@@ -60,6 +60,8 @@ export interface WorkflowStep {
   agent: string;
   /** Display name for the agent (shown in output). Falls back to agent basename if not specified */
   agentDisplayName: string;
+  /** Allowed tools for this step (optional, passed to agent execution) */
+  allowedTools?: string[];
   /** Resolved absolute path to agent prompt file (set by loader) */
   agentPath?: string;
   /** Provider override for this step */

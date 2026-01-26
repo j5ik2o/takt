@@ -59,6 +59,7 @@ export const WorkflowStepRawSchema = z.object({
   agent: z.string().min(1),
   /** Display name for the agent (shown in output). Falls back to agent basename if not specified */
   agent_name: z.string().optional(),
+  allowed_tools: z.array(z.string()).optional(),
   provider: z.enum(['claude', 'codex']).optional(),
   instruction: z.string().optional(),
   instruction_template: z.string().optional(),

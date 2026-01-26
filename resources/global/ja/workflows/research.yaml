@@ -14,6 +14,12 @@ max_iterations: 10
 steps:
   - name: plan
     agent: ~/.takt/agents/research/planner.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
     instruction_template: |
       ## ワークフロー状況
       - イテレーション: {iteration}/{max_iterations}
@@ -46,6 +52,12 @@ steps:
 
   - name: dig
     agent: ~/.takt/agents/research/digger.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
     instruction_template: |
       ## ワークフロー状況
       - イテレーション: {iteration}/{max_iterations}
@@ -83,6 +95,12 @@ steps:
 
   - name: supervise
     agent: ~/.takt/agents/research/supervisor.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
     instruction_template: |
       ## ワークフロー状況
       - イテレーション: {iteration}/{max_iterations}

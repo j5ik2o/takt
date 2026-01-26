@@ -64,6 +64,7 @@ describe('WorkflowConfigRawSchema', () => {
         {
           name: 'step1',
           agent: 'coder',
+          allowed_tools: ['Read', 'Grep'],
           instruction: '{task}',
           transitions: [
             { condition: 'done', next_step: 'COMPLETE' },
@@ -75,6 +76,7 @@ describe('WorkflowConfigRawSchema', () => {
     const result = WorkflowConfigRawSchema.parse(config);
     expect(result.name).toBe('test-workflow');
     expect(result.steps).toHaveLength(1);
+    expect(result.steps[0]?.allowed_tools).toEqual(['Read', 'Grep']);
     expect(result.max_iterations).toBe(10);
   });
 

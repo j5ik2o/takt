@@ -23,6 +23,13 @@ steps:
   # ===========================================
   - name: plan
     agent: ~/.takt/agents/default/planner.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Bash
+      - WebSearch
+      - WebFetch
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -87,6 +94,15 @@ steps:
   # ===========================================
   - name: implement
     agent: ~/.takt/agents/default/coder.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -153,6 +169,12 @@ steps:
   # ===========================================
   - name: cqrs_es_review
     agent: ~/.takt/agents/expert-review/cqrs-es-reviewer.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -221,6 +243,15 @@ steps:
 
   - name: fix_cqrs_es
     agent: ~/.takt/agents/default/coder.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -259,6 +290,12 @@ steps:
   # ===========================================
   - name: frontend_review
     agent: ~/.takt/agents/expert-review/frontend-reviewer.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -327,6 +364,15 @@ steps:
 
   - name: fix_frontend
     agent: ~/.takt/agents/default/coder.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -365,6 +411,12 @@ steps:
   # ===========================================
   - name: ai_review
     agent: ~/.takt/agents/default/ai-reviewer.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -429,6 +481,15 @@ steps:
 
   - name: ai_fix
     agent: ~/.takt/agents/default/coder.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -465,6 +526,12 @@ steps:
   # ===========================================
   - name: security_review
     agent: ~/.takt/agents/expert-review/security-reviewer.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -530,6 +597,15 @@ steps:
 
   - name: fix_security
     agent: ~/.takt/agents/default/coder.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -577,6 +653,12 @@ steps:
   # ===========================================
   - name: qa_review
     agent: ~/.takt/agents/expert-review/qa-reviewer.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -642,6 +724,15 @@ steps:
 
   - name: fix_qa
     agent: ~/.takt/agents/default/coder.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -693,6 +784,12 @@ steps:
   # ===========================================
   - name: supervise
     agent: ~/.takt/agents/expert-review/supervisor.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -800,6 +897,15 @@ steps:
 
   - name: fix_supervisor
     agent: ~/.takt/agents/default/coder.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}

@@ -29,20 +29,14 @@ export interface RunAgentOptions {
   provider?: 'claude' | 'codex';
   /** Resolved path to agent prompt file */
   agentPath?: string;
+  /** Allowed tools for this agent run */
+  allowedTools?: string[];
   onStream?: StreamCallback;
   onPermissionRequest?: PermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;
   /** Bypass all permission checks (sacrifice-my-pc mode) */
   bypassPermissions?: boolean;
 }
-
-/** Default tools for each built-in agent type */
-const DEFAULT_AGENT_TOOLS: Record<string, string[]> = {
-  coder: ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash', 'WebSearch', 'WebFetch'],
-  architect: ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'],
-  supervisor: ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'],
-  planner: ['Read', 'Glob', 'Grep', 'Bash', 'WebSearch', 'WebFetch'],
-};
 
 type AgentProvider = 'claude' | 'codex';
 
@@ -89,12 +83,14 @@ export async function runCustomAgent(
   task: string,
   options: RunAgentOptions
 ): Promise<AgentResponse> {
+  const allowedTools = options.allowedTools ?? agentConfig.allowedTools;
+
   // If agent references a Claude Code agent
   if (agentConfig.claudeAgent) {
     const callOptions: ClaudeCallOptions = {
       cwd: options.cwd,
       sessionId: options.sessionId,
-      allowedTools: agentConfig.allowedTools,
+      allowedTools,
       model: options.model || agentConfig.model,
       onStream: options.onStream,
       onPermissionRequest: options.onPermissionRequest,
@@ -109,7 +105,7 @@ export async function runCustomAgent(
     const callOptions: ClaudeCallOptions = {
       cwd: options.cwd,
       sessionId: options.sessionId,
-      allowedTools: agentConfig.allowedTools,
+      allowedTools,
       model: options.model || agentConfig.model,
       onStream: options.onStream,
       onPermissionRequest: options.onPermissionRequest,
@@ -121,7 +117,7 @@ export async function runCustomAgent(
 
   // Custom agent with prompt
   const systemPrompt = loadAgentPrompt(agentConfig);
-  const tools = agentConfig.allowedTools || ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'];
+  const tools = allowedTools;
   const provider = resolveProvider(options.cwd, options, agentConfig);
   if (provider === 'codex') {
     const callOptions: CodexCallOptions = {
@@ -134,12 +130,12 @@ export async function runCustomAgent(
     return callCodexCustom(agentConfig.name, task, systemPrompt, callOptions);
   }
 
-  const callOptions: ClaudeCallOptions = {
-    cwd: options.cwd,
-    sessionId: options.sessionId,
-    allowedTools: tools,
-    model: options.model || agentConfig.model,
-    statusPatterns: agentConfig.statusPatterns,
+    const callOptions: ClaudeCallOptions = {
+      cwd: options.cwd,
+      sessionId: options.sessionId,
+      allowedTools: tools,
+      model: options.model || agentConfig.model,
+      statusPatterns: agentConfig.statusPatterns,
     onStream: options.onStream,
     onPermissionRequest: options.onPermissionRequest,
     onAskUserQuestion: options.onAskUserQuestion,
@@ -198,7 +194,7 @@ export async function runAgent(
       throw new Error(`Agent file not found: ${options.agentPath}`);
     }
     const systemPrompt = loadAgentPromptFromPath(options.agentPath);
-    const tools = DEFAULT_AGENT_TOOLS[agentName] || ['Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch'];
+    const tools = options.allowedTools;
     const provider = resolveProvider(options.cwd, options);
 
     if (provider === 'codex') {

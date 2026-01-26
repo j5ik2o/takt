@@ -26,6 +26,9 @@ initial_step: first-step  # Optional, defaults to first step
 steps:
   - name: step-name
     agent: coder           # Built-in agent or path to .md file
+    allowed_tools:         # Optional tool allowlist for this step
+      - Read
+      - Grep
     instruction_template: |
       Your instructions here with {variables}
     transitions:
@@ -80,6 +83,15 @@ max_iterations: 5
 steps:
   - name: implement
     agent: coder
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
     instruction_template: |
       {task}
     transitions:
@@ -98,6 +110,15 @@ max_iterations: 10
 steps:
   - name: implement
     agent: coder
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
     instruction_template: |
       {task}
     transitions:
@@ -108,6 +129,12 @@ steps:
 
   - name: review
     agent: architect
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
     instruction_template: |
       Review the implementation for:
       - Code quality
@@ -126,6 +153,12 @@ steps:
 steps:
   - name: analyze
     agent: architect
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
     instruction_template: |
       Analyze this request and create a plan: {task}
     transitions:
@@ -135,6 +168,15 @@ steps:
   - name: implement
     agent: coder
     pass_previous_response: true  # Enable {previous_response}
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
     instruction_template: |
       Implement based on this analysis:
       {previous_response}

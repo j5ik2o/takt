@@ -10,6 +10,12 @@ max_iterations: 5
 steps:
   - name: melchior
     agent: ~/.takt/agents/magi/melchior.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
     instruction_template: |
       # MAGI System Initiated
 
@@ -30,6 +36,12 @@ steps:
 
   - name: balthasar
     agent: ~/.takt/agents/magi/balthasar.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
     instruction_template: |
       # MAGI System Continuing
 
@@ -55,6 +67,12 @@ steps:
 
   - name: casper
     agent: ~/.takt/agents/magi/casper.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
     instruction_template: |
       # MAGI System Final Deliberation
 
