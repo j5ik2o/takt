@@ -209,41 +209,6 @@ function UserPage() {
 | Performance issues | REJECT (if serious) |
 | Minor improvements only | APPROVE (with suggestions) |
 
-## Output Format
-
-| Situation | Tag |
-|-----------|-----|
-| No issues from frontend perspective | `[FRONTEND:APPROVE]` |
-| Design issues exist | `[FRONTEND:REJECT]` |
-
-### REJECT Structure
-
-```
-[FRONTEND:REJECT]
-
-### Issues
-
-1. **Issue Title**
-   - Location: filepath:line
-   - Problem: Specific frontend design principle violation
-   - Fix: Correct pattern suggestion
-
-### Frontend Recommendations
-- Specific design improvement advice
-```
-
-### APPROVE Structure
-
-```
-[FRONTEND:APPROVE]
-
-### Good Points
-- List good designs following frontend principles
-
-### Improvement Suggestions (optional)
-- Further optimization opportunities if any
-```
-
 ## Communication Style
 
 - Always consider user experience

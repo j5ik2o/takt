@@ -30,6 +30,16 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Analysis complete | `[PLANNER:DONE]` |
+      | Requirements unclear | `[PLANNER:BLOCKED]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -103,6 +113,16 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Implementation complete | `[CODER:DONE]` |
+      | Cannot proceed | `[CODER:BLOCKED]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -175,6 +195,16 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Design is sound | `[CQRS-ES:APPROVE]` |
+      | Design issues found | `[CQRS-ES:REJECT]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -252,6 +282,16 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Fix complete | `[CODER:DONE]` |
+      | Cannot proceed | `[CODER:BLOCKED]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -296,6 +336,16 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Frontend design is sound | `[FRONTEND:APPROVE]` |
+      | Design issues found | `[FRONTEND:REJECT]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -373,6 +423,16 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Fix complete | `[CODER:DONE]` |
+      | Cannot proceed | `[CODER:BLOCKED]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -417,6 +477,16 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | No AI-specific issues | `[AI_REVIEW:APPROVE]` |
+      | Issues found | `[AI_REVIEW:REJECT]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -490,6 +560,16 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Fix complete | `[CODER:DONE]` |
+      | Cannot proceed | `[CODER:BLOCKED]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -532,6 +612,16 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | No security issues | `[SECURITY:APPROVE]` |
+      | Vulnerabilities found | `[SECURITY:REJECT]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -606,6 +696,17 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Minor fix complete | `[CODER:DONE]` |
+      | Major fix (restart from CQRS+ES) | `[CODER:REJECT]` |
+      | Cannot proceed | `[CODER:BLOCKED]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -659,6 +760,16 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Quality standards met | `[QA:APPROVE]` |
+      | Quality issues found | `[QA:REJECT]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -733,6 +844,18 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Minor fix complete | `[CODER:DONE]` |
+      | Security-impacting fix | `[CODER:IMPROVE]` |
+      | Major fix (restart from CQRS+ES) | `[CODER:REJECT]` |
+      | Cannot proceed | `[CODER:BLOCKED]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -790,6 +913,16 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Ready to merge | `[SUPERVISOR:APPROVE]` |
+      | Issues found | `[SUPERVISOR:REJECT]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -906,6 +1039,16 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Fix complete | `[CODER:DONE]` |
+      | Cannot proceed | `[CODER:BLOCKED]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}

@@ -148,7 +148,7 @@ export class WorkflowEngine extends EventEmitter {
       sessionId,
       agentPath: step.agentPath,
       allowedTools: step.allowedTools,
-      statusRules: step.statusRules,
+      statusRulesPrompt: step.statusRulesPrompt,
       provider: step.provider,
       model: step.model,
       onStream: this.options.onStream,

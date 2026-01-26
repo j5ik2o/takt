@@ -251,20 +251,12 @@ When review count is provided (e.g., "Review count: 3rd"), adjust judgment accor
 2. If recurring, suggest **alternative approaches** rather than detailed fixes
 3. Even when REJECTing, include perspective that "a different approach should be considered"
 
-```
-[ARCHITECT:REJECT]
+Example: When issues repeat on the 3rd review
 
-### Issues
-(Normal feedback)
-
-### Reconsidering the Approach
-Same issues continue through the 3rd review.
-The current approach may be fundamentally problematic.
-
-Alternatives:
-- Option A: Redesign with xxx pattern
-- Option B: Introduce yyy
-```
+- Point out the normal issues
+- Note that the same type of issues are recurring
+- Explain the limitations of the current approach
+- Present alternatives (e.g., redesign with a different pattern, introduce new technology)
 
 **Point**: Rather than repeating "fix this again", step back and suggest a different path.
 

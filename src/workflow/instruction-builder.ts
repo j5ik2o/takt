@@ -88,9 +88,9 @@ export function buildInstruction(
     instruction = instruction.replace(/\{report_dir\}/g, context.reportDir);
   }
 
-  // Append status_rules if present
-  if (step.statusRules) {
-    instruction = `${instruction}\n\n${step.statusRules}`;
+  // Append status_rules_prompt if present
+  if (step.statusRulesPrompt) {
+    instruction = `${instruction}\n\n${step.statusRulesPrompt}`;
   }
 
   return instruction;

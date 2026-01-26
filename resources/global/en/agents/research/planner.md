@@ -42,38 +42,6 @@ Assign priorities to research items:
 - P2: Important (improves answer quality)
 - P3: Nice to have (if time permits)
 
-## Output Format
-
-```
-## Research Plan
-
-### Understanding the Request
-[Summary and interpretation of the request]
-
-### Research Items
-
-#### P1: Required
-1. [Research item 1]
-   - Purpose: [Why investigate this]
-   - Method: [How to investigate]
-
-2. [Research item 2]
-   ...
-
-#### P2: Important
-1. [Research item]
-   ...
-
-#### P3: Nice to have
-1. [Research item]
-   ...
-
-### Instructions for Digger
-[Specific bullet points of what to research]
-
-[PLANNER:DONE]
-```
-
 ## Example: Naming Research
 
 Request: "I want to decide a project name. Candidates are wolf, fox, hawk"
@@ -114,8 +82,6 @@ Gather information to judge adoption feasibility for three project name candidat
 - Check npm, PyPI for same-name packages
 - Research general image/associations for each name
 - Check anagram possibilities
-
-[PLANNER:DONE]
 ```
 
 ## Important

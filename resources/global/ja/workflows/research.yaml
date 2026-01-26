@@ -20,6 +20,31 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | 計画完了 | `[PLANNER:DONE]` |
+      | 情報不足 | `[PLANNER:BLOCKED]` |
+
+      ### 出力例
+
+      **DONE の場合:**
+      ```
+      [PLANNER:DONE]
+      ```
+
+      **BLOCKED の場合:**
+      ```
+      [PLANNER:BLOCKED]
+
+      確認事項:
+      - {質問1}
+      ```
     instruction_template: |
       ## ワークフロー状況
       - イテレーション: {iteration}/{max_iterations}
@@ -41,8 +66,6 @@ steps:
       - 不明点は仮定を置いて進める
       - 複数の解釈がある場合は、すべてを調査対象に含める
       - Supervisorからフィードバックがある場合は、指摘を反映した計画を作成
-
-      計画が完了したら [PLANNER:DONE] を出力してください。
     pass_previous_response: true
     transitions:
       - condition: done
@@ -58,6 +81,30 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | 調査完了 | `[DIGGER:DONE]` |
+      | 調査不可 | `[DIGGER:BLOCKED]` |
+
+      ### 出力例
+
+      **DONE の場合:**
+      ```
+      [DIGGER:DONE]
+      ```
+
+      **BLOCKED の場合:**
+      ```
+      [DIGGER:BLOCKED]
+
+      理由: {調査できなかった理由}
+      ```
     instruction_template: |
       ## ワークフロー状況
       - イテレーション: {iteration}/{max_iterations}
@@ -84,8 +131,6 @@ steps:
       - GitHub検索（gh コマンド）
       - コードベース検索
       - ファイル読み取り
-
-      調査が完了したら [DIGGER:DONE] を出力してください。
     pass_previous_response: true
     transitions:
       - condition: done
@@ -101,6 +146,40 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 判定基準
+
+      | 状況 | 判定 |
+      |------|------|
+      | 調査結果が十分 | APPROVE |
+      | 調査結果が不十分 | REJECT |
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | 調査完了、結果は十分 | `[SUPERVISOR:APPROVE]` |
+      | 不十分、計画からやり直し | `[SUPERVISOR:REJECT]` |
+
+      ### 出力例
+
+      **APPROVE の場合:**
+      ```
+      [SUPERVISOR:APPROVE]
+
+      調査結果は元の依頼に対して十分です。
+      ```
+
+      **REJECT の場合:**
+      ```
+      [SUPERVISOR:REJECT]
+
+      不足点:
+      - {具体的な不足点}
+      ```
     instruction_template: |
       ## ワークフロー状況
       - イテレーション: {iteration}/{max_iterations}
@@ -114,10 +193,6 @@ steps:
 
       ## 指示
       調査結果を評価し、元の依頼に対して十分な回答になっているか判断してください。
-
-      **評価結果の出力**:
-      - [SUPERVISOR:APPROVE] - 調査完了、結果は十分
-      - [SUPERVISOR:REJECT] - 不十分、計画からやり直し（具体的な不足点を指摘）
 
       **重要**: 問題がある場合は、Plannerへの具体的な指示を含めてください。
     pass_previous_response: true

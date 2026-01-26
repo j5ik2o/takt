@@ -30,6 +30,16 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | 分析完了 | `[PLANNER:DONE]` |
+      | 要件不明確 | `[PLANNER:BLOCKED]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -103,6 +113,16 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | 実装完了 | `[CODER:DONE]` |
+      | 進行不可 | `[CODER:BLOCKED]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -175,6 +195,16 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | 設計に問題なし | `[CQRS-ES:APPROVE]` |
+      | 設計に問題あり | `[CQRS-ES:REJECT]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -252,6 +282,16 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | 修正完了 | `[CODER:DONE]` |
+      | 進行不可 | `[CODER:BLOCKED]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -296,6 +336,16 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | フロントエンド設計に問題なし | `[FRONTEND:APPROVE]` |
+      | フロントエンド設計に問題あり | `[FRONTEND:REJECT]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -373,6 +423,16 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | 修正完了 | `[CODER:DONE]` |
+      | 進行不可 | `[CODER:BLOCKED]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -417,6 +477,16 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | AI特有の問題なし | `[AI_REVIEW:APPROVE]` |
+      | 問題あり | `[AI_REVIEW:REJECT]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -490,6 +560,16 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | 修正完了 | `[CODER:DONE]` |
+      | 進行不可 | `[CODER:BLOCKED]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -532,6 +612,16 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | セキュリティ問題なし | `[SECURITY:APPROVE]` |
+      | 脆弱性あり | `[SECURITY:REJECT]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -606,6 +696,17 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | 軽微な修正完了 | `[CODER:DONE]` |
+      | 大きな修正（CQRS+ESからやり直し） | `[CODER:REJECT]` |
+      | 進行不可 | `[CODER:BLOCKED]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -659,6 +760,16 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | 品質基準を満たす | `[QA:APPROVE]` |
+      | 品質問題あり | `[QA:REJECT]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -733,6 +844,18 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | 軽微な修正完了 | `[CODER:DONE]` |
+      | セキュリティ影響あり | `[CODER:IMPROVE]` |
+      | 大きな修正（CQRS+ESからやり直し） | `[CODER:REJECT]` |
+      | 進行不可 | `[CODER:BLOCKED]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -790,6 +913,16 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | 最終承認 | `[SUPERVISOR:APPROVE]` |
+      | 問題あり | `[SUPERVISOR:REJECT]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -906,6 +1039,16 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | 修正完了 | `[CODER:DONE]` |
+      | 進行不可 | `[CODER:BLOCKED]` |
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}

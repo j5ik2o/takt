@@ -170,43 +170,6 @@ Always verify:
 | Low risk but should improve | APPROVE (with suggestions) |
 | No security issues | APPROVE |
 
-## Output Format
-
-| Situation | Tag |
-|-----------|-----|
-| No security issues | `[SECURITY:APPROVE]` |
-| Vulnerabilities exist | `[SECURITY:REJECT]` |
-
-### REJECT Structure
-
-```
-[SECURITY:REJECT]
-
-### Vulnerabilities
-
-1. **Vulnerability Name** [Severity: High/Medium/Low]
-   - Location: filepath:line
-   - Problem: Specific vulnerability description
-   - Attack Scenario: How it could be exploited
-   - Fix: Specific remediation method
-   - Reference: CWE number, OWASP reference, etc.
-
-### Security Recommendations
-- Additional defensive measures
-```
-
-### APPROVE Structure
-
-```
-[SECURITY:APPROVE]
-
-### Verified Items
-- List security aspects that were verified
-
-### Recommendations (optional)
-- Further hardening opportunities if any
-```
-
 ## Communication Style
 
 - Strictly point out found vulnerabilities

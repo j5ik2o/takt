@@ -70,7 +70,7 @@ function normalizeWorkflowConfig(raw: unknown, workflowDir: string): WorkflowCon
     provider: step.provider,
     model: step.model,
     instructionTemplate: step.instruction_template || step.instruction || '{task}',
-    statusRules: step.status_rules,
+    statusRulesPrompt: step.status_rules_prompt,
     transitions: step.transitions.map((t) => ({
       condition: t.condition,
       nextStep: t.next_step,

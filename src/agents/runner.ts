@@ -32,7 +32,7 @@ export interface RunAgentOptions {
   /** Allowed tools for this agent run */
   allowedTools?: string[];
   /** Status output rules to inject into system prompt */
-  statusRules?: string;
+  statusRulesPrompt?: string;
   onStream?: StreamCallback;
   onPermissionRequest?: PermissionHandler;
   onAskUserQuestion?: AskUserQuestionHandler;
@@ -133,8 +133,8 @@ export async function runCustomAgent(
   let systemPrompt = loadAgentPrompt(agentConfig);
 
   // Inject status rules if provided
-  if (options.statusRules) {
-    systemPrompt = `${systemPrompt}\n\n${options.statusRules}`;
+  if (options.statusRulesPrompt) {
+    systemPrompt = `${systemPrompt}\n\n${options.statusRulesPrompt}`;
   }
 
   const tools = allowedTools;
@@ -217,8 +217,8 @@ export async function runAgent(
     let systemPrompt = loadAgentPromptFromPath(options.agentPath);
 
     // Inject status rules if provided
-    if (options.statusRules) {
-      systemPrompt = `${systemPrompt}\n\n${options.statusRules}`;
+    if (options.statusRulesPrompt) {
+      systemPrompt = `${systemPrompt}\n\n${options.statusRulesPrompt}`;
     }
 
     const tools = options.allowedTools;

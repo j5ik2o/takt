@@ -64,7 +64,7 @@ export const WorkflowStepRawSchema = z.object({
   model: z.string().optional(),
   instruction: z.string().optional(),
   instruction_template: z.string().optional(),
-  status_rules: z.string().optional(),
+  status_rules_prompt: z.string().optional(),
   pass_previous_response: z.boolean().optional().default(true),
   on_no_status: OnNoStatusBehaviorSchema.optional(),
   transitions: z.array(

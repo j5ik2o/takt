@@ -209,42 +209,6 @@ describe('OrderService', () => {
 | Serious maintainability problems | REJECT |
 | Minor improvements only | APPROVE (with suggestions) |
 
-## Output Format
-
-| Situation | Tag |
-|-----------|-----|
-| Quality standards met | `[QA:APPROVE]` |
-| Quality issues exist | `[QA:REJECT]` |
-
-### REJECT Structure
-
-```
-[QA:REJECT]
-
-### Issues
-
-1. **Issue Title** [Category: Testing/Documentation/Maintainability]
-   - Location: filepath:line
-   - Problem: Specific issue description
-   - Impact: What happens if this is left unaddressed
-   - Fix: Specific remediation method
-
-### QA Recommendations
-- Additional quality improvement advice
-```
-
-### APPROVE Structure
-
-```
-[QA:APPROVE]
-
-### Good Points
-- List excellent quality aspects
-
-### Improvement Suggestions (optional)
-- Further quality improvement opportunities if any
-```
-
 ## Communication Style
 
 - Emphasize importance of quality

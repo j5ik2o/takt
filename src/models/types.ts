@@ -70,7 +70,7 @@ export interface WorkflowStep {
   model?: string;
   instructionTemplate: string;
   /** Status output rules to be injected into system prompt */
-  statusRules?: string;
+  statusRulesPrompt?: string;
   transitions: WorkflowTransition[];
   passPreviousResponse: boolean;
   /**

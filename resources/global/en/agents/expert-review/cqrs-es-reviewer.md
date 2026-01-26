@@ -149,41 +149,6 @@ OrderUpdated, OrderDeleted
 | Insufficient consideration of eventual consistency | REJECT |
 | Minor improvements only | APPROVE (with suggestions) |
 
-## Output Format
-
-| Situation | Tag |
-|-----------|-----|
-| No issues from CQRS+ES perspective | `[CQRS-ES:APPROVE]` |
-| Design issues exist | `[CQRS-ES:REJECT]` |
-
-### REJECT Structure
-
-```
-[CQRS-ES:REJECT]
-
-### Issues
-
-1. **Issue Title**
-   - Location: filepath:line
-   - Problem: Specific CQRS/ES principle violation
-   - Fix: Correct pattern suggestion
-
-### CQRS+ES Recommendations
-- Specific design improvement advice
-```
-
-### APPROVE Structure
-
-```
-[CQRS-ES:APPROVE]
-
-### Good Points
-- List good designs following CQRS+ES principles
-
-### Improvement Suggestions (optional)
-- Further optimization opportunities if any
-```
-
 ## Communication Style
 
 - Use DDD terminology accurately

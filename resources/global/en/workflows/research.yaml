@@ -20,6 +20,31 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Plan complete | `[PLANNER:DONE]` |
+      | Insufficient info | `[PLANNER:BLOCKED]` |
+
+      ### Output Examples
+
+      **DONE case:**
+      ```
+      [PLANNER:DONE]
+      ```
+
+      **BLOCKED case:**
+      ```
+      [PLANNER:BLOCKED]
+
+      Clarifications needed:
+      - {Question 1}
+      ```
     instruction_template: |
       ## Workflow Status
       - Iteration: {iteration}/{max_iterations}
@@ -41,8 +66,6 @@ steps:
       - Make assumptions for unclear points and proceed
       - If multiple interpretations exist, include all in the research scope
       - If there is feedback from Supervisor, incorporate it into the plan
-
-      Output [PLANNER:DONE] when the plan is complete.
     pass_previous_response: true
     transitions:
       - condition: done
@@ -58,6 +81,30 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Research complete | `[DIGGER:DONE]` |
+      | Unable to research | `[DIGGER:BLOCKED]` |
+
+      ### Output Examples
+
+      **DONE case:**
+      ```
+      [DIGGER:DONE]
+      ```
+
+      **BLOCKED case:**
+      ```
+      [DIGGER:BLOCKED]
+
+      Reason: {Why research was not possible}
+      ```
     instruction_template: |
       ## Workflow Status
       - Iteration: {iteration}/{max_iterations}
@@ -84,8 +131,6 @@ steps:
       - GitHub search (gh command)
       - Codebase search
       - File reading
-
-      Output [DIGGER:DONE] when the research is complete.
     pass_previous_response: true
     transitions:
       - condition: done
@@ -101,6 +146,40 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Judgment Criteria
+
+      | Situation | Judgment |
+      |-----------|----------|
+      | Research results sufficient | APPROVE |
+      | Research results insufficient | REJECT |
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Research complete, results sufficient | `[SUPERVISOR:APPROVE]` |
+      | Insufficient, restart from planning | `[SUPERVISOR:REJECT]` |
+
+      ### Output Examples
+
+      **APPROVE case:**
+      ```
+      [SUPERVISOR:APPROVE]
+
+      Research results adequately answer the original request.
+      ```
+
+      **REJECT case:**
+      ```
+      [SUPERVISOR:REJECT]
+
+      Missing:
+      - {Specific missing items}
+      ```
     instruction_template: |
       ## Workflow Status
       - Iteration: {iteration}/{max_iterations}
@@ -114,10 +193,6 @@ steps:
 
       ## Instructions
       Evaluate the research results and determine if they adequately answer the original request.
-
-      **Evaluation Output**:
-      - [SUPERVISOR:APPROVE] - Research complete, results are sufficient
-      - [SUPERVISOR:REJECT] - Insufficient, restart from planning (specify what's missing)
 
       **Important**: If there are issues, include specific instructions for the Planner.
     pass_previous_response: true

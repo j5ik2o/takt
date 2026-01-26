@@ -36,45 +36,6 @@ You follow the research plan from the Planner and **actually execute the researc
    - If related information exists, investigate further
 3. Create report when all complete
 
-## Output Format
-
-```
-## Research Results Report
-
-### Results by Research Item
-
-#### 1. [Research Item Name]
-**Result**: [Summary of research result]
-
-**Details**:
-[Specific data, URLs, quotes, etc.]
-
-**Additional Notes**:
-[Related information discovered additionally]
-
----
-
-#### 2. [Research Item Name]
-...
-
-### Summary
-
-#### Key Findings
-- [Important finding 1]
-- [Important finding 2]
-
-#### Caveats/Risks
-- [Discovered risks]
-
-#### Items Unable to Research
-- [Item]: [Reason]
-
-### Recommendation/Conclusion
-[Recommendations based on research results]
-
-[DIGGER:DONE]
-```
-
 ## Example: Naming Research Results
 
 ```
@@ -123,8 +84,6 @@ Scoped packages (@yourname/wolf etc.) can be used
 1. Least GitHub collisions
 2. npm addressable via scoped packages
 3. "Hawk" image fits surveillance/hunting tools
-
-[DIGGER:DONE]
 ```
 
 ## Important

@@ -16,6 +16,25 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Judgment | Tag |
+      |----------|-----|
+      | In favor | `[MELCHIOR:APPROVE]` |
+      | Against | `[MELCHIOR:REJECT]` |
+      | Conditional approval | `[MELCHIOR:CONDITIONAL]` |
+
+      ### Output Example
+
+      ```
+      [MELCHIOR:APPROVE]
+
+      Reason: {Reason for approval}
+      ```
     instruction_template: |
       # MAGI System Initiated
 
@@ -25,11 +44,6 @@ steps:
       ## Instructions
       You are MELCHIOR-1 of the MAGI System.
       Analyze the above from the perspective of a scientist/engineer and render your judgment.
-
-      Your judgment must be one of:
-      - [MELCHIOR:APPROVE] - In favor
-      - [MELCHIOR:REJECT] - Against
-      - [MELCHIOR:CONDITIONAL] - Conditional approval
     transitions:
       - condition: always
         next_step: balthasar
@@ -42,6 +56,25 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      | Judgment | Tag |
+      |----------|-----|
+      | In favor | `[BALTHASAR:APPROVE]` |
+      | Against | `[BALTHASAR:REJECT]` |
+      | Conditional approval | `[BALTHASAR:CONDITIONAL]` |
+
+      ### Output Example
+
+      ```
+      [BALTHASAR:APPROVE]
+
+      Reason: {Reason for approval}
+      ```
     instruction_template: |
       # MAGI System Continuing
 
@@ -55,11 +88,6 @@ steps:
       You are BALTHASAR-2 of the MAGI System.
       Analyze the above from the perspective of a nurturer and render your judgment.
       Consider MELCHIOR's judgment as reference, but make your own independent assessment.
-
-      Your judgment must be one of:
-      - [BALTHASAR:APPROVE] - In favor
-      - [BALTHASAR:REJECT] - Against
-      - [BALTHASAR:CONDITIONAL] - Conditional approval
     pass_previous_response: true
     transitions:
       - condition: always
@@ -73,6 +101,35 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
+      ## Output Format
+
+      Final conclusion by majority vote:
+
+      | Judgment | Tag |
+      |----------|-----|
+      | Approved (2+ in favor) | `[MAGI:APPROVE]` |
+      | Rejected (2+ against) | `[MAGI:REJECT]` |
+      | Conditional approval | `[MAGI:CONDITIONAL]` |
+
+      ### Output Example
+
+      ```
+      ## MAGI System Final Judgment
+
+      | System | Judgment |
+      |--------|----------|
+      | MELCHIOR-1 | APPROVE |
+      | BALTHASAR-2 | CONDITIONAL |
+      | CASPER-3 | APPROVE |
+
+      **Conclusion: [MAGI:APPROVE]**
+
+      [Reasoning/Summary]
+      ```
     instruction_template: |
       # MAGI System Final Deliberation
 
@@ -87,27 +144,6 @@ steps:
       Analyze the above from a practical/realistic perspective and render your judgment.
 
       **Finally, tally the judgments from all three and provide the final conclusion.**
-
-      ### Final Conclusion (Required)
-      Determine the final judgment by majority vote:
-      - [MAGI:APPROVE] - Approved (2 or more in favor)
-      - [MAGI:REJECT] - Rejected (2 or more against)
-      - [MAGI:CONDITIONAL] - Conditional approval (majority conditional or split opinions)
-
-      **Final Conclusion Format Example:**
-      ```
-      ## MAGI System Final Judgment
-
-      | System | Judgment |
-      |--------|----------|
-      | MELCHIOR-1 | APPROVE |
-      | BALTHASAR-2 | CONDITIONAL |
-      | CASPER-3 | APPROVE |
-
-      **Conclusion: [MAGI:APPROVE]**
-
-      [Reasoning/Summary]
-      ```
     pass_previous_response: true
     transitions:
       - condition: always

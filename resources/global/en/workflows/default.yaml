@@ -18,12 +18,39 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules: |
-      ## Status Output Format
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
 
-      Output analysis results with the following tags:
-      - [PLANNER:DONE] Analysis complete
-      - [PLANNER:BLOCKED] Insufficient info (list clarifications needed)
+      ## Judgment Criteria
+
+      | Situation | Judgment |
+      |-----------|----------|
+      | Requirements clear and implementable | DONE |
+      | Requirements unclear, insufficient info | BLOCKED |
+
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Analysis complete | `[PLANNER:DONE]` |
+      | Insufficient info | `[PLANNER:BLOCKED]` |
+
+      ### Output Examples
+
+      **DONE case:**
+      ```
+      [PLANNER:DONE]
+      ```
+
+      **BLOCKED case:**
+      ```
+      [PLANNER:BLOCKED]
+
+      Clarifications needed:
+      - {Question 1}
+      - {Question 2}
+      ```
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -91,14 +118,37 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules: |
-      ## Status Output Format
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
 
-      Always include these tags when work is complete:
-      - [CODER:DONE] Implementation complete
-      - [CODER:BLOCKED] Cannot decide/insufficient info
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Implementation complete | `[CODER:DONE]` |
+      | Cannot decide/insufficient info | `[CODER:BLOCKED]` |
 
       **Important**: When in doubt, `[BLOCKED]`. Don't decide on your own.
+
+      ### Output Examples
+
+      **DONE case:**
+      ```
+      Implementation complete.
+      - Created: `src/auth/service.ts`, `tests/auth.test.ts`
+      - Modified: `src/routes.ts`
+
+      [CODER:DONE]
+      ```
+
+      **BLOCKED case:**
+      ```
+      [CODER:BLOCKED]
+
+      Reason: DB schema is undefined, cannot implement
+      Required info: users table structure
+      ```
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -165,7 +215,10 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules: |
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
       ## Judgment Criteria
 
       | Situation | Judgment |
@@ -174,48 +227,49 @@ steps:
       | Design principle violations | REJECT |
       | Security issues | REJECT |
       | Insufficient tests | REJECT |
-      | Improvements needed (non-blocking but should be addressed) | IMPROVE |
+      | Minor improvements needed | IMPROVE |
       | No issues | APPROVE |
 
       **How to use IMPROVE:**
       - Design is acceptable but there are points that could be better
-      - Minor issues you want fixed before proceeding to next step
       - Examples: naming improvements, small refactoring, adding comments
 
-      ## Status Output Format
+      ## Output Format
 
-      Output review results with the following tags:
-      - [ARCHITECT:APPROVE] No issues
-      - [ARCHITECT:IMPROVE] Minor improvements needed
-      - [ARCHITECT:REJECT] Structural changes required
+      | Situation | Tag |
+      |-----------|-----|
+      | No issues | `[ARCHITECT:APPROVE]` |
+      | Minor improvements needed | `[ARCHITECT:IMPROVE]` |
+      | Structural changes required | `[ARCHITECT:REJECT]` |
 
       ### Output Examples
-
-      **REJECT case:**
-      ```
-      [ARCHITECT:REJECT]
-
-      ### Issues
-
-      1. **File Size Exceeded**
-         - Location: `src/services/user.ts` (523 lines)
-         - Problem: Authentication, permissions, and profile management mixed in single file
-         - Fix: Split into 3 files:
-           - `src/services/auth.ts` - Authentication
-           - `src/services/permission.ts` - Permissions
-           - `src/services/profile.ts` - Profile
-      ```
 
       **APPROVE case:**
       ```
       [ARCHITECT:APPROVE]
 
-      ### Positive Points
+      Positive points:
       - Appropriate module organization
       - Single responsibility maintained
+      ```
 
-      ### Improvement Suggestions (Optional)
-      - Consider organizing shared utilities in `utils/` in the future
+      **IMPROVE case:**
+      ```
+      [ARCHITECT:IMPROVE]
+
+      Improvements:
+      - Improve naming: `data` → `userData`
+      - Add comments
+      ```
+
+      **REJECT case:**
+      ```
+      [ARCHITECT:REJECT]
+
+      Issues:
+      1. File size exceeded
+         - Location: `src/services/user.ts` (523 lines)
+         - Fix: Split into 3 files
       ```
     instruction_template: |
       ## Workflow Context
@@ -287,12 +341,37 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules: |
-      ## Status Output Format
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
 
-      Always include these tags when work is complete:
-      - [CODER:DONE] Improvements complete
-      - [CODER:BLOCKED] Cannot decide/insufficient info
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Improvements complete | `[CODER:DONE]` |
+      | Cannot decide/insufficient info | `[CODER:BLOCKED]` |
+
+      **Important**: When in doubt, `[BLOCKED]`. Don't decide on your own.
+
+      ### Output Examples
+
+      **DONE case:**
+      ```
+      Improvements complete.
+      - Improved naming: `data` → `userData`
+      - Added comments
+
+      [CODER:DONE]
+      ```
+
+      **BLOCKED case:**
+      ```
+      [CODER:BLOCKED]
+
+      Reason: Improvement intent unclear
+      Required info: Specific improvement details
+      ```
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -332,7 +411,10 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules: |
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
       ## Judgment Criteria
 
       | Situation | Judgment |
@@ -344,13 +426,31 @@ steps:
       | Minor style deviations only | APPROVE |
       | Code fits context and works | APPROVE |
 
-      **Note:** Scope creep is noted as a warning but doesn't warrant REJECT alone. Some tasks require large changes.
+      **Note:** Scope creep is noted as a warning but doesn't warrant REJECT alone.
 
-      ## Status Output Format
+      ## Output Format
 
-      Output review results with the following tags:
-      - [AI_REVIEW:APPROVE] No AI-specific issues
-      - [AI_REVIEW:REJECT] Issues found
+      | Situation | Tag |
+      |-----------|-----|
+      | No AI-specific issues | `[AI_REVIEW:APPROVE]` |
+      | Issues found | `[AI_REVIEW:REJECT]` |
+
+      ### Output Examples
+
+      **APPROVE case:**
+      ```
+      [AI_REVIEW:APPROVE]
+
+      Verification result: No issues
+      ```
+
+      **REJECT case:**
+      ```
+      [AI_REVIEW:REJECT]
+
+      Issues:
+      1. Non-existent API used: `fetch.json()` → `response.json()`
+      ```
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -420,12 +520,36 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules: |
-      ## Status Output Format
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
 
-      Always include these tags when work is complete:
-      - [CODER:DONE] Fixes complete
-      - [CODER:BLOCKED] Cannot decide/insufficient info
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | AI issue fixes complete | `[CODER:DONE]` |
+      | Cannot decide/insufficient info | `[CODER:BLOCKED]` |
+
+      **Important**: When in doubt, `[BLOCKED]`. Don't decide on your own.
+
+      ### Output Examples
+
+      **DONE case:**
+      ```
+      Fixed AI Reviewer's issues.
+      - Fixed non-existent API: `fetch.json()` → `response.json()`
+
+      [CODER:DONE]
+      ```
+
+      **BLOCKED case:**
+      ```
+      [CODER:BLOCKED]
+
+      Reason: Fix method unclear
+      Required info: Alternative API specification
+      ```
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -463,21 +587,43 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules: |
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
       ## Judgment Criteria
 
       | Situation | Judgment |
       |-----------|----------|
-      | Critical vulnerability (Immediate REJECT) | REJECT |
+      | Critical vulnerability | REJECT |
       | Medium severity vulnerability | REJECT |
       | Minor issues/warnings only | APPROVE (note warnings) |
       | No security issues | APPROVE |
 
-      ## Status Output Format
+      ## Output Format
 
-      Output review results with the following tags:
-      - [SECURITY:APPROVE] No security issues
-      - [SECURITY:REJECT] Vulnerabilities require fixes
+      | Situation | Tag |
+      |-----------|-----|
+      | No security issues | `[SECURITY:APPROVE]` |
+      | Vulnerabilities require fixes | `[SECURITY:REJECT]` |
+
+      ### Output Examples
+
+      **APPROVE case:**
+      ```
+      [SECURITY:APPROVE]
+
+      No security issues detected.
+      ```
+
+      **REJECT case:**
+      ```
+      [SECURITY:REJECT]
+
+      Vulnerabilities:
+      1. SQL Injection: `src/db.ts:42`
+         Fix: Use parameterized query
+      ```
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -550,12 +696,36 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules: |
-      ## Status Output Format
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
 
-      Always include these tags when work is complete:
-      - [CODER:DONE] Security fixes complete
-      - [CODER:BLOCKED] Cannot decide/insufficient info
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Security fixes complete | `[CODER:DONE]` |
+      | Cannot decide/insufficient info | `[CODER:BLOCKED]` |
+
+      **Important**: Security issues require highest priority.
+
+      ### Output Examples
+
+      **DONE case:**
+      ```
+      Fixed security issues.
+      - SQL injection fix: Changed to parameterized query
+
+      [CODER:DONE]
+      ```
+
+      **BLOCKED case:**
+      ```
+      [CODER:BLOCKED]
+
+      Reason: Fix method unclear
+      Required info: Auth library specification
+      ```
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -592,12 +762,37 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules: |
-      ## Status Output Format
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
 
-      Always include these tags when work is complete:
-      - [CODER:DONE] Fixes complete
-      - [CODER:BLOCKED] Cannot decide/insufficient info
+      ## Output Format
+
+      | Situation | Tag |
+      |-----------|-----|
+      | Architect's issues fixed | `[CODER:DONE]` |
+      | Cannot decide/insufficient info | `[CODER:BLOCKED]` |
+
+      **Important**: When in doubt, `[BLOCKED]`. Don't decide on your own.
+
+      ### Output Examples
+
+      **DONE case:**
+      ```
+      Fixed Architect's issues.
+      - File split: Split into 3 files
+      - Added type definitions
+
+      [CODER:DONE]
+      ```
+
+      **BLOCKED case:**
+      ```
+      [CODER:BLOCKED]
+
+      Reason: Fix approach unclear
+      Required info: Specific split method
+      ```
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -633,7 +828,10 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules: |
+    status_rules_prompt: |
+      # Status Output Rules
+      Your final output MUST include a status tag following the rules below.
+
       ## Judgment Criteria
 
       | Situation | Judgment |
@@ -646,11 +844,33 @@ steps:
 
       **Principle**: When in doubt, REJECT. Don't give ambiguous approval.
 
-      ## Status Output Format
+      ## Output Format
 
-      Output verification results with the following tags:
-      - [SUPERVISOR:APPROVE] if ready to merge
-      - [SUPERVISOR:REJECT] if issues found (specify the issues)
+      | Situation | Tag |
+      |-----------|-----|
+      | Final approval | `[SUPERVISOR:APPROVE]` |
+      | Return for fixes | `[SUPERVISOR:REJECT]` |
+
+      ### Output Examples
+
+      **APPROVE case:**
+      ```
+      [SUPERVISOR:APPROVE]
+
+      Verification results:
+      - Tests: ✅ All passed
+      - Build: ✅ Succeeded
+      - Requirements met: ✅
+      ```
+
+      **REJECT case:**
+      ```
+      [SUPERVISOR:REJECT]
+
+      Issues:
+      1. Tests failing: `npm test` - 2 failures
+      2. Requirements not met: Login feature not implemented
+      ```
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}

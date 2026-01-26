@@ -18,39 +18,39 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules: |
-      ## 判断基準
-       
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 判定基準
+
       | 状況 | 判定 |
       |------|------|
       | 要件が明確で実装可能 | DONE |
       | 要件が不明確、情報不足 | BLOCKED |
-       
+
       ## 出力フォーマット
-         
+
       | 状況 | タグ |
       |------|------|
       | 分析完了 | `[PLANNER:DONE]` |
       | 情報不足 | `[PLANNER:BLOCKED]` |
-       
-      ### DONE時の出力構造
-       
+
+      ### 出力例
+
+      **DONE の場合:**
       ```
       [PLANNER:DONE]
       ```
-       
-      ### BLOCKED時の出力構造
-        
+
+      **BLOCKED の場合:**
       ```
       [PLANNER:BLOCKED]
-      
+
       確認事項:
       - {質問1}
       - {質問2}
       ```
-      分析結果を以下のタグで出力してください：
-      - [PLANNER:DONE] 分析完了
-      - [PLANNER:BLOCKED] 情報不足（確認事項を記載）
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -118,45 +118,36 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules: |      
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
       ## 出力フォーマット
-      
-      作業完了時は必ず以下のタグを含めてください:
-        
+
       | 状況 | タグ |
       |------|------|
       | 実装完了 | `[CODER:DONE]` |
-      | Architectの指摘を修正完了 | `[CODER:FIXED]` |
       | 判断できない/情報不足 | `[CODER:BLOCKED]` |
-      
+
       **重要**: 迷ったら `[BLOCKED]`。勝手に判断しない。
-      
+
       ### 出力例
-        
-      **実装完了時:**
+
+      **DONE の場合:**
       ```
       実装完了しました。
       - 作成: `src/auth/service.ts`, `tests/auth.test.ts`
       - 変更: `src/routes.ts`
-        
+
       [CODER:DONE]
       ```
-        
-      **ブロック時:**
+
+      **BLOCKED の場合:**
       ```
       [CODER:BLOCKED]
+
       理由: DBスキーマが未定義のため実装できません
       必要な情報: usersテーブルの構造
-      ```
-        
-      **修正完了時:**
-      ```
-      Architectの指摘3点を修正しました。
-      - 型定義を追加
-      - エラーハンドリングを修正
-      - テストケースを追加
-        
-      [CODER:FIXED]
       ```
     instruction_template: |
       ## Workflow Context
@@ -224,7 +215,10 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules: |
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
       ## 判定基準
 
       | 状況 | 判定 |
@@ -233,48 +227,49 @@ steps:
       | 設計原則違反がある | REJECT |
       | セキュリティ問題がある | REJECT |
       | テストが不十分 | REJECT |
-      | 改善すべき点がある（ブロッキングではないが対応すべき） | IMPROVE |
+      | 改善すべき点がある（軽微） | IMPROVE |
       | 問題なし | APPROVE |
 
-      **IMPROVEの使い方:**
+      **IMPROVE の使い方:**
       - 設計としては許容範囲だが、改善した方が良い点がある場合
-      - 次のステップに進む前に修正させたい軽微な問題
       - 例: 命名の改善、小さなリファクタリング、コメント追加
 
-      ## ステータス出力形式
+      ## 出力フォーマット
 
-      レビュー結果を以下のタグで出力してください：
-      - [ARCHITECT:APPROVE] 問題なし
-      - [ARCHITECT:IMPROVE] 軽微な改善必要
-      - [ARCHITECT:REJECT] 構造的な修正必要
+      | 状況 | タグ |
+      |------|------|
+      | 問題なし | `[ARCHITECT:APPROVE]` |
+      | 軽微な改善必要 | `[ARCHITECT:IMPROVE]` |
+      | 構造的な修正必要 | `[ARCHITECT:REJECT]` |
 
       ### 出力例
 
-      **REJECTの場合:**
-      ```
-      [ARCHITECT:REJECT]
-
-      ### 問題点
-
-      1. **ファイルサイズ超過**
-         - 場所: `src/services/user.ts` (523行)
-         - 問題: 単一ファイルに認証・権限・プロフィール管理が混在
-         - 修正案: 以下の3ファイルに分割
-           - `src/services/auth.ts` - 認証
-           - `src/services/permission.ts` - 権限
-           - `src/services/profile.ts` - プロフィール
-      ```
-
-      **APPROVEの場合:**
+      **APPROVE の場合:**
       ```
       [ARCHITECT:APPROVE]
 
-      ### 良い点
+      良い点:
       - モジュール分割が適切
       - 単一責務が守られている
+      ```
 
-      ### 改善提案（任意）
-      - `utils/` 内の共通処理は将来的に整理を検討
+      **IMPROVE の場合:**
+      ```
+      [ARCHITECT:IMPROVE]
+
+      改善点:
+      - 命名を改善してください: `data` → `userData`
+      - コメントを追加してください
+      ```
+
+      **REJECT の場合:**
+      ```
+      [ARCHITECT:REJECT]
+
+      問題点:
+      1. ファイルサイズ超過
+         - 場所: `src/services/user.ts` (523行)
+         - 修正案: 3ファイルに分割
       ```
     instruction_template: |
       ## Workflow Context
@@ -346,45 +341,36 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules: |
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
       ## 出力フォーマット
-      
-      作業完了時は必ず以下のタグを含めてください:
-      
+
       | 状況 | タグ |
       |------|------|
-      | 実装完了 | `[CODER:DONE]` |
-      | Architectの指摘を修正完了 | `[CODER:FIXED]` |
+      | 改善完了 | `[CODER:DONE]` |
       | 判断できない/情報不足 | `[CODER:BLOCKED]` |
-      
+
       **重要**: 迷ったら `[BLOCKED]`。勝手に判断しない。
-      
+
       ### 出力例
-      
-      **実装完了時:**
+
+      **DONE の場合:**
       ```
-      実装完了しました。
-      - 作成: `src/auth/service.ts`, `tests/auth.test.ts`
-      - 変更: `src/routes.ts`
-      
+      改善を完了しました。
+      - 命名を改善: `data` → `userData`
+      - コメントを追加
+
       [CODER:DONE]
       ```
-      
-      **ブロック時:**
+
+      **BLOCKED の場合:**
       ```
       [CODER:BLOCKED]
-      理由: DBスキーマが未定義のため実装できません
-      必要な情報: usersテーブルの構造
-      ```
-      
-      **修正完了時:**
-      ```
-      Architectの指摘3点を修正しました。
-      - 型定義を追加
-      - エラーハンドリングを修正
-      - テストケースを追加
-      
-      [CODER:FIXED]
+
+      理由: 改善の意図が不明確です
+      必要な情報: 具体的な改善内容
       ```
     instruction_template: |
       ## Workflow Context
@@ -424,9 +410,12 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules: |
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
       ## 判定基準
-      
+
       | 状況 | 判定 |
       |------|------|
       | 仮定が間違っている（動作に影響） | REJECT |
@@ -435,21 +424,32 @@ steps:
       | スコープクリープ | APPROVE（警告を付記） |
       | 軽微なスタイルの逸脱のみ | APPROVE |
       | コードが文脈に合い動作する | APPROVE |
-      
-      **注意:** スコープクリープは警告として記載するが、それだけでREJECTしない。大きな変更が必要なタスクもある。
-      
+
+      **注意:** スコープクリープは警告として記載するが、それだけでREJECTしない。
+
       ## 出力フォーマット
-      
+
       | 状況 | タグ |
       |------|------|
       | AI特有の問題なし | `[AI_REVIEW:APPROVE]` |
       | 問題あり | `[AI_REVIEW:REJECT]` |
 
-      ## ステータス出力形式
+      ### 出力例
 
-      レビュー結果を以下のタグで出力してください：
-      - [AI_REVIEW:APPROVE] AI特有の問題なし
-      - [AI_REVIEW:REJECT] 問題あり
+      **APPROVE の場合:**
+      ```
+      [AI_REVIEW:APPROVE]
+
+      検証結果: 問題なし
+      ```
+
+      **REJECT の場合:**
+      ```
+      [AI_REVIEW:REJECT]
+
+      問題点:
+      1. 存在しないAPIを使用: `fetch.json()` → `response.json()`
+      ```
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -519,45 +519,35 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules: |
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
       ## 出力フォーマット
-      
-      作業完了時は必ず以下のタグを含めてください:
-      
+
       | 状況 | タグ |
       |------|------|
-      | 実装完了 | `[CODER:DONE]` |
-      | Architectの指摘を修正完了 | `[CODER:FIXED]` |
+      | AI問題の修正完了 | `[CODER:DONE]` |
       | 判断できない/情報不足 | `[CODER:BLOCKED]` |
-      
+
       **重要**: 迷ったら `[BLOCKED]`。勝手に判断しない。
-      
+
       ### 出力例
-      
-      **実装完了時:**
+
+      **DONE の場合:**
       ```
-      実装完了しました。
-      - 作成: `src/auth/service.ts`, `tests/auth.test.ts`
-      - 変更: `src/routes.ts`
-      
+      AI Reviewerの指摘を修正しました。
+      - 存在しないAPIを修正: `fetch.json()` → `response.json()`
+
       [CODER:DONE]
       ```
-      
-      **ブロック時:**
+
+      **BLOCKED の場合:**
       ```
       [CODER:BLOCKED]
-      理由: DBスキーマが未定義のため実装できません
-      必要な情報: usersテーブルの構造
-      ```
-      
-      **修正完了時:**
-      ```
-      Architectの指摘3点を修正しました。
-      - 型定義を追加
-      - エラーハンドリングを修正
-      - テストケースを追加
-      
-      [CODER:FIXED]
+
+      理由: 指摘された問題の修正方法が不明確です
+      必要な情報: 代替APIの仕様
       ```
     instruction_template: |
       ## Workflow Context
@@ -595,21 +585,43 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules: |
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
       ## 判定基準
 
       | 状況 | 判定 |
       |------|------|
-      | 重大な脆弱性（即REJECT） | REJECT |
+      | 重大な脆弱性 | REJECT |
       | 中程度の脆弱性 | REJECT |
       | 軽微な問題・警告のみ | APPROVE（警告を付記） |
       | セキュリティ問題なし | APPROVE |
 
-      ## ステータス出力形式
+      ## 出力フォーマット
 
-      レビュー結果を以下のタグで出力してください：
-      - [SECURITY:APPROVE] セキュリティ問題なし
-      - [SECURITY:REJECT] 脆弱性があり修正が必要（具体的な問題をリスト）
+      | 状況 | タグ |
+      |------|------|
+      | セキュリティ問題なし | `[SECURITY:APPROVE]` |
+      | 脆弱性があり修正が必要 | `[SECURITY:REJECT]` |
+
+      ### 出力例
+
+      **APPROVE の場合:**
+      ```
+      [SECURITY:APPROVE]
+
+      セキュリティ問題は検出されませんでした。
+      ```
+
+      **REJECT の場合:**
+      ```
+      [SECURITY:REJECT]
+
+      脆弱性:
+      1. SQLインジェクション: `src/db.ts:42`
+         修正案: パラメータ化クエリを使用
+      ```
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -682,12 +694,36 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules: |
-      ## ステータス出力形式
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
 
-      作業完了時は必ず以下のタグを含めてください：
-      - [CODER:DONE] セキュリティ修正完了
-      - [CODER:BLOCKED] 判断できない/情報不足
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | セキュリティ修正完了 | `[CODER:DONE]` |
+      | 判断できない/情報不足 | `[CODER:BLOCKED]` |
+
+      **重要**: セキュリティの問題は最優先で対応が必要です。
+
+      ### 出力例
+
+      **DONE の場合:**
+      ```
+      セキュリティの指摘を修正しました。
+      - SQLインジェクション対策: パラメータ化クエリに変更
+
+      [CODER:DONE]
+      ```
+
+      **BLOCKED の場合:**
+      ```
+      [CODER:BLOCKED]
+
+      理由: 修正方法が不明確です
+      必要な情報: 認証ライブラリの仕様
+      ```
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}
@@ -723,45 +759,36 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules: |
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
       ## 出力フォーマット
-      
-      作業完了時は必ず以下のタグを含めてください:
-      
+
       | 状況 | タグ |
       |------|------|
-      | 実装完了 | `[CODER:DONE]` |
-      | Architectの指摘を修正完了 | `[CODER:FIXED]` |
+      | Architectの指摘を修正完了 | `[CODER:DONE]` |
       | 判断できない/情報不足 | `[CODER:BLOCKED]` |
-      
+
       **重要**: 迷ったら `[BLOCKED]`。勝手に判断しない。
-      
+
       ### 出力例
-      
-      **実装完了時:**
+
+      **DONE の場合:**
       ```
-      実装完了しました。
-      - 作成: `src/auth/service.ts`, `tests/auth.test.ts`
-      - 変更: `src/routes.ts`
-      
+      Architectの指摘を修正しました。
+      - ファイル分割: 3ファイルに分割
+      - 型定義を追加
+
       [CODER:DONE]
       ```
-      
-      **ブロック時:**
+
+      **BLOCKED の場合:**
       ```
       [CODER:BLOCKED]
-      理由: DBスキーマが未定義のため実装できません
-      必要な情報: usersテーブルの構造
-      ```
-      
-      **修正完了時:**
-      ```
-      Architectの指摘3点を修正しました。
-      - 型定義を追加
-      - エラーハンドリングを修正
-      - テストケースを追加
-      
-      [CODER:FIXED]
+
+      理由: 修正方針が不明確です
+      必要な情報: 分割の具体的な方法
       ```
     instruction_template: |
       ## Workflow Context
@@ -797,8 +824,12 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules: |
-      
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 判定基準
+
       | 状況 | 判定 |
       |------|------|
       | 要求が満たされていない | REJECT |
@@ -806,15 +837,36 @@ steps:
       | ビルドが通らない | REJECT |
       | その場しのぎが残っている | REJECT |
       | すべて問題なし | APPROVE |
-      
+
       **原則**: 疑わしきは REJECT。曖昧な承認はしない。
-      
+
       ## 出力フォーマット
-      
+
       | 状況 | タグ |
       |------|------|
       | 最終承認 | `[SUPERVISOR:APPROVE]` |
       | 差し戻し | `[SUPERVISOR:REJECT]` |
+
+      ### 出力例
+
+      **APPROVE の場合:**
+      ```
+      [SUPERVISOR:APPROVE]
+
+      検証結果:
+      - テスト: ✅ 全件パス
+      - ビルド: ✅ 成功
+      - 要求充足: ✅
+      ```
+
+      **REJECT の場合:**
+      ```
+      [SUPERVISOR:REJECT]
+
+      問題点:
+      1. テストが失敗: `npm test` で 2 件失敗
+      2. 元の要求を満たしていない: ログイン機能が未実装
+      ```
     instruction_template: |
       ## Workflow Context
       - Iteration: {iteration}/{max_iterations}

@@ -16,6 +16,25 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 判定 | タグ |
+      |------|------|
+      | 賛成 | `[MELCHIOR:APPROVE]` |
+      | 反対 | `[MELCHIOR:REJECT]` |
+      | 条件付き賛成 | `[MELCHIOR:CONDITIONAL]` |
+
+      ### 出力例
+
+      ```
+      [MELCHIOR:APPROVE]
+
+      理由: {賛成の理由}
+      ```
     instruction_template: |
       # MAGI System 起動
 
@@ -25,11 +44,6 @@ steps:
       ## 指示
       あなたはMAGI System の MELCHIOR-1 です。
       科学者・技術者の観点から上記を分析し、判定を下してください。
-
-      判定は以下のいずれか:
-      - [MELCHIOR:APPROVE] - 賛成
-      - [MELCHIOR:REJECT] - 反対
-      - [MELCHIOR:CONDITIONAL] - 条件付き賛成
     transitions:
       - condition: always
         next_step: balthasar
@@ -42,6 +56,25 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 判定 | タグ |
+      |------|------|
+      | 賛成 | `[BALTHASAR:APPROVE]` |
+      | 反対 | `[BALTHASAR:REJECT]` |
+      | 条件付き賛成 | `[BALTHASAR:CONDITIONAL]` |
+
+      ### 出力例
+
+      ```
+      [BALTHASAR:APPROVE]
+
+      理由: {賛成の理由}
+      ```
     instruction_template: |
       # MAGI System 継続
 
@@ -55,11 +88,6 @@ steps:
       あなたはMAGI System の BALTHASAR-2 です。
       育成者の観点から上記を分析し、判定を下してください。
       MELCHIORの判定は参考にしつつも、独自の観点で判断してください。
-
-      判定は以下のいずれか:
-      - [BALTHASAR:APPROVE] - 賛成
-      - [BALTHASAR:REJECT] - 反対
-      - [BALTHASAR:CONDITIONAL] - 条件付き賛成
     pass_previous_response: true
     transitions:
       - condition: always
@@ -73,6 +101,35 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
+    status_rules_prompt: |
+      # ステータス出力ルール
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      最終結論は3者の多数決で判定:
+
+      | 判定 | タグ |
+      |------|------|
+      | 承認（2票以上賛成） | `[MAGI:APPROVE]` |
+      | 却下（2票以上反対） | `[MAGI:REJECT]` |
+      | 条件付き承認 | `[MAGI:CONDITIONAL]` |
+
+      ### 出力例
+
+      ```
+      ## MAGI System 最終判定
+
+      | システム | 判定 |
+      |----------|------|
+      | MELCHIOR-1 | APPROVE |
+      | BALTHASAR-2 | CONDITIONAL |
+      | CASPER-3 | APPROVE |
+
+      **結論: [MAGI:APPROVE]**
+
+      [理由・まとめ]
+      ```
     instruction_template: |
       # MAGI System 最終審議
 
@@ -87,27 +144,6 @@ steps:
       実務・現実の観点から上記を分析し、判定を下してください。
 
       **最後に、3者の判定を集計し、最終結論を出してください。**
-
-      ### 最終結論（必須）
-      3者の多数決で最終判定を出す:
-      - [MAGI:APPROVE] - 承認（2票以上賛成）
-      - [MAGI:REJECT] - 却下（2票以上反対）
-      - [MAGI:CONDITIONAL] - 条件付き承認（条件付きが多数または意見が分かれた場合）
-
-      **最終結論のフォーマット例:**
-      ```
-      ## MAGI System 最終判定
-
-      | システム | 判定 |
-      |----------|------|
-      | MELCHIOR-1 | APPROVE |
-      | BALTHASAR-2 | CONDITIONAL |
-      | CASPER-3 | APPROVE |
-
-      **結論: [MAGI:APPROVE]**
-
-      [理由・まとめ]
-      ```
     pass_previous_response: true
     transitions:
       - condition: always
