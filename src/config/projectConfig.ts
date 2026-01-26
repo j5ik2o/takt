@@ -82,11 +82,13 @@ export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig
   const configDir = getConfigDir(projectDir);
   const configPath = getConfigPath(projectDir);
 
-  // Ensure directory exists and copy project resources on first creation
+  // Ensure directory exists
   if (!existsSync(configDir)) {
     mkdirSync(configDir, { recursive: true });
-    copyProjectResourcesToDir(configDir);
   }
+
+  // Copy project resources (only copies files that don't exist)
+  copyProjectResourcesToDir(configDir);
 
   const content = stringify(config, { indent: 2 });
   writeFileSync(configPath, content, 'utf-8');

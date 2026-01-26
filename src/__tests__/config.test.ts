@@ -367,3 +367,53 @@ describe('loadInputHistory - edge cases', () => {
     expect(history).toEqual([]);
   });
 });
+
+describe('saveProjectConfig - gitignore copy', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should copy .gitignore when creating new config', () => {
+    setCurrentWorkflow(testDir, 'test');
+
+    const configDir = getProjectConfigDir(testDir);
+    const gitignorePath = join(configDir, '.gitignore');
+
+    expect(existsSync(gitignorePath)).toBe(true);
+  });
+
+  it('should copy .gitignore to existing config directory without one', () => {
+    // Create config directory without .gitignore
+    const configDir = getProjectConfigDir(testDir);
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), 'workflow: existing\n');
+
+    // Save config should still copy .gitignore
+    setCurrentWorkflow(testDir, 'updated');
+
+    const gitignorePath = join(configDir, '.gitignore');
+    expect(existsSync(gitignorePath)).toBe(true);
+  });
+
+  it('should not overwrite existing .gitignore', () => {
+    const configDir = getProjectConfigDir(testDir);
+    mkdirSync(configDir, { recursive: true });
+    const customContent = '# Custom gitignore\nmy-custom-file';
+    writeFileSync(join(configDir, '.gitignore'), customContent);
+
+    setCurrentWorkflow(testDir, 'test');
+
+    const gitignorePath = join(configDir, '.gitignore');
+    const content = readFileSync(gitignorePath, 'utf-8');
+    expect(content).toBe(customContent);
+  });
+});
