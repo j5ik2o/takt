@@ -7,6 +7,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parse, stringify } from 'yaml';
+import { copyProjectResourcesToDir } from '../resources/index.js';
 
 /** Permission mode for the project
  * - default: Uses Agent SDK's acceptEdits mode (auto-accepts file edits, minimal prompts)
@@ -81,9 +82,10 @@ export function saveProjectConfig(projectDir: string, config: ProjectLocalConfig
   const configDir = getConfigDir(projectDir);
   const configPath = getConfigPath(projectDir);
 
-  // Ensure directory exists
+  // Ensure directory exists and copy project resources on first creation
   if (!existsSync(configDir)) {
     mkdirSync(configDir, { recursive: true });
+    copyProjectResourcesToDir(configDir);
   }
 
   const content = stringify(config, { indent: 2 });

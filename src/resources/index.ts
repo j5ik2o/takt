@@ -31,6 +31,13 @@ export function getGlobalResourcesDir(): string {
 }
 
 /**
+ * Get the project resources directory path (resources/project/)
+ */
+export function getProjectResourcesDir(): string {
+  return join(getResourcesDir(), 'project');
+}
+
+/**
  * Get the language-specific global resources directory path (resources/global/{lang}/)
  */
 export function getLanguageResourcesDir(lang: Language): string {
@@ -49,6 +56,18 @@ export function copyGlobalResourcesToDir(targetDir: string): void {
   }
   // Skip language directories (they are handled by copyLanguageResourcesToDir)
   copyDirRecursive(resourcesDir, targetDir, ['en', 'ja']);
+}
+
+/**
+ * Copy project resources directory to .takt in project.
+ * Only copies files that don't exist in target (e.g., .gitignore).
+ */
+export function copyProjectResourcesToDir(targetDir: string): void {
+  const resourcesDir = getProjectResourcesDir();
+  if (!existsSync(resourcesDir)) {
+    return;
+  }
+  copyDirRecursive(resourcesDir, targetDir);
 }
 
 /**
@@ -87,6 +106,9 @@ export function copyLanguageResourcesToDir(targetDir: string, lang: Language): v
   }
 }
 
+/** Files to skip during resource copy (OS-generated files) */
+const SKIP_FILES = ['.DS_Store', 'Thumbs.db'];
+
 /**
  * Recursively copy directory contents.
  * Skips files that already exist in target.
@@ -98,8 +120,8 @@ function copyDirRecursive(srcDir: string, destDir: string, skipDirs: string[] = 
   }
 
   for (const entry of readdirSync(srcDir)) {
-    // Skip .DS_Store and other hidden files
-    if (entry.startsWith('.')) continue;
+    // Skip OS-generated files
+    if (SKIP_FILES.includes(entry)) continue;
 
     // Skip specified directories
     if (skipDirs.includes(entry)) continue;

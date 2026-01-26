@@ -1,0 +1,8 @@
+# Temporary files
+logs/
+reports/
+completed/
+tasks/
+worktrees/
+agent_sessions.json
+input_history
