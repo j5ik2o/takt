@@ -23,6 +23,8 @@ import {
   addUserInput,
   getPreviousOutput,
 } from './state-manager.js';
+import { parseWorktreeConfig } from '../utils/worktree.js';
+import { generateReportDir } from '../utils/session.js';
 
 // Re-export types for backward compatibility
 export type {
@@ -33,34 +35,14 @@ export type {
   IterationLimitCallback,
   WorkflowEngineOptions,
 } from './types.js';
+export type { WorktreeConfig } from '../utils/worktree.js';
 export { COMPLETE_STEP, ABORT_STEP } from './constants.js';
-
-/**
- * Generate report directory name from task and timestamp.
- * Format: YYYYMMDD-HHMMSS-task-summary
- */
-function generateReportDir(task: string): string {
-  const now = new Date();
-  const timestamp = now.toISOString()
-    .replace(/[-:T]/g, '')
-    .slice(0, 14)
-    .replace(/(\d{8})(\d{6})/, '$1-$2');
-
-  // Extract first 30 chars of task, sanitize for directory name
-  const summary = task
-    .slice(0, 30)
-    .toLowerCase()
-    .replace(/[^a-z0-9\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    || 'task';
-
-  return `${timestamp}-${summary}`;
-}
 
 /** Workflow engine for orchestrating agent execution */
 export class WorkflowEngine extends EventEmitter {
   private state: WorkflowState;
   private config: WorkflowConfig;
+  private originalCwd: string;
   private cwd: string;
   private task: string;
   private options: WorkflowEngineOptions;
@@ -70,6 +52,7 @@ export class WorkflowEngine extends EventEmitter {
   constructor(config: WorkflowConfig, cwd: string, task: string, options: WorkflowEngineOptions = {}) {
     super();
     this.config = config;
+    this.originalCwd = cwd;
     this.cwd = cwd;
     this.task = task;
     this.options = options;
@@ -80,9 +63,9 @@ export class WorkflowEngine extends EventEmitter {
     this.state = createInitialState(config, options);
   }
 
-  /** Ensure report directory exists */
+  /** Ensure report directory exists (always in original cwd) */
   private ensureReportDirExists(): void {
-    const reportDirPath = join(this.cwd, '.takt', 'reports', this.reportDir);
+    const reportDirPath = join(this.originalCwd, '.takt', 'reports', this.reportDir);
     if (!existsSync(reportDirPath)) {
       mkdirSync(reportDirPath, { recursive: true });
     }
@@ -118,6 +101,21 @@ export class WorkflowEngine extends EventEmitter {
   /** Add user input */
   addUserInput(input: string): void {
     addUserInput(this.state, input);
+  }
+
+  /** Update working directory (used after worktree creation) */
+  updateCwd(newCwd: string): void {
+    this.cwd = newCwd;
+  }
+
+  /** Get current working directory (may be worktree path) */
+  getCwd(): string {
+    return this.cwd;
+  }
+
+  /** Get original working directory (for .takt data) */
+  getOriginalCwd(): string {
+    return this.originalCwd;
   }
 
   /** Build instruction from template */
@@ -218,6 +216,14 @@ export class WorkflowEngine extends EventEmitter {
       try {
         const response = await this.runStep(step);
         this.emit('step:complete', step, response);
+
+        // Check for worktree config in Planner output (when DONE)
+        if (step.name === 'plan' && response.status === 'done') {
+          const worktreeConfig = parseWorktreeConfig(response.content);
+          if (worktreeConfig) {
+            this.emit('planner:worktree_config', worktreeConfig);
+          }
+        }
 
         if (response.status === 'blocked') {
           this.emit('step:blocked', step, response);

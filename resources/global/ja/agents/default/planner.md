@@ -55,6 +55,27 @@
 | 分析完了 | `[PLANNER:DONE]` |
 | 情報不足 | `[PLANNER:BLOCKED]` |
 
+### DONE時の出力構造
+
+```
+[PLANNER:DONE]
+
+worktree:
+  baseBranch: {元ブランチ名}
+  branchName: {新ブランチ名}
+```
+
+**baseBranch判断基準:**
+- 新機能開発: `main` または `master`
+- 既存機能の修正: 関連するfeatureブランチ（不明な場合は `main`）
+- バグ修正: 該当するブランチ（不明な場合は `main`）
+
+**branchName命名規則:**
+- 機能追加: `add-{feature-name}` (例: `add-user-authentication`)
+- 修正: `fix-{issue}` (例: `fix-login-error`)
+- リファクタ: `refactor-{target}` (例: `refactor-api-client`)
+- 英語・小文字・ハイフン区切りで記述
+
 ### BLOCKED時の出力構造
 
 ```
@@ -64,6 +85,8 @@
 - {質問1}
 - {質問2}
 ```
+
+**注意:** BLOCKEDの場合、worktree設定は出力しない。
 
 ## 重要
 
