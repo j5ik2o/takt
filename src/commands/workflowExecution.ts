@@ -4,10 +4,12 @@
 
 import { WorkflowEngine } from '../workflow/engine.js';
 import type { WorkflowConfig } from '../models/types.js';
+import type { IterationLimitRequest } from '../workflow/types.js';
 import { loadAgentSessions, updateAgentSession, clearAgentSessions } from '../config/paths.js';
 import {
   header,
   info,
+  warn,
   error,
   success,
   status,
@@ -22,6 +24,7 @@ import {
 } from '../utils/session.js';
 import { createLogger } from '../utils/debug.js';
 import { notifySuccess, notifyError } from '../utils/notification.js';
+import { selectOption, promptInput } from '../prompt/index.js';
 
 const log = createLogger('workflow');
 
@@ -86,10 +89,54 @@ export async function executeWorkflow(
     updateAgentSession(cwd, agentName, agentSessionId);
   };
 
+  const iterationLimitHandler = async (
+    request: IterationLimitRequest
+  ): Promise<number | null> => {
+    if (displayRef.current) {
+      displayRef.current.flush();
+      displayRef.current = null;
+    }
+
+    console.log();
+    warn(
+      `最大イテレーションに到達しました (${request.currentIteration}/${request.maxIterations})`
+    );
+    info(`現在のステップ: ${request.currentStep}`);
+
+    const action = await selectOption('続行しますか？', [
+      {
+        label: '続行する（追加イテレーション数を入力）',
+        value: 'continue',
+        description: '入力した回数だけ上限を増やします',
+      },
+      { label: '終了する', value: 'stop' },
+    ]);
+
+    if (action !== 'continue') {
+      return null;
+    }
+
+    while (true) {
+      const input = await promptInput('追加するイテレーション数を入力してください（1以上）');
+      if (!input) {
+        return null;
+      }
+
+      const additionalIterations = Number.parseInt(input, 10);
+      if (Number.isInteger(additionalIterations) && additionalIterations > 0) {
+        workflowConfig.maxIterations += additionalIterations;
+        return additionalIterations;
+      }
+
+      warn('1以上の整数を入力してください。');
+    }
+  };
+
   const engine = new WorkflowEngine(workflowConfig, cwd, task, {
     onStream: streamHandler,
     initialSessions: savedSessions,
     onSessionUpdate: sessionUpdateHandler,
+    onIterationLimit: iterationLimitHandler,
   });
 
   let abortReason: string | undefined;
