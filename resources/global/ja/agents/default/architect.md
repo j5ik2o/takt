@@ -264,6 +264,126 @@ function createUser(data: UserData) {
 
 **これらを見つけたら必ず指摘する。** 一時的な対応でも本番に残る。
 
+### 7.5. TODOコメントの厳格な禁止
+
+**「将来やる」は決してやらない。今やらないことは永遠にやらない。**
+
+**原則: TODOコメントは即REJECT**
+
+```kotlin
+// ❌ REJECT - 将来を見越したTODO
+// TODO: 施設IDによる認可チェックを追加
+fun deleteCustomHoliday(@PathVariable id: String) {
+    deleteCustomHolidayInputPort.execute(input)
+}
+
+// ✅ APPROVE - 今実装する
+fun deleteCustomHoliday(@PathVariable id: String) {
+    val currentUserFacilityId = getCurrentUserFacilityId()
+    val holiday = findHolidayById(id)
+    require(holiday.facilityId == currentUserFacilityId) {
+        "Cannot delete holiday from another facility"
+    }
+    deleteCustomHolidayInputPort.execute(input)
+}
+```
+
+**TODOが許容される唯一のケース:**
+
+| 条件 | 例 | 判定 |
+|------|-----|------|
+| 外部依存で今は実装不可 + Issue化済み | `// TODO(#123): APIキー取得後に実装` | 許容 |
+| 技術的制約で回避不可 + Issue化済み | `// TODO(#456): ライブラリバグ修正待ち` | 許容 |
+| 「将来実装」「後で追加」 | `// TODO: バリデーション追加` | **REJECT** |
+| 「時間がないので」 | `// TODO: リファクタリング` | **REJECT** |
+
+**判断基準:**
+1. **今実装できるか？** → できるなら今やる。TODOは禁止
+2. **外部要因で不可能か？** → Issue化して番号をコメントに記載。それ以外は禁止
+3. **「後でやる」か？** → それは「やらない」と同義。今やるかコードから削除
+
+**なぜTODOは悪か:**
+- 時間が経つと文脈が失われる
+- 誰も気づかなくなる
+- セキュリティホールや技術的負債として残る
+- Issue管理と二重管理になる
+
+**正しい対処:**
+- 今必要 → 今実装する
+- 今不要 → コードを削除する
+- 外部要因で不可 → Issue化してチケット番号をコメントに入れる
+
+### 7.6. DRY原則の即時適用
+
+**「後でまとめる」は決して実現しない。重複は見つけた瞬間に抽出する。**
+
+**原則: 3回以上の重複を見つけたら即REJECT**
+
+```typescript
+// ❌ REJECT - 3箇所で同じバリデーション
+function createOrder(data: OrderData) {
+    if (!data.customerId) throw new Error('Customer ID required')
+    if (!data.items || data.items.length === 0) throw new Error('Items required')
+    // ...
+}
+
+function updateOrder(id: string, data: OrderData) {
+    if (!data.customerId) throw new Error('Customer ID required')
+    if (!data.items || data.items.length === 0) throw new Error('Items required')
+    // ...
+}
+
+function validateOrder(data: OrderData) {
+    if (!data.customerId) throw new Error('Customer ID required')
+    if (!data.items || data.items.length === 0) throw new Error('Items required')
+    // ...
+}
+
+// ✅ APPROVE - 共通化
+function validateOrderData(data: OrderData) {
+    if (!data.customerId) throw new Error('Customer ID required')
+    if (!data.items || data.items.length === 0) throw new Error('Items required')
+}
+
+function createOrder(data: OrderData) {
+    validateOrderData(data)
+    // ...
+}
+```
+
+**DRY違反の検出:**
+
+| パターン | 判定 |
+|---------|------|
+| 同じロジックが3箇所以上 | **即REJECT** - 関数/メソッドに抽出 |
+| 同じバリデーションが2箇所以上 | **即REJECT** - バリデーター関数に抽出 |
+| 似たようなコンポーネントが3個以上 | **即REJECT** - 共通コンポーネント化 |
+| コピペで派生したコード | **即REJECT** - パラメータ化または抽象化 |
+
+**「後でまとめる」が実現しない理由:**
+1. **気づけない** - 新しいコードを書く人は既存の重複に気づかない
+2. **忘れる** - 「次のタスクでまとめよう」は忘れられる
+3. **コストが増す** - 後から抽出するより今抽出する方が簡単
+4. **バグが増殖** - 重複コードはバグ修正時に修正漏れを生む
+
+**正しい対処:**
+- 2回目の重複を書く時点で「3回目が来る」と予測し、抽出を検討
+- 3回目の重複を見つけたら即座に抽出
+- 「似ているが微妙に違う」場合はパラメータ化を検討
+
+**例外: 抽象化が早すぎる場合**
+
+| 状況 | 対応 |
+|------|------|
+| 2回しか使われていない | 様子見（3回目で抽出） |
+| 偶然似ているだけ | 抽象化しない |
+| ドメインが異なる | 別々に保つ（AHA原則） |
+
+**AHA原則（Avoid Hasty Abstractions）とのバランス:**
+- 2回の重複 → 様子見
+- 3回の重複 → 即抽出
+- ドメインが異なる重複 → 抽象化しない（例: 顧客用バリデーションと管理者用バリデーションは別物）
+
 ### 8. 品質特性
 
 | 特性 | 確認観点 |
