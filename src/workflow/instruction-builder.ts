@@ -60,11 +60,15 @@ const METADATA_STRINGS = {
   en: {
     heading: '## Execution Context',
     workingDirectory: 'Working Directory',
+    rulesHeading: '## Execution Rules',
+    noCommit: '**Do NOT run git commit.** Commits are handled automatically by the system after workflow completion.',
     note: 'Note: This section is metadata. Follow the language used in the rest of the prompt.',
   },
   ja: {
     heading: '## 実行コンテキスト',
     workingDirectory: '作業ディレクトリ',
+    rulesHeading: '## 実行ルール',
+    noCommit: '**git commit を実行しないでください。** コミットはワークフロー完了後にシステムが自動で行います。',
     note: '',
   },
 } as const;
@@ -73,7 +77,7 @@ const METADATA_STRINGS = {
  * Render execution metadata as a markdown string.
  *
  * Pure function: ExecutionMetadata → string.
- * Always includes heading + Working Directory.
+ * Always includes heading + Working Directory + Execution Rules.
  * Language determines the output language; 'en' includes a note about language consistency.
  */
 export function renderExecutionMetadata(metadata: ExecutionMetadata): string {
@@ -81,6 +85,9 @@ export function renderExecutionMetadata(metadata: ExecutionMetadata): string {
   const lines = [
     strings.heading,
     `- ${strings.workingDirectory}: ${metadata.workingDirectory}`,
+    '',
+    strings.rulesHeading,
+    `- ${strings.noCommit}`,
   ];
   if (strings.note) {
     lines.push('');

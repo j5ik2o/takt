@@ -192,13 +192,13 @@ describe('instruction-builder', () => {
   });
 
   describe('renderExecutionMetadata', () => {
-    it('should render Working Directory only', () => {
+    it('should render Working Directory and Execution Rules', () => {
       const rendered = renderExecutionMetadata({ workingDirectory: '/project', language: 'en' });
 
       expect(rendered).toContain('## Execution Context');
       expect(rendered).toContain('- Working Directory: /project');
-      expect(rendered).not.toContain('Project Root');
-      expect(rendered).not.toContain('Mode:');
+      expect(rendered).toContain('## Execution Rules');
+      expect(rendered).toContain('Do NOT run git commit');
     });
 
     it('should end with a trailing empty line', () => {
@@ -212,8 +212,8 @@ describe('instruction-builder', () => {
 
       expect(rendered).toContain('## 実行コンテキスト');
       expect(rendered).toContain('- 作業ディレクトリ: /project');
-      expect(rendered).not.toContain('Execution Context');
-      expect(rendered).not.toContain('Working Directory');
+      expect(rendered).toContain('## 実行ルール');
+      expect(rendered).toContain('git commit を実行しないでください');
     });
 
     it('should include English note only for en, not for ja', () => {
