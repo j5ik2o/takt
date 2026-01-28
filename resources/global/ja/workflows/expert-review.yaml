@@ -2,9 +2,9 @@
 # CQRS+ES、フロントエンド、セキュリティ、QAの専門家によるレビューワークフロー
 #
 # フロー:
-# plan -> implement -> cqrs_es_review -> frontend_review -> ai_review -> security_review -> qa_review -> supervise -> COMPLETE
-#                          ↓                  ↓                 ↓              ↓                ↓            ↓
-#                     fix_cqrs_es       fix_frontend        ai_fix       fix_security       fix_qa    fix_supervisor
+# plan -> implement -> architect_review -> cqrs_es_review -> frontend_review -> ai_review -> security_review -> qa_review -> supervise -> COMPLETE
+#                          ↓                   ↓                  ↓                 ↓              ↓                ↓            ↓
+#                     fix_architect        fix_cqrs_es       fix_frontend        ai_fix       fix_security       fix_qa    fix_supervisor
 #
 # 修正時の戻り先はCoderが判断:
 # - fix_security: MINOR→security_review, MAJOR→cqrs_es_review
@@ -196,12 +196,169 @@ steps:
       進行できない場合は [CODER:BLOCKED] を出力し、planに戻ります。
     transitions:
       - condition: done
-        next_step: cqrs_es_review
+        next_step: architect_review
       - condition: blocked
         next_step: plan
 
   # ===========================================
-  # Phase 2: CQRS+ES Review
+  # Phase 2: Architecture Review
+  # ===========================================
+  - name: architect_review
+    agent: ~/.takt/agents/default/architect.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - WebSearch
+      - WebFetch
+    status_rules_prompt: |
+      # ⚠️ 必須: ステータス出力ルール ⚠️
+
+      **このタグがないとワークフローが停止します。**
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 判定基準
+
+      | 状況 | 判定 |
+      |------|------|
+      | 構造に問題がある | REJECT |
+      | 設計原則違反がある | REJECT |
+      | 呼び出しチェーンの配線漏れ | REJECT |
+      | テストが不十分 | REJECT |
+      | 改善すべき点がある（軽微） | IMPROVE |
+      | 問題なし | APPROVE |
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | 問題なし | `[ARCHITECT:APPROVE]` |
+      | 軽微な改善必要 | `[ARCHITECT:IMPROVE]` |
+      | 構造的な修正必要 | `[ARCHITECT:REJECT]` |
+    instruction_template: |
+      ## Workflow Context
+      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
+      - Step Iteration: {step_iteration}（このステップの実行回数）
+      - Step: architect_review (アーキテクチャレビュー)
+      - Report Directory: .takt/reports/{report_dir}/
+      - Report File: .takt/reports/{report_dir}/03-architect-review.md
+
+      ## Original User Request (ワークフロー開始時の元の要求)
+      {task}
+
+      ## Git Diff
+      ```diff
+      {git_diff}
+      ```
+
+      ## Instructions
+      **アーキテクチャと設計**のレビューに集中してください。
+
+      **レビュー観点:**
+      - 構造・設計の妥当性
+      - コード品質
+      - 変更スコープの適切性
+      - テストカバレッジ
+      - デッドコード
+      - 呼び出しチェーン検証
+
+      **レポート出力:** 上記の `Report File` に出力してください。
+      - ファイルが存在しない場合: 新規作成
+      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
+
+      **レポートフォーマット:**
+      ```markdown
+      # アーキテクチャレビュー
+
+      ## 結果: APPROVE / IMPROVE / REJECT
+
+      ## サマリー
+      {1-2文で結果を要約}
+
+      ## 確認した観点
+      - [x] 構造・設計
+      - [x] コード品質
+      - [x] 変更スコープ
+      - [x] テストカバレッジ
+      - [x] デッドコード
+      - [x] 呼び出しチェーン検証
+
+      ## 問題点（REJECTの場合）
+      | # | 場所 | 問題 | 修正案 |
+      |---|------|------|--------|
+      | 1 | `src/file.ts:42` | 問題の説明 | 修正方法 |
+
+      ## 改善提案（任意・ブロッキングではない）
+      - {将来的な改善提案}
+      ```
+
+      **認知負荷軽減ルール:**
+      - APPROVE + 問題なし → サマリーのみ（5行以内）
+      - APPROVE + 軽微な提案 → サマリー + 改善提案（15行以内）
+      - REJECT → 問題点を表形式で（30行以内）
+    transitions:
+      - condition: approved
+        next_step: cqrs_es_review
+      - condition: improve
+        next_step: fix_architect
+      - condition: rejected
+        next_step: fix_architect
+
+  - name: fix_architect
+    agent: ~/.takt/agents/default/coder.md
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Edit
+      - Write
+      - Bash
+      - WebSearch
+      - WebFetch
+    permission_mode: acceptEdits
+    status_rules_prompt: |
+      # ⚠️ 必須: ステータス出力ルール ⚠️
+
+      **このタグがないとワークフローが停止します。**
+      最終出力には必ず以下のルールに従ったステータスタグを含めてください。
+
+      ## 出力フォーマット
+
+      | 状況 | タグ |
+      |------|------|
+      | 修正完了 | `[CODER:DONE]` |
+      | 進行不可 | `[CODER:BLOCKED]` |
+    instruction_template: |
+      ## Workflow Context
+      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
+      - Step Iteration: {step_iteration}（このステップの実行回数）
+      - Step: fix_architect
+
+      ## Architect Feedback (これが最新の指示です - 優先して対応してください)
+      {previous_response}
+
+      ## Original User Request (ワークフロー開始時の元の要求 - 参考情報)
+      {task}
+
+      ## Additional User Inputs
+      {user_inputs}
+
+      ## Instructions
+      **重要**: Architectのフィードバックに対応してください。
+      「Original User Request」は参考情報であり、最新の指示ではありません。
+      セッションの会話履歴を確認し、Architectの指摘事項を修正してください。
+
+      完了時は [CODER:DONE] を含めてください。
+      進行できない場合は [CODER:BLOCKED] を含めてください。
+    pass_previous_response: true
+    transitions:
+      - condition: done
+        next_step: architect_review
+      - condition: blocked
+        next_step: plan
+
+  # ===========================================
+  # Phase 3: CQRS+ES Review
   # ===========================================
   - name: cqrs_es_review
     agent: ~/.takt/agents/expert-review/cqrs-es-reviewer.md
@@ -229,7 +386,7 @@ steps:
       - Step Iteration: {step_iteration}（このステップの実行回数）
       - Step: cqrs_es_review (CQRS+ES専門レビュー)
       - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/03-cqrs-es-review.md
+      - Report File: .takt/reports/{report_dir}/04-cqrs-es-review.md
 
       ## Original User Request
       {task}
@@ -376,7 +533,7 @@ steps:
       - Step Iteration: {step_iteration}（このステップの実行回数）
       - Step: frontend_review (フロントエンド専門レビュー)
       - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/04-frontend-review.md
+      - Report File: .takt/reports/{report_dir}/05-frontend-review.md
 
       ## Original User Request
       {task}
@@ -523,7 +680,7 @@ steps:
       - Step Iteration: {step_iteration}（このステップの実行回数）
       - Step: ai_review (AI生成コードレビュー)
       - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/05-ai-review.md
+      - Report File: .takt/reports/{report_dir}/06-ai-review.md
 
       ## Original User Request (ワークフロー開始時の元の要求)
       {task}
@@ -664,7 +821,7 @@ steps:
       - Step Iteration: {step_iteration}（このステップの実行回数）
       - Step: security_review (セキュリティ専門レビュー)
       - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/06-security-review.md
+      - Report File: .takt/reports/{report_dir}/07-security-review.md
 
       ## Original User Request
       {task}
@@ -818,7 +975,7 @@ steps:
       - Step Iteration: {step_iteration}（このステップの実行回数）
       - Step: qa_review (QA専門レビュー)
       - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/07-qa-review.md
+      - Report File: .takt/reports/{report_dir}/08-qa-review.md
 
       ## Original User Request
       {task}
@@ -978,7 +1135,7 @@ steps:
       - Step: supervise (最終確認)
       - Report Directory: .takt/reports/{report_dir}/
       - Report Files:
-        - Validation: .takt/reports/{report_dir}/08-supervisor-validation.md
+        - Validation: .takt/reports/{report_dir}/09-supervisor-validation.md
         - Summary: .takt/reports/{report_dir}/summary.md
 
       ## Original User Request
@@ -991,6 +1148,7 @@ steps:
 
       ## Previous Reviews Summary
       このステップに到達したということは、以下のレビューがすべてAPPROVEされています：
+      - Architecture Review: APPROVED
       - CQRS+ES Review: APPROVED
       - Frontend Review: APPROVED
       - AI Review: APPROVED
@@ -1054,6 +1212,7 @@ steps:
       ## レビュー結果
       | レビュー | 結果 |
       |---------|------|
+      | Architecture | ✅ APPROVE |
       | CQRS+ES | ✅ APPROVE |
       | Frontend | ✅ APPROVE |
       | AI Review | ✅ APPROVE |

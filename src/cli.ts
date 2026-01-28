@@ -219,7 +219,7 @@ program
       const { execCwd, isWorktree } = await confirmAndCreateWorktree(cwd, task);
 
       log.info('Starting task execution', { task, workflow: selectedWorkflow, worktree: isWorktree });
-      const taskSuccess = await executeTask(task, execCwd, selectedWorkflow);
+      const taskSuccess = await executeTask(task, execCwd, selectedWorkflow, cwd);
 
       if (taskSuccess && isWorktree) {
         const commitResult = autoCommitWorktree(execCwd, task);

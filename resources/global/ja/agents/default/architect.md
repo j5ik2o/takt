@@ -384,7 +384,40 @@ function createOrder(data: OrderData) {
 - 3回の重複 → 即抽出
 - ドメインが異なる重複 → 抽象化しない（例: 顧客用バリデーションと管理者用バリデーションは別物）
 
-### 8. 品質特性
+### 8. 呼び出しチェーン検証
+
+**新しいパラメータ・フィールドが追加された場合、変更ファイル内だけでなく呼び出し元も検証する。**
+
+**検証手順:**
+1. 新しいオプショナルパラメータや interface フィールドを見つけたら、`Grep` で全呼び出し元を検索
+2. 全呼び出し元が新しいパラメータを渡しているか確認
+3. フォールバック値（`?? default`）がある場合、フォールバックが使われるケースが意図通りか確認
+
+**危険パターン:**
+
+| パターン | 問題 | 検出方法 |
+|---------|------|---------|
+| `options.xxx ?? fallback` で全呼び出し元が `xxx` を省略 | 機能が実装されているのに常にフォールバック | grep で呼び出し元を確認 |
+| テストがモックで直接値をセット | 実際の呼び出しチェーンを経由しない | テストの構築方法を確認 |
+| `executeXxx()` が内部で使う `options` を引数で受け取らない | 上位から値を渡す口がない | 関数シグネチャを確認 |
+
+**具体例:**
+
+```typescript
+// ❌ 配線漏れ: projectCwd を受け取る口がない
+export async function executeWorkflow(config, cwd, task) {
+  const engine = new WorkflowEngine(config, cwd, task);  // options なし
+}
+
+// ✅ 配線済み: projectCwd を渡せる
+export async function executeWorkflow(config, cwd, task, options?) {
+  const engine = new WorkflowEngine(config, cwd, task, options);
+}
+```
+
+**このパターンを見つけたら REJECT。** 個々のファイルが正しくても、結合されていなければ機能しない。
+
+### 9. 品質特性
 
 | 特性 | 確認観点 |
 |------|---------|
@@ -392,7 +425,7 @@ function createOrder(data: OrderData) {
 | Maintainability | 変更・修正が容易か |
 | Observability | ログ・監視が可能な設計か |
 
-### 9. 大局観
+### 10. 大局観
 
 **注意**: 細かい「クリーンコード」の指摘に終始しない。
 
@@ -403,7 +436,7 @@ function createOrder(data: OrderData) {
 - ビジネス要件と整合しているか
 - 命名がドメインと一貫しているか
 
-### 10. 変更スコープの評価
+### 11. 変更スコープの評価
 
 **変更スコープを確認し、レポートに記載する（ブロッキングではない）。**
 
@@ -422,7 +455,7 @@ function createOrder(data: OrderData) {
 **提案として記載すること（ブロッキングではない）:**
 - 分割可能な場合は分割案を提示
 
-### 11. 堂々巡りの検出
+### 12. 堂々巡りの検出
 
 レビュー回数が渡される場合（例: 「レビュー回数: 3回目」）、回数に応じて判断を変える。
 

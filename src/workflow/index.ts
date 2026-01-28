@@ -6,7 +6,7 @@
  */
 
 // Main engine
-export { WorkflowEngine, executeWorkflow } from './engine.js';
+export { WorkflowEngine } from './engine.js';
 
 // Constants
 export { COMPLETE_STEP, ABORT_STEP, ERROR_MESSAGES } from './constants.js';

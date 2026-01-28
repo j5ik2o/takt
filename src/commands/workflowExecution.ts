@@ -56,6 +56,8 @@ export interface WorkflowExecutionResult {
 export interface WorkflowExecutionOptions {
   /** Header prefix for display */
   headerPrefix?: string;
+  /** Project root directory (where .takt/ lives). Defaults to cwd. */
+  projectCwd?: string;
 }
 
 /**
@@ -71,13 +73,16 @@ export async function executeWorkflow(
     headerPrefix = 'Running Workflow:',
   } = options;
 
+  // projectCwd is where .takt/ lives (project root, not worktree)
+  const projectCwd = options.projectCwd ?? cwd;
+
   // Always continue from previous sessions (use /clear to reset)
   log.debug('Continuing session (use /clear to reset)');
 
   header(`${headerPrefix} ${workflowConfig.name}`);
 
   const workflowSessionId = generateSessionId();
-  const sessionLog = createSessionLog(task, cwd, workflowConfig.name);
+  const sessionLog = createSessionLog(task, projectCwd, workflowConfig.name);
 
   // Track current display for streaming
   const displayRef: { current: StreamDisplay | null } = { current: null };
@@ -91,12 +96,12 @@ export async function executeWorkflow(
     displayRef.current.createHandler()(event);
   };
 
-  // Load saved agent sessions for continuity
-  const savedSessions = loadAgentSessions(cwd);
+  // Load saved agent sessions for continuity (from project root)
+  const savedSessions = loadAgentSessions(projectCwd);
 
-  // Session update handler - persist session IDs when they change
+  // Session update handler - persist session IDs when they change (to project root)
   const sessionUpdateHandler = (agentName: string, agentSessionId: string): void => {
-    updateAgentSession(cwd, agentName, agentSessionId);
+    updateAgentSession(projectCwd, agentName, agentSessionId);
   };
 
   const iterationLimitHandler = async (
@@ -147,6 +152,7 @@ export async function executeWorkflow(
     initialSessions: savedSessions,
     onSessionUpdate: sessionUpdateHandler,
     onIterationLimit: iterationLimitHandler,
+    projectCwd,
   });
 
   let abortReason: string | undefined;
@@ -179,8 +185,8 @@ export async function executeWorkflow(
   engine.on('workflow:complete', (state) => {
     log.info('Workflow completed successfully', { iterations: state.iteration });
     finalizeSessionLog(sessionLog, 'completed');
-    // Save log to original cwd so user can find it easily
-    const logPath = saveSessionLog(sessionLog, workflowSessionId, cwd);
+    // Save log to project root so user can find it easily
+    const logPath = saveSessionLog(sessionLog, workflowSessionId, projectCwd);
 
     const elapsed = sessionLog.endTime
       ? formatElapsedTime(sessionLog.startTime, sessionLog.endTime)
@@ -200,8 +206,8 @@ export async function executeWorkflow(
     }
     abortReason = reason;
     finalizeSessionLog(sessionLog, 'aborted');
-    // Save log to original cwd so user can find it easily
-    const logPath = saveSessionLog(sessionLog, workflowSessionId, cwd);
+    // Save log to project root so user can find it easily
+    const logPath = saveSessionLog(sessionLog, workflowSessionId, projectCwd);
 
     const elapsed = sessionLog.endTime
       ? formatElapsedTime(sessionLog.startTime, sessionLog.endTime)

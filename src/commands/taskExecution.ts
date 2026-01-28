@@ -22,11 +22,16 @@ const log = createLogger('task');
 
 /**
  * Execute a single task with workflow
+ * @param task - Task content
+ * @param cwd - Working directory (may be a worktree path)
+ * @param workflowName - Workflow to use
+ * @param projectCwd - Project root (where .takt/ lives). Defaults to cwd.
  */
 export async function executeTask(
   task: string,
   cwd: string,
-  workflowName: string = DEFAULT_WORKFLOW_NAME
+  workflowName: string = DEFAULT_WORKFLOW_NAME,
+  projectCwd?: string
 ): Promise<boolean> {
   const workflowConfig = loadWorkflow(workflowName);
 
@@ -42,7 +47,9 @@ export async function executeTask(
     steps: workflowConfig.steps.map(s => s.name),
   });
 
-  const result = await executeWorkflow(workflowConfig, task, cwd);
+  const result = await executeWorkflow(workflowConfig, task, cwd, {
+    projectCwd,
+  });
   return result.success;
 }
 
@@ -66,7 +73,8 @@ export async function executeAndCompleteTask(
   try {
     const { execCwd, execWorkflow, isWorktree } = resolveTaskExecution(task, cwd, workflowName);
 
-    const taskSuccess = await executeTask(task.content, execCwd, execWorkflow);
+    // cwd is always the project root; pass it as projectCwd so reports/sessions go there
+    const taskSuccess = await executeTask(task.content, execCwd, execWorkflow, cwd);
     const completedAt = new Date().toISOString();
 
     if (taskSuccess && isWorktree) {

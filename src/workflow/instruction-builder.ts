@@ -5,6 +5,7 @@
  * template placeholders with actual values.
  */
 
+import { join } from 'node:path';
 import type { WorkflowStep, AgentResponse } from '../models/types.js';
 import { getGitDiff } from '../agents/runner.js';
 
@@ -20,8 +21,10 @@ export interface InstructionContext {
   maxIterations: number;
   /** Current step's iteration number (how many times this step has been executed) */
   stepIteration: number;
-  /** Working directory */
+  /** Working directory (agent work dir, may be a worktree) */
   cwd: string;
+  /** Project root directory (where .takt/ lives). Defaults to cwd. */
+  projectCwd?: string;
   /** User inputs accumulated during workflow */
   userInputs: string[];
   /** Previous step output if available */
@@ -87,8 +90,14 @@ export function buildInstruction(
     escapeTemplateChars(userInputsStr)
   );
 
-  // Replace {report_dir}
+  // Replace .takt/reports/{report_dir} with absolute path first,
+  // then replace standalone {report_dir} with the directory name.
+  // This ensures agents always use the correct project root for reports,
+  // even when their cwd is a worktree.
   if (context.reportDir) {
+    const projectRoot = context.projectCwd ?? context.cwd;
+    const reportDirFullPath = join(projectRoot, '.takt', 'reports', context.reportDir);
+    instruction = instruction.replace(/\.takt\/reports\/\{report_dir\}/g, reportDirFullPath);
     instruction = instruction.replace(/\{report_dir\}/g, context.reportDir);
   }
 

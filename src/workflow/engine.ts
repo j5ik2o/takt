@@ -44,7 +44,7 @@ export { COMPLETE_STEP, ABORT_STEP } from './constants.js';
 export class WorkflowEngine extends EventEmitter {
   private state: WorkflowState;
   private config: WorkflowConfig;
-  private originalCwd: string;
+  private projectCwd: string;
   private cwd: string;
   private task: string;
   private options: WorkflowEngineOptions;
@@ -54,7 +54,7 @@ export class WorkflowEngine extends EventEmitter {
   constructor(config: WorkflowConfig, cwd: string, task: string, options: WorkflowEngineOptions = {}) {
     super();
     this.config = config;
-    this.originalCwd = cwd;
+    this.projectCwd = options.projectCwd ?? cwd;
     this.cwd = cwd;
     this.task = task;
     this.options = options;
@@ -71,9 +71,9 @@ export class WorkflowEngine extends EventEmitter {
     });
   }
 
-  /** Ensure report directory exists (always in original cwd) */
+  /** Ensure report directory exists (always in project root, not worktree) */
   private ensureReportDirExists(): void {
-    const reportDirPath = join(this.originalCwd, '.takt', 'reports', this.reportDir);
+    const reportDirPath = join(this.projectCwd, '.takt', 'reports', this.reportDir);
     if (!existsSync(reportDirPath)) {
       mkdirSync(reportDirPath, { recursive: true });
     }
@@ -121,9 +121,9 @@ export class WorkflowEngine extends EventEmitter {
     return this.cwd;
   }
 
-  /** Get original working directory (for .takt data) */
-  getOriginalCwd(): string {
-    return this.originalCwd;
+  /** Get project root directory (where .takt/ lives) */
+  getProjectCwd(): string {
+    return this.projectCwd;
   }
 
   /** Build instruction from template */
@@ -134,6 +134,7 @@ export class WorkflowEngine extends EventEmitter {
       maxIterations: this.config.maxIterations,
       stepIteration,
       cwd: this.cwd,
+      projectCwd: this.projectCwd,
       userInputs: this.state.userInputs,
       previousOutput: getPreviousOutput(this.state),
       reportDir: this.reportDir,
@@ -324,14 +325,4 @@ export class WorkflowEngine extends EventEmitter {
 
     return { response, nextStep, isComplete, loopDetected: loopCheck.isLoop };
   }
-}
-
-/** Create and run a workflow */
-export async function executeWorkflow(
-  config: WorkflowConfig,
-  cwd: string,
-  task: string
-): Promise<WorkflowState> {
-  const engine = new WorkflowEngine(config, cwd, task);
-  return engine.run();
 }
