@@ -92,7 +92,8 @@ program
       const args = parts.slice(1);
 
       switch (command) {
-        case 'run-tasks': {
+        case 'run-tasks':
+        case 'run': {
           const workflow = getCurrentWorkflow(cwd);
           await runAllTasks(cwd, workflow);
           return;
@@ -117,6 +118,7 @@ program
           return;
 
         case 'add-task':
+        case 'add':
           await addTask(cwd, args);
           return;
 
@@ -135,7 +137,7 @@ program
 
         default:
           error(`Unknown command: /${command}`);
-          info('Available: /run-tasks, /watch, /add-task, /review-tasks, /switch, /clear, /refresh-builtin, /help, /config');
+          info('Available: /run-tasks (/run), /watch, /add-task (/add), /review-tasks (/review), /switch (/sw), /clear, /refresh-builtin, /help, /config');
           process.exit(1);
       }
     }

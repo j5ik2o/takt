@@ -7,6 +7,7 @@
 
 import * as readline from 'node:readline';
 import chalk from 'chalk';
+import { truncateText } from '../utils/text.js';
 
 /** Option type for selectOption */
 export interface SelectOptionItem<T extends string> {
@@ -19,6 +20,7 @@ export interface SelectOptionItem<T extends string> {
 /**
  * Render the menu options to the terminal.
  * Writes directly to stdout using ANSI escape codes.
+ * Labels are truncated to fit within the terminal width.
  * Exported for testing.
  */
 export function renderMenu<T extends string>(
@@ -26,21 +28,32 @@ export function renderMenu<T extends string>(
   selectedIndex: number,
   hasCancelOption: boolean
 ): string[] {
+  const maxWidth = process.stdout.columns || 80;
+  // Prefix "  ❯ " = 4 visible columns (2 spaces + cursor + space)
+  const labelPrefix = 4;
+  // Description prefix "     " = 5 visible columns
+  const descPrefix = 5;
+  // Detail prefix "       • " = 9 visible columns
+  const detailPrefix = 9;
+
   const lines: string[] = [];
 
   for (let i = 0; i < options.length; i++) {
     const opt = options[i]!;
     const isSelected = i === selectedIndex;
     const cursor = isSelected ? chalk.cyan('❯') : ' ';
-    const label = isSelected ? chalk.cyan.bold(opt.label) : opt.label;
+    const truncatedLabel = truncateText(opt.label, maxWidth - labelPrefix);
+    const label = isSelected ? chalk.cyan.bold(truncatedLabel) : truncatedLabel;
     lines.push(`  ${cursor} ${label}`);
 
     if (opt.description) {
-      lines.push(chalk.gray(`     ${opt.description}`));
+      const truncatedDesc = truncateText(opt.description, maxWidth - descPrefix);
+      lines.push(chalk.gray(`     ${truncatedDesc}`));
     }
     if (opt.details && opt.details.length > 0) {
       for (const detail of opt.details) {
-        lines.push(chalk.dim(`       • ${detail}`));
+        const truncatedDetail = truncateText(detail, maxWidth - detailPrefix);
+        lines.push(chalk.dim(`       • ${truncatedDetail}`));
       }
     }
   }
@@ -145,7 +158,9 @@ function setupRawMode(): { cleanup: (listener: (data: Buffer) => void) => void; 
 }
 
 /**
- * Redraw the menu by moving cursor up and re-rendering.
+ * Redraw the menu using relative cursor movement.
+ * Auto-wrap is disabled during menu interaction, so
+ * 1 logical line = 1 physical line, making line-count movement accurate.
  */
 function redrawMenu<T extends string>(
   options: SelectOptionItem<T>[],
@@ -153,8 +168,8 @@ function redrawMenu<T extends string>(
   hasCancelOption: boolean,
   totalLines: number
 ): void {
-  process.stdout.write(`\x1B[${totalLines}A`);
-  process.stdout.write('\x1B[J');
+  process.stdout.write(`\x1B[${totalLines}A`);  // Move up to menu start
+  process.stdout.write('\x1B[J');                 // Clear from cursor to end
   const newLines = renderMenu(options, selectedIndex, hasCancelOption);
   process.stdout.write(newLines.join('\n') + '\n');
 }
@@ -175,16 +190,25 @@ function interactiveSelect<T extends string>(
 
     printHeader(message);
 
+    // Disable auto-wrap so 1 logical line = 1 physical line
+    process.stdout.write('\x1B[?7l');
+
     const totalLines = countRenderedLines(options, hasCancelOption);
     const lines = renderMenu(options, selectedIndex, hasCancelOption);
     process.stdout.write(lines.join('\n') + '\n');
 
     if (!process.stdin.isTTY) {
+      process.stdout.write('\x1B[?7h');  // Re-enable auto-wrap
       resolve(initialIndex);
       return;
     }
 
     const rawMode = setupRawMode();
+
+    const cleanup = (listener: (data: Buffer) => void): void => {
+      rawMode.cleanup(listener);
+      process.stdout.write('\x1B[?7h');  // Re-enable auto-wrap
+    };
 
     const onKeypress = (data: Buffer): void => {
       const result = handleKeyInput(
@@ -201,15 +225,15 @@ function interactiveSelect<T extends string>(
           redrawMenu(options, selectedIndex, hasCancelOption, totalLines);
           break;
         case 'confirm':
-          rawMode.cleanup(onKeypress);
+          cleanup(onKeypress);
           resolve(result.selectedIndex);
           break;
         case 'cancel':
-          rawMode.cleanup(onKeypress);
+          cleanup(onKeypress);
           resolve(result.cancelIndex);
           break;
         case 'exit':
-          rawMode.cleanup(onKeypress);
+          cleanup(onKeypress);
           process.exit(130);
           break;
         case 'none':

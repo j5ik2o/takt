@@ -14,10 +14,10 @@ export function showHelp(): void {
   console.log(`
 Usage:
   takt {task}             Execute task with current workflow (continues session)
-  takt /run-tasks         Run all pending tasks from .takt/tasks/
-  takt /watch             Watch for tasks and auto-execute (stays resident)
-  takt /add-task          Add a new task (interactive, YAML format)
-  takt /review-tasks      Review worktree task results (merge/delete)
+  takt /run-tasks (/run)           Run all pending tasks from .takt/tasks/
+  takt /watch                      Watch for tasks and auto-execute (stays resident)
+  takt /add-task (/add)            Add a new task (interactive, YAML format)
+  takt /review-tasks (/review)     Review worktree task results (merge/delete)
   takt /switch            Switch workflow interactively
   takt /clear             Clear agent conversation sessions (reset to initial state)
   takt /refresh-builtin   Overwrite builtin agents/workflows with latest version

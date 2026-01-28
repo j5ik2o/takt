@@ -9,6 +9,7 @@ import {
   buildReviewItems,
   type WorktreeInfo,
 } from '../task/worktree.js';
+import { isBranchMerged, type ReviewAction } from '../commands/reviewTasks.js';
 
 describe('parseTaktWorktrees', () => {
   it('should parse takt/ branches from porcelain output', () => {
@@ -165,5 +166,27 @@ describe('buildReviewItems', () => {
   it('should handle empty worktree list', () => {
     const items = buildReviewItems('/project', [], 'main');
     expect(items).toHaveLength(0);
+  });
+});
+
+describe('ReviewAction type', () => {
+  it('should include try, merge, delete (no skip)', () => {
+    const actions: ReviewAction[] = ['try', 'merge', 'delete'];
+    expect(actions).toHaveLength(3);
+    expect(actions).toContain('try');
+    expect(actions).not.toContain('skip');
+  });
+});
+
+describe('isBranchMerged', () => {
+  it('should return false for non-existent project dir', () => {
+    // git merge-base will fail on non-existent dir
+    const result = isBranchMerged('/non-existent-dir', 'some-branch');
+    expect(result).toBe(false);
+  });
+
+  it('should return false for non-existent branch', () => {
+    const result = isBranchMerged('/tmp', 'non-existent-branch-xyz');
+    expect(result).toBe(false);
   });
 });

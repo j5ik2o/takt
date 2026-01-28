@@ -2,7 +2,7 @@
  * Review tasks command
  *
  * Interactive UI for reviewing worktree-based task results:
- * merge, skip, or delete actions.
+ * try merge, merge & cleanup, or delete actions.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -21,7 +21,23 @@ import { createLogger } from '../utils/debug.js';
 const log = createLogger('review-tasks');
 
 /** Actions available for a reviewed worktree */
-export type ReviewAction = 'merge' | 'skip' | 'delete';
+export type ReviewAction = 'try' | 'merge' | 'delete';
+
+/**
+ * Check if a branch has already been merged into HEAD.
+ */
+export function isBranchMerged(projectDir: string, branch: string): boolean {
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', branch, 'HEAD'], {
+      cwd: projectDir,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Show diff stat for a branch and prompt for an action.
@@ -30,7 +46,7 @@ async function showDiffAndPromptAction(
   cwd: string,
   defaultBranch: string,
   item: WorktreeReviewItem,
-): Promise<ReviewAction> {
+): Promise<ReviewAction | null> {
   console.log();
   console.log(chalk.bold.cyan(`=== ${item.info.branch} ===`));
   console.log();
@@ -50,32 +66,64 @@ async function showDiffAndPromptAction(
   const action = await selectOption<ReviewAction>(
     `Action for ${item.info.branch}:`,
     [
-      { label: 'Merge', value: 'merge', description: 'Merge changes into current branch and clean up' },
-      { label: 'Skip', value: 'skip', description: 'Return to list without changes' },
+      { label: 'Try merge', value: 'try', description: 'Merge without cleanup (keep worktree & branch)' },
+      { label: 'Merge & cleanup', value: 'merge', description: 'Merge (if needed) and remove worktree & branch' },
       { label: 'Delete', value: 'delete', description: 'Discard changes, remove worktree and branch' },
     ],
   );
 
-  return action ?? 'skip';
+  return action;
 }
 
 /**
- * Merge a worktree branch into the current branch.
- * Removes the worktree first, then merges, then deletes the branch.
+ * Try-merge: merge the branch without cleanup.
+ * Keeps the worktree and branch intact for further review.
  */
-export function mergeWorktreeBranch(projectDir: string, item: WorktreeReviewItem): boolean {
+export function tryMergeWorktreeBranch(projectDir: string, item: WorktreeReviewItem): boolean {
   const { branch } = item.info;
 
   try {
-    // 1. Remove worktree (must happen before merge to unlock branch)
-    removeWorktree(projectDir, item.info.path);
-
-    // 2. Merge the branch
     execFileSync('git', ['merge', branch], {
       cwd: projectDir,
       encoding: 'utf-8',
       stdio: 'pipe',
     });
+
+    success(`Merged ${branch} (worktree kept)`);
+    log.info('Try-merge completed', { branch });
+    return true;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError(`Merge failed: ${msg}`);
+    logError('You may need to resolve conflicts manually.');
+    log.error('Try-merge failed', { branch, error: msg });
+    return false;
+  }
+}
+
+/**
+ * Merge & cleanup: if already merged, skip merge and just cleanup.
+ * Otherwise merge first, then cleanup (remove worktree + delete branch).
+ */
+export function mergeWorktreeBranch(projectDir: string, item: WorktreeReviewItem): boolean {
+  const { branch } = item.info;
+  const alreadyMerged = isBranchMerged(projectDir, branch);
+
+  try {
+    // 1. Remove worktree (must happen before merge to unlock branch)
+    removeWorktree(projectDir, item.info.path);
+
+    // 2. Merge only if not already merged
+    if (alreadyMerged) {
+      info(`${branch} is already merged, skipping merge.`);
+      log.info('Branch already merged, cleanup only', { branch });
+    } else {
+      execFileSync('git', ['merge', branch], {
+        cwd: projectDir,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      });
+    }
 
     // 3. Delete the branch
     try {
@@ -88,14 +136,14 @@ export function mergeWorktreeBranch(projectDir: string, item: WorktreeReviewItem
       warn(`Could not delete branch ${branch}. You may delete it manually.`);
     }
 
-    success(`Merged ${branch}`);
-    log.info('Worktree merged', { branch });
+    success(`Merged & cleaned up ${branch}`);
+    log.info('Worktree merged & cleaned up', { branch, alreadyMerged });
     return true;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logError(`Merge failed: ${msg}`);
     logError('You may need to resolve conflicts manually.');
-    log.error('Merge failed', { branch, error: msg });
+    log.error('Merge & cleanup failed', { branch, error: msg });
     return false;
   }
 }
@@ -168,7 +216,12 @@ export async function reviewTasks(cwd: string): Promise<void> {
 
     const action = await showDiffAndPromptAction(cwd, defaultBranch, item);
 
+    if (action === null) continue;
+
     switch (action) {
+      case 'try':
+        tryMergeWorktreeBranch(cwd, item);
+        break;
       case 'merge':
         mergeWorktreeBranch(cwd, item);
         break;
@@ -182,8 +235,6 @@ export async function reviewTasks(cwd: string): Promise<void> {
         }
         break;
       }
-      case 'skip':
-        break;
     }
 
     // Refresh worktree list after action
