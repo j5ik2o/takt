@@ -199,6 +199,7 @@ describe('instruction-builder', () => {
       expect(rendered).toContain('- Working Directory: /project');
       expect(rendered).toContain('## Execution Rules');
       expect(rendered).toContain('Do NOT run git commit');
+      expect(rendered).toContain('Do NOT use `cd`');
     });
 
     it('should end with a trailing empty line', () => {
@@ -214,6 +215,7 @@ describe('instruction-builder', () => {
       expect(rendered).toContain('- 作業ディレクトリ: /project');
       expect(rendered).toContain('## 実行ルール');
       expect(rendered).toContain('git commit を実行しないでください');
+      expect(rendered).toContain('cd` を使用しないでください');
     });
 
     it('should include English note only for en, not for ja', () => {

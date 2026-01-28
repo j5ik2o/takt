@@ -62,6 +62,7 @@ const METADATA_STRINGS = {
     workingDirectory: 'Working Directory',
     rulesHeading: '## Execution Rules',
     noCommit: '**Do NOT run git commit.** Commits are handled automatically by the system after workflow completion.',
+    noCd: '**Do NOT use `cd` in Bash commands.** Your working directory is already set correctly. Run commands directly without changing directories.',
     note: 'Note: This section is metadata. Follow the language used in the rest of the prompt.',
   },
   ja: {
@@ -69,6 +70,7 @@ const METADATA_STRINGS = {
     workingDirectory: '作業ディレクトリ',
     rulesHeading: '## 実行ルール',
     noCommit: '**git commit を実行しないでください。** コミットはワークフロー完了後にシステムが自動で行います。',
+    noCd: '**Bashコマンドで `cd` を使用しないでください。** 作業ディレクトリは既に正しく設定されています。ディレクトリを変更せずにコマンドを実行してください。',
     note: '',
   },
 } as const;
@@ -88,6 +90,7 @@ export function renderExecutionMetadata(metadata: ExecutionMetadata): string {
     '',
     strings.rulesHeading,
     `- ${strings.noCommit}`,
+    `- ${strings.noCd}`,
   ];
   if (strings.note) {
     lines.push('');
