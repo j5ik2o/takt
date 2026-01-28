@@ -8,6 +8,9 @@ import { executeClaudeCli, type ClaudeSpawnOptions, type StreamCallback, type Pe
 import type { AgentDefinition } from '@anthropic-ai/claude-agent-sdk';
 import type { AgentResponse, Status, PermissionMode } from '../models/types.js';
 import { GENERIC_STATUS_PATTERNS } from '../models/schemas.js';
+import { createLogger } from '../utils/debug.js';
+
+const log = createLogger('client');
 
 /** Options for calling Claude */
 export interface ClaudeCallOptions {
@@ -125,12 +128,17 @@ export async function callClaude(
   const patterns = options.statusPatterns || getBuiltinStatusPatterns(agentType);
   const status = determineStatus(result, patterns);
 
+  if (!result.success && result.error) {
+    log.error('Agent query failed', { agent: agentType, error: result.error });
+  }
+
   return {
     agent: agentType,
     status,
     content: result.content,
     timestamp: new Date(),
     sessionId: result.sessionId,
+    error: result.error,
   };
 }
 
@@ -160,12 +168,17 @@ export async function callClaudeCustom(
   const patterns = options.statusPatterns || getBuiltinStatusPatterns(agentName);
   const status = determineStatus(result, patterns);
 
+  if (!result.success && result.error) {
+    log.error('Agent query failed', { agent: agentName, error: result.error });
+  }
+
   return {
     agent: agentName,
     status,
     content: result.content,
     timestamp: new Date(),
     sessionId: result.sessionId,
+    error: result.error,
   };
 }
 
@@ -206,11 +219,16 @@ export async function callClaudeSkill(
 
   const result = await executeClaudeCli(fullPrompt, spawnOptions);
 
+  if (!result.success && result.error) {
+    log.error('Skill query failed', { skill: skillName, error: result.error });
+  }
+
   return {
     agent: `skill:${skillName}`,
     status: result.success ? 'done' : 'blocked',
     content: result.content,
     timestamp: new Date(),
     sessionId: result.sessionId,
+    error: result.error,
   };
 }

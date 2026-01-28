@@ -297,6 +297,57 @@ export async function promptInput(message: string): Promise<string | null> {
 }
 
 /**
+ * Read multiline input from a readable stream.
+ * An empty line finishes input. If the first line is empty, returns null.
+ * Exported for testing.
+ */
+export function readMultilineFromStream(input: NodeJS.ReadableStream): Promise<string | null> {
+  const lines: string[] = [];
+  const rl = readline.createInterface({ input });
+
+  return new Promise((resolve) => {
+    let resolved = false;
+
+    rl.on('line', (line) => {
+      if (line === '' && lines.length > 0) {
+        resolved = true;
+        rl.close();
+        const result = lines.join('\n').trim();
+        resolve(result || null);
+        return;
+      }
+
+      if (line === '' && lines.length === 0) {
+        resolved = true;
+        rl.close();
+        resolve(null);
+        return;
+      }
+
+      lines.push(line);
+    });
+
+    rl.on('close', () => {
+      if (!resolved) {
+        resolve(lines.length > 0 ? lines.join('\n').trim() : null);
+      }
+    });
+  });
+}
+
+/**
+ * Prompt user for multiline text input.
+ * Each line is entered with Enter. An empty line finishes input.
+ * If the first line is empty, returns null (cancel).
+ * @returns Multiline text or null if cancelled
+ */
+export async function promptMultilineInput(message: string): Promise<string | null> {
+  console.log(chalk.green(`${message} (empty line to finish):`));
+  process.stdout.write(chalk.gray('> '));
+  return readMultilineFromStream(process.stdin);
+}
+
+/**
  * Prompt user to select from a list of options with a default value.
  * Uses cursor navigation. Enter immediately selects the default.
  * @returns Selected option value, or null if cancelled (ESC pressed)

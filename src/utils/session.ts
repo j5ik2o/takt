@@ -22,6 +22,7 @@ export interface SessionLog {
     status: string;
     timestamp: string;
     content: string;
+    error?: string;
   }>;
 }
 
@@ -83,6 +84,7 @@ export function addToSessionLog(
     status: response.status,
     timestamp: response.timestamp.toISOString(),
     content: response.content,
+    ...(response.error ? { error: response.error } : {}),
   });
   log.iterations++;
 }

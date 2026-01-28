@@ -3,12 +3,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Readable } from 'node:stream';
 import chalk from 'chalk';
 import type { SelectOptionItem, KeyInputResult } from '../prompt/index.js';
 import {
   renderMenu,
   countRenderedLines,
   handleKeyInput,
+  readMultilineFromStream,
 } from '../prompt/index.js';
 import { isFullWidth, getDisplayWidth, truncateText } from '../utils/text.js';
 
@@ -421,6 +423,46 @@ describe('prompt', () => {
       // Wait, let's re-read: if width+charWidth > maxWidth-1, truncate.
       // For 'abc' maxWidth=4: a(1)>3? no; b(2)>3? no; c(3)>3? no; returns 'abc'
       expect(truncateText('abc', 4)).toBe('abc');
+    });
+  });
+
+  describe('readMultilineFromStream', () => {
+    it('should return null when first line is empty (cancel)', async () => {
+      const input = Readable.from(['\n']);
+      const result = await readMultilineFromStream(input);
+      expect(result).toBeNull();
+    });
+
+    it('should return single line when followed by empty line', async () => {
+      const input = Readable.from(['hello world\n\n']);
+      const result = await readMultilineFromStream(input);
+      expect(result).toBe('hello world');
+    });
+
+    it('should return multiple lines joined by newline', async () => {
+      const input = Readable.from(['line 1\nline 2\nline 3\n\n']);
+      const result = await readMultilineFromStream(input);
+      expect(result).toBe('line 1\nline 2\nline 3');
+    });
+
+    it('should trim leading and trailing whitespace from the joined result', async () => {
+      const input = Readable.from(['  hello  \n  world  \n\n']);
+      const result = await readMultilineFromStream(input);
+      // .trim() is applied to the joined string, so leading spaces on first line are trimmed
+      expect(result).toBe('hello  \n  world');
+    });
+
+    it('should handle stream close without empty line (Ctrl+C)', async () => {
+      // Stream ends without empty line terminator
+      const input = Readable.from(['some content\n']);
+      const result = await readMultilineFromStream(input);
+      expect(result).toBe('some content');
+    });
+
+    it('should return null when stream closes with no input', async () => {
+      const input = Readable.from([]);
+      const result = await readMultilineFromStream(input);
+      expect(result).toBeNull();
     });
   });
 

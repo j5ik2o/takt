@@ -97,12 +97,19 @@ export async function executeWorkflow(
   };
 
   // Load saved agent sessions for continuity (from project root)
-  const savedSessions = loadAgentSessions(projectCwd);
+  // When running in a worktree (cwd !== projectCwd), skip session resume because
+  // Claude Code sessions are stored per-cwd in ~/.claude/projects/{encoded-path}/
+  // and sessions from the main project dir can't be resumed in a worktree dir.
+  const isWorktree = cwd !== projectCwd;
+  const savedSessions = isWorktree ? {} : loadAgentSessions(projectCwd);
 
   // Session update handler - persist session IDs when they change (to project root)
-  const sessionUpdateHandler = (agentName: string, agentSessionId: string): void => {
-    updateAgentSession(projectCwd, agentName, agentSessionId);
-  };
+  // Skip persisting worktree sessions since they can't be reused across different worktrees.
+  const sessionUpdateHandler = isWorktree
+    ? undefined
+    : (agentName: string, agentSessionId: string): void => {
+        updateAgentSession(projectCwd, agentName, agentSessionId);
+      };
 
   const iterationLimitHandler = async (
     request: IterationLimitRequest
@@ -169,6 +176,7 @@ export async function executeWorkflow(
       status: response.status,
       contentLength: response.content.length,
       sessionId: response.sessionId,
+      error: response.error,
     });
     if (displayRef.current) {
       displayRef.current.flush();
@@ -176,6 +184,9 @@ export async function executeWorkflow(
     }
     console.log();
     status('Status', response.status);
+    if (response.error) {
+      error(`Error: ${response.error}`);
+    }
     if (response.sessionId) {
       status('Session', response.sessionId);
     }

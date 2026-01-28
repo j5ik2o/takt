@@ -35,6 +35,8 @@ export interface AgentResponse {
   content: string;
   timestamp: Date;
   sessionId?: string;
+  /** Error message when the query failed (e.g., API error, rate limit) */
+  error?: string;
 }
 
 /** Session state for workflow execution */

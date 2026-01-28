@@ -8,7 +8,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
-import { promptInput, confirm, selectOption } from '../prompt/index.js';
+import { promptInput, promptMultilineInput, confirm, selectOption } from '../prompt/index.js';
 import { success, info } from '../utils/ui.js';
 import { slugify } from '../utils/slug.js';
 import { createLogger } from '../utils/debug.js';
@@ -55,8 +55,8 @@ export async function addTask(cwd: string, args: string[]): Promise<void> {
     // Argument mode: task content provided directly
     taskContent = args.join(' ');
   } else {
-    // Interactive mode
-    const input = await promptInput('Task content');
+    // Interactive mode (multiline: empty line to finish)
+    const input = await promptMultilineInput('Task content');
     if (!input) {
       info('Cancelled.');
       return;
@@ -110,8 +110,9 @@ export async function addTask(cwd: string, args: string[]): Promise<void> {
     taskData.workflow = workflow;
   }
 
-  // Write YAML filea
-  const filename = generateFilename(tasksDir, taskContent);
+  // Write YAML file (use first line for filename to keep it short)
+  const firstLine = taskContent.split('\n')[0] || taskContent;
+  const filename = generateFilename(tasksDir, firstLine);
   const filePath = path.join(tasksDir, filename);
   const yamlContent = stringifyYaml(taskData);
   fs.writeFileSync(filePath, yamlContent, 'utf-8');
