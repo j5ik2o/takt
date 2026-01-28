@@ -233,6 +233,49 @@ async function selectWorkflowForInstruction(projectDir: string): Promise<string 
 }
 
 /**
+ * Get worktree context: diff stat and commit log from main branch.
+ */
+function getWorktreeContext(projectDir: string, branch: string): string {
+  const defaultBranch = detectDefaultBranch(projectDir);
+  const lines: string[] = [];
+
+  // Get diff stat
+  try {
+    const diffStat = execFileSync(
+      'git', ['diff', '--stat', `${defaultBranch}...${branch}`],
+      { cwd: projectDir, encoding: 'utf-8', stdio: 'pipe' }
+    ).trim();
+    if (diffStat) {
+      lines.push('## 現在の変更内容（mainからの差分）');
+      lines.push('```');
+      lines.push(diffStat);
+      lines.push('```');
+    }
+  } catch {
+    // Ignore errors
+  }
+
+  // Get commit log
+  try {
+    const commitLog = execFileSync(
+      'git', ['log', '--oneline', `${defaultBranch}..${branch}`],
+      { cwd: projectDir, encoding: 'utf-8', stdio: 'pipe' }
+    ).trim();
+    if (commitLog) {
+      lines.push('');
+      lines.push('## コミット履歴');
+      lines.push('```');
+      lines.push(commitLog);
+      lines.push('```');
+    }
+  } catch {
+    // Ignore errors
+  }
+
+  return lines.length > 0 ? lines.join('\n') + '\n\n' : '';
+}
+
+/**
  * Instruct worktree: give additional instructions to modify the worktree.
  * Executes a task on the worktree and auto-commits if successful.
  */
@@ -260,10 +303,16 @@ export async function instructWorktree(
   log.info('Instructing worktree', { branch, worktreePath, workflow: selectedWorkflow });
   info(`Running instruction on ${branch}...`);
 
-  // 3. Execute task on worktree
-  const taskSuccess = await executeTask(instruction, worktreePath, selectedWorkflow, projectDir);
+  // 3. Build instruction with worktree context
+  const worktreeContext = getWorktreeContext(projectDir, branch);
+  const fullInstruction = worktreeContext
+    ? `${worktreeContext}## 追加指示\n${instruction}`
+    : instruction;
 
-  // 4. Auto-commit if successful
+  // 4. Execute task on worktree
+  const taskSuccess = await executeTask(fullInstruction, worktreePath, selectedWorkflow, projectDir);
+
+  // 5. Auto-commit if successful
   if (taskSuccess) {
     const commitResult = autoCommitWorktree(worktreePath, item.taskSlug);
     if (commitResult.success && commitResult.commitHash) {
