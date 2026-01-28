@@ -30,11 +30,6 @@ steps:
       - WebSearch
       - WebFetch
     status_rules_prompt: |
-      # ⚠️ REQUIRED: Status Output Rules ⚠️
-
-      **Without this tag, the workflow will stop.**
-      Your final output MUST include a status tag following the rules below.
-
       ## Judgment Criteria
 
       | Situation | Judgment |
@@ -150,11 +145,6 @@ steps:
       - WebFetch
     permission_mode: acceptEdits
     status_rules_prompt: |
-      # ⚠️ REQUIRED: Status Output Rules ⚠️
-
-      **Without this tag, the workflow will stop.**
-      Your final output MUST include a status tag following the rules below.
-
       ## Output Format
 
       | Situation | Tag |
@@ -250,11 +240,6 @@ steps:
       - WebSearch
       - WebFetch
     status_rules_prompt: |
-      # ⚠️ REQUIRED: Status Output Rules ⚠️
-
-      **Without this tag, the workflow will stop.**
-      Your final output MUST include a status tag following the rules below.
-
       ## Judgment Criteria
 
       | Situation | Judgment |
@@ -365,11 +350,6 @@ steps:
       - WebSearch
       - WebFetch
     status_rules_prompt: |
-      # ⚠️ REQUIRED: Status Output Rules ⚠️
-
-      **Without this tag, the workflow will stop.**
-      Your final output MUST include a status tag following the rules below.
-
       ## Judgment Criteria
 
       | Situation | Judgment |
@@ -475,11 +455,6 @@ steps:
       - WebSearch
       - WebFetch
     status_rules_prompt: |
-      # ⚠️ REQUIRED: Status Output Rules ⚠️
-
-      **Without this tag, the workflow will stop.**
-      Your final output MUST include a status tag following the rules below.
-
       ## Judgment Criteria
 
       | Situation | Judgment |

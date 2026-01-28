@@ -55,6 +55,29 @@ export function buildExecutionMetadata(context: InstructionContext): ExecutionMe
   };
 }
 
+/** Localized strings for status rules header */
+const STATUS_RULES_HEADER_STRINGS = {
+  en: {
+    heading: '# ⚠️ Required: Status Output Rules ⚠️',
+    warning: '**The workflow will stop without this tag.**',
+    instruction: 'Your final output MUST include a status tag following the rules below.',
+  },
+  ja: {
+    heading: '# ⚠️ 必須: ステータス出力ルール ⚠️',
+    warning: '**このタグがないとワークフローが停止します。**',
+    instruction: '最終出力には必ず以下のルールに従ったステータスタグを含めてください。',
+  },
+} as const;
+
+/**
+ * Render status rules header.
+ * Prepended to status_rules_prompt when it exists.
+ */
+export function renderStatusRulesHeader(language: Language): string {
+  const strings = STATUS_RULES_HEADER_STRINGS[language];
+  return [strings.heading, '', strings.warning, strings.instruction, ''].join('\n');
+}
+
 /** Localized strings for execution metadata rendering */
 const METADATA_STRINGS = {
   en: {
@@ -168,9 +191,10 @@ export function buildInstruction(
     instruction = instruction.replace(/\{report_dir\}/g, context.reportDir);
   }
 
-  // Append status_rules_prompt if present
+  // Append status_rules_prompt with localized header if present
   if (step.statusRulesPrompt) {
-    instruction = `${instruction}\n\n${step.statusRulesPrompt}`;
+    const statusHeader = renderStatusRulesHeader(context.language ?? 'en');
+    instruction = `${instruction}\n\n${statusHeader}\n${step.statusRulesPrompt}`;
   }
 
   // Prepend execution context metadata so agents see it first.

@@ -7,6 +7,7 @@ import {
   buildInstruction,
   buildExecutionMetadata,
   renderExecutionMetadata,
+  renderStatusRulesHeader,
   type InstructionContext,
 } from '../workflow/instruction-builder.js';
 import type { WorkflowStep } from '../models/types.js';
@@ -224,6 +225,68 @@ describe('instruction-builder', () => {
 
       expect(enRendered).toContain('Note:');
       expect(jaRendered).not.toContain('Note:');
+    });
+  });
+
+  describe('renderStatusRulesHeader', () => {
+    it('should render Japanese header when language is ja', () => {
+      const header = renderStatusRulesHeader('ja');
+
+      expect(header).toContain('# ⚠️ 必須: ステータス出力ルール ⚠️');
+      expect(header).toContain('このタグがないとワークフローが停止します');
+      expect(header).toContain('最終出力には必ず以下のルールに従ったステータスタグを含めてください');
+    });
+
+    it('should render English header when language is en', () => {
+      const header = renderStatusRulesHeader('en');
+
+      expect(header).toContain('# ⚠️ Required: Status Output Rules ⚠️');
+      expect(header).toContain('The workflow will stop without this tag');
+      expect(header).toContain('Your final output MUST include a status tag');
+    });
+
+    it('should end with trailing empty line', () => {
+      const header = renderStatusRulesHeader('en');
+
+      expect(header).toMatch(/\n$/);
+    });
+  });
+
+  describe('status_rules_prompt with header', () => {
+    it('should prepend status header to status_rules_prompt in Japanese', () => {
+      const step = createMinimalStep('Do work');
+      step.statusRulesPrompt = '## 出力フォーマット\n| 状況 | タグ |';
+      const context = createMinimalContext({ language: 'ja' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('# ⚠️ 必須: ステータス出力ルール ⚠️');
+      expect(result).toContain('## 出力フォーマット');
+      // Header should come before the step-specific content
+      const headerIndex = result.indexOf('⚠️ 必須');
+      const formatIndex = result.indexOf('## 出力フォーマット');
+      expect(headerIndex).toBeLessThan(formatIndex);
+    });
+
+    it('should prepend status header to status_rules_prompt in English', () => {
+      const step = createMinimalStep('Do work');
+      step.statusRulesPrompt = '## Output Format\n| Situation | Tag |';
+      const context = createMinimalContext({ language: 'en' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('# ⚠️ Required: Status Output Rules ⚠️');
+      expect(result).toContain('## Output Format');
+    });
+
+    it('should not add header if statusRulesPrompt is not set', () => {
+      const step = createMinimalStep('Do work');
+      const context = createMinimalContext({ language: 'en' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).not.toContain('⚠️ Required');
+      expect(result).not.toContain('⚠️ 必須');
     });
   });
 

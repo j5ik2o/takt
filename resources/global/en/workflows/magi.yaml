@@ -27,10 +27,7 @@ steps:
       - WebSearch
       - WebFetch
     status_rules_prompt: |
-      # ⚠️ REQUIRED: Status Output Rules ⚠️
 
-      **Without this tag, the workflow will stop.**
-      Your final output MUST include a status tag following the rules below.
 
       ## Output Format
 
@@ -69,10 +66,7 @@ steps:
       - WebSearch
       - WebFetch
     status_rules_prompt: |
-      # ⚠️ REQUIRED: Status Output Rules ⚠️
 
-      **Without this tag, the workflow will stop.**
-      Your final output MUST include a status tag following the rules below.
 
       ## Output Format
 
@@ -116,10 +110,7 @@ steps:
       - WebSearch
       - WebFetch
     status_rules_prompt: |
-      # ⚠️ REQUIRED: Status Output Rules ⚠️
 
-      **Without this tag, the workflow will stop.**
-      Your final output MUST include a status tag following the rules below.
 
       ## Output Format
 
