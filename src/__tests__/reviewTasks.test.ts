@@ -93,7 +93,7 @@ describe('extractTaskSlug', () => {
 });
 
 describe('buildReviewItems', () => {
-  it('should build items with correct task slug', () => {
+  it('should build items with correct task slug and originalInstruction', () => {
     const branches: BranchInfo[] = [
       {
         branch: 'takt/20260128-fix-auth',
@@ -107,6 +107,8 @@ describe('buildReviewItems', () => {
     expect(items[0]!.info).toBe(branches[0]);
     // filesChanged will be 0 since we don't have a real git repo
     expect(items[0]!.filesChanged).toBe(0);
+    // originalInstruction will be empty since git command fails on non-existent repo
+    expect(items[0]!.originalInstruction).toBe('');
   });
 
   it('should handle multiple branches', () => {

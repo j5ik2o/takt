@@ -78,6 +78,9 @@ async function showDiffAndPromptAction(
 ): Promise<ReviewAction | null> {
   console.log();
   console.log(chalk.bold.cyan(`=== ${item.info.branch} ===`));
+  if (item.originalInstruction) {
+    console.log(chalk.dim(`  ${item.originalInstruction}`));
+  }
   console.log();
 
   // Show diff stat
@@ -353,11 +356,17 @@ export async function reviewTasks(cwd: string): Promise<void> {
     const items = buildReviewItems(cwd, branches, defaultBranch);
 
     // Build selection options
-    const options = items.map((item, idx) => ({
-      label: item.info.branch,
-      value: String(idx),
-      description: `${item.filesChanged} file${item.filesChanged !== 1 ? 's' : ''} changed`,
-    }));
+    const options = items.map((item, idx) => {
+      const filesSummary = `${item.filesChanged} file${item.filesChanged !== 1 ? 's' : ''} changed`;
+      const description = item.originalInstruction
+        ? `${filesSummary} | ${item.originalInstruction}`
+        : filesSummary;
+      return {
+        label: item.info.branch,
+        value: String(idx),
+        description,
+      };
+    });
 
     const selected = await selectOption<string>(
       'Review Tasks (Branches)',

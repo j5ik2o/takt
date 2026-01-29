@@ -43,13 +43,15 @@ export interface BranchReviewItem {
   info: BranchInfo;
   filesChanged: number;
   taskSlug: string;
+  /** Original task instruction extracted from first commit message */
+  originalInstruction: string;
 }
 
 /**
  * Generate a timestamp string for paths/branches
  */
 function generateTimestamp(): string {
-  return new Date().toISOString().replace(/[:.]/g, '').slice(0, 15);
+  return new Date().toISOString().replace(/[-:.]/g, '').slice(0, 13);
 }
 
 /**
@@ -314,6 +316,41 @@ export function extractTaskSlug(branch: string): string {
 }
 
 /**
+ * Extract the original task instruction from the first commit message on a branch.
+ *
+ * The first commit on a takt branch has the format: "takt: {original instruction}".
+ * This function retrieves the first commit's message and strips the "takt: " prefix.
+ * Returns empty string if extraction fails.
+ */
+export function getOriginalInstruction(
+  cwd: string,
+  defaultBranch: string,
+  branch: string,
+): string {
+  try {
+    // Get the first commit message on the branch (oldest first)
+    const output = execFileSync(
+      'git',
+      ['log', '--format=%s', '--reverse', `${defaultBranch}..${branch}`],
+      { cwd, encoding: 'utf-8', stdio: 'pipe' },
+    ).trim();
+
+    if (!output) return '';
+
+    const firstLine = output.split('\n')[0] || '';
+    // Strip "takt: " prefix if present
+    const TAKT_COMMIT_PREFIX = 'takt:';
+    if (firstLine.startsWith(TAKT_COMMIT_PREFIX)) {
+      return firstLine.slice(TAKT_COMMIT_PREFIX.length).trim();
+    }
+
+    return firstLine;
+  } catch {
+    return '';
+  }
+}
+
+/**
  * Build review items from branch list, enriching with diff stats.
  */
 export function buildReviewItems(
@@ -325,5 +362,6 @@ export function buildReviewItems(
     info: br,
     filesChanged: getFilesChanged(projectDir, defaultBranch, br.branch),
     taskSlug: extractTaskSlug(br.branch),
+    originalInstruction: getOriginalInstruction(projectDir, defaultBranch, br.branch),
   }));
 }
