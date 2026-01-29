@@ -228,7 +228,7 @@ program
       const taskSuccess = await executeTask(task, execCwd, selectedWorkflow, cwd);
 
       if (taskSuccess && isWorktree) {
-        const commitResult = autoCommitAndPush(execCwd, task);
+        const commitResult = autoCommitAndPush(execCwd, task, cwd);
         if (commitResult.success && commitResult.commitHash) {
           success(`Auto-committed & pushed: ${commitResult.commitHash}`);
         } else if (!commitResult.success) {

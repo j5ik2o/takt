@@ -30,7 +30,7 @@ describe('autoCommitAndPush', () => {
       return Buffer.from('');
     });
 
-    const result = autoCommitAndPush('/tmp/clone', 'my-task');
+    const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project');
 
     expect(result.success).toBe(true);
     expect(result.commitHash).toBe('abc1234');
@@ -50,10 +50,10 @@ describe('autoCommitAndPush', () => {
       expect.objectContaining({ cwd: '/tmp/clone' })
     );
 
-    // Verify push was called
+    // Verify push was called with projectDir directly (no origin remote)
     expect(mockExecFileSync).toHaveBeenCalledWith(
       'git',
-      ['push', 'origin', 'HEAD'],
+      ['push', '/project', 'HEAD'],
       expect.objectContaining({ cwd: '/tmp/clone' })
     );
   });
@@ -67,7 +67,7 @@ describe('autoCommitAndPush', () => {
       return Buffer.from('');
     });
 
-    const result = autoCommitAndPush('/tmp/clone', 'my-task');
+    const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project');
 
     expect(result.success).toBe(true);
     expect(result.commitHash).toBeUndefined();
@@ -90,7 +90,7 @@ describe('autoCommitAndPush', () => {
     // Verify push was NOT called
     expect(mockExecFileSync).not.toHaveBeenCalledWith(
       'git',
-      ['push', 'origin', 'HEAD'],
+      ['push', '/project', 'HEAD'],
       expect.anything()
     );
   });
@@ -100,7 +100,7 @@ describe('autoCommitAndPush', () => {
       throw new Error('git error: not a git repository');
     });
 
-    const result = autoCommitAndPush('/tmp/clone', 'my-task');
+    const result = autoCommitAndPush('/tmp/clone', 'my-task', '/project');
 
     expect(result.success).toBe(false);
     expect(result.commitHash).toBeUndefined();
@@ -120,7 +120,7 @@ describe('autoCommitAndPush', () => {
       return Buffer.from('');
     });
 
-    autoCommitAndPush('/tmp/clone', 'test-task');
+    autoCommitAndPush('/tmp/clone', 'test-task', '/project');
 
     // Find the commit call
     const commitCall = mockExecFileSync.mock.calls.find(
@@ -145,7 +145,7 @@ describe('autoCommitAndPush', () => {
       return Buffer.from('');
     });
 
-    autoCommitAndPush('/tmp/clone', '認証機能を追加する');
+    autoCommitAndPush('/tmp/clone', '認証機能を追加する', '/project');
 
     const commitCall = mockExecFileSync.mock.calls.find(
       call => (call[1] as string[])[0] === 'commit'

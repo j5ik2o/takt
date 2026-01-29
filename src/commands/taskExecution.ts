@@ -81,7 +81,7 @@ export async function executeAndCompleteTask(
     const completedAt = new Date().toISOString();
 
     if (taskSuccess && isWorktree) {
-      const commitResult = autoCommitAndPush(execCwd, task.name);
+      const commitResult = autoCommitAndPush(execCwd, task.name, cwd);
       if (commitResult.success && commitResult.commitHash) {
         info(`Auto-committed & pushed: ${commitResult.commitHash}`);
       } else if (!commitResult.success) {

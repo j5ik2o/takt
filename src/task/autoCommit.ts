@@ -32,8 +32,9 @@ export interface AutoCommitResult {
  *
  * @param cloneCwd - The clone directory
  * @param taskName - Task name used in commit message
+ * @param projectDir - The main project directory (push target)
  */
-export function autoCommitAndPush(cloneCwd: string, taskName: string): AutoCommitResult {
+export function autoCommitAndPush(cloneCwd: string, taskName: string, projectDir: string): AutoCommitResult {
   log.info('Auto-commit starting', { cwd: cloneCwd, taskName });
 
   try {
@@ -71,13 +72,13 @@ export function autoCommitAndPush(cloneCwd: string, taskName: string): AutoCommi
 
     log.info('Auto-commit created', { commitHash, message: commitMessage });
 
-    // Push to origin so the branch is reflected in the main repo
-    execFileSync('git', ['push', 'origin', 'HEAD'], {
+    // Push directly to the main repo (origin was removed to isolate the clone)
+    execFileSync('git', ['push', projectDir, 'HEAD'], {
       cwd: cloneCwd,
       stdio: 'pipe',
     });
 
-    log.info('Pushed to origin');
+    log.info('Pushed to main repo', { projectDir });
 
     return {
       success: true,

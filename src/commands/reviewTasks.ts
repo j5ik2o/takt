@@ -317,7 +317,7 @@ export async function instructBranch(
 
     // 6. Auto-commit+push if successful
     if (taskSuccess) {
-      const commitResult = autoCommitAndPush(clone.path, item.taskSlug);
+      const commitResult = autoCommitAndPush(clone.path, item.taskSlug, projectDir);
       if (commitResult.success && commitResult.commitHash) {
         info(`Auto-committed & pushed: ${commitResult.commitHash}`);
       } else if (!commitResult.success) {

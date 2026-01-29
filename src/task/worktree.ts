@@ -137,6 +137,12 @@ export function createSharedClone(projectDir: string, options: WorktreeOptions):
     stdio: 'pipe',
   });
 
+  // Remove origin remote so Claude Code SDK won't follow it back to the main repo
+  execFileSync('git', ['remote', 'remove', 'origin'], {
+    cwd: clonePath,
+    stdio: 'pipe',
+  });
+
   // Checkout branch
   if (branchExists(clonePath, branch)) {
     execFileSync('git', ['checkout', branch], {
@@ -182,6 +188,12 @@ export function createTempCloneForBranch(projectDir: string, branch: string): Wo
 
   execFileSync('git', ['clone', '--reference', projectDir, '--dissociate', projectDir, clonePath], {
     cwd: projectDir,
+    stdio: 'pipe',
+  });
+
+  // Remove origin remote so Claude Code SDK won't follow it back to the main repo
+  execFileSync('git', ['remote', 'remove', 'origin'], {
+    cwd: clonePath,
     stdio: 'pipe',
   });
 
