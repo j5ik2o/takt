@@ -42,39 +42,27 @@ function generateTimestamp(): string {
  * Priority:
  * 1. Custom path in options.worktree (string)
  * 2. worktree_dir from config.yaml (if set)
- * 3. Default: ../{tree-name} (outside project to avoid Claude Code project detection issues)
+ * 3. Default: ../{tree-name}
  */
 function resolveWorktreePath(projectDir: string, options: WorktreeOptions): string {
   const timestamp = generateTimestamp();
   const slug = slugify(options.taskSlug);
   const dirName = slug ? `${timestamp}-${slug}` : timestamp;
 
-  // Custom path specified in task options
   if (typeof options.worktree === 'string') {
-    const resolved = path.isAbsolute(options.worktree)
+    return path.isAbsolute(options.worktree)
       ? options.worktree
       : path.resolve(projectDir, options.worktree);
-    return resolved;
   }
 
-  // Load config to check for worktree_dir setting
-  let worktreeBaseDir: string | undefined;
-  try {
-    const globalConfig = loadGlobalConfig();
-    worktreeBaseDir = globalConfig.worktreeDir;
-  } catch {
-    // Config not found, use default
+  const globalConfig = loadGlobalConfig();
+  if (globalConfig.worktreeDir) {
+    const baseDir = path.isAbsolute(globalConfig.worktreeDir)
+      ? globalConfig.worktreeDir
+      : path.resolve(projectDir, globalConfig.worktreeDir);
+    return path.join(baseDir, dirName);
   }
 
-  if (worktreeBaseDir) {
-    // Use configured worktree directory
-    const resolved = path.isAbsolute(worktreeBaseDir)
-      ? worktreeBaseDir
-      : path.resolve(projectDir, worktreeBaseDir);
-    return path.join(resolved, dirName);
-  }
-
-  // Default: ../{tree-name} (sibling to project directory)
   return path.join(projectDir, '..', dirName);
 }
 
