@@ -9,7 +9,7 @@ import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createLogger } from '../utils/debug.js';
 import { slugify } from '../utils/slug.js';
-import { isPathSafe } from '../config/paths.js';
+import { loadGlobalConfig } from '../config/globalConfig.js';
 
 const log = createLogger('worktree');
 
@@ -37,29 +37,45 @@ function generateTimestamp(): string {
 }
 
 /**
- * Resolve the worktree path based on options.
- * Validates that custom paths stay within the project directory.
+ * Resolve the worktree path based on options and global config.
  *
- * @throws Error if a custom path escapes projectDir (path traversal)
+ * Priority:
+ * 1. Custom path in options.worktree (string)
+ * 2. worktree_dir from config.yaml (if set)
+ * 3. Default: ../{tree-name} (outside project to avoid Claude Code project detection issues)
  */
 function resolveWorktreePath(projectDir: string, options: WorktreeOptions): string {
+  const timestamp = generateTimestamp();
+  const slug = slugify(options.taskSlug);
+  const dirName = slug ? `${timestamp}-${slug}` : timestamp;
+
+  // Custom path specified in task options
   if (typeof options.worktree === 'string') {
     const resolved = path.isAbsolute(options.worktree)
       ? options.worktree
       : path.resolve(projectDir, options.worktree);
-
-    if (!isPathSafe(projectDir, resolved)) {
-      throw new Error(`Worktree path escapes project directory: ${options.worktree}`);
-    }
-
     return resolved;
   }
 
-  // worktree: true → .takt/worktrees/{timestamp}-{task-slug}/
-  const timestamp = generateTimestamp();
-  const slug = slugify(options.taskSlug);
-  const dirName = slug ? `${timestamp}-${slug}` : timestamp;
-  return path.join(projectDir, '.takt', 'worktrees', dirName);
+  // Load config to check for worktree_dir setting
+  let worktreeBaseDir: string | undefined;
+  try {
+    const globalConfig = loadGlobalConfig();
+    worktreeBaseDir = globalConfig.worktreeDir;
+  } catch {
+    // Config not found, use default
+  }
+
+  if (worktreeBaseDir) {
+    // Use configured worktree directory
+    const resolved = path.isAbsolute(worktreeBaseDir)
+      ? worktreeBaseDir
+      : path.resolve(projectDir, worktreeBaseDir);
+    return path.join(resolved, dirName);
+  }
+
+  // Default: ../{tree-name} (sibling to project directory)
+  return path.join(projectDir, '..', dirName);
 }
 
 /**

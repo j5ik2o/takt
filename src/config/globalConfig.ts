@@ -35,6 +35,7 @@ export function loadGlobalConfig(): GlobalConfig {
       enabled: parsed.debug.enabled,
       logFile: parsed.debug.log_file,
     } : undefined,
+    worktreeDir: parsed.worktree_dir,
   };
 }
 
@@ -56,6 +57,9 @@ export function saveGlobalConfig(config: GlobalConfig): void {
       enabled: config.debug.enabled,
       log_file: config.debug.logFile,
     };
+  }
+  if (config.worktreeDir) {
+    raw.worktree_dir = config.worktreeDir;
   }
   writeFileSync(configPath, stringifyYaml(raw), 'utf-8');
 }
