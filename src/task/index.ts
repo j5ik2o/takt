@@ -29,9 +29,9 @@ export {
   getFilesChanged,
   extractTaskSlug,
   getOriginalInstruction,
-  buildReviewItems,
+  buildListItems,
   type BranchInfo,
-  type BranchReviewItem,
-} from './branchReview.js';
+  type BranchListItem,
+} from './branchList.js';
 export { autoCommitAndPush, type AutoCommitResult } from './autoCommit.js';
 export { TaskWatcher, type TaskWatcherOptions } from './watcher.js';

@@ -65,7 +65,7 @@ vi.mock('../commands/index.js', () => ({
   addTask: vi.fn(),
   refreshBuiltin: vi.fn(),
   watchTasks: vi.fn(),
-  reviewTasks: vi.fn(),
+  listTasks: vi.fn(),
 }));
 
 vi.mock('../config/workflowLoader.js', () => ({

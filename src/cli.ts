@@ -32,7 +32,7 @@ import {
   addTask,
   refreshBuiltin,
   watchTasks,
-  reviewTasks,
+  listTasks,
 } from './commands/index.js';
 import { listWorkflows } from './config/workflowLoader.js';
 import { selectOptionWithDefault, confirm } from './prompt/index.js';
@@ -167,14 +167,14 @@ program
           await watchTasks(cwd);
           return;
 
-        case 'review-tasks':
-        case 'review':
-          await reviewTasks(cwd);
+        case 'list-tasks':
+        case 'list':
+          await listTasks(cwd);
           return;
 
         default:
           error(`Unknown command: /${command}`);
-          info('Available: /run-tasks (/run), /watch, /add-task (/add), /review-tasks (/review), /switch (/sw), /clear, /refresh-builtin, /help, /config');
+          info('Available: /run-tasks (/run), /watch, /add-task (/add), /list-tasks (/list), /switch (/sw), /clear, /refresh-builtin, /help, /config');
           process.exit(1);
       }
     }

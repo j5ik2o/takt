@@ -1,15 +1,15 @@
 /**
- * Tests for review-tasks command
+ * Tests for list-tasks command
  */
 
 import { describe, it, expect, vi } from 'vitest';
 import {
   parseTaktBranches,
   extractTaskSlug,
-  buildReviewItems,
+  buildListItems,
   type BranchInfo,
-} from '../task/branchReview.js';
-import { isBranchMerged, showFullDiff, type ReviewAction } from '../commands/reviewTasks.js';
+} from '../task/branchList.js';
+import { isBranchMerged, showFullDiff, type ListAction } from '../commands/listTasks.js';
 
 describe('parseTaktBranches', () => {
   it('should parse takt/ branches from git branch output', () => {
@@ -92,7 +92,7 @@ describe('extractTaskSlug', () => {
   });
 });
 
-describe('buildReviewItems', () => {
+describe('buildListItems', () => {
   it('should build items with correct task slug and originalInstruction', () => {
     const branches: BranchInfo[] = [
       {
@@ -101,7 +101,7 @@ describe('buildReviewItems', () => {
       },
     ];
 
-    const items = buildReviewItems('/project', branches, 'main');
+    const items = buildListItems('/project', branches, 'main');
     expect(items).toHaveLength(1);
     expect(items[0]!.taskSlug).toBe('fix-auth');
     expect(items[0]!.info).toBe(branches[0]);
@@ -123,21 +123,21 @@ describe('buildReviewItems', () => {
       },
     ];
 
-    const items = buildReviewItems('/project', branches, 'main');
+    const items = buildListItems('/project', branches, 'main');
     expect(items).toHaveLength(2);
     expect(items[0]!.taskSlug).toBe('fix-auth');
     expect(items[1]!.taskSlug).toBe('add-search');
   });
 
   it('should handle empty branch list', () => {
-    const items = buildReviewItems('/project', [], 'main');
+    const items = buildListItems('/project', [], 'main');
     expect(items).toHaveLength(0);
   });
 });
 
-describe('ReviewAction type', () => {
+describe('ListAction type', () => {
   it('should include diff, instruct, try, merge, delete (no skip)', () => {
-    const actions: ReviewAction[] = ['diff', 'instruct', 'try', 'merge', 'delete'];
+    const actions: ListAction[] = ['diff', 'instruct', 'try', 'merge', 'delete'];
     expect(actions).toHaveLength(5);
     expect(actions).toContain('diff');
     expect(actions).toContain('instruct');

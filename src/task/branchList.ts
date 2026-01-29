@@ -1,15 +1,15 @@
 /**
- * Branch review helpers
+ * Branch list helpers
  *
  * Functions for listing, parsing, and enriching takt-managed branches
  * with metadata (diff stats, original instruction, task slug).
- * Used by the /review command.
+ * Used by the /list command.
  */
 
 import { execFileSync } from 'node:child_process';
 import { createLogger } from '../utils/debug.js';
 
-const log = createLogger('branchReview');
+const log = createLogger('branchList');
 
 /** Branch info from `git branch --list` */
 export interface BranchInfo {
@@ -17,8 +17,8 @@ export interface BranchInfo {
   commit: string;
 }
 
-/** Branch with review metadata */
-export interface BranchReviewItem {
+/** Branch with list metadata */
+export interface BranchListItem {
   info: BranchInfo;
   filesChanged: number;
   taskSlug: string;
@@ -159,13 +159,13 @@ export function getOriginalInstruction(
 }
 
 /**
- * Build review items from branch list, enriching with diff stats.
+ * Build list items from branch list, enriching with diff stats.
  */
-export function buildReviewItems(
+export function buildListItems(
   projectDir: string,
   branches: BranchInfo[],
   defaultBranch: string,
-): BranchReviewItem[] {
+): BranchListItem[] {
   return branches.map(br => ({
     info: br,
     filesChanged: getFilesChanged(projectDir, defaultBranch, br.branch),

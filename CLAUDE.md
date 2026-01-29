@@ -24,7 +24,7 @@ TAKT (Task Agent Koordination Tool) is a multi-agent orchestration system for Cl
 | `takt /run-tasks` | `/run` | Execute all pending tasks from `.takt/tasks/` once |
 | `takt /watch` | | Watch `.takt/tasks/` and auto-execute tasks (resident process) |
 | `takt /add-task` | `/add` | Add a new task interactively (YAML format, multiline supported) |
-| `takt /review-tasks` | `/review` | Review task branches (try merge, merge & cleanup, or delete) |
+| `takt /list-tasks` | `/list` | List task branches (try merge, merge & cleanup, or delete) |
 | `takt /switch` | | Switch workflow interactively |
 | `takt /clear` | | Clear agent conversation sessions (reset state) |
 | `takt /refresh-builtin` | | Update builtin resources from `resources/` to `~/.takt/` |
@@ -37,7 +37,7 @@ TAKT (Task Agent Koordination Tool) is a multi-agent orchestration system for Cl
 
 ```
 CLI (cli.ts)
-  → Slash commands (/run-tasks, /watch, /add-task, /switch, /clear, /refresh-builtin, /help, /config)
+  → Slash commands (/run-tasks, /watch, /add-task, /list-tasks, /switch, /clear, /refresh-builtin, /help, /config)
   → or executeTask()
     → WorkflowEngine (workflow/engine.ts)
       → runAgent() (agents/runner.ts)
@@ -199,7 +199,7 @@ Key constraints:
 - **Session isolation**: Claude Code sessions are stored per-cwd in `~/.claude/projects/{encoded-path}/`. Sessions from the main project cannot be resumed in a clone. The engine skips session resume when `cwd !== projectCwd`.
 - **No node_modules**: Clones only contain tracked files. `node_modules/` is absent.
 - **Dual cwd**: `cwd` = clone path (where agents run), `projectCwd` = project root (where `.takt/` lives). Reports, logs, and session data always write to `projectCwd`.
-- **Review**: Use `takt /review-tasks` to review branches. Instruct action creates a temporary clone for the branch, executes, pushes, then removes the clone.
+- **List**: Use `takt /list-tasks` to list branches. Instruct action creates a temporary clone for the branch, executes, pushes, then removes the clone.
 
 ## Error Propagation
 

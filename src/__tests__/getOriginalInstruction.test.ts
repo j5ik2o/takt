@@ -12,7 +12,7 @@ vi.mock('node:child_process', () => ({
 import { execFileSync } from 'node:child_process';
 const mockExecFileSync = vi.mocked(execFileSync);
 
-import { getOriginalInstruction } from '../task/branchReview.js';
+import { getOriginalInstruction } from '../task/branchList.js';
 
 beforeEach(() => {
   vi.clearAllMocks();

@@ -1,5 +1,5 @@
 /**
- * Review tasks command
+ * List tasks command
  *
  * Interactive UI for reviewing branch-based task results:
  * try merge, merge & cleanup, or delete actions.
@@ -17,9 +17,9 @@ import {
 import {
   detectDefaultBranch,
   listTaktBranches,
-  buildReviewItems,
-  type BranchReviewItem,
-} from '../task/branchReview.js';
+  buildListItems,
+  type BranchListItem,
+} from '../task/branchList.js';
 import { autoCommitAndPush } from '../task/autoCommit.js';
 import { selectOption, confirm, promptInput } from '../prompt/index.js';
 import { info, success, error as logError, warn } from '../utils/ui.js';
@@ -29,10 +29,10 @@ import { listWorkflows } from '../config/workflowLoader.js';
 import { getCurrentWorkflow } from '../config/paths.js';
 import { DEFAULT_WORKFLOW_NAME } from '../constants.js';
 
-const log = createLogger('review-tasks');
+const log = createLogger('list-tasks');
 
-/** Actions available for a reviewed branch */
-export type ReviewAction = 'diff' | 'instruct' | 'try' | 'merge' | 'delete';
+/** Actions available for a listed branch */
+export type ListAction = 'diff' | 'instruct' | 'try' | 'merge' | 'delete';
 
 /**
  * Check if a branch has already been merged into HEAD.
@@ -78,8 +78,8 @@ export function showFullDiff(
 async function showDiffAndPromptAction(
   cwd: string,
   defaultBranch: string,
-  item: BranchReviewItem,
-): Promise<ReviewAction | null> {
+  item: BranchListItem,
+): Promise<ListAction | null> {
   console.log();
   console.log(chalk.bold.cyan(`=== ${item.info.branch} ===`));
   if (item.originalInstruction) {
@@ -99,7 +99,7 @@ async function showDiffAndPromptAction(
   }
 
   // Prompt action
-  const action = await selectOption<ReviewAction>(
+  const action = await selectOption<ListAction>(
     `Action for ${item.info.branch}:`,
     [
       { label: 'View diff', value: 'diff', description: 'Show full diff in pager' },
@@ -117,7 +117,7 @@ async function showDiffAndPromptAction(
  * Try-merge (squash): stage changes from branch without committing.
  * User can inspect staged changes and commit manually if satisfied.
  */
-export function tryMergeBranch(projectDir: string, item: BranchReviewItem): boolean {
+export function tryMergeBranch(projectDir: string, item: BranchListItem): boolean {
   const { branch } = item.info;
 
   try {
@@ -145,7 +145,7 @@ export function tryMergeBranch(projectDir: string, item: BranchReviewItem): bool
  * Otherwise merge first, then delete the branch.
  * No worktree removal needed — clones are ephemeral.
  */
-export function mergeBranch(projectDir: string, item: BranchReviewItem): boolean {
+export function mergeBranch(projectDir: string, item: BranchListItem): boolean {
   const { branch } = item.info;
   const alreadyMerged = isBranchMerged(projectDir, branch);
 
@@ -192,7 +192,7 @@ export function mergeBranch(projectDir: string, item: BranchReviewItem): boolean
  * Delete a branch (discard changes).
  * No worktree removal needed — clones are ephemeral.
  */
-export function deleteBranch(projectDir: string, item: BranchReviewItem): boolean {
+export function deleteBranch(projectDir: string, item: BranchListItem): boolean {
   const { branch } = item.info;
 
   try {
@@ -291,7 +291,7 @@ function getBranchContext(projectDir: string, branch: string): string {
  */
 export async function instructBranch(
   projectDir: string,
-  item: BranchReviewItem,
+  item: BranchListItem,
 ): Promise<boolean> {
   const { branch } = item.info;
 
@@ -349,22 +349,22 @@ export async function instructBranch(
 }
 
 /**
- * Main entry point: review branch-based tasks interactively.
+ * Main entry point: list branch-based tasks interactively.
  */
-export async function reviewTasks(cwd: string): Promise<void> {
-  log.info('Starting review-tasks');
+export async function listTasks(cwd: string): Promise<void> {
+  log.info('Starting list-tasks');
 
   const defaultBranch = detectDefaultBranch(cwd);
   let branches = listTaktBranches(cwd);
 
   if (branches.length === 0) {
-    info('No tasks to review.');
+    info('No tasks to list.');
     return;
   }
 
   // Interactive loop
   while (branches.length > 0) {
-    const items = buildReviewItems(cwd, branches, defaultBranch);
+    const items = buildListItems(cwd, branches, defaultBranch);
 
     // Build selection options
     const options = items.map((item, idx) => {
@@ -380,7 +380,7 @@ export async function reviewTasks(cwd: string): Promise<void> {
     });
 
     const selected = await selectOption<string>(
-      'Review Tasks (Branches)',
+      'List Tasks (Branches)',
       options,
     );
 
@@ -393,7 +393,7 @@ export async function reviewTasks(cwd: string): Promise<void> {
     if (!item) continue;
 
     // Action loop: re-show menu after viewing diff
-    let action: ReviewAction | null;
+    let action: ListAction | null;
     do {
       action = await showDiffAndPromptAction(cwd, defaultBranch, item);
 
@@ -430,5 +430,5 @@ export async function reviewTasks(cwd: string): Promise<void> {
     branches = listTaktBranches(cwd);
   }
 
-  info('All tasks reviewed.');
+  info('All tasks listed.');
 }

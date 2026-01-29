@@ -35,8 +35,8 @@ takt /run-tasks
 # Watch for tasks and auto-execute
 takt /watch
 
-# Review task branches (merge or delete)
-takt /review-tasks
+# List task branches (merge or delete)
+takt /list-tasks
 
 # Switch workflow
 takt /switch
@@ -51,7 +51,7 @@ takt /switch
 | `takt /run-tasks` | `/run` | Run all pending tasks from `.takt/tasks/` |
 | `takt /watch` | | Watch `.takt/tasks/` and auto-execute tasks (stays resident) |
 | `takt /add-task` | `/add` | Add a new task interactively (YAML format, multiline supported) |
-| `takt /review-tasks` | `/review` | Review task branches (try merge, merge & cleanup, or delete) |
+| `takt /list-tasks` | `/list` | List task branches (try merge, merge & cleanup, or delete) |
 | `takt /switch` | | Switch workflow interactively |
 | `takt /clear` | | Clear agent conversation sessions |
 | `takt /refresh-builtin` | | Update builtin agents/workflows to latest version |
@@ -353,7 +353,7 @@ YAML task files can specify `worktree` to run each task in an isolated `git clon
 
 > **Note**: The YAML field is named `worktree` for backward compatibility. Internally, `git clone --shared` is used instead of `git worktree` because git worktrees have a `.git` file with `gitdir:` that points back to the main repository, causing Claude Code to recognize the main repo as the project root. Shared clones have an independent `.git` directory that avoids this issue.
 
-Clones are ephemeral. When a task completes successfully, TAKT automatically commits all changes and pushes the branch to the main repository, then deletes the clone. Use `takt /review-tasks` to review, try-merge, or delete task branches.
+Clones are ephemeral. When a task completes successfully, TAKT automatically commits all changes and pushes the branch to the main repository, then deletes the clone. Use `takt /list-tasks` to list, try-merge, or delete task branches.
 
 #### Running Tasks with `/run-tasks`
 
@@ -376,10 +376,10 @@ Watch mode polls `.takt/tasks/` for new task files and auto-executes them as the
 - Automated workflows where tasks are added by external processes
 - Long-running development sessions where tasks are queued over time
 
-#### Reviewing Task Branches with `/review-tasks`
+#### Listing Task Branches with `/list-tasks`
 
 ```bash
-takt /review-tasks
+takt /list-tasks
 ```
 
 Lists all `takt/`-prefixed branches with file change counts. For each branch you can:

@@ -11,4 +11,4 @@ export { showHelp } from './help.js';
 export { withAgentSession } from './session.js';
 export { switchWorkflow } from './workflow.js';
 export { switchConfig, getCurrentPermissionMode, setPermissionMode, type PermissionMode } from './config.js';
-export { reviewTasks } from './reviewTasks.js';
+export { listTasks } from './listTasks.js';
