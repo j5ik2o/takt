@@ -14,7 +14,7 @@ vi.mock('../task/index.js', () => ({
   TaskRunner: vi.fn(),
 }));
 
-vi.mock('../task/worktree.js', () => ({
+vi.mock('../task/clone.js', () => ({
   createSharedClone: vi.fn(),
   removeClone: vi.fn(),
 }));
@@ -56,7 +56,7 @@ vi.mock('../constants.js', () => ({
   DEFAULT_LANGUAGE: 'en',
 }));
 
-import { createSharedClone } from '../task/worktree.js';
+import { createSharedClone } from '../task/clone.js';
 import { summarizeTaskName } from '../task/summarize.js';
 import { info } from '../utils/ui.js';
 import { resolveTaskExecution } from '../commands/taskExecution.js';
@@ -143,6 +143,7 @@ describe('resolveTaskExecution', () => {
       execCwd: '/project/../20260128T0504-add-auth',
       execWorkflow: 'default',
       isWorktree: true,
+      branch: 'takt/20260128T0504-add-auth',
     });
   });
 

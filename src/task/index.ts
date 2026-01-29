@@ -16,16 +16,22 @@ export {
   createSharedClone,
   removeClone,
   createTempCloneForBranch,
+  saveCloneMeta,
+  removeCloneMeta,
+  cleanupOrphanedClone,
+  type WorktreeOptions,
+  type WorktreeResult,
+} from './clone.js';
+export {
   detectDefaultBranch,
   listTaktBranches,
   parseTaktBranches,
   getFilesChanged,
   extractTaskSlug,
+  getOriginalInstruction,
   buildReviewItems,
-  type WorktreeOptions,
-  type WorktreeResult,
   type BranchInfo,
   type BranchReviewItem,
-} from './worktree.js';
+} from './branchReview.js';
 export { autoCommitAndPush, type AutoCommitResult } from './autoCommit.js';
 export { TaskWatcher, type TaskWatcherOptions } from './watcher.js';

@@ -4,7 +4,7 @@
 
 import { loadWorkflow, loadGlobalConfig } from '../config/index.js';
 import { TaskRunner, type TaskInfo } from '../task/index.js';
-import { createSharedClone, removeClone } from '../task/worktree.js';
+import { createSharedClone, removeClone, removeCloneMeta } from '../task/clone.js';
 import { autoCommitAndPush } from '../task/autoCommit.js';
 import { summarizeTaskName } from '../task/summarize.js';
 import {
@@ -74,7 +74,7 @@ export async function executeAndCompleteTask(
   const executionLog: string[] = [];
 
   try {
-    const { execCwd, execWorkflow, isWorktree } = await resolveTaskExecution(task, cwd, workflowName);
+    const { execCwd, execWorkflow, isWorktree, branch } = await resolveTaskExecution(task, cwd, workflowName);
 
     // cwd is always the project root; pass it as projectCwd so reports/sessions go there
     const taskSuccess = await executeTask(task.content, execCwd, execWorkflow, cwd);
@@ -92,6 +92,7 @@ export async function executeAndCompleteTask(
     // Remove clone after task completion (success or failure)
     if (isWorktree) {
       removeClone(execCwd);
+      if (branch) removeCloneMeta(cwd, branch);
     }
 
     const taskResult = {
@@ -191,7 +192,7 @@ export async function resolveTaskExecution(
   task: TaskInfo,
   defaultCwd: string,
   defaultWorkflow: string
-): Promise<{ execCwd: string; execWorkflow: string; isWorktree: boolean }> {
+): Promise<{ execCwd: string; execWorkflow: string; isWorktree: boolean; branch?: string }> {
   const data = task.data;
 
   // No structured data: use defaults
@@ -201,6 +202,7 @@ export async function resolveTaskExecution(
 
   let execCwd = defaultCwd;
   let isWorktree = false;
+  let branch: string | undefined;
 
   // Handle worktree (now creates a shared clone)
   if (data.worktree) {
@@ -214,6 +216,7 @@ export async function resolveTaskExecution(
       taskSlug,
     });
     execCwd = result.path;
+    branch = result.branch;
     isWorktree = true;
     info(`Clone created: ${result.path} (branch: ${result.branch})`);
   }
@@ -221,5 +224,5 @@ export async function resolveTaskExecution(
   // Handle workflow override
   const execWorkflow = data.workflow || defaultWorkflow;
 
-  return { execCwd, execWorkflow, isWorktree };
+  return { execCwd, execWorkflow, isWorktree, branch };
 }

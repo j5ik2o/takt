@@ -8,7 +8,7 @@ import {
   extractTaskSlug,
   buildReviewItems,
   type BranchInfo,
-} from '../task/worktree.js';
+} from '../task/branchReview.js';
 import { isBranchMerged, showFullDiff, type ReviewAction } from '../commands/reviewTasks.js';
 
 describe('parseTaktBranches', () => {

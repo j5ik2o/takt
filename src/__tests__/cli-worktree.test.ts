@@ -10,7 +10,7 @@ vi.mock('../prompt/index.js', () => ({
   selectOptionWithDefault: vi.fn(),
 }));
 
-vi.mock('../task/worktree.js', () => ({
+vi.mock('../task/clone.js', () => ({
   createSharedClone: vi.fn(),
   removeClone: vi.fn(),
 }));
@@ -77,7 +77,7 @@ vi.mock('../constants.js', () => ({
 }));
 
 import { confirm } from '../prompt/index.js';
-import { createSharedClone } from '../task/worktree.js';
+import { createSharedClone } from '../task/clone.js';
 import { summarizeTaskName } from '../task/summarize.js';
 import { info } from '../utils/ui.js';
 import { confirmAndCreateWorktree } from '../cli.js';

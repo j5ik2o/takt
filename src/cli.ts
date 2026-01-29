@@ -36,7 +36,7 @@ import {
 } from './commands/index.js';
 import { listWorkflows } from './config/workflowLoader.js';
 import { selectOptionWithDefault, confirm } from './prompt/index.js';
-import { createSharedClone, removeClone } from './task/worktree.js';
+import { createSharedClone, removeClone, removeCloneMeta } from './task/clone.js';
 import { autoCommitAndPush } from './task/autoCommit.js';
 import { summarizeTaskName } from './task/summarize.js';
 import { DEFAULT_WORKFLOW_NAME } from './constants.js';
@@ -46,6 +46,7 @@ const log = createLogger('cli');
 export interface WorktreeConfirmationResult {
   execCwd: string;
   isWorktree: boolean;
+  branch?: string;
 }
 
 /**
@@ -73,7 +74,7 @@ export async function confirmAndCreateWorktree(
   });
   info(`Clone created: ${result.path} (branch: ${result.branch})`);
 
-  return { execCwd: result.path, isWorktree: true };
+  return { execCwd: result.path, isWorktree: true, branch: result.branch };
 }
 
 const program = new Command();
@@ -222,7 +223,7 @@ program
       }
 
       // Ask whether to create a worktree
-      const { execCwd, isWorktree } = await confirmAndCreateWorktree(cwd, task);
+      const { execCwd, isWorktree, branch } = await confirmAndCreateWorktree(cwd, task);
 
       log.info('Starting task execution', { task, workflow: selectedWorkflow, worktree: isWorktree });
       const taskSuccess = await executeTask(task, execCwd, selectedWorkflow, cwd);
@@ -239,6 +240,7 @@ program
       // Remove clone after task completion (success or failure)
       if (isWorktree) {
         removeClone(execCwd);
+        if (branch) removeCloneMeta(cwd, branch);
       }
 
       if (!taskSuccess) {

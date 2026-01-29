@@ -9,13 +9,17 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import chalk from 'chalk';
 import {
+  createTempCloneForBranch,
+  removeClone,
+  removeCloneMeta,
+  cleanupOrphanedClone,
+} from '../task/clone.js';
+import {
   detectDefaultBranch,
   listTaktBranches,
   buildReviewItems,
-  createTempCloneForBranch,
-  removeClone,
   type BranchReviewItem,
-} from '../task/worktree.js';
+} from '../task/branchReview.js';
 import { autoCommitAndPush } from '../task/autoCommit.js';
 import { selectOption, confirm, promptInput } from '../prompt/index.js';
 import { info, success, error as logError, warn } from '../utils/ui.js';
@@ -169,6 +173,9 @@ export function mergeBranch(projectDir: string, item: BranchReviewItem): boolean
       warn(`Could not delete branch ${branch}. You may delete it manually.`);
     }
 
+    // Clean up orphaned clone directory if it still exists
+    cleanupOrphanedClone(projectDir, branch);
+
     success(`Merged & cleaned up ${branch}`);
     log.info('Branch merged & cleaned up', { branch, alreadyMerged });
     return true;
@@ -195,6 +202,9 @@ export function deleteBranch(projectDir: string, item: BranchReviewItem): boolea
       encoding: 'utf-8',
       stdio: 'pipe',
     });
+
+    // Clean up orphaned clone directory if it still exists
+    cleanupOrphanedClone(projectDir, branch);
 
     success(`Deleted ${branch}`);
     log.info('Branch deleted', { branch });
@@ -332,8 +342,9 @@ export async function instructBranch(
 
     return taskSuccess;
   } finally {
-    // 7. Always remove temp clone
+    // 7. Always remove temp clone and metadata
     removeClone(clone.path);
+    removeCloneMeta(projectDir, branch);
   }
 }
 
