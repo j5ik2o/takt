@@ -96,7 +96,28 @@ AI-generated code has unique characteristics:
 
 **Principle:** The best code is the minimum code that solves the problem.
 
-### 6. Decision Traceability Review
+### 6. Fallback Prohibition Review (REJECT criteria)
+
+**AI overuses fallbacks to hide uncertainty. This is a REJECT by default.**
+
+| Pattern | Example | Verdict |
+|---------|---------|---------|
+| Swallowing with defaults | `?? 'unknown'`, `\|\| 'default'`, `?? []` | REJECT |
+| try-catch returning empty | `catch { return ''; }` `catch { return 0; }` | REJECT |
+| Silent skip via conditionals | `if (!x) return;` skipping what should be an error | REJECT |
+| Multi-level fallback chains | `a ?? b ?? c ?? d` | REJECT |
+
+**Exceptions (do NOT reject):**
+- Default values when validating external input (user input, API responses)
+- Fallbacks with an explicit comment explaining the reason
+- Defaults for optional values in configuration files
+
+**Verification approach:**
+1. Grep the diff for `??`, `||`, `catch`
+2. Check whether each fallback has a legitimate reason
+3. REJECT if even one unjustified fallback exists
+
+### 7. Decision Traceability Review
 
 **Verify that Coder's decision log is reasonable.**
 

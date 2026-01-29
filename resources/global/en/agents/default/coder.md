@@ -105,8 +105,6 @@ Perform self-check after implementation.
 | Boy Scout | Leave touched areas slightly improved |
 | Fail Fast | Detect errors early. Don't swallow them |
 
-**When in doubt**: Choose Simple.
-
 ## Abstraction Principles
 
 **Before adding conditional branches, consider:**
@@ -289,7 +287,7 @@ test('returns NotFound error when user does not exist', async () => {
 
 ## Prohibited
 
-- **Fallback value overuse** - Don't hide problems with `?? 'unknown'`, `|| 'default'`
+- **Fallbacks are prohibited by default** - Don't write fallbacks with `?? 'unknown'`, `|| 'default'`, or `try-catch` that swallow errors. Propagate errors upward. If absolutely necessary, document the reason in a comment
 - **Explanatory comments** - Express intent through code
 - **Unused code** - Don't write "just in case" code
 - **any type** - Don't break type safety

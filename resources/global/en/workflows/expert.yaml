@@ -493,7 +493,7 @@ steps:
   # Phase 4: AI Review
   # ===========================================
   - name: ai_review
-    agent: ~/.takt/agents/default/ai-reviewer.md
+    agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
     allowed_tools:
       - Read
       - Glob
