@@ -127,8 +127,17 @@ Check:
 | Type of suggestion | Decision |
 |--------------------|----------|
 | Minor fix in same file | Address now (REJECT) |
+| Fixable in seconds to minutes | Address now (REJECT) |
+| Redundant code / unnecessary expression removal | Address now (REJECT) |
 | Affects other features | Address in next task (record only) |
 | External impact (API changes, etc.) | Address in next task (record only) |
+| Requires significant refactoring (large scope) | Address in next task (record only) |
+
+### Boy Scout Rule
+
+**"Functionally harmless" is not a free pass.** Classifying a near-zero-cost fix as "non-blocking" or "next task" is a compromise. There is no guarantee it will be addressed in a future task, and it accumulates as technical debt.
+
+**Principle:** If a reviewer found it and it can be fixed in minutes, make the coder fix it now. Do not settle for recording it as a "non-blocking improvement suggestion."
 
 ## Workaround Detection
 

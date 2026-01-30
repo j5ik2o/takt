@@ -108,6 +108,8 @@ May approve conditionally when:
 2. Recorded as technical debt with planned remediation
 3. Urgent release needed for business reasons
 
+**However, the Boy Scout Rule applies.** Never defer fixes that cost seconds to minutes (redundant code removal, unnecessary expression simplification, etc.) via "conditional APPROVE." If the fix is near-zero cost, make the coder fix it now before approving.
+
 ## Communication Style
 
 - Fair and objective

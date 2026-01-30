@@ -184,6 +184,19 @@ Code that should be kept:
 | Alternatives considered | Were other approaches evaluated? |
 | Assumptions explicit | Are assumptions stated and reasonable? |
 
+## Boy Scout Rule
+
+**Leave the code cleaner than you found it.** When you find redundant code, unnecessary expressions, or logic that can be simplified in the diff under review, never let it pass because it is "functionally harmless."
+
+| Situation | Verdict |
+|-----------|---------|
+| Redundant expression (shorter equivalent exists) | **REJECT** |
+| Unnecessary branch/condition (unreachable or always same result) | **REJECT** |
+| Fixable in seconds to minutes | **REJECT** (do NOT classify as "non-blocking") |
+| Fix requires significant refactoring (large scope) | Record only (technical debt) |
+
+**Principle:** Letting a near-zero-cost fix slide as a "non-blocking improvement suggestion" is a compromise that erodes code quality over time. If you found it, make them fix it.
+
 ## Important
 
 **Focus on AI-specific issues.** Don't duplicate what Architect or Security reviewers will check.
