@@ -23,7 +23,7 @@ export type {
 } from './types.js';
 
 // Transitions
-export { determineNextStep, matchesCondition, extractBlockedPrompt } from './transitions.js';
+export { determineNextStepByRules, extractBlockedPrompt } from './transitions.js';
 
 // Loop detection
 export { LoopDetector } from './loop-detector.js';

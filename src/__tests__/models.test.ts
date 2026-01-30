@@ -6,12 +6,10 @@ import { describe, it, expect } from 'vitest';
 import {
   AgentTypeSchema,
   StatusSchema,
-  TransitionConditionSchema,
   PermissionModeSchema,
   WorkflowConfigRawSchema,
   CustomAgentConfigSchema,
   GlobalConfigSchema,
-  GENERIC_STATUS_PATTERNS,
 } from '../models/schemas.js';
 
 describe('AgentTypeSchema', () => {
@@ -43,21 +41,6 @@ describe('StatusSchema', () => {
   });
 });
 
-describe('TransitionConditionSchema', () => {
-  it('should accept valid conditions', () => {
-    expect(TransitionConditionSchema.parse('done')).toBe('done');
-    expect(TransitionConditionSchema.parse('approved')).toBe('approved');
-    expect(TransitionConditionSchema.parse('rejected')).toBe('rejected');
-    expect(TransitionConditionSchema.parse('always')).toBe('always');
-    expect(TransitionConditionSchema.parse('answer')).toBe('answer');
-  });
-
-  it('should reject invalid conditions', () => {
-    expect(() => TransitionConditionSchema.parse('conditional')).toThrow();
-    expect(() => TransitionConditionSchema.parse('fixed')).toThrow();
-  });
-});
-
 describe('PermissionModeSchema', () => {
   it('should accept valid permission modes', () => {
     expect(PermissionModeSchema.parse('default')).toBe('default');
@@ -82,8 +65,8 @@ describe('WorkflowConfigRawSchema', () => {
           agent: 'coder',
           allowed_tools: ['Read', 'Grep'],
           instruction: '{task}',
-          transitions: [
-            { condition: 'done', next_step: 'COMPLETE' },
+          rules: [
+            { condition: 'Task completed', next: 'COMPLETE' },
           ],
         },
       ],
@@ -106,8 +89,8 @@ describe('WorkflowConfigRawSchema', () => {
           allowed_tools: ['Read', 'Edit', 'Write', 'Bash'],
           permission_mode: 'acceptEdits',
           instruction: '{task}',
-          transitions: [
-            { condition: 'done', next_step: 'COMPLETE' },
+          rules: [
+            { condition: 'Done', next: 'COMPLETE' },
           ],
         },
       ],
@@ -125,7 +108,6 @@ describe('WorkflowConfigRawSchema', () => {
           name: 'plan',
           agent: 'planner',
           instruction: '{task}',
-          transitions: [],
         },
       ],
     };
@@ -143,7 +125,6 @@ describe('WorkflowConfigRawSchema', () => {
           agent: 'coder',
           permission_mode: 'superAdmin',
           instruction: '{task}',
-          transitions: [],
         },
       ],
     };
@@ -233,33 +214,5 @@ describe('GlobalConfigSchema', () => {
     const result = GlobalConfigSchema.parse(config);
     expect(result.trusted_directories).toHaveLength(1);
     expect(result.log_level).toBe('debug');
-  });
-});
-
-describe('GENERIC_STATUS_PATTERNS', () => {
-  it('should have all standard status patterns', () => {
-    expect(GENERIC_STATUS_PATTERNS.approved).toBeDefined();
-    expect(GENERIC_STATUS_PATTERNS.rejected).toBeDefined();
-    expect(GENERIC_STATUS_PATTERNS.done).toBeDefined();
-    expect(GENERIC_STATUS_PATTERNS.blocked).toBeDefined();
-    expect(GENERIC_STATUS_PATTERNS.improve).toBeDefined();
-    expect(GENERIC_STATUS_PATTERNS.answer).toBeDefined();
-  });
-
-  it('should have valid regex patterns', () => {
-    for (const pattern of Object.values(GENERIC_STATUS_PATTERNS)) {
-      expect(() => new RegExp(pattern)).not.toThrow();
-    }
-  });
-
-  it('should match any [ROLE:COMMAND] format', () => {
-    // Generic patterns match any role
-    expect(new RegExp(GENERIC_STATUS_PATTERNS.approved).test('[CODER:APPROVE]')).toBe(true);
-    expect(new RegExp(GENERIC_STATUS_PATTERNS.approved).test('[MY_AGENT:APPROVE]')).toBe(true);
-    expect(new RegExp(GENERIC_STATUS_PATTERNS.done).test('[CUSTOM:DONE]')).toBe(true);
-    expect(new RegExp(GENERIC_STATUS_PATTERNS.done).test('[CODER:FIXED]')).toBe(true);
-    expect(new RegExp(GENERIC_STATUS_PATTERNS.improve).test('[MAGI:IMPROVE]')).toBe(true);
-    expect(new RegExp(GENERIC_STATUS_PATTERNS.answer).test('[PLANNER:ANSWER]')).toBe(true);
-    expect(new RegExp(GENERIC_STATUS_PATTERNS.answer).test('[MY_AGENT:ANSWER]')).toBe(true);
   });
 });

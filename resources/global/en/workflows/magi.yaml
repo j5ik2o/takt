@@ -8,7 +8,6 @@
 #   {step_iteration} - Per-step iteration count (how many times THIS step has been executed)
 #   {task}           - Original user request
 #   {previous_response} - Output from the previous step
-#   {git_diff}       - Current uncommitted changes (git diff)
 #   {user_inputs}    - Accumulated user inputs during workflow
 #   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
 
@@ -26,8 +25,15 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
+    instruction_template: |
+      # MAGI System Initiated
 
+      ## Matter for Deliberation
+      {task}
+
+      ## Instructions
+      You are MELCHIOR-1 of the MAGI System.
+      Analyze the above from the perspective of a scientist/engineer and render your judgment.
 
       ## Output Format
 
@@ -44,18 +50,9 @@ steps:
 
       Reason: {Reason for approval}
       ```
-    instruction_template: |
-      # MAGI System Initiated
-
-      ## Matter for Deliberation
-      {task}
-
-      ## Instructions
-      You are MELCHIOR-1 of the MAGI System.
-      Analyze the above from the perspective of a scientist/engineer and render your judgment.
-    transitions:
-      - condition: always
-        next_step: balthasar
+    rules:
+      - condition: Judgment completed
+        next: balthasar
 
   - name: balthasar
     agent: ~/.takt/agents/magi/balthasar.md
@@ -65,8 +62,19 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
+    instruction_template: |
+      # MAGI System Continuing
 
+      ## Matter for Deliberation
+      {task}
+
+      ## MELCHIOR-1's Judgment
+      {previous_response}
+
+      ## Instructions
+      You are BALTHASAR-2 of the MAGI System.
+      Analyze the above from the perspective of a nurturer and render your judgment.
+      Consider MELCHIOR's judgment as reference, but make your own independent assessment.
 
       ## Output Format
 
@@ -83,23 +91,10 @@ steps:
 
       Reason: {Reason for approval}
       ```
-    instruction_template: |
-      # MAGI System Continuing
-
-      ## Matter for Deliberation
-      {task}
-
-      ## MELCHIOR-1's Judgment
-      {previous_response}
-
-      ## Instructions
-      You are BALTHASAR-2 of the MAGI System.
-      Analyze the above from the perspective of a nurturer and render your judgment.
-      Consider MELCHIOR's judgment as reference, but make your own independent assessment.
     pass_previous_response: true
-    transitions:
-      - condition: always
-        next_step: casper
+    rules:
+      - condition: Judgment completed
+        next: casper
 
   - name: casper
     agent: ~/.takt/agents/magi/casper.md
@@ -109,8 +104,20 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
+    instruction_template: |
+      # MAGI System Final Deliberation
 
+      ## Matter for Deliberation
+      {task}
+
+      ## Previous Judgments
+      {previous_response}
+
+      ## Instructions
+      You are CASPER-3 of the MAGI System.
+      Analyze the above from a practical/realistic perspective and render your judgment.
+
+      **Finally, tally the judgments from all three and provide the final conclusion.**
 
       ## Output Format
 
@@ -137,21 +144,7 @@ steps:
 
       [Reasoning/Summary]
       ```
-    instruction_template: |
-      # MAGI System Final Deliberation
-
-      ## Matter for Deliberation
-      {task}
-
-      ## Previous Judgments
-      {previous_response}
-
-      ## Instructions
-      You are CASPER-3 of the MAGI System.
-      Analyze the above from a practical/realistic perspective and render your judgment.
-
-      **Finally, tally the judgments from all three and provide the final conclusion.**
     pass_previous_response: true
-    transitions:
-      - condition: always
-        next_step: COMPLETE
+    rules:
+      - condition: Final judgment completed
+        next: COMPLETE

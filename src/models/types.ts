@@ -18,16 +18,6 @@ export type Status =
   | 'interrupted'
   | 'answer';
 
-/** Condition types for workflow transitions */
-export type TransitionCondition =
-  | 'done'
-  | 'blocked'
-  | 'approved'
-  | 'rejected'
-  | 'improve'
-  | 'answer'
-  | 'always';
-
 /** Response from an agent execution */
 export interface AgentResponse {
   agent: string;
@@ -37,6 +27,8 @@ export interface AgentResponse {
   sessionId?: string;
   /** Error message when the query failed (e.g., API error, rate limit) */
   error?: string;
+  /** Matched rule index (0-based) when rules-based detection was used */
+  matchedRuleIndex?: number;
 }
 
 /** Session state for workflow execution */
@@ -48,14 +40,33 @@ export interface SessionState {
   context: Record<string, string>;
 }
 
-/** Workflow step transition configuration */
-export interface WorkflowTransition {
-  condition: TransitionCondition;
-  nextStep: string;
+/** Rule-based transition configuration (new unified format) */
+export interface WorkflowRule {
+  /** Human-readable condition text */
+  condition: string;
+  /** Next step name (e.g., implement, COMPLETE, ABORT) */
+  next: string;
+  /** Template for additional AI output */
+  appendix?: string;
 }
 
-/** Behavior when no status marker is found in agent output */
-export type OnNoStatusBehavior = 'complete' | 'continue' | 'stay';
+/** Report file configuration for a workflow step (label: path pair) */
+export interface ReportConfig {
+  /** Display label (e.g., "Scope", "Decisions") */
+  label: string;
+  /** File path relative to report directory (e.g., "01-coder-scope.md") */
+  path: string;
+}
+
+/** Report object configuration with order/format instructions */
+export interface ReportObjectConfig {
+  /** Report file name (e.g., "00-plan.md") */
+  name: string;
+  /** Instruction prepended before instruction_template (e.g., output destination) */
+  order?: string;
+  /** Instruction appended after instruction_template (e.g., output format) */
+  format?: string;
+}
 
 /** Permission mode for tool execution */
 export type PermissionMode = 'default' | 'acceptEdits' | 'bypassPermissions';
@@ -77,18 +88,14 @@ export interface WorkflowStep {
   model?: string;
   /** Permission mode for tool execution in this step */
   permissionMode?: PermissionMode;
+  /** Whether this step is allowed to edit project files (true=allowed, false=prohibited, undefined=no prompt) */
+  edit?: boolean;
   instructionTemplate: string;
-  /** Status output rules to be injected into system prompt */
-  statusRulesPrompt?: string;
-  transitions: WorkflowTransition[];
+  /** Rules for step routing */
+  rules?: WorkflowRule[];
+  /** Report file configuration. Single string, array of label:path, or object with order/format. */
+  report?: string | ReportConfig[] | ReportObjectConfig;
   passPreviousResponse: boolean;
-  /**
-   * Behavior when agent doesn't output a status marker (in_progress).
-   * - 'complete': Treat as done, follow done/always transition or complete workflow (default)
-   * - 'continue': Treat as done, follow done/always transition or move to next step
-   * - 'stay': Stay on current step (may cause loops, use with caution)
-   */
-  onNoStatus?: OnNoStatusBehavior;
 }
 
 /** Loop detection configuration */
@@ -135,7 +142,6 @@ export interface CustomAgentConfig {
   promptFile?: string;
   prompt?: string;
   allowedTools?: string[];
-  statusPatterns?: Record<string, string>;
   claudeAgent?: string;
   claudeSkill?: string;
   provider?: 'claude' | 'codex' | 'mock';

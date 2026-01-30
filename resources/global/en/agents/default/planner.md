@@ -54,15 +54,8 @@ Determine the implementation direction:
 - Points to be careful about
 - Items requiring confirmation
 
-## Judgment Criteria
-
-| Situation | Judgment |
-|-----------|----------|
-| Requirements are clear and implementable | DONE |
-| Requirements are unclear, insufficient info | BLOCKED |
-
 ## Important
 
 **Keep analysis simple.** Overly detailed plans are unnecessary. Provide enough direction for Coder to proceed with implementation.
 
-**Make unclear points explicit.** Don't proceed with guesses, report with BLOCKED.
+**Make unclear points explicit.** Don't proceed with guesses, report unclear points.

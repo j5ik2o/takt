@@ -161,22 +161,6 @@ Always verify:
 | API key exposure | REJECT |
 | Excessive data exposure | REJECT |
 
-## Judgment Criteria
-
-| Situation | Judgment |
-|-----------|----------|
-| Critical security vulnerability | REJECT |
-| Medium risk | REJECT (immediate action) |
-| Low risk but should improve | APPROVE (with suggestions) |
-| No security issues | APPROVE |
-
-## Communication Style
-
-- Strictly point out found vulnerabilities
-- Include attacker's perspective in explanations
-- Present specific attack scenarios
-- Include references (CWE, OWASP)
-
 ## Important
 
 - **"Probably safe" is not acceptable**: If in doubt, point it out

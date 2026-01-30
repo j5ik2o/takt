@@ -1,19 +1,18 @@
 # Simple TAKT Workflow
-# Plan -> Coder -> Architect Review -> AI Review -> Supervisor Approval
+# Plan -> Implement -> AI Review -> Architect Review -> Supervisor Approval
 # (defaultの簡略版 - improve, fix, ai_fix, security_review, security_fix を削除)
 #
-# Template Variables:
+# Template Variables (auto-injected):
 #   {iteration}      - Workflow-wide turn count (total steps executed across all agents)
 #   {max_iterations} - Maximum iterations allowed for the workflow
 #   {step_iteration} - Per-step iteration count (how many times THIS step has been executed)
-#   {task}           - Original user request
-#   {previous_response} - Output from the previous step
-#   {git_diff}       - Current uncommitted changes (git diff)
-#   {user_inputs}    - Accumulated user inputs during workflow
+#   {task}           - Original user request (auto-injected)
+#   {previous_response} - Output from the previous step (auto-injected)
+#   {user_inputs}    - Accumulated user inputs during workflow (auto-injected)
 #   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
 
 name: simple
-description: Simplified development workflow (plan -> implement -> review -> ai_review -> supervise)
+description: Simplified development workflow (plan -> implement -> ai_review -> review -> supervise)
 
 max_iterations: 20
 
@@ -21,7 +20,31 @@ initial_step: plan
 
 steps:
   - name: plan
+    edit: false
     agent: ~/.takt/agents/default/planner.md
+    report:
+      name: 00-plan.md
+      format: |
+        ```markdown
+        # タスク計画
+
+        ## 元の要求
+        {ユーザーの要求をそのまま記載}
+
+        ## 分析結果
+
+        ### 目的
+        {達成すべきこと}
+
+        ### スコープ
+        {影響範囲}
+
+        ### 実装アプローチ
+        {どう進めるか}
+
+        ## 確認事項（あれば）
+        - {不明点や確認が必要な点}
+        ```
     allowed_tools:
       - Read
       - Glob
@@ -30,66 +53,11 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-      ## 判定基準
-
-      | 状況 | 判定 |
-      |------|------|
-      | 要件が明確で実装可能 | DONE |
-      | ユーザーが質問をしている（実装タスクではない） | ANSWER |
-      | 要件が不明確、情報不足 | BLOCKED |
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 分析完了 | `[PLANNER:DONE]` |
-      | 質問への回答 | `[PLANNER:ANSWER]` |
-      | 情報不足 | `[PLANNER:BLOCKED]` |
-
-      ### 出力例
-
-      **DONE の場合:**
-      ```
-      [PLANNER:DONE]
-      ```
-
-      **ANSWER の場合:**
-      ```
-      {質問への回答}
-
-      [PLANNER:ANSWER]
-      ```
-
-      **BLOCKED の場合:**
-      ```
-      [PLANNER:BLOCKED]
-
-      確認事項:
-      - {質問1}
-      - {質問2}
-      ```
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: plan (タスク分析)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/00-plan.md
-
-      ## User Request
-      {task}
-
       ## Previous Response (implementからの差し戻し時)
       {previous_response}
 
-      ## Instructions
       タスクを分析し、実装方針を立ててください。
-
-      **判断基準:**
-      - ユーザーの入力が実装タスクの場合 → 計画を立てて `[PLANNER:DONE]`
-      - ユーザーの入力が質問の場合 → 調査・回答して `[PLANNER:ANSWER]`
-      - 情報不足の場合 → `[PLANNER:BLOCKED]`
 
       **注意:** Previous Responseがある場合は差し戻しのため、
       その内容を踏まえて計画を見直してください（replan）。
@@ -98,43 +66,25 @@ steps:
       1. タスクの要件を理解する
       2. 影響範囲を特定する
       3. 実装アプローチを決める
-
-      **レポート出力:** 上記の `Report File` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
-
-      **レポートフォーマット:**
-      ```markdown
-      # タスク計画
-
-      ## 元の要求
-      {ユーザーの要求をそのまま記載}
-
-      ## 分析結果
-
-      ### 目的
-      {達成すべきこと}
-
-      ### スコープ
-      {影響範囲}
-
-      ### 実装アプローチ
-      {どう進めるか}
-
-      ## 確認事項（あれば）
-      - {不明点や確認が必要な点}
-      ```
     pass_previous_response: true
-    transitions:
-      - condition: done
-        next_step: implement
-      - condition: answer
-        next_step: COMPLETE
-      - condition: blocked
-        next_step: ABORT
+    rules:
+      - condition: "要件が明確で実装可能"
+        next: implement
+      - condition: "ユーザーが質問をしている（実装タスクではない）"
+        next: COMPLETE
+      - condition: "要件が不明確、情報不足"
+        next: ABORT
+        appendix: |
+          確認事項:
+          - {質問1}
+          - {質問2}
 
   - name: implement
+    edit: true
     agent: ~/.takt/agents/default/coder.md
+    report:
+      - Scope: 01-coder-scope.md
+      - Decisions: 02-coder-decisions.md
     allowed_tools:
       - Read
       - Glob
@@ -145,57 +95,9 @@ steps:
       - WebSearch
       - WebFetch
     permission_mode: acceptEdits
-    status_rules_prompt: |
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 実装完了 | `[CODER:DONE]` |
-      | 判断できない/情報不足 | `[CODER:BLOCKED]` |
-
-      **重要**: 迷ったら `[BLOCKED]`。勝手に判断しない。
-
-      ### 出力例
-
-      **DONE の場合:**
-      ```
-      実装完了しました。
-      - 作成: `src/auth/service.ts`, `tests/auth.test.ts`
-      - 変更: `src/routes.ts`
-
-      [CODER:DONE]
-      ```
-
-      **BLOCKED の場合:**
-      ```
-      [CODER:BLOCKED]
-
-      理由: DBスキーマが未定義のため実装できません
-      必要な情報: usersテーブルの構造
-      ```
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: implement
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report Files:
-        - Scope: .takt/reports/{report_dir}/01-coder-scope.md
-        - Decisions: .takt/reports/{report_dir}/02-coder-decisions.md
-
-      ## User Request
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       planステップで立てた計画に従って実装してください。
       計画レポート（00-plan.md）を参照し、実装を進めてください。
-
-      **レポート出力:** 上記の `Report Files` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
 
       **Scopeレポートフォーマット（実装開始時に作成）:**
       ```markdown
@@ -226,125 +128,43 @@ steps:
       - **検討した選択肢**: {選択肢リスト}
       - **理由**: {選んだ理由}
       ```
-    transitions:
-      - condition: done
-        next_step: review
-      - condition: blocked
-        next_step: plan
-
-  - name: review
-    agent: ~/.takt/agents/default/architect.md
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Write
-      - WebSearch
-      - WebFetch
-    status_rules_prompt: |
-      ## 判定基準
-
-      | 状況 | 判定 |
-      |------|------|
-      | 構造に問題がある | REJECT |
-      | 設計原則違反がある | REJECT |
-      | セキュリティ問題がある | REJECT |
-      | テストが不十分 | REJECT |
-      | 問題なし | APPROVE |
-
-      **注意:** simpleワークフローでは IMPROVE は使用しません。
-      軽微な問題もある場合は APPROVE + コメントとしてください。
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 問題なし | `[ARCHITECT:APPROVE]` |
-      | 構造的な修正必要 | `[ARCHITECT:REJECT]` |
-
-      ### 出力例
-
-      **APPROVE の場合:**
-      ```
-      [ARCHITECT:APPROVE]
-
-      良い点:
-      - モジュール分割が適切
-      - 単一責務が守られている
-      ```
-
-      **REJECT の場合:**
-      ```
-      [ARCHITECT:REJECT]
-
-      問題点:
-      1. ファイルサイズ超過
-         - 場所: `src/services/user.ts` (523行)
-         - 修正案: 3ファイルに分割
-      ```
-    instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: review (アーキテクチャレビュー)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/03-architect-review.md
-
-      ## Original User Request (ワークフロー開始時の元の要求)
-      {task}
-
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
-      ## Instructions
-      **アーキテクチャと設計**のレビューに集中してください。AI特有の問題はレビューしないでください（次のステップで行います）。
-
-      変更をレビューしてフィードバックを提供してください。
-
-      **注意:** simpleワークフローではIMPROVE判定は使用しません。
-      軽微な改善提案がある場合は APPROVE + コメントとしてください。
-
-      **レポート出力:** 上記の `Report File` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
-
-      **レポートフォーマット:**
-      ```markdown
-      # アーキテクチャレビュー
-
-      ## 結果: APPROVE / REJECT
-
-      ## サマリー
-      {1-2文で結果を要約}
-
-      ## 確認した観点
-      - [x] 構造・設計
-      - [x] コード品質
-      - [x] 変更スコープ
-
-      ## 問題点（REJECTの場合）
-      | # | 場所 | 問題 | 修正案 |
-      |---|------|------|--------|
-      | 1 | `src/file.ts:42` | 問題の説明 | 修正方法 |
-
-      ## 改善提案（任意・ブロッキングではない）
-      - {将来的な改善提案}
-      ```
-
-      **認知負荷軽減ルール:**
-      - APPROVE + 問題なし → サマリーのみ（5行以内）
-      - APPROVE + 軽微な提案 → サマリー + 改善提案（15行以内）
-      - REJECT → 問題点を表形式で（30行以内）
-    transitions:
-      - condition: approved
-        next_step: ai_review
-      - condition: rejected
-        next_step: plan
+    rules:
+      - condition: "実装完了"
+        next: ai_review
+      - condition: "判断できない、情報不足"
+        next: plan
 
   - name: ai_review
+    edit: false
     agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
+    report:
+      name: 03-ai-review.md
+      format: |
+        ```markdown
+        # AI生成コードレビュー
+
+        ## 結果: APPROVE / REJECT
+
+        ## サマリー
+        {1文で結果を要約}
+
+        ## 検証した項目
+        | 観点 | 結果 | 備考 |
+        |------|------|------|
+        | 仮定の妥当性 | ✅ | - |
+        | API/ライブラリの実在 | ✅ | - |
+        | コンテキスト適合 | ✅ | - |
+        | スコープ | ✅ | - |
+
+        ## 問題点（REJECTの場合）
+        | # | カテゴリ | 場所 | 問題 |
+        |---|---------|------|------|
+        | 1 | 幻覚API | `src/file.ts:23` | 存在しないメソッド |
+        ```
+
+        **認知負荷軽減ルール:**
+        - 問題なし → サマリー1文 + チェック表のみ（10行以内）
+        - 問題あり → + 問題を表形式で（25行以内）
     allowed_tools:
       - Read
       - Glob
@@ -352,104 +172,76 @@ steps:
       - Write
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-      ## 判定基準
-
-      | 状況 | 判定 |
-      |------|------|
-      | 仮定が間違っている（動作に影響） | REJECT |
-      | もっともらしいが間違っているコード | REJECT |
-      | コードベースの文脈に重大な不整合 | REJECT |
-      | スコープクリープ | APPROVE（警告を付記） |
-      | 軽微なスタイルの逸脱のみ | APPROVE |
-      | コードが文脈に合い動作する | APPROVE |
-
-      **注意:** スコープクリープは警告として記載するが、それだけでREJECTしない。
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | AI特有の問題なし | `[AI_REVIEW:APPROVE]` |
-      | 問題あり | `[AI_REVIEW:REJECT]` |
-
-      ### 出力例
-
-      **APPROVE の場合:**
-      ```
-      [AI_REVIEW:APPROVE]
-
-      検証結果: 問題なし
-      ```
-
-      **REJECT の場合:**
-      ```
-      [AI_REVIEW:REJECT]
-
-      問題点:
-      1. 存在しないAPIを使用: `fetch.json()` → `response.json()`
-      ```
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: ai_review (AI生成コードレビュー)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/04-ai-review.md
-
-      ## Original User Request (ワークフロー開始時の元の要求)
-      {task}
-
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
-      ## Instructions
       AI特有の問題についてコードをレビューしてください:
       - 仮定の検証
       - もっともらしいが間違っているパターン
       - 既存コードベースとの適合性
       - スコープクリープの検出
+    rules:
+      - condition: "AI特有の問題なし"
+        next: review
+      - condition: "AI特有の問題あり"
+        next: plan
 
-      **レポート出力:** 上記の `Report File` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
+  - name: review
+    edit: false
+    agent: ~/.takt/agents/default/architecture-reviewer.md
+    report:
+      name: 04-architect-review.md
+      format: |
+        ```markdown
+        # アーキテクチャレビュー
 
-      **レポートフォーマット:**
-      ```markdown
-      # AI生成コードレビュー
+        ## 結果: APPROVE / REJECT
 
-      ## 結果: APPROVE / REJECT
+        ## サマリー
+        {1-2文で結果を要約}
 
-      ## サマリー
-      {1文で結果を要約}
+        ## 確認した観点
+        - [x] 構造・設計
+        - [x] コード品質
+        - [x] 変更スコープ
 
-      ## 検証した項目
-      | 観点 | 結果 | 備考 |
-      |------|------|------|
-      | 仮定の妥当性 | ✅ | - |
-      | API/ライブラリの実在 | ✅ | - |
-      | コンテキスト適合 | ✅ | - |
-      | スコープ | ✅ | - |
+        ## 問題点（REJECTの場合）
+        | # | 場所 | 問題 | 修正案 |
+        |---|------|------|--------|
+        | 1 | `src/file.ts:42` | 問題の説明 | 修正方法 |
 
-      ## 問題点（REJECTの場合）
-      | # | カテゴリ | 場所 | 問題 |
-      |---|---------|------|------|
-      | 1 | 幻覚API | `src/file.ts:23` | 存在しないメソッド |
-      ```
+        ## 改善提案（任意・ブロッキングではない）
+        - {将来的な改善提案}
+        ```
 
-      **認知負荷軽減ルール:**
-      - 問題なし → サマリー1文 + チェック表のみ（10行以内）
-      - 問題あり → + 問題を表形式で（25行以内）
-    transitions:
-      - condition: approved
-        next_step: supervise
-      - condition: rejected
-        next_step: plan
+        **認知負荷軽減ルール:**
+        - APPROVE + 問題なし → サマリーのみ（5行以内）
+        - APPROVE + 軽微な提案 → サマリー + 改善提案（15行以内）
+        - REJECT → 問題点を表形式で（30行以内）
+    allowed_tools:
+      - Read
+      - Glob
+      - Grep
+      - Write
+      - WebSearch
+      - WebFetch
+    instruction_template: |
+      **アーキテクチャと設計**のレビューに集中してください。AI特有の問題はレビューしないでください（前のステップで完了済み）。
+
+      変更をレビューしてフィードバックを提供してください。
+
+      **注意:** simpleワークフローではIMPROVE判定は使用しません。
+      軽微な改善提案がある場合は APPROVE + コメントとしてください。
+    rules:
+      - condition: "問題なし"
+        next: supervise
+      - condition: "構造的な修正必要"
+        next: plan
 
   - name: supervise
+    edit: false
     agent: ~/.takt/agents/default/supervisor.md
+    report:
+      - Validation: 05-supervisor-validation.md
+      - Summary: summary.md
     allowed_tools:
       - Read
       - Glob
@@ -458,65 +250,7 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-      ## 判定基準
-
-      | 状況 | 判定 |
-      |------|------|
-      | 要求が満たされていない | REJECT |
-      | テストが失敗する | REJECT |
-      | ビルドが通らない | REJECT |
-      | その場しのぎが残っている | REJECT |
-      | すべて問題なし | APPROVE |
-
-      **原則**: 疑わしきは REJECT。曖昧な承認はしない。
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 最終承認 | `[SUPERVISOR:APPROVE]` |
-      | 差し戻し | `[SUPERVISOR:REJECT]` |
-
-      ### 出力例
-
-      **APPROVE の場合:**
-      ```
-      [SUPERVISOR:APPROVE]
-
-      検証結果:
-      - テスト: ✅ 全件パス
-      - ビルド: ✅ 成功
-      - 要求充足: ✅
-      ```
-
-      **REJECT の場合:**
-      ```
-      [SUPERVISOR:REJECT]
-
-      問題点:
-      1. テストが失敗: `npm test` で 2 件失敗
-      2. 元の要求を満たしていない: ログイン機能が未実装
-      ```
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: supervise (final verification)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report Files:
-        - Validation: .takt/reports/{report_dir}/05-supervisor-validation.md
-        - Summary: .takt/reports/{report_dir}/summary.md
-
-      ## Original User Request
-      {task}
-
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
-      ## Instructions
       テスト実行、ビルド確認、最終承認を行ってください。
 
       **ワークフロー全体の確認:**
@@ -526,10 +260,6 @@ steps:
 
       **レポートの確認:** Report Directory内の全レポートを読み、
       未対応の改善提案がないか確認してください。
-
-      **レポート出力:** 上記の `Report Files` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
 
       **Validationレポートフォーマット:**
       ```markdown
@@ -573,8 +303,8 @@ steps:
       ## レビュー結果
       | レビュー | 結果 |
       |---------|------|
-      | Architect | ✅ APPROVE |
       | AI Review | ✅ APPROVE |
+      | Architect | ✅ APPROVE |
       | Supervisor | ✅ APPROVE |
 
       ## 確認コマンド
@@ -583,8 +313,8 @@ steps:
       npm run build
       ```
       ```
-    transitions:
-      - condition: approved
-        next_step: COMPLETE
-      - condition: rejected
-        next_step: plan
+    rules:
+      - condition: "すべて問題なし"
+        next: COMPLETE
+      - condition: "要求未達成、テスト失敗、ビルドエラー"
+        next: plan

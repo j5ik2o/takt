@@ -19,6 +19,7 @@ export interface SessionLog {
   history: Array<{
     step: string;
     agent: string;
+    instruction: string;
     status: string;
     timestamp: string;
     content: string;
@@ -76,11 +77,13 @@ export function createSessionLog(
 export function addToSessionLog(
   log: SessionLog,
   stepName: string,
-  response: AgentResponse
+  response: AgentResponse,
+  instruction: string
 ): void {
   log.history.push({
     step: stepName,
     agent: response.agent,
+    instruction,
     status: response.status,
     timestamp: response.timestamp.toISOString(),
     content: response.content,
@@ -214,6 +217,7 @@ export function workflowStateToSessionLog(
     log.history.push({
       step: stepName,
       agent: response.agent,
+      instruction: '',
       status: response.status,
       timestamp: response.timestamp.toISOString(),
       content: response.content,

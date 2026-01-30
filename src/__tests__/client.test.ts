@@ -4,42 +4,9 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  detectStatus,
+  detectRuleIndex,
   isRegexSafe,
-  getBuiltinStatusPatterns,
 } from '../claude/client.js';
-
-describe('detectStatus', () => {
-  it('should detect done status', () => {
-    const content = 'Task completed successfully.\n[CODER:DONE]';
-    const patterns = { done: '\\[CODER:DONE\\]' };
-    expect(detectStatus(content, patterns)).toBe('done');
-  });
-
-  it('should detect approved status', () => {
-    const content = 'Code looks good.\n[ARCHITECT:APPROVE]';
-    const patterns = { approved: '\\[ARCHITECT:APPROVE\\]' };
-    expect(detectStatus(content, patterns)).toBe('approved');
-  });
-
-  it('should return in_progress when no pattern matches', () => {
-    const content = 'Working on it...';
-    const patterns = { done: '\\[DONE\\]' };
-    expect(detectStatus(content, patterns)).toBe('in_progress');
-  });
-
-  it('should be case insensitive', () => {
-    const content = '[coder:done]';
-    const patterns = { done: '\\[CODER:DONE\\]' };
-    expect(detectStatus(content, patterns)).toBe('done');
-  });
-
-  it('should handle invalid regex gracefully', () => {
-    const content = 'test';
-    const patterns = { done: '[invalid(' };
-    expect(detectStatus(content, patterns)).toBe('in_progress');
-  });
-});
 
 describe('isRegexSafe', () => {
   it('should accept simple patterns', () => {
@@ -60,32 +27,43 @@ describe('isRegexSafe', () => {
   });
 });
 
-describe('getBuiltinStatusPatterns', () => {
-  it('should return patterns for coder', () => {
-    const patterns = getBuiltinStatusPatterns('coder');
-    expect(patterns.done).toBeDefined();
-    expect(patterns.blocked).toBeDefined();
+describe('detectRuleIndex', () => {
+  it('should detect [PLAN:1] as index 0', () => {
+    expect(detectRuleIndex('Analysis complete.\n[PLAN:1]', 'plan')).toBe(0);
   });
 
-  it('should return patterns for architect', () => {
-    const patterns = getBuiltinStatusPatterns('architect');
-    expect(patterns.approved).toBeDefined();
-    expect(patterns.rejected).toBeDefined();
+  it('should detect [PLAN:2] as index 1', () => {
+    expect(detectRuleIndex('Question answered.\n[PLAN:2]', 'plan')).toBe(1);
   });
 
-  it('should return generic patterns for unknown agent', () => {
-    // With generic patterns, any agent gets the standard patterns
-    const patterns = getBuiltinStatusPatterns('unknown');
-    expect(patterns.approved).toBeDefined();
-    expect(patterns.rejected).toBeDefined();
-    expect(patterns.done).toBeDefined();
-    expect(patterns.blocked).toBeDefined();
+  it('should detect [PLAN:3] as index 2', () => {
+    expect(detectRuleIndex('[PLAN:3]\n\nBlocked.', 'plan')).toBe(2);
   });
 
-  it('should detect status using generic patterns for any agent', () => {
-    // Generic patterns work for any [ROLE:COMMAND] format
-    const patterns = getBuiltinStatusPatterns('my-custom-agent');
-    const content = '[MY_CUSTOM_AGENT:APPROVE]';
-    expect(detectStatus(content, patterns)).toBe('approved');
+  it('should be case insensitive', () => {
+    expect(detectRuleIndex('[plan:1]', 'plan')).toBe(0);
+    expect(detectRuleIndex('[Plan:2]', 'plan')).toBe(1);
+  });
+
+  it('should match step name case-insensitively', () => {
+    expect(detectRuleIndex('[IMPLEMENT:1]', 'implement')).toBe(0);
+    expect(detectRuleIndex('[REVIEW:2]', 'review')).toBe(1);
+  });
+
+  it('should return -1 when no match', () => {
+    expect(detectRuleIndex('No tags here.', 'plan')).toBe(-1);
+  });
+
+  it('should return -1 for [PLAN:0] (invalid)', () => {
+    expect(detectRuleIndex('[PLAN:0]', 'plan')).toBe(-1);
+  });
+
+  it('should return -1 for wrong step name', () => {
+    expect(detectRuleIndex('[REVIEW:1]', 'plan')).toBe(-1);
+  });
+
+  it('should handle step names with hyphens', () => {
+    expect(detectRuleIndex('[AI_REVIEW:1]', 'ai_review')).toBe(0);
+    expect(detectRuleIndex('[SECURITY_FIX:2]', 'security_fix')).toBe(1);
   });
 });

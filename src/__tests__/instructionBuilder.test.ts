@@ -8,9 +8,12 @@ import {
   buildExecutionMetadata,
   renderExecutionMetadata,
   renderStatusRulesHeader,
+  generateStatusRulesFromRules,
+  isReportObjectConfig,
   type InstructionContext,
 } from '../workflow/instruction-builder.js';
-import type { WorkflowStep } from '../models/types.js';
+import type { WorkflowStep, WorkflowRule } from '../models/types.js';
+
 
 function createMinimalStep(template: string): WorkflowStep {
   return {
@@ -18,7 +21,6 @@ function createMinimalStep(template: string): WorkflowStep {
     agent: 'test-agent',
     agentDisplayName: 'Test Agent',
     instructionTemplate: template,
-    transitions: [],
     passPreviousResponse: false,
   };
 }
@@ -73,6 +75,34 @@ describe('instruction-builder', () => {
       const bodyIndex = result.indexOf('Do some work');
 
       expect(metadataIndex).toBeLessThan(bodyIndex);
+    });
+
+    it('should include edit enabled prompt when step.edit is true', () => {
+      const step = { ...createMinimalStep('Implement feature'), edit: true as const };
+      const context = createMinimalContext({ cwd: '/project' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('Editing is ENABLED');
+    });
+
+    it('should include edit disabled prompt when step.edit is false', () => {
+      const step = { ...createMinimalStep('Review code'), edit: false as const };
+      const context = createMinimalContext({ cwd: '/project' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('Editing is DISABLED');
+    });
+
+    it('should not include edit prompt when step.edit is undefined', () => {
+      const step = createMinimalStep('Do some work');
+      const context = createMinimalContext({ cwd: '/project' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).not.toContain('Editing is ENABLED');
+      expect(result).not.toContain('Editing is DISABLED');
     });
   });
 
@@ -175,6 +205,20 @@ describe('instruction-builder', () => {
 
       expect(metadata.language).toBe('ja');
     });
+
+    it('should propagate edit field when provided', () => {
+      const context = createMinimalContext({ cwd: '/project' });
+
+      expect(buildExecutionMetadata(context, true).edit).toBe(true);
+      expect(buildExecutionMetadata(context, false).edit).toBe(false);
+    });
+
+    it('should leave edit undefined when not provided', () => {
+      const context = createMinimalContext({ cwd: '/project' });
+      const metadata = buildExecutionMetadata(context);
+
+      expect(metadata.edit).toBeUndefined();
+    });
   });
 
   describe('renderExecutionMetadata', () => {
@@ -211,6 +255,43 @@ describe('instruction-builder', () => {
       expect(enRendered).toContain('Note:');
       expect(jaRendered).not.toContain('Note:');
     });
+
+    it('should include edit enabled prompt when edit is true (en)', () => {
+      const rendered = renderExecutionMetadata({ workingDirectory: '/project', language: 'en', edit: true });
+
+      expect(rendered).toContain('Editing is ENABLED');
+      expect(rendered).not.toContain('Editing is DISABLED');
+    });
+
+    it('should include edit disabled prompt when edit is false (en)', () => {
+      const rendered = renderExecutionMetadata({ workingDirectory: '/project', language: 'en', edit: false });
+
+      expect(rendered).toContain('Editing is DISABLED');
+      expect(rendered).not.toContain('Editing is ENABLED');
+    });
+
+    it('should not include edit prompt when edit is undefined', () => {
+      const rendered = renderExecutionMetadata({ workingDirectory: '/project', language: 'en' });
+
+      expect(rendered).not.toContain('Editing is ENABLED');
+      expect(rendered).not.toContain('Editing is DISABLED');
+      expect(rendered).not.toContain('編集が許可');
+      expect(rendered).not.toContain('編集が禁止');
+    });
+
+    it('should render edit enabled prompt in Japanese when language is ja', () => {
+      const rendered = renderExecutionMetadata({ workingDirectory: '/project', language: 'ja', edit: true });
+
+      expect(rendered).toContain('編集が許可されています');
+      expect(rendered).not.toContain('編集が禁止');
+    });
+
+    it('should render edit disabled prompt in Japanese when language is ja', () => {
+      const rendered = renderExecutionMetadata({ workingDirectory: '/project', language: 'ja', edit: false });
+
+      expect(rendered).toContain('編集が禁止されています');
+      expect(rendered).not.toContain('編集が許可');
+    });
   });
 
   describe('renderStatusRulesHeader', () => {
@@ -237,41 +318,566 @@ describe('instruction-builder', () => {
     });
   });
 
-  describe('status_rules_prompt with header', () => {
-    it('should prepend status header to status_rules_prompt in Japanese', () => {
-      const step = createMinimalStep('Do work');
-      step.statusRulesPrompt = '## 出力フォーマット\n| 状況 | タグ |';
-      const context = createMinimalContext({ language: 'ja' });
+  describe('generateStatusRulesFromRules', () => {
+    const rules: WorkflowRule[] = [
+      { condition: '要件が明確で実装可能', next: 'implement' },
+      { condition: 'ユーザーが質問をしている', next: 'COMPLETE' },
+      { condition: '要件が不明確、情報不足', next: 'ABORT', appendix: '確認事項:\n- {質問1}\n- {質問2}' },
+    ];
 
-      const result = buildInstruction(step, context);
+    it('should generate criteria table with numbered tags (ja)', () => {
+      const result = generateStatusRulesFromRules('plan', rules, 'ja');
 
-      expect(result).toContain('# ⚠️ 必須: ステータス出力ルール ⚠️');
-      expect(result).toContain('## 出力フォーマット');
-      // Header should come before the step-specific content
-      const headerIndex = result.indexOf('⚠️ 必須');
-      const formatIndex = result.indexOf('## 出力フォーマット');
-      expect(headerIndex).toBeLessThan(formatIndex);
+      expect(result).toContain('## 判定基準');
+      expect(result).toContain('| 1 | 要件が明確で実装可能 | `[PLAN:1]` |');
+      expect(result).toContain('| 2 | ユーザーが質問をしている | `[PLAN:2]` |');
+      expect(result).toContain('| 3 | 要件が不明確、情報不足 | `[PLAN:3]` |');
     });
 
-    it('should prepend status header to status_rules_prompt in English', () => {
+    it('should generate criteria table with numbered tags (en)', () => {
+      const enRules: WorkflowRule[] = [
+        { condition: 'Requirements are clear', next: 'implement' },
+        { condition: 'User is asking a question', next: 'COMPLETE' },
+      ];
+      const result = generateStatusRulesFromRules('plan', enRules, 'en');
+
+      expect(result).toContain('## Decision Criteria');
+      expect(result).toContain('| 1 | Requirements are clear | `[PLAN:1]` |');
+      expect(result).toContain('| 2 | User is asking a question | `[PLAN:2]` |');
+    });
+
+    it('should generate output format section with condition labels', () => {
+      const result = generateStatusRulesFromRules('plan', rules, 'ja');
+
+      expect(result).toContain('## 出力フォーマット');
+      expect(result).toContain('`[PLAN:1]` — 要件が明確で実装可能');
+      expect(result).toContain('`[PLAN:2]` — ユーザーが質問をしている');
+      expect(result).toContain('`[PLAN:3]` — 要件が不明確、情報不足');
+    });
+
+    it('should generate appendix template section when rules have appendix', () => {
+      const result = generateStatusRulesFromRules('plan', rules, 'ja');
+
+      expect(result).toContain('### 追加出力テンプレート');
+      expect(result).toContain('`[PLAN:3]`');
+      expect(result).toContain('確認事項:');
+      expect(result).toContain('- {質問1}');
+    });
+
+    it('should not generate appendix section when no rules have appendix', () => {
+      const noAppendixRules: WorkflowRule[] = [
+        { condition: 'Done', next: 'review' },
+        { condition: 'Blocked', next: 'plan' },
+      ];
+      const result = generateStatusRulesFromRules('implement', noAppendixRules, 'en');
+
+      expect(result).not.toContain('Appendix Template');
+    });
+
+    it('should uppercase step name in tags', () => {
+      const result = generateStatusRulesFromRules('ai_review', [
+        { condition: 'No issues', next: 'supervise' },
+      ], 'en');
+
+      expect(result).toContain('`[AI_REVIEW:1]`');
+    });
+  });
+
+  describe('buildInstruction with rules', () => {
+    it('should auto-generate status rules from rules', () => {
       const step = createMinimalStep('Do work');
-      step.statusRulesPrompt = '## Output Format\n| Situation | Tag |';
+      step.name = 'plan';
+      step.rules = [
+        { condition: 'Clear requirements', next: 'implement' },
+        { condition: 'Unclear', next: 'ABORT' },
+      ];
       const context = createMinimalContext({ language: 'en' });
 
       const result = buildInstruction(step, context);
 
-      expect(result).toContain('# ⚠️ Required: Status Output Rules ⚠️');
-      expect(result).toContain('## Output Format');
+      // Should contain status header
+      expect(result).toContain('⚠️ Required: Status Output Rules ⚠️');
+      // Should contain auto-generated criteria table
+      expect(result).toContain('## Decision Criteria');
+      expect(result).toContain('`[PLAN:1]`');
+      expect(result).toContain('`[PLAN:2]`');
     });
 
-    it('should not add header if statusRulesPrompt is not set', () => {
+    it('should not add status rules when rules do not exist', () => {
       const step = createMinimalStep('Do work');
       const context = createMinimalContext({ language: 'en' });
 
       const result = buildInstruction(step, context);
 
       expect(result).not.toContain('⚠️ Required');
-      expect(result).not.toContain('⚠️ 必須');
+      expect(result).not.toContain('Decision Criteria');
+    });
+
+    it('should not auto-generate when rules array is empty', () => {
+      const step = createMinimalStep('Do work');
+      step.rules = [];
+      const context = createMinimalContext({ language: 'en' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).not.toContain('⚠️ Required');
+      expect(result).not.toContain('Decision Criteria');
+    });
+  });
+
+  describe('auto-injected Workflow Context section', () => {
+    it('should include iteration, step iteration, and step name', () => {
+      const step = createMinimalStep('Do work');
+      step.name = 'implement';
+      const context = createMinimalContext({
+        iteration: 3,
+        maxIterations: 20,
+        stepIteration: 2,
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('## Workflow Context');
+      expect(result).toContain('- Iteration: 3/20');
+      expect(result).toContain('- Step Iteration: 2');
+      expect(result).toContain('- Step: implement');
+    });
+
+    it('should include single report file when report is a string', () => {
+      const step = createMinimalStep('Do work');
+      step.name = 'plan';
+      step.report = '00-plan.md';
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('- Report Directory: 20260129-test/');
+      expect(result).toContain('- Report File: 20260129-test/00-plan.md');
+      expect(result).not.toContain('Report Files:');
+    });
+
+    it('should include multiple report files when report is ReportConfig[]', () => {
+      const step = createMinimalStep('Do work');
+      step.name = 'implement';
+      step.report = [
+        { label: 'Scope', path: '01-scope.md' },
+        { label: 'Decisions', path: '02-decisions.md' },
+      ];
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('- Report Directory: 20260129-test/');
+      expect(result).toContain('- Report Files:');
+      expect(result).toContain('  - Scope: 20260129-test/01-scope.md');
+      expect(result).toContain('  - Decisions: 20260129-test/02-decisions.md');
+      expect(result).not.toContain('Report File:');
+    });
+
+    it('should include report file when report is ReportObjectConfig', () => {
+      const step = createMinimalStep('Do work');
+      step.name = 'plan';
+      step.report = { name: '00-plan.md' };
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('- Report Directory: 20260129-test/');
+      expect(result).toContain('- Report File: 20260129-test/00-plan.md');
+      expect(result).not.toContain('Report Files:');
+    });
+
+    it('should NOT include report info when reportDir is undefined', () => {
+      const step = createMinimalStep('Do work');
+      step.report = '00-plan.md';
+      const context = createMinimalContext({ language: 'en' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('## Workflow Context');
+      expect(result).not.toContain('Report Directory');
+      expect(result).not.toContain('Report File');
+    });
+
+    it('should NOT include report info when step has no report', () => {
+      const step = createMinimalStep('Do work');
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('## Workflow Context');
+      expect(result).not.toContain('Report Directory');
+      expect(result).not.toContain('Report File');
+    });
+
+    it('should render Japanese step iteration suffix', () => {
+      const step = createMinimalStep('Do work');
+      const context = createMinimalContext({
+        stepIteration: 3,
+        language: 'ja',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('- Step Iteration: 3（このステップの実行回数）');
+    });
+
+    it('should NOT include .takt/reports/ prefix in report paths', () => {
+      const step = createMinimalStep('Do work');
+      step.report = '00-plan.md';
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).not.toContain('.takt/reports/');
+    });
+  });
+
+  describe('ReportObjectConfig order/format injection', () => {
+    it('should inject order before instruction_template', () => {
+      const step = createMinimalStep('Do work');
+      step.report = {
+        name: '00-plan.md',
+        order: '**Output:** Write to {report:00-plan.md}',
+      };
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      const orderIdx = result.indexOf('**Output:** Write to 20260129-test/00-plan.md');
+      const instructionsIdx = result.indexOf('## Instructions');
+      expect(orderIdx).toBeGreaterThan(-1);
+      expect(instructionsIdx).toBeGreaterThan(orderIdx);
+    });
+
+    it('should inject format after instruction_template', () => {
+      const step = createMinimalStep('Do work');
+      step.report = {
+        name: '00-plan.md',
+        format: '**Format:**\n```markdown\n# Plan\n```',
+      };
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      const instructionsIdx = result.indexOf('## Instructions');
+      const formatIdx = result.indexOf('**Format:**');
+      expect(formatIdx).toBeGreaterThan(instructionsIdx);
+    });
+
+    it('should inject both order before and format after instruction_template', () => {
+      const step = createMinimalStep('Do work');
+      step.report = {
+        name: '00-plan.md',
+        order: '**Output:** Write to {report:00-plan.md}',
+        format: '**Format:**\n```markdown\n# Plan\n```',
+      };
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      const orderIdx = result.indexOf('**Output:** Write to 20260129-test/00-plan.md');
+      const instructionsIdx = result.indexOf('## Instructions');
+      const formatIdx = result.indexOf('**Format:**');
+      expect(orderIdx).toBeGreaterThan(-1);
+      expect(instructionsIdx).toBeGreaterThan(orderIdx);
+      expect(formatIdx).toBeGreaterThan(instructionsIdx);
+    });
+
+    it('should replace {report:filename} in order text', () => {
+      const step = createMinimalStep('Do work');
+      step.report = {
+        name: '00-plan.md',
+        order: 'Output to {report:00-plan.md} file.',
+      };
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('Output to 20260129-test/00-plan.md file.');
+      expect(result).not.toContain('{report:00-plan.md}');
+    });
+
+    it('should auto-inject report output instruction when report is a simple string', () => {
+      const step = createMinimalStep('Do work');
+      step.report = '00-plan.md';
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      // Auto-generated report output instruction should be injected before ## Instructions
+      expect(result).toContain('**Report output:** Output to the `Report File` specified above.');
+      expect(result).toContain('- If file does not exist: Create new file');
+      const reportIdx = result.indexOf('**Report output:**');
+      const instructionsIdx = result.indexOf('## Instructions');
+      expect(reportIdx).toBeGreaterThan(-1);
+      expect(instructionsIdx).toBeGreaterThan(reportIdx);
+    });
+
+    it('should auto-inject report output instruction when report is ReportConfig[]', () => {
+      const step = createMinimalStep('Do work');
+      step.report = [
+        { label: 'Scope', path: '01-scope.md' },
+      ];
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      // Auto-generated multi-file report output instruction
+      expect(result).toContain('**Report output:** Output to the `Report Files` specified above.');
+      expect(result).toContain('- If file does not exist: Create new file');
+    });
+
+    it('should replace {report:filename} in instruction_template too', () => {
+      const step = createMinimalStep('Write to {report:00-plan.md}');
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('Write to 20260129-test/00-plan.md');
+      expect(result).not.toContain('{report:00-plan.md}');
+    });
+
+    it('should replace {step_iteration} in order/format text', () => {
+      const step = createMinimalStep('Do work');
+      step.report = {
+        name: '00-plan.md',
+        order: 'Append ## Iteration {step_iteration} section',
+      };
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        stepIteration: 3,
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('Append ## Iteration 3 section');
+    });
+
+    it('should auto-inject Japanese report output instruction for ja language', () => {
+      const step = createMinimalStep('作業する');
+      step.report = { name: '00-plan.md' };
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'ja',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('**レポート出力:** `Report File` に出力してください。');
+      expect(result).toContain('- ファイルが存在しない場合: 新規作成');
+      expect(result).toContain('- ファイルが存在する場合: `## Iteration 1` セクションを追記');
+    });
+
+    it('should auto-inject Japanese multi-file report output instruction', () => {
+      const step = createMinimalStep('作業する');
+      step.report = [{ label: 'Scope', path: '01-scope.md' }];
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'ja',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('**レポート出力:** Report Files に出力してください。');
+    });
+
+    it('should replace {step_iteration} in auto-generated report output instruction', () => {
+      const step = createMinimalStep('Do work');
+      step.report = '00-plan.md';
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        stepIteration: 5,
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('Append with `## Iteration 5` section');
+    });
+
+    it('should prefer explicit order over auto-generated report instruction', () => {
+      const step = createMinimalStep('Do work');
+      step.report = {
+        name: '00-plan.md',
+        order: 'Custom order instruction',
+      };
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('Custom order instruction');
+      expect(result).not.toContain('**Report output:**');
+    });
+
+    it('should auto-inject report output for ReportObjectConfig without order', () => {
+      const step = createMinimalStep('Do work');
+      step.report = { name: '00-plan.md', format: '# Plan' };
+      const context = createMinimalContext({
+        reportDir: '20260129-test',
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('**Report output:** Output to the `Report File` specified above.');
+    });
+
+    it('should NOT inject report output when no reportDir', () => {
+      const step = createMinimalStep('Do work');
+      step.report = '00-plan.md';
+      const context = createMinimalContext({
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).not.toContain('**Report output:**');
+    });
+  });
+
+  describe('auto-injected User Request and Additional User Inputs sections', () => {
+    it('should include User Request section with task', () => {
+      const step = createMinimalStep('Do work');
+      const context = createMinimalContext({ task: 'Build the feature', language: 'en' });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('## User Request\n');
+    });
+
+    it('should include Additional User Inputs section', () => {
+      const step = createMinimalStep('Do work');
+      const context = createMinimalContext({
+        userInputs: ['input1', 'input2'],
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('## Additional User Inputs\n');
+    });
+
+    it('should include Previous Response when passPreviousResponse is true and output exists', () => {
+      const step = createMinimalStep('Do work');
+      step.passPreviousResponse = true;
+      const context = createMinimalContext({
+        previousOutput: { content: 'Previous result', tag: '[TEST:1]' },
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).toContain('## Previous Response\n');
+    });
+
+    it('should NOT include Previous Response when passPreviousResponse is false', () => {
+      const step = createMinimalStep('Do work');
+      step.passPreviousResponse = false;
+      const context = createMinimalContext({
+        previousOutput: { content: 'Previous result', tag: '[TEST:1]' },
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      expect(result).not.toContain('## Previous Response');
+    });
+
+    it('should include Instructions header before template content', () => {
+      const step = createMinimalStep('My specific instructions here');
+      const context = createMinimalContext({ language: 'en' });
+
+      const result = buildInstruction(step, context);
+
+      const instructionsIdx = result.indexOf('## Instructions');
+      const contentIdx = result.indexOf('My specific instructions here');
+      expect(instructionsIdx).toBeGreaterThan(-1);
+      expect(contentIdx).toBeGreaterThan(instructionsIdx);
+    });
+
+    it('should skip auto-injected User Request when template contains {task}', () => {
+      const step = createMinimalStep('Process this: {task}');
+      const context = createMinimalContext({ task: 'My task', language: 'en' });
+
+      const result = buildInstruction(step, context);
+
+      // Auto-injected section should NOT appear
+      expect(result).not.toContain('## User Request');
+      // But template placeholder should be replaced
+      expect(result).toContain('Process this: My task');
+    });
+
+    it('should skip auto-injected Previous Response when template contains {previous_response}', () => {
+      const step = createMinimalStep('## Feedback\n{previous_response}\n\nFix the issues.');
+      step.passPreviousResponse = true;
+      const context = createMinimalContext({
+        previousOutput: { content: 'Review feedback here', tag: '[TEST:1]' },
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      // Auto-injected section should NOT appear
+      expect(result).not.toContain('## Previous Response\n');
+      // But template placeholder should be replaced with content
+      expect(result).toContain('## Feedback\nReview feedback here');
+    });
+
+    it('should skip auto-injected Additional User Inputs when template contains {user_inputs}', () => {
+      const step = createMinimalStep('Inputs: {user_inputs}');
+      const context = createMinimalContext({
+        userInputs: ['extra info'],
+        language: 'en',
+      });
+
+      const result = buildInstruction(step, context);
+
+      // Auto-injected section should NOT appear
+      expect(result).not.toContain('## Additional User Inputs');
+      // But template placeholder should be replaced
+      expect(result).toContain('Inputs: extra info');
     });
   });
 
@@ -301,6 +907,24 @@ describe('instruction-builder', () => {
       const result = buildInstruction(step, context);
 
       expect(result).toContain('Run #2');
+    });
+  });
+
+  describe('isReportObjectConfig', () => {
+    it('should return true for ReportObjectConfig', () => {
+      expect(isReportObjectConfig({ name: '00-plan.md' })).toBe(true);
+    });
+
+    it('should return true for ReportObjectConfig with order/format', () => {
+      expect(isReportObjectConfig({ name: '00-plan.md', order: 'output to...', format: '# Plan' })).toBe(true);
+    });
+
+    it('should return false for string', () => {
+      expect(isReportObjectConfig('00-plan.md')).toBe(false);
+    });
+
+    it('should return false for ReportConfig[] (array)', () => {
+      expect(isReportObjectConfig([{ label: 'Scope', path: '01-scope.md' }])).toBe(false);
     });
   });
 });

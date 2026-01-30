@@ -18,7 +18,6 @@ export interface ProviderCallOptions {
   model?: string;
   systemPrompt?: string;
   allowedTools?: string[];
-  statusPatterns?: Record<string, string>;
   /** Permission mode for tool execution (from workflow step) */
   permissionMode?: PermissionMode;
   onStream?: StreamCallback;

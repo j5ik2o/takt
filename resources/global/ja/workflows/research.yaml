@@ -12,7 +12,6 @@
 #   {step_iteration} - ステップごとのイテレーション数（このステップが何回実行されたか）
 #   {task}           - 元のユーザー要求
 #   {previous_response} - 前のステップの出力
-#   {git_diff}       - 現在のコミットされていない変更（git diff）
 #   {user_inputs}    - ワークフロー中に蓄積されたユーザー入力
 #   {report_dir}     - レポートディレクトリ名（例: "20250126-143052-task-summary"）
 
@@ -30,30 +29,6 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 計画完了 | `[PLANNER:DONE]` |
-      | 情報不足 | `[PLANNER:BLOCKED]` |
-
-      ### 出力例
-
-      **DONE の場合:**
-      ```
-      [PLANNER:DONE]
-      ```
-
-      **BLOCKED の場合:**
-      ```
-      [PLANNER:BLOCKED]
-
-      確認事項:
-      - {質問1}
-      ```
     instruction_template: |
       ## ワークフロー状況
       - イテレーション: {iteration}/{max_iterations}（ワークフロー全体）
@@ -77,11 +52,11 @@ steps:
       - 複数の解釈がある場合は、すべてを調査対象に含める
       - Supervisorからフィードバックがある場合は、指摘を反映した計画を作成
     pass_previous_response: true
-    transitions:
-      - condition: done
-        next_step: dig
-      - condition: blocked
-        next_step: ABORT
+    rules:
+      - condition: 計画が完了した
+        next: dig
+      - condition: 情報が不足しており計画を立てられない
+        next: ABORT
 
   - name: dig
     agent: ~/.takt/agents/research/digger.md
@@ -91,29 +66,6 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 調査完了 | `[DIGGER:DONE]` |
-      | 調査不可 | `[DIGGER:BLOCKED]` |
-
-      ### 出力例
-
-      **DONE の場合:**
-      ```
-      [DIGGER:DONE]
-      ```
-
-      **BLOCKED の場合:**
-      ```
-      [DIGGER:BLOCKED]
-
-      理由: {調査できなかった理由}
-      ```
     instruction_template: |
       ## ワークフロー状況
       - イテレーション: {iteration}/{max_iterations}（ワークフロー全体）
@@ -142,11 +94,11 @@ steps:
       - コードベース検索
       - ファイル読み取り
     pass_previous_response: true
-    transitions:
-      - condition: done
-        next_step: supervise
-      - condition: blocked
-        next_step: ABORT
+    rules:
+      - condition: 調査が完了した
+        next: supervise
+      - condition: 調査を実行できない
+        next: ABORT
 
   - name: supervise
     agent: ~/.takt/agents/research/supervisor.md
@@ -156,39 +108,6 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## 判定基準
-
-      | 状況 | 判定 |
-      |------|------|
-      | 調査結果が十分 | APPROVE |
-      | 調査結果が不十分 | REJECT |
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 調査完了、結果は十分 | `[SUPERVISOR:APPROVE]` |
-      | 不十分、計画からやり直し | `[SUPERVISOR:REJECT]` |
-
-      ### 出力例
-
-      **APPROVE の場合:**
-      ```
-      [SUPERVISOR:APPROVE]
-
-      調査結果は元の依頼に対して十分です。
-      ```
-
-      **REJECT の場合:**
-      ```
-      [SUPERVISOR:REJECT]
-
-      不足点:
-      - {具体的な不足点}
-      ```
     instruction_template: |
       ## ワークフロー状況
       - イテレーション: {iteration}/{max_iterations}（ワークフロー全体）
@@ -206,10 +125,10 @@ steps:
 
       **重要**: 問題がある場合は、Plannerへの具体的な指示を含めてください。
     pass_previous_response: true
-    transitions:
-      - condition: approved
-        next_step: COMPLETE
-      - condition: rejected
-        next_step: plan
+    rules:
+      - condition: 調査結果が元の依頼に対して十分である
+        next: COMPLETE
+      - condition: 調査結果が不十分であり、計画からやり直す必要がある
+        next: plan
 
 initial_step: plan

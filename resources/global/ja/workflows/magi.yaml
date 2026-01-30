@@ -8,7 +8,6 @@
 #   {step_iteration} - ステップごとのイテレーション数（このステップが何回実行されたか）
 #   {task}           - 元のユーザー要求
 #   {previous_response} - 前のステップの出力
-#   {git_diff}       - 現在のコミットされていない変更（git diff）
 #   {user_inputs}    - ワークフロー中に蓄積されたユーザー入力
 #   {report_dir}     - レポートディレクトリ名（例: "20250126-143052-task-summary"）
 
@@ -26,8 +25,15 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
+    instruction_template: |
+      # MAGI System 起動
 
+      ## 審議事項
+      {task}
+
+      ## 指示
+      あなたはMAGI System の MELCHIOR-1 です。
+      科学者・技術者の観点から上記を分析し、判定を下してください。
 
       ## 出力フォーマット
 
@@ -44,18 +50,9 @@ steps:
 
       理由: {賛成の理由}
       ```
-    instruction_template: |
-      # MAGI System 起動
-
-      ## 審議事項
-      {task}
-
-      ## 指示
-      あなたはMAGI System の MELCHIOR-1 です。
-      科学者・技術者の観点から上記を分析し、判定を下してください。
-    transitions:
-      - condition: always
-        next_step: balthasar
+    rules:
+      - condition: 判定を完了した
+        next: balthasar
 
   - name: balthasar
     agent: ~/.takt/agents/magi/balthasar.md
@@ -65,8 +62,19 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
+    instruction_template: |
+      # MAGI System 継続
 
+      ## 審議事項
+      {task}
+
+      ## MELCHIOR-1 の判定
+      {previous_response}
+
+      ## 指示
+      あなたはMAGI System の BALTHASAR-2 です。
+      育成者の観点から上記を分析し、判定を下してください。
+      MELCHIORの判定は参考にしつつも、独自の観点で判断してください。
 
       ## 出力フォーマット
 
@@ -83,23 +91,10 @@ steps:
 
       理由: {賛成の理由}
       ```
-    instruction_template: |
-      # MAGI System 継続
-
-      ## 審議事項
-      {task}
-
-      ## MELCHIOR-1 の判定
-      {previous_response}
-
-      ## 指示
-      あなたはMAGI System の BALTHASAR-2 です。
-      育成者の観点から上記を分析し、判定を下してください。
-      MELCHIORの判定は参考にしつつも、独自の観点で判断してください。
     pass_previous_response: true
-    transitions:
-      - condition: always
-        next_step: casper
+    rules:
+      - condition: 判定を完了した
+        next: casper
 
   - name: casper
     agent: ~/.takt/agents/magi/casper.md
@@ -109,8 +104,20 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
+    instruction_template: |
+      # MAGI System 最終審議
 
+      ## 審議事項
+      {task}
+
+      ## これまでの判定
+      {previous_response}
+
+      ## 指示
+      あなたはMAGI System の CASPER-3 です。
+      実務・現実の観点から上記を分析し、判定を下してください。
+
+      **最後に、3者の判定を集計し、最終結論を出してください。**
 
       ## 出力フォーマット
 
@@ -137,21 +144,7 @@ steps:
 
       [理由・まとめ]
       ```
-    instruction_template: |
-      # MAGI System 最終審議
-
-      ## 審議事項
-      {task}
-
-      ## これまでの判定
-      {previous_response}
-
-      ## 指示
-      あなたはMAGI System の CASPER-3 です。
-      実務・現実の観点から上記を分析し、判定を下してください。
-
-      **最後に、3者の判定を集計し、最終結論を出してください。**
     pass_previous_response: true
-    transitions:
-      - condition: always
-        next_step: COMPLETE
+    rules:
+      - condition: 最終判定を完了した
+        next: COMPLETE

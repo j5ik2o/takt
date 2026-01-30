@@ -7,7 +7,6 @@
 import { executeClaudeCli, type ClaudeSpawnOptions, type StreamCallback, type PermissionHandler, type AskUserQuestionHandler } from './process.js';
 import type { AgentDefinition } from '@anthropic-ai/claude-agent-sdk';
 import type { AgentResponse, Status, PermissionMode } from '../models/types.js';
-import { GENERIC_STATUS_PATTERNS } from '../models/schemas.js';
 import { createLogger } from '../utils/debug.js';
 
 const log = createLogger('client');
@@ -20,7 +19,6 @@ export interface ClaudeCallOptions {
   model?: string;
   maxTurns?: number;
   systemPrompt?: string;
-  statusPatterns?: Record<string, string>;
   /** SDK agents to register for sub-agent execution */
   agents?: Record<string, AgentDefinition>;
   /** Permission mode for tool execution (from workflow step) */
@@ -35,22 +33,21 @@ export interface ClaudeCallOptions {
   bypassPermissions?: boolean;
 }
 
-/** Detect status from agent output content */
-export function detectStatus(
-  content: string,
-  patterns: Record<string, string>
-): Status {
-  for (const [status, pattern] of Object.entries(patterns)) {
-    try {
-      const regex = new RegExp(pattern, 'i');
-      if (regex.test(content)) {
-        return status as Status;
-      }
-    } catch {
-      // Invalid regex, skip
-    }
+/**
+ * Detect rule index from numbered tag pattern [STEP_NAME:N].
+ * Returns 0-based rule index, or -1 if no match.
+ *
+ * Example: detectRuleIndex("... [PLAN:2] ...", "plan") → 1
+ */
+export function detectRuleIndex(content: string, stepName: string): number {
+  const tag = stepName.toUpperCase();
+  const regex = new RegExp(`\\[${tag}:(\\d+)\\]`, 'i');
+  const match = content.match(regex);
+  if (match?.[1]) {
+    const index = Number.parseInt(match[1], 10) - 1;
+    return index >= 0 ? index : -1;
   }
-  return 'in_progress';
+  return -1;
 }
 
 /** Validate regex pattern for ReDoS safety */
@@ -79,28 +76,17 @@ export function isRegexSafe(pattern: string): boolean {
   return true;
 }
 
-/** Get status patterns for a built-in agent type */
-export function getBuiltinStatusPatterns(_agentType: string): Record<string, string> {
-  // Uses generic patterns that work for any agent
-  return GENERIC_STATUS_PATTERNS;
-}
-
 /** Determine status from result */
 function determineStatus(
   result: { success: boolean; interrupted?: boolean; content: string; fullContent?: string },
-  patterns: Record<string, string>
 ): Status {
   if (!result.success) {
-    // Check if it was an interrupt using the flag (not magic string)
     if (result.interrupted) {
       return 'interrupted';
     }
     return 'blocked';
   }
-  // Use fullContent for status detection (contains all assistant messages)
-  // Fall back to content if fullContent is not available
-  const textForStatusDetection = result.fullContent || result.content;
-  return detectStatus(textForStatusDetection, patterns);
+  return 'done';
 }
 
 /** Call Claude with an agent prompt */
@@ -125,8 +111,7 @@ export async function callClaude(
   };
 
   const result = await executeClaudeCli(prompt, spawnOptions);
-  const patterns = options.statusPatterns || getBuiltinStatusPatterns(agentType);
-  const status = determineStatus(result, patterns);
+  const status = determineStatus(result);
 
   if (!result.success && result.error) {
     log.error('Agent query failed', { agent: agentType, error: result.error });
@@ -164,9 +149,7 @@ export async function callClaudeCustom(
   };
 
   const result = await executeClaudeCli(prompt, spawnOptions);
-  // Use provided patterns, or fall back to built-in patterns for known agents
-  const patterns = options.statusPatterns || getBuiltinStatusPatterns(agentName);
-  const status = determineStatus(result, patterns);
+  const status = determineStatus(result);
 
   if (!result.success && result.error) {
     log.error('Agent query failed', { agent: agentName, error: result.error });

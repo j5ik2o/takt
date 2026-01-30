@@ -2,28 +2,36 @@
 # CQRS+ES、フロントエンド、セキュリティ、QAの専門家によるレビューワークフロー
 #
 # フロー:
-# plan -> implement -> architect_review -> cqrs_es_review -> frontend_review -> ai_review -> security_review -> qa_review -> supervise -> COMPLETE
-#                          ↓                   ↓                  ↓                 ↓              ↓                ↓            ↓
-#                     fix_architect        fix_cqrs_es       fix_frontend        ai_fix       fix_security       fix_qa    fix_supervisor
+# plan -> implement -> ai_review -> cqrs_es_review -> frontend_review -> security_review -> qa_review -> supervise -> COMPLETE
+#                          ↓            ↓                  ↓                  ↓                ↓            ↓
+#                        ai_fix    fix_cqrs_es       fix_frontend       fix_security       fix_qa    fix_supervisor
 #
 # 修正時の戻り先はCoderが判断:
 # - fix_security: MINOR→security_review, MAJOR→cqrs_es_review
 # - fix_qa: MINOR→qa_review, SECURITY→security_review, MAJOR→cqrs_es_review
 #
-# テンプレート変数:
-#   {iteration}      - ワークフロー全体のターン数（全エージェントで実行されたステップの合計）
-#   {max_iterations} - ワークフローの最大イテレーション数
-#   {step_iteration} - ステップごとのイテレーション数（このステップが何回実行されたか）
-#   {task}           - 元のユーザー要求
-#   {previous_response} - 前のステップの出力
-#   {git_diff}       - 現在のコミットされていない変更（git diff）
-#   {user_inputs}    - ワークフロー中に蓄積されたユーザー入力
-#   {report_dir}     - レポートディレクトリ名（例: "20250126-143052-task-summary"）
+# ボイラープレートセクション（Workflow Context, User Request, Previous Response,
+# Additional User Inputs, Instructions heading）はbuildInstruction()が自動挿入。
+# instruction_templateにはステップ固有の内容のみ記述。
+#
+# テンプレート変数（instruction_template内で使用可能）:
+#   {iteration}         - ワークフロー全体のターン数（全エージェントで実行されたステップの合計）
+#   {max_iterations}    - ワークフローの最大イテレーション数
+#   {step_iteration}    - ステップごとのイテレーション数（このステップが何回実行されたか）
+#   {previous_response} - 前のステップの出力（pass_previous_response: true の場合のみ）
+#   {report_dir}        - レポートディレクトリ名（例: "20250126-143052-task-summary"）
+#
+# ステップレベルフィールド:
+#   report:  - ステップのレポートファイル（Workflow ContextにReport File/Filesとして自動挿入）
+#              単一: report: 00-plan.md
+#              複数: report:
+#                      - Scope: 01-coder-scope.md
+#                      - Decisions: 02-coder-decisions.md
 
 name: expert-cqrs
 description: CQRS+ES・フロントエンド・セキュリティ・QA専門家レビュー
 
-max_iterations: 20
+max_iterations: 30
 
 initial_step: plan
 
@@ -32,7 +40,31 @@ steps:
   # Phase 0: Planning
   # ===========================================
   - name: plan
+    edit: false
     agent: ~/.takt/agents/default/planner.md
+    report:
+      name: 00-plan.md
+      format: |
+        ```markdown
+        # タスク計画
+
+        ## 元の要求
+        {ユーザーの要求をそのまま記載}
+
+        ## 分析結果
+
+        ### 目的
+        {達成すべきこと}
+
+        ### スコープ
+        {影響範囲}
+
+        ### 実装アプローチ
+        {どう進めるか}
+
+        ## 確認事項（あれば）
+        - {不明点や確認が必要な点}
+        ```
     allowed_tools:
       - Read
       - Glob
@@ -41,30 +73,10 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 分析完了 | `[PLANNER:DONE]` |
-      | 要件不明確 | `[PLANNER:BLOCKED]` |
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: plan (タスク分析)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/00-plan.md
-
-      ## User Request
-      {task}
-
       ## Previous Response (implementからの差し戻し時)
       {previous_response}
 
-      ## Instructions
       タスクを分析し、実装方針を立ててください。
 
       **注意:** Previous Responseがある場合は差し戻しのため、
@@ -74,47 +86,22 @@ steps:
       1. タスクの要件を理解する
       2. 影響範囲を特定する
       3. 実装アプローチを決める
-
-      **レポート出力:** 上記の `Report File` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
-
-      **レポートフォーマット:**
-      ```markdown
-      # タスク計画
-
-      ## 元の要求
-      {ユーザーの要求をそのまま記載}
-
-      ## 分析結果
-
-      ### 目的
-      {達成すべきこと}
-
-      ### スコープ
-      {影響範囲}
-
-      ### 実装アプローチ
-      {どう進めるか}
-
-      ## 確認事項（あれば）
-      - {不明点や確認が必要な点}
-      ```
-
-      完了したら [PLANNER:DONE] を出力。
-      要件が不明確な場合は [PLANNER:BLOCKED] を出力。
     pass_previous_response: true
-    transitions:
-      - condition: done
-        next_step: implement
-      - condition: blocked
-        next_step: ABORT
+    rules:
+      - condition: タスク分析と計画が完了した
+        next: implement
+      - condition: 要件が不明確で計画を立てられない
+        next: ABORT
 
   # ===========================================
   # Phase 1: Implementation
   # ===========================================
   - name: implement
+    edit: true
     agent: ~/.takt/agents/default/coder.md
+    report:
+      - Scope: 01-coder-scope.md
+      - Decisions: 02-coder-decisions.md
     allowed_tools:
       - Read
       - Glob
@@ -124,38 +111,9 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 実装完了 | `[CODER:DONE]` |
-      | 進行不可 | `[CODER:BLOCKED]` |
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: implement
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report Files:
-        - Scope: .takt/reports/{report_dir}/01-coder-scope.md
-        - Decisions: .takt/reports/{report_dir}/02-coder-decisions.md
-
-      ## User Request
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       planステップで立てた計画に従って実装してください。
       計画レポート（00-plan.md）を参照し、実装を進めてください。
-
-      **レポート出力:** 上記の `Report Files` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
 
       **Scopeレポートフォーマット（実装開始時に作成）:**
       ```markdown
@@ -186,20 +144,46 @@ steps:
       - **検討した選択肢**: {選択肢リスト}
       - **理由**: {選んだ理由}
       ```
-
-      完了時は [CODER:DONE] を含めてください。
-      進行できない場合は [CODER:BLOCKED] を出力し、planに戻ります。
-    transitions:
-      - condition: done
-        next_step: architect_review
-      - condition: blocked
-        next_step: plan
+    rules:
+      - condition: 実装が完了した
+        next: ai_review
+      - condition: 実装を進行できない
+        next: plan
 
   # ===========================================
-  # Phase 2: Architecture Review
+  # Phase 2: AI Review
   # ===========================================
-  - name: architect_review
-    agent: ~/.takt/agents/default/architect.md
+  - name: ai_review
+    edit: false
+    agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
+    report:
+      name: 03-ai-review.md
+      format: |
+        ```markdown
+        # AI生成コードレビュー
+
+        ## 結果: APPROVE / REJECT
+
+        ## サマリー
+        {1文で結果を要約}
+
+        ## 検証した項目
+        | 観点 | 結果 | 備考 |
+        |------|------|------|
+        | 仮定の妥当性 | ✅ | - |
+        | API/ライブラリの実在 | ✅ | - |
+        | コンテキスト適合 | ✅ | - |
+        | スコープ | ✅ | - |
+
+        ## 問題点（REJECTの場合）
+        | # | カテゴリ | 場所 | 問題 |
+        |---|---------|------|------|
+        | 1 | 幻覚API | `src/file.ts:23` | 存在しないメソッド |
+        ```
+
+        **認知負荷軽減ルール:**
+        - 問題なし → サマリー1文 + チェック表のみ（10行以内）
+        - 問題あり → + 問題を表形式で（25行以内）
     allowed_tools:
       - Read
       - Glob
@@ -207,97 +191,20 @@ steps:
       - Write
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## 判定基準
-
-      | 状況 | 判定 |
-      |------|------|
-      | 構造に問題がある | REJECT |
-      | 設計原則違反がある | REJECT |
-      | 呼び出しチェーンの配線漏れ | REJECT |
-      | テストが不十分 | REJECT |
-      | 改善すべき点がある（軽微） | IMPROVE |
-      | 問題なし | APPROVE |
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 問題なし | `[ARCHITECT:APPROVE]` |
-      | 軽微な改善必要 | `[ARCHITECT:IMPROVE]` |
-      | 構造的な修正必要 | `[ARCHITECT:REJECT]` |
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: architect_review (アーキテクチャレビュー)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/03-architect-review.md
+      AI特有の問題についてコードをレビューしてください:
+      - 仮定の検証
+      - もっともらしいが間違っているパターン
+      - 既存コードベースとの適合性
+      - スコープクリープの検出
+    rules:
+      - condition: AI特有の問題が見つからない
+        next: cqrs_es_review
+      - condition: AI特有の問題が検出された
+        next: ai_fix
 
-      ## Original User Request (ワークフロー開始時の元の要求)
-      {task}
-
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
-      ## Instructions
-      **アーキテクチャと設計**のレビューに集中してください。
-
-      **レビュー観点:**
-      - 構造・設計の妥当性
-      - コード品質
-      - 変更スコープの適切性
-      - テストカバレッジ
-      - デッドコード
-      - 呼び出しチェーン検証
-
-      **レポート出力:** 上記の `Report File` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
-
-      **レポートフォーマット:**
-      ```markdown
-      # アーキテクチャレビュー
-
-      ## 結果: APPROVE / IMPROVE / REJECT
-
-      ## サマリー
-      {1-2文で結果を要約}
-
-      ## 確認した観点
-      - [x] 構造・設計
-      - [x] コード品質
-      - [x] 変更スコープ
-      - [x] テストカバレッジ
-      - [x] デッドコード
-      - [x] 呼び出しチェーン検証
-
-      ## 問題点（REJECTの場合）
-      | # | 場所 | 問題 | 修正案 |
-      |---|------|------|--------|
-      | 1 | `src/file.ts:42` | 問題の説明 | 修正方法 |
-
-      ## 改善提案（任意・ブロッキングではない）
-      - {将来的な改善提案}
-      ```
-
-      **認知負荷軽減ルール:**
-      - APPROVE + 問題なし → サマリーのみ（5行以内）
-      - APPROVE + 軽微な提案 → サマリー + 改善提案（15行以内）
-      - REJECT → 問題点を表形式で（30行以内）
-    transitions:
-      - condition: approved
-        next_step: cqrs_es_review
-      - condition: improve
-        next_step: fix_architect
-      - condition: rejected
-        next_step: fix_architect
-
-  - name: fix_architect
+  - name: ai_fix
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     allowed_tools:
       - Read
@@ -308,50 +215,54 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    permission_mode: acceptEdits
-    status_rules_prompt: |
-
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 修正完了 | `[CODER:DONE]` |
-      | 進行不可 | `[CODER:BLOCKED]` |
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: fix_architect
-
-      ## Architect Feedback (これが最新の指示です - 優先して対応してください)
+      ## AI Review Feedback (これが最新の指示です - 優先して対応してください)
       {previous_response}
 
-      ## Original User Request (ワークフロー開始時の元の要求 - 参考情報)
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
-      **重要**: Architectのフィードバックに対応してください。
-      「Original User Request」は参考情報であり、最新の指示ではありません。
-      セッションの会話履歴を確認し、Architectの指摘事項を修正してください。
-
-      完了時は [CODER:DONE] を含めてください。
-      進行できない場合は [CODER:BLOCKED] を含めてください。
+      **重要**: AI Reviewerのフィードバックに対応してください。
+      以下に集中してください:
+      - 間違った仮定の修正
+      - もっともらしいが間違っている実装の修正
+      - 既存コードベースのパターンとの整合
+      - スコープクリープの除去
     pass_previous_response: true
-    transitions:
-      - condition: done
-        next_step: architect_review
-      - condition: blocked
-        next_step: plan
+    rules:
+      - condition: AI Reviewerの指摘に対する修正が完了した
+        next: ai_review
+      - condition: 修正を進行できない
+        next: plan
 
   # ===========================================
   # Phase 3: CQRS+ES Review
   # ===========================================
   - name: cqrs_es_review
+    edit: false
     agent: ~/.takt/agents/expert-cqrs/cqrs-es-reviewer.md
+    report:
+      name: 04-cqrs-es-review.md
+      format: |
+        ```markdown
+        # CQRS+ESレビュー
+
+        ## 結果: APPROVE / REJECT
+
+        ## サマリー
+        {1-2文で結果を要約}
+
+        ## 確認した観点
+        | 観点 | 結果 | 備考 |
+        |------|------|------|
+        | Aggregate設計 | ✅ | - |
+        | イベント設計 | ✅ | - |
+        | Command/Query分離 | ✅ | - |
+        | プロジェクション | ✅ | - |
+        | 結果整合性 | ✅ | - |
+
+        ## 問題点（REJECTの場合）
+        | # | 場所 | 問題 | 修正案 |
+        |---|------|------|--------|
+        | 1 | `src/file.ts:42` | 問題の説明 | 修正方法 |
+        ```
     allowed_tools:
       - Read
       - Glob
@@ -359,32 +270,7 @@ steps:
       - Write
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 設計に問題なし | `[CQRS-ES:APPROVE]` |
-      | 設計に問題あり | `[CQRS-ES:REJECT]` |
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: cqrs_es_review (CQRS+ES専門レビュー)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/04-cqrs-es-review.md
-
-      ## Original User Request
-      {task}
-
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
-      ## Instructions
       CQRS（コマンドクエリ責務分離）とEvent Sourcing（イベントソーシング）の観点から
       上記の変更をレビューしてください。
 
@@ -397,45 +283,14 @@ steps:
 
       **注意**: このプロジェクトがCQRS+ESパターンを使用していない場合は、
       一般的なドメイン設計の観点からレビューしてください。
-
-      **レポート出力:** 上記の `Report File` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
-
-      **レポートフォーマット:**
-      ```markdown
-      # CQRS+ESレビュー
-
-      ## 結果: APPROVE / REJECT
-
-      ## サマリー
-      {1-2文で結果を要約}
-
-      ## 確認した観点
-      | 観点 | 結果 | 備考 |
-      |------|------|------|
-      | Aggregate設計 | ✅ | - |
-      | イベント設計 | ✅ | - |
-      | Command/Query分離 | ✅ | - |
-      | プロジェクション | ✅ | - |
-      | 結果整合性 | ✅ | - |
-
-      ## 問題点（REJECTの場合）
-      | # | 場所 | 問題 | 修正案 |
-      |---|------|------|--------|
-      | 1 | `src/file.ts:42` | 問題の説明 | 修正方法 |
-      ```
-
-      Include:
-      - [CQRS-ES:APPROVE] if CQRS+ES design is sound
-      - [CQRS-ES:REJECT] if design issues found (list specific issues)
-    transitions:
-      - condition: approved
-        next_step: frontend_review
-      - condition: rejected
-        next_step: fix_cqrs_es
+    rules:
+      - condition: CQRS+ES設計に問題がない
+        next: frontend_review
+      - condition: CQRS+ES設計に問題がある
+        next: fix_cqrs_es
 
   - name: fix_cqrs_es
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     allowed_tools:
       - Read
@@ -446,31 +301,10 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 修正完了 | `[CODER:DONE]` |
-      | 進行不可 | `[CODER:BLOCKED]` |
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: fix_cqrs_es
-
       ## CQRS+ES Review Feedback (これが最新の指示です - 優先して対応してください)
       {previous_response}
 
-      ## Original User Request (ワークフロー開始時の元の要求 - 参考情報)
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       **重要**: CQRS+ES専門家からの指摘を修正してください。
 
       指摘されたポイント:
@@ -479,21 +313,44 @@ steps:
       - Command/Query分離
       - プロジェクション
       - 結果整合性
-
-      完了時は [CODER:DONE] を含めてください。
-      進行できない場合は [CODER:BLOCKED] を含めてください。
     pass_previous_response: true
-    transitions:
-      - condition: done
-        next_step: cqrs_es_review
-      - condition: blocked
-        next_step: plan
+    rules:
+      - condition: CQRS+ES専門家の指摘に対する修正が完了した
+        next: cqrs_es_review
+      - condition: 修正を進行できない
+        next: plan
 
   # ===========================================
-  # Phase 3: Frontend Review
+  # Phase 4: Frontend Review
   # ===========================================
   - name: frontend_review
+    edit: false
     agent: ~/.takt/agents/expert/frontend-reviewer.md
+    report:
+      name: 05-frontend-review.md
+      format: |
+        ```markdown
+        # フロントエンドレビュー
+
+        ## 結果: APPROVE / REJECT
+
+        ## サマリー
+        {1-2文で結果を要約}
+
+        ## 確認した観点
+        | 観点 | 結果 | 備考 |
+        |------|------|------|
+        | コンポーネント設計 | ✅ | - |
+        | 状態管理 | ✅ | - |
+        | パフォーマンス | ✅ | - |
+        | アクセシビリティ | ✅ | - |
+        | 型安全性 | ✅ | - |
+
+        ## 問題点（REJECTの場合）
+        | # | 場所 | 問題 | 修正案 |
+        |---|------|------|--------|
+        | 1 | `src/file.tsx:42` | 問題の説明 | 修正方法 |
+        ```
     allowed_tools:
       - Read
       - Glob
@@ -501,32 +358,7 @@ steps:
       - Write
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | フロントエンド設計に問題なし | `[FRONTEND:APPROVE]` |
-      | フロントエンド設計に問題あり | `[FRONTEND:REJECT]` |
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: frontend_review (フロントエンド専門レビュー)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/05-frontend-review.md
-
-      ## Original User Request
-      {task}
-
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
-      ## Instructions
       フロントエンド開発の観点から上記の変更をレビューしてください。
 
       **レビュー観点:**
@@ -538,46 +370,15 @@ steps:
       - TypeScript型安全性
 
       **注意**: このプロジェクトがフロントエンドを含まない場合は、
-      [FRONTEND:APPROVE] として次に進んでください。
-
-      **レポート出力:** 上記の `Report File` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
-
-      **レポートフォーマット:**
-      ```markdown
-      # フロントエンドレビュー
-
-      ## 結果: APPROVE / REJECT
-
-      ## サマリー
-      {1-2文で結果を要約}
-
-      ## 確認した観点
-      | 観点 | 結果 | 備考 |
-      |------|------|------|
-      | コンポーネント設計 | ✅ | - |
-      | 状態管理 | ✅ | - |
-      | パフォーマンス | ✅ | - |
-      | アクセシビリティ | ✅ | - |
-      | 型安全性 | ✅ | - |
-
-      ## 問題点（REJECTの場合）
-      | # | 場所 | 問題 | 修正案 |
-      |---|------|------|--------|
-      | 1 | `src/file.tsx:42` | 問題の説明 | 修正方法 |
-      ```
-
-      Include:
-      - [FRONTEND:APPROVE] if frontend design is sound
-      - [FRONTEND:REJECT] if design issues found (list specific issues)
-    transitions:
-      - condition: approved
-        next_step: ai_review
-      - condition: rejected
-        next_step: fix_frontend
+      問題なしとして次に進んでください。
+    rules:
+      - condition: フロントエンド設計に問題がない
+        next: security_review
+      - condition: フロントエンド設計に問題がある
+        next: fix_frontend
 
   - name: fix_frontend
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     allowed_tools:
       - Read
@@ -588,31 +389,10 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 修正完了 | `[CODER:DONE]` |
-      | 進行不可 | `[CODER:BLOCKED]` |
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: fix_frontend
-
       ## Frontend Review Feedback (これが最新の指示です - 優先して対応してください)
       {previous_response}
 
-      ## Original User Request (ワークフロー開始時の元の要求 - 参考情報)
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       **重要**: フロントエンド専門家からの指摘を修正してください。
 
       指摘されたポイント:
@@ -621,157 +401,45 @@ steps:
       - パフォーマンス
       - アクセシビリティ
       - 型安全性
-
-      完了時は [CODER:DONE] を含めてください。
-      進行できない場合は [CODER:BLOCKED] を含めてください。
     pass_previous_response: true
-    transitions:
-      - condition: done
-        next_step: frontend_review
-      - condition: blocked
-        next_step: plan
-
-  # ===========================================
-  # Phase 4: AI Review
-  # ===========================================
-  - name: ai_review
-    agent: ~/.takt/agents/default/ai-antipattern-reviewer.md
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Write
-      - WebSearch
-      - WebFetch
-    status_rules_prompt: |
-
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | AI特有の問題なし | `[AI_REVIEW:APPROVE]` |
-      | 問題あり | `[AI_REVIEW:REJECT]` |
-    instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: ai_review (AI生成コードレビュー)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/06-ai-review.md
-
-      ## Original User Request (ワークフロー開始時の元の要求)
-      {task}
-
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
-      ## Instructions
-      AI特有の問題についてコードをレビューしてください:
-      - 仮定の検証
-      - もっともらしいが間違っているパターン
-      - 既存コードベースとの適合性
-      - スコープクリープの検出
-
-      **レポート出力:** 上記の `Report File` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
-
-      **レポートフォーマット:**
-      ```markdown
-      # AI生成コードレビュー
-
-      ## 結果: APPROVE / REJECT
-
-      ## サマリー
-      {1文で結果を要約}
-
-      ## 検証した項目
-      | 観点 | 結果 | 備考 |
-      |------|------|------|
-      | 仮定の妥当性 | ✅ | - |
-      | API/ライブラリの実在 | ✅ | - |
-      | コンテキスト適合 | ✅ | - |
-      | スコープ | ✅ | - |
-
-      ## 問題点（REJECTの場合）
-      | # | カテゴリ | 場所 | 問題 |
-      |---|---------|------|------|
-      | 1 | 幻覚API | `src/file.ts:23` | 存在しないメソッド |
-      ```
-
-      **認知負荷軽減ルール:**
-      - 問題なし → サマリー1文 + チェック表のみ（10行以内）
-      - 問題あり → + 問題を表形式で（25行以内）
-
-      以下を含めてください:
-      - [AI_REVIEW:APPROVE] AI特有の問題が見つからない場合
-      - [AI_REVIEW:REJECT] 問題が検出された場合（具体的な問題をリスト）
-    transitions:
-      - condition: approved
-        next_step: security_review
-      - condition: rejected
-        next_step: ai_fix
-
-  - name: ai_fix
-    agent: ~/.takt/agents/default/coder.md
-    allowed_tools:
-      - Read
-      - Glob
-      - Grep
-      - Edit
-      - Write
-      - Bash
-      - WebSearch
-      - WebFetch
-    status_rules_prompt: |
-
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 修正完了 | `[CODER:DONE]` |
-      | 進行不可 | `[CODER:BLOCKED]` |
-    instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: ai_fix
-
-      ## AI Review Feedback (これが最新の指示です - 優先して対応してください)
-      {previous_response}
-
-      ## Original User Request (ワークフロー開始時の元の要求 - 参考情報)
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
-      **重要**: AI Reviewerのフィードバックに対応してください。
-      以下に集中してください:
-      - 間違った仮定の修正
-      - もっともらしいが間違っている実装の修正
-      - 既存コードベースのパターンとの整合
-      - スコープクリープの除去
-
-      完了時は [CODER:DONE] を含めてください。
-      進行できない場合は [CODER:BLOCKED] を含めてください。
-    pass_previous_response: true
-    transitions:
-      - condition: done
-        next_step: ai_review
-      - condition: blocked
-        next_step: plan
+    rules:
+      - condition: フロントエンドの指摘に対する修正が完了した
+        next: frontend_review
+      - condition: 修正を進行できない
+        next: plan
 
   # ===========================================
   # Phase 5: Security Review
   # ===========================================
   - name: security_review
+    edit: false
     agent: ~/.takt/agents/expert/security-reviewer.md
+    report:
+      name: 06-security-review.md
+      format: |
+        ```markdown
+        # セキュリティレビュー
+
+        ## 結果: APPROVE / REJECT
+
+        ## 重大度: None / Low / Medium / High / Critical
+
+        ## チェック結果
+        | カテゴリ | 結果 | 備考 |
+        |---------|------|------|
+        | インジェクション | ✅ | - |
+        | 認証・認可 | ✅ | - |
+        | データ保護 | ✅ | - |
+        | 依存関係 | ✅ | - |
+
+        ## 脆弱性（REJECTの場合）
+        | # | 重大度 | 種類 | 場所 | 修正案 |
+        |---|--------|------|------|--------|
+        | 1 | High | SQLi | `src/db.ts:42` | パラメータ化クエリを使用 |
+
+        ## 警告（ブロッキングではない）
+        - {セキュリティに関する推奨事項}
+        ```
     allowed_tools:
       - Read
       - Glob
@@ -779,32 +447,7 @@ steps:
       - Write
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | セキュリティ問題なし | `[SECURITY:APPROVE]` |
-      | 脆弱性あり | `[SECURITY:REJECT]` |
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: security_review (セキュリティ専門レビュー)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/07-security-review.md
-
-      ## Original User Request
-      {task}
-
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
-      ## Instructions
       セキュリティの観点から上記の変更をレビューしてください。
 
       **レビュー観点:**
@@ -813,46 +456,14 @@ steps:
       - 機密情報の取り扱い
       - 暗号化の適切性
       - OWASP Top 10
-
-      **レポート出力:** 上記の `Report File` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
-
-      **レポートフォーマット:**
-      ```markdown
-      # セキュリティレビュー
-
-      ## 結果: APPROVE / REJECT
-
-      ## 重大度: None / Low / Medium / High / Critical
-
-      ## チェック結果
-      | カテゴリ | 結果 | 備考 |
-      |---------|------|------|
-      | インジェクション | ✅ | - |
-      | 認証・認可 | ✅ | - |
-      | データ保護 | ✅ | - |
-      | 依存関係 | ✅ | - |
-
-      ## 脆弱性（REJECTの場合）
-      | # | 重大度 | 種類 | 場所 | 修正案 |
-      |---|--------|------|------|--------|
-      | 1 | High | SQLi | `src/db.ts:42` | パラメータ化クエリを使用 |
-
-      ## 警告（ブロッキングではない）
-      - {セキュリティに関する推奨事項}
-      ```
-
-      Include:
-      - [SECURITY:APPROVE] if no security issues found
-      - [SECURITY:REJECT] if vulnerabilities found (list specific issues with severity)
-    transitions:
-      - condition: approved
-        next_step: qa_review
-      - condition: rejected
-        next_step: fix_security
+    rules:
+      - condition: セキュリティ上の問題がない
+        next: qa_review
+      - condition: セキュリティ上の脆弱性が検出された
+        next: fix_security
 
   - name: fix_security
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     allowed_tools:
       - Read
@@ -863,32 +474,10 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 軽微な修正完了 | `[CODER:DONE]` |
-      | 大きな修正（CQRS+ESからやり直し） | `[CODER:REJECT]` |
-      | 進行不可 | `[CODER:BLOCKED]` |
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: fix_security
-
       ## Security Review Feedback (これが最新の指示です - 優先して対応してください)
       {previous_response}
 
-      ## Original User Request (ワークフロー開始時の元の要求 - 参考情報)
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       **重要**: セキュリティ専門家からの指摘を修正してください。
       セキュリティ問題は最優先で対応してください。
 
@@ -899,28 +488,52 @@ steps:
       - 暗号化の問題
 
       ## 修正完了時の判断
-      修正が完了したら、**変更の影響範囲**を判断して適切なタグを出力してください：
+      修正が完了したら、**変更の影響範囲**を判断してください：
 
-      - `[CODER:DONE]` - 軽微な修正（セキュリティレビューのみ再実施）
+      - 軽微な修正（セキュリティレビューのみ再実施）
         - 例: バリデーション追加、エスケープ処理追加、設定変更
-      - `[CODER:REJECT]` - 大きな修正（CQRS+ESレビューからやり直し）
+      - 大きな修正（CQRS+ESレビューからやり直し）
         - 例: データフロー変更、API設計変更、認証方式変更、ドメインモデル変更
-
-      進行できない場合は [CODER:BLOCKED] を含めてください。
     pass_previous_response: true
-    transitions:
-      - condition: done
-        next_step: security_review
-      - condition: rejected
-        next_step: cqrs_es_review
-      - condition: blocked
-        next_step: plan
+    rules:
+      - condition: 軽微なセキュリティ修正が完了した
+        next: security_review
+      - condition: 大きな修正を行い、CQRS+ESレビューからやり直す必要がある
+        next: cqrs_es_review
+      - condition: 修正を進行できない
+        next: plan
 
   # ===========================================
   # Phase 6: QA Review
   # ===========================================
   - name: qa_review
+    edit: false
     agent: ~/.takt/agents/expert/qa-reviewer.md
+    report:
+      name: 07-qa-review.md
+      format: |
+        ```markdown
+        # QAレビュー
+
+        ## 結果: APPROVE / REJECT
+
+        ## サマリー
+        {1-2文で結果を要約}
+
+        ## 確認した観点
+        | 観点 | 結果 | 備考 |
+        |------|------|------|
+        | テストカバレッジ | ✅ | - |
+        | テスト品質 | ✅ | - |
+        | エラーハンドリング | ✅ | - |
+        | ドキュメント | ✅ | - |
+        | 保守性 | ✅ | - |
+
+        ## 問題点（REJECTの場合）
+        | # | カテゴリ | 問題 | 修正案 |
+        |---|---------|------|--------|
+        | 1 | テスト | 問題の説明 | 修正方法 |
+        ```
     allowed_tools:
       - Read
       - Glob
@@ -928,32 +541,7 @@ steps:
       - Write
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 品質基準を満たす | `[QA:APPROVE]` |
-      | 品質問題あり | `[QA:REJECT]` |
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: qa_review (QA専門レビュー)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report File: .takt/reports/{report_dir}/08-qa-review.md
-
-      ## Original User Request
-      {task}
-
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
-      ## Instructions
       品質保証の観点から上記の変更をレビューしてください。
 
       **レビュー観点:**
@@ -963,45 +551,14 @@ steps:
       - エラーハンドリング
       - ログとモニタリング
       - 保守性
-
-      **レポート出力:** 上記の `Report File` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
-
-      **レポートフォーマット:**
-      ```markdown
-      # QAレビュー
-
-      ## 結果: APPROVE / REJECT
-
-      ## サマリー
-      {1-2文で結果を要約}
-
-      ## 確認した観点
-      | 観点 | 結果 | 備考 |
-      |------|------|------|
-      | テストカバレッジ | ✅ | - |
-      | テスト品質 | ✅ | - |
-      | エラーハンドリング | ✅ | - |
-      | ドキュメント | ✅ | - |
-      | 保守性 | ✅ | - |
-
-      ## 問題点（REJECTの場合）
-      | # | カテゴリ | 問題 | 修正案 |
-      |---|---------|------|--------|
-      | 1 | テスト | 問題の説明 | 修正方法 |
-      ```
-
-      Include:
-      - [QA:APPROVE] if quality standards are met
-      - [QA:REJECT] if quality issues found (list specific issues)
-    transitions:
-      - condition: approved
-        next_step: supervise
-      - condition: rejected
-        next_step: fix_qa
+    rules:
+      - condition: 品質基準を満たしている
+        next: supervise
+      - condition: 品質に問題がある
+        next: fix_qa
 
   - name: fix_qa
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     allowed_tools:
       - Read
@@ -1012,33 +569,10 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 軽微な修正完了 | `[CODER:DONE]` |
-      | セキュリティ影響あり | `[CODER:IMPROVE]` |
-      | 大きな修正（CQRS+ESからやり直し） | `[CODER:REJECT]` |
-      | 進行不可 | `[CODER:BLOCKED]` |
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: fix_qa
-
       ## QA Review Feedback (これが最新の指示です - 優先して対応してください)
       {previous_response}
 
-      ## Original User Request (ワークフロー開始時の元の要求 - 参考情報)
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       **重要**: QA専門家からの指摘を修正してください。
 
       指摘されたポイント:
@@ -1049,32 +583,34 @@ steps:
       - コード品質
 
       ## 修正完了時の判断
-      修正が完了したら、**変更の影響範囲**を判断して適切なタグを出力してください：
+      修正が完了したら、**変更の影響範囲**を判断してください：
 
-      - `[CODER:DONE]` - 軽微な修正（QAレビューのみ再実施）
+      - 軽微な修正（QAレビューのみ再実施）
         - 例: テスト追加、ドキュメント追加、ログ追加、コメント追加
-      - `[CODER:IMPROVE]` - セキュリティに影響する修正（セキュリティレビューからやり直し）
+      - セキュリティに影響する修正（セキュリティレビューからやり直し）
         - 例: エラーハンドリング変更（エラーメッセージの内容変更）、入力検証の変更
-      - `[CODER:REJECT]` - 大きな修正（CQRS+ESレビューからやり直し）
+      - 大きな修正（CQRS+ESレビューからやり直し）
         - 例: ビジネスロジック変更、データモデル変更、API変更
-
-      進行できない場合は [CODER:BLOCKED] を含めてください。
     pass_previous_response: true
-    transitions:
-      - condition: done
-        next_step: qa_review
-      - condition: improve
-        next_step: security_review
-      - condition: rejected
-        next_step: cqrs_es_review
-      - condition: blocked
-        next_step: plan
+    rules:
+      - condition: 軽微なQA修正が完了した
+        next: qa_review
+      - condition: セキュリティに影響する修正を行った
+        next: security_review
+      - condition: 大きな修正を行い、CQRS+ESレビューからやり直す必要がある
+        next: cqrs_es_review
+      - condition: 修正を進行できない
+        next: plan
 
   # ===========================================
   # Phase 7: Supervision
   # ===========================================
   - name: supervise
+    edit: false
     agent: ~/.takt/agents/expert/supervisor.md
+    report:
+      - Validation: 08-supervisor-validation.md
+      - Summary: summary.md
     allowed_tools:
       - Read
       - Glob
@@ -1082,43 +618,15 @@ steps:
       - Write
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 最終承認 | `[SUPERVISOR:APPROVE]` |
-      | 問題あり | `[SUPERVISOR:REJECT]` |
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: supervise (最終確認)
-      - Report Directory: .takt/reports/{report_dir}/
-      - Report Files:
-        - Validation: .takt/reports/{report_dir}/09-supervisor-validation.md
-        - Summary: .takt/reports/{report_dir}/summary.md
-
-      ## Original User Request
-      {task}
-
-      ## Git Diff
-      ```diff
-      {git_diff}
-      ```
-
       ## Previous Reviews Summary
       このステップに到達したということは、以下のレビューがすべてAPPROVEされています：
-      - Architecture Review: APPROVED
+      - AI Review: APPROVED
       - CQRS+ES Review: APPROVED
       - Frontend Review: APPROVED
-      - AI Review: APPROVED
       - Security Review: APPROVED
       - QA Review: APPROVED
 
-      ## Instructions
       テスト実行、ビルド確認、最終承認を行ってください。
 
       **ワークフロー全体の確認:**
@@ -1128,10 +636,6 @@ steps:
 
       **レポートの確認:** Report Directory内の全レポートを読み、
       未対応の改善提案がないか確認してください。
-
-      **レポート出力:** 上記の `Report Files` に出力してください。
-      - ファイルが存在しない場合: 新規作成
-      - ファイルが存在する場合: `## Iteration {step_iteration}` セクションを追記
 
       **Validationレポートフォーマット:**
       ```markdown
@@ -1175,10 +679,9 @@ steps:
       ## レビュー結果
       | レビュー | 結果 |
       |---------|------|
-      | Architecture | ✅ APPROVE |
+      | AI Review | ✅ APPROVE |
       | CQRS+ES | ✅ APPROVE |
       | Frontend | ✅ APPROVE |
-      | AI Review | ✅ APPROVE |
       | Security | ✅ APPROVE |
       | QA | ✅ APPROVE |
       | Supervisor | ✅ APPROVE |
@@ -1189,17 +692,14 @@ steps:
       npm run build
       ```
       ```
-
-      出力:
-      - [SUPERVISOR:APPROVE] すべて完了、マージ可能
-      - [SUPERVISOR:REJECT] 問題あり（具体的な問題を記載）
-    transitions:
-      - condition: approved
-        next_step: COMPLETE
-      - condition: rejected
-        next_step: fix_supervisor
+    rules:
+      - condition: すべての検証が完了し、マージ可能な状態である
+        next: COMPLETE
+      - condition: 問題が検出された
+        next: fix_supervisor
 
   - name: fix_supervisor
+    edit: true
     agent: ~/.takt/agents/default/coder.md
     allowed_tools:
       - Read
@@ -1210,41 +710,17 @@ steps:
       - Bash
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## 出力フォーマット
-
-      | 状況 | タグ |
-      |------|------|
-      | 修正完了 | `[CODER:DONE]` |
-      | 進行不可 | `[CODER:BLOCKED]` |
     instruction_template: |
-      ## Workflow Context
-      - Iteration: {iteration}/{max_iterations}（ワークフロー全体）
-      - Step Iteration: {step_iteration}（このステップの実行回数）
-      - Step: fix_supervisor
-
       ## Supervisor Feedback (これが最新の指示です - 優先して対応してください)
       {previous_response}
 
-      ## Original User Request (ワークフロー開始時の元の要求 - 参考情報)
-      {task}
-
-      ## Additional User Inputs
-      {user_inputs}
-
-      ## Instructions
       **重要**: 監督者からの指摘を修正してください。
 
       監督者は全体を俯瞰した視点から問題を指摘しています。
       優先度の高い項目から順に対応してください。
-
-      完了時は [CODER:DONE] を含めてください。
-      進行できない場合は [CODER:BLOCKED] を含めてください。
     pass_previous_response: true
-    transitions:
-      - condition: done
-        next_step: supervise
-      - condition: blocked
-        next_step: plan
+    rules:
+      - condition: 監督者の指摘に対する修正が完了した
+        next: supervise
+      - condition: 修正を進行できない
+        next: plan

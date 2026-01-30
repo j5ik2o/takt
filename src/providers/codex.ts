@@ -14,7 +14,6 @@ export class CodexProvider implements Provider {
       sessionId: options.sessionId,
       model: options.model,
       systemPrompt: options.systemPrompt,
-      statusPatterns: options.statusPatterns,
       onStream: options.onStream,
     };
 
@@ -26,7 +25,6 @@ export class CodexProvider implements Provider {
       cwd: options.cwd,
       sessionId: options.sessionId,
       model: options.model,
-      statusPatterns: options.statusPatterns,
       onStream: options.onStream,
     };
 

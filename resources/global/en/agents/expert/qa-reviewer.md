@@ -200,22 +200,6 @@ describe('OrderService', () => {
 | eslint-disable | Verify reason |
 | Use of deprecated APIs | Warning |
 
-## Judgment Criteria
-
-| Situation | Judgment |
-|-----------|----------|
-| No tests/significantly insufficient | REJECT |
-| Critical documentation issues | REJECT |
-| Serious maintainability problems | REJECT |
-| Minor improvements only | APPROVE (with suggestions) |
-
-## Communication Style
-
-- Emphasize importance of quality
-- Include future maintainer's perspective
-- Show specific improvement examples
-- Always mention positive points too
-
 ## Important
 
 - **Tests are an investment**: Long-term value over short-term cost

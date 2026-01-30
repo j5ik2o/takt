@@ -2,7 +2,6 @@
  * Agent execution runners
  */
 
-import { execSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import {
@@ -32,8 +31,6 @@ export interface RunAgentOptions {
   agentPath?: string;
   /** Allowed tools for this agent run */
   allowedTools?: string[];
-  /** Status output rules to inject into system prompt */
-  statusRulesPrompt?: string;
   /** Permission mode for tool execution (from workflow step) */
   permissionMode?: PermissionMode;
   onStream?: StreamCallback;
@@ -70,28 +67,6 @@ function resolveModel(cwd: string, options?: RunAgentOptions, agentConfig?: Cust
   return undefined;
 }
 
-/** Get git diff for review context */
-export function getGitDiff(cwd: string): string {
-  try {
-    // First check if HEAD exists (new repos may not have any commits)
-    try {
-      execSync('git rev-parse HEAD', { cwd, encoding: 'utf-8', stdio: 'pipe' });
-    } catch {
-      // No commits yet, return empty diff
-      return '';
-    }
-
-    const diff = execSync('git diff HEAD', {
-      cwd,
-      encoding: 'utf-8',
-      maxBuffer: 1024 * 1024 * 10, // 10MB
-      stdio: 'pipe',
-    });
-    return diff.trim();
-  } catch {
-    return '';
-  }
-}
 
 /** Run a custom agent */
 export async function runCustomAgent(
@@ -134,12 +109,7 @@ export async function runCustomAgent(
   }
 
   // Custom agent with prompt
-  let systemPrompt = loadAgentPrompt(agentConfig);
-
-  // Inject status rules if provided
-  if (options.statusRulesPrompt) {
-    systemPrompt = `${systemPrompt}\n\n${options.statusRulesPrompt}`;
-  }
+  const systemPrompt = loadAgentPrompt(agentConfig);
 
   const providerType = resolveProvider(options.cwd, options, agentConfig);
   const provider = getProvider(providerType);
@@ -149,7 +119,6 @@ export async function runCustomAgent(
     sessionId: options.sessionId,
     allowedTools,
     model: resolveModel(options.cwd, options, agentConfig),
-    statusPatterns: agentConfig.statusPatterns,
     permissionMode: options.permissionMode,
     onStream: options.onStream,
     onPermissionRequest: options.onPermissionRequest,
@@ -217,12 +186,7 @@ export async function runAgent(
     if (!existsSync(options.agentPath)) {
       throw new Error(`Agent file not found: ${options.agentPath}`);
     }
-    let systemPrompt = loadAgentPromptFromPath(options.agentPath);
-
-    // Inject status rules if provided
-    if (options.statusRulesPrompt) {
-      systemPrompt = `${systemPrompt}\n\n${options.statusRulesPrompt}`;
-    }
+    const systemPrompt = loadAgentPromptFromPath(options.agentPath);
 
     const providerType = resolveProvider(options.cwd, options);
     const provider = getProvider(providerType);

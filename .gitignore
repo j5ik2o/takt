@@ -26,6 +26,7 @@ coverage/
 .env
 .env.local
 .env.*.local
+.envrc
 
 # TAKT config (user data)
 .takt/

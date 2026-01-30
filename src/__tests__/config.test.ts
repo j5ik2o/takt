@@ -65,9 +65,9 @@ steps:
   - name: step1
     agent: coder
     instruction: "{task}"
-    transitions:
-      - condition: done
-        next_step: COMPLETE
+    rules:
+      - condition: Task completed
+        next: COMPLETE
 `;
     writeFileSync(join(workflowsDir, 'test.yaml'), sampleWorkflow);
 

@@ -14,8 +14,9 @@ import type {
 import { runAgent, type RunAgentOptions } from '../agents/runner.js';
 import { COMPLETE_STEP, ABORT_STEP, ERROR_MESSAGES } from './constants.js';
 import type { WorkflowEngineOptions } from './types.js';
-import { determineNextStep } from './transitions.js';
-import { buildInstruction as buildInstructionFromTemplate } from './instruction-builder.js';
+import { determineNextStepByRules } from './transitions.js';
+import { detectRuleIndex } from '../claude/client.js';
+import { buildInstruction as buildInstructionFromTemplate, isReportObjectConfig } from './instruction-builder.js';
 import { LoopDetector } from './loop-detector.js';
 import { handleBlocked } from './blocked-handler.js';
 import {
@@ -105,11 +106,13 @@ export class WorkflowEngine extends EventEmitter {
     stepNames.add(ABORT_STEP);
 
     for (const step of this.config.steps) {
-      for (const transition of step.transitions) {
-        if (!stepNames.has(transition.nextStep)) {
-          throw new Error(
-            `Invalid transition in step "${step.name}": target step "${transition.nextStep}" does not exist`
-          );
+      if (step.rules) {
+        for (const rule of step.rules) {
+          if (!stepNames.has(rule.next)) {
+            throw new Error(
+              `Invalid rule in step "${step.name}": target step "${rule.next}" does not exist`
+            );
+          }
         }
       }
     }
@@ -165,9 +168,36 @@ export class WorkflowEngine extends EventEmitter {
     return step;
   }
 
+  /**
+   * Emit step:report events for each report file that exists after step completion.
+   * The UI layer (workflowExecution.ts) listens and displays the content.
+   */
+  private emitStepReports(step: WorkflowStep): void {
+    if (!step.report || !this.reportDir) return;
+    const baseDir = join(this.projectCwd, '.takt', 'reports', this.reportDir);
+
+    if (typeof step.report === 'string') {
+      this.emitIfReportExists(step, baseDir, step.report);
+    } else if (isReportObjectConfig(step.report)) {
+      this.emitIfReportExists(step, baseDir, step.report.name);
+    } else {
+      // ReportConfig[] (array)
+      for (const rc of step.report) {
+        this.emitIfReportExists(step, baseDir, rc.path);
+      }
+    }
+  }
+
+  /** Emit step:report if the report file exists */
+  private emitIfReportExists(step: WorkflowStep, baseDir: string, fileName: string): void {
+    const filePath = join(baseDir, fileName);
+    if (existsSync(filePath)) {
+      this.emit('step:report', step, filePath, fileName);
+    }
+  }
+
   /** Run a single step */
-  private async runStep(step: WorkflowStep): Promise<AgentResponse> {
-    // Increment step iteration counter before building instruction
+  private async runStep(step: WorkflowStep): Promise<{ response: AgentResponse; instruction: string }> {
     const stepIteration = incrementStepIteration(this.state, step.name);
     const instruction = this.buildInstruction(step, stepIteration);
     const sessionId = this.state.agentSessions.get(step.agent);
@@ -184,7 +214,6 @@ export class WorkflowEngine extends EventEmitter {
       sessionId,
       agentPath: step.agentPath,
       allowedTools: step.allowedTools,
-      statusRulesPrompt: step.statusRulesPrompt,
       provider: step.provider,
       model: step.model,
       permissionMode: step.permissionMode,
@@ -194,7 +223,7 @@ export class WorkflowEngine extends EventEmitter {
       bypassPermissions: this.options.bypassPermissions,
     };
 
-    const response = await runAgent(step.agent, instruction, agentOptions);
+    let response = await runAgent(step.agent, instruction, agentOptions);
 
     if (response.sessionId) {
       const previousSessionId = this.state.agentSessions.get(step.agent);
@@ -205,8 +234,30 @@ export class WorkflowEngine extends EventEmitter {
       }
     }
 
+    if (step.rules && step.rules.length > 0) {
+      const ruleIndex = detectRuleIndex(response.content, step.name);
+      if (ruleIndex >= 0 && ruleIndex < step.rules.length) {
+        response = { ...response, matchedRuleIndex: ruleIndex };
+      }
+    }
+
     this.state.stepOutputs.set(step.name, response);
-    return response;
+    this.emitStepReports(step);
+    return { response, instruction };
+  }
+
+  /**
+   * Determine next step for a completed step using rules-based routing.
+   */
+  private resolveNextStep(step: WorkflowStep, response: AgentResponse): string {
+    if (response.matchedRuleIndex != null && step.rules) {
+      const nextByRules = determineNextStepByRules(step, response.matchedRuleIndex);
+      if (nextByRules) {
+        return nextByRules;
+      }
+    }
+
+    throw new Error(`No matching rule found for step "${step.name}" (status: ${response.status})`);
   }
 
   /** Run the workflow to completion */
@@ -253,8 +304,8 @@ export class WorkflowEngine extends EventEmitter {
       this.emit('step:start', step, this.state.iteration);
 
       try {
-        const response = await this.runStep(step);
-        this.emit('step:complete', step, response);
+        const { response, instruction } = await this.runStep(step);
+        this.emit('step:complete', step, response, instruction);
 
         if (response.status === 'blocked') {
           this.emit('step:blocked', step, response);
@@ -271,10 +322,11 @@ export class WorkflowEngine extends EventEmitter {
           break;
         }
 
-        const nextStep = determineNextStep(step, response.status, this.config);
+        const nextStep = this.resolveNextStep(step, response);
         log.debug('Step transition', {
           from: step.name,
           status: response.status,
+          matchedRuleIndex: response.matchedRuleIndex,
           nextStep,
         });
 
@@ -328,8 +380,8 @@ export class WorkflowEngine extends EventEmitter {
     }
 
     this.state.iteration++;
-    const response = await this.runStep(step);
-    const nextStep = determineNextStep(step, response.status, this.config);
+    const { response } = await this.runStep(step);
+    const nextStep = this.resolveNextStep(step, response);
     const isComplete = nextStep === COMPLETE_STEP || nextStep === ABORT_STEP;
 
     if (!isComplete) {

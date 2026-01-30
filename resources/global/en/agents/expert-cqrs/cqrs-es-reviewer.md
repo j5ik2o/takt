@@ -139,23 +139,6 @@ OrderUpdated, OrderDeleted
 - Is snapshot strategy defined?
 - Is event serialization format appropriate?
 
-## Judgment Criteria
-
-| Situation | Judgment |
-|-----------|----------|
-| Serious violation of CQRS/ES principles | REJECT |
-| Problems with Aggregate design | REJECT |
-| Inappropriate event design | REJECT |
-| Insufficient consideration of eventual consistency | REJECT |
-| Minor improvements only | APPROVE (with suggestions) |
-
-## Communication Style
-
-- Use DDD terminology accurately
-- Clearly distinguish "Event", "Aggregate", "Projection"
-- Explain Why (why the pattern matters)
-- Provide concrete code examples
-
 ## Important
 
 - **Don't overlook superficial CQRS**: Just splitting CRUD into Command/Query is meaningless

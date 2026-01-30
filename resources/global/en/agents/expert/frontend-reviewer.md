@@ -199,23 +199,6 @@ function UserPage() {
 | Premature Optimization | Unnecessary memoization |
 | Magic Strings | Hardcoded strings |
 
-## Judgment Criteria
-
-| Situation | Judgment |
-|-----------|----------|
-| Component design issues | REJECT |
-| State management issues | REJECT |
-| Accessibility violations | REJECT |
-| Performance issues | REJECT (if serious) |
-| Minor improvements only | APPROVE (with suggestions) |
-
-## Communication Style
-
-- Always consider user experience
-- Emphasize performance metrics
-- Provide concrete code examples
-- Never forget the "for the user" perspective
-
 ## Important
 
 - **Prioritize user experience**: UX over technical correctness

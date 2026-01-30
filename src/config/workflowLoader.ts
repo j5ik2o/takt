@@ -8,7 +8,7 @@ import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { WorkflowConfigRawSchema } from '../models/schemas.js';
-import type { WorkflowConfig, WorkflowStep } from '../models/types.js';
+import type { WorkflowConfig, WorkflowStep, WorkflowRule, ReportConfig, ReportObjectConfig } from '../models/types.js';
 import { getGlobalWorkflowsDir } from './paths.js';
 
 /** Get builtin workflow by name */
@@ -55,30 +55,101 @@ function extractAgentDisplayName(agentPath: string): string {
 }
 
 /**
+ * Resolve a string value that may be a file path.
+ * If the value ends with .md and the file exists (resolved relative to workflowDir),
+ * read and return the file contents. Otherwise return the value as-is.
+ */
+function resolveContentPath(value: string | undefined, workflowDir: string): string | undefined {
+  if (value == null) return undefined;
+  if (value.endsWith('.md')) {
+    // Resolve path relative to workflow directory
+    let resolvedPath = value;
+    if (value.startsWith('./')) {
+      resolvedPath = join(workflowDir, value.slice(2));
+    } else if (value.startsWith('~')) {
+      const homedir = process.env.HOME || process.env.USERPROFILE || '';
+      resolvedPath = join(homedir, value.slice(1));
+    } else if (!value.startsWith('/')) {
+      resolvedPath = join(workflowDir, value);
+    }
+    if (existsSync(resolvedPath)) {
+      return readFileSync(resolvedPath, 'utf-8');
+    }
+  }
+  return value;
+}
+
+/**
+ * Check if a raw report value is the object form (has 'name' property).
+ */
+function isReportObject(raw: unknown): raw is { name: string; order?: string; format?: string } {
+  return typeof raw === 'object' && raw !== null && !Array.isArray(raw) && 'name' in raw;
+}
+
+/**
+ * Normalize the raw report field from YAML into internal format.
+ *
+ * YAML formats:
+ *   report: "00-plan.md"                  → string (single file)
+ *   report:                               → ReportConfig[] (multiple files)
+ *     - Scope: 01-scope.md
+ *     - Decisions: 02-decisions.md
+ *   report:                               → ReportObjectConfig (object form)
+ *     name: 00-plan.md
+ *     order: ...
+ *     format: ...
+ *
+ * Array items are parsed as single-key objects: [{Scope: "01-scope.md"}, ...]
+ */
+function normalizeReport(
+  raw: string | Record<string, string>[] | { name: string; order?: string; format?: string } | undefined,
+  workflowDir: string,
+): string | ReportConfig[] | ReportObjectConfig | undefined {
+  if (raw == null) return undefined;
+  if (typeof raw === 'string') return raw;
+  if (isReportObject(raw)) {
+    return {
+      name: raw.name,
+      order: resolveContentPath(raw.order, workflowDir),
+      format: resolveContentPath(raw.format, workflowDir),
+    };
+  }
+  // Convert [{Scope: "01-scope.md"}, ...] to [{label: "Scope", path: "01-scope.md"}, ...]
+  return (raw as Record<string, string>[]).flatMap((entry) =>
+    Object.entries(entry).map(([label, path]) => ({ label, path })),
+  );
+}
+
+/**
  * Convert raw YAML workflow config to internal format.
  * Agent paths are resolved relative to the workflow directory.
  */
 function normalizeWorkflowConfig(raw: unknown, workflowDir: string): WorkflowConfig {
   const parsed = WorkflowConfigRawSchema.parse(raw);
 
-  const steps: WorkflowStep[] = parsed.steps.map((step) => ({
-    name: step.name,
-    agent: step.agent,
-    agentDisplayName: step.agent_name || extractAgentDisplayName(step.agent),
-    agentPath: resolveAgentPathForWorkflow(step.agent, workflowDir),
-    allowedTools: step.allowed_tools,
-    provider: step.provider,
-    model: step.model,
-    permissionMode: step.permission_mode,
-    instructionTemplate: step.instruction_template || step.instruction || '{task}',
-    statusRulesPrompt: step.status_rules_prompt,
-    transitions: step.transitions.map((t) => ({
-      condition: t.condition,
-      nextStep: t.next_step,
-    })),
-    passPreviousResponse: step.pass_previous_response,
-    onNoStatus: step.on_no_status,
-  }));
+  const steps: WorkflowStep[] = parsed.steps.map((step) => {
+    const rules: WorkflowRule[] | undefined = step.rules?.map((r) => ({
+      condition: r.condition,
+      next: r.next,
+      appendix: r.appendix,
+    }));
+
+    return {
+      name: step.name,
+      agent: step.agent,
+      agentDisplayName: step.agent_name || extractAgentDisplayName(step.agent),
+      agentPath: resolveAgentPathForWorkflow(step.agent, workflowDir),
+      allowedTools: step.allowed_tools,
+      provider: step.provider,
+      model: step.model,
+      permissionMode: step.permission_mode,
+      edit: step.edit,
+      instructionTemplate: resolveContentPath(step.instruction_template, workflowDir) || step.instruction || '{task}',
+      rules,
+      report: normalizeReport(step.report, workflowDir),
+      passPreviousResponse: step.pass_previous_response,
+    };
+  });
 
   return {
     name: parsed.name,

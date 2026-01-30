@@ -24,40 +24,62 @@ export const StatusSchema = z.enum([
   'answer',
 ]);
 
-/**
- * Transition condition schema
- *
- * WARNING: Do NOT add new values carelessly.
- * Use existing values creatively in workflow design:
- * - done: Task completed (minor fixes, successful completion)
- * - blocked: Cannot proceed (needs plan rework)
- * - approved: Review passed
- * - rejected: Review failed, needs major rework
- * - improve: Needs improvement (security concerns, quality issues)
- * - answer: Question answered (complete workflow as success)
- * - always: Unconditional transition
- */
-export const TransitionConditionSchema = z.enum([
-  'done',
-  'blocked',
-  'approved',
-  'rejected',
-  'improve',
-  'answer',
-  'always',
-]);
-
-/** On no status behavior schema */
-export const OnNoStatusBehaviorSchema = z.enum(['complete', 'continue', 'stay']);
-
-/** Workflow transition schema */
-export const WorkflowTransitionSchema = z.object({
-  condition: TransitionConditionSchema,
-  nextStep: z.string().min(1),
-});
-
 /** Permission mode schema for tool execution */
 export const PermissionModeSchema = z.enum(['default', 'acceptEdits', 'bypassPermissions']);
+
+/**
+ * Report object schema (new structured format).
+ *
+ * YAML format:
+ *   report:
+ *     name: 00-plan.md
+ *     order: |
+ *       **レポート出力:** {report:00-plan.md} に出力してください。
+ *     format: |
+ *       **レポートフォーマット:**
+ *       ```markdown
+ *       ...
+ *       ```
+ */
+export const ReportObjectSchema = z.object({
+  /** Report file name */
+  name: z.string().min(1),
+  /** Instruction prepended before instruction_template (e.g., output destination) */
+  order: z.string().optional(),
+  /** Instruction appended after instruction_template (e.g., output format) */
+  format: z.string().optional(),
+});
+
+/**
+ * Report field schema.
+ *
+ * YAML formats:
+ *   report: 00-plan.md          # single file (string)
+ *   report:                     # multiple files (label: path map entries)
+ *     - Scope: 01-scope.md
+ *     - Decisions: 02-decisions.md
+ *   report:                     # object form (name + order + format)
+ *     name: 00-plan.md
+ *     order: ...
+ *     format: ...
+ *
+ * Array items are parsed as single-key objects: [{Scope: "01-scope.md"}, ...]
+ */
+export const ReportFieldSchema = z.union([
+  z.string().min(1),
+  z.array(z.record(z.string(), z.string())).min(1),
+  ReportObjectSchema,
+]);
+
+/** Rule-based transition schema (new unified format) */
+export const WorkflowRuleSchema = z.object({
+  /** Human-readable condition text */
+  condition: z.string().min(1),
+  /** Next step name (e.g., implement, COMPLETE, ABORT) */
+  next: z.string().min(1),
+  /** Template for additional AI output */
+  appendix: z.string().optional(),
+});
 
 /** Workflow step schema - raw YAML format */
 export const WorkflowStepRawSchema = z.object({
@@ -70,17 +92,15 @@ export const WorkflowStepRawSchema = z.object({
   model: z.string().optional(),
   /** Permission mode for tool execution in this step */
   permission_mode: PermissionModeSchema.optional(),
+  /** Whether this step is allowed to edit project files */
+  edit: z.boolean().optional(),
   instruction: z.string().optional(),
   instruction_template: z.string().optional(),
-  status_rules_prompt: z.string().optional(),
+  /** Rules for step routing */
+  rules: z.array(WorkflowRuleSchema).optional(),
+  /** Report file(s) for this step */
+  report: ReportFieldSchema.optional(),
   pass_previous_response: z.boolean().optional().default(true),
-  on_no_status: OnNoStatusBehaviorSchema.optional(),
-  transitions: z.array(
-    z.object({
-      condition: TransitionConditionSchema,
-      next_step: z.string().min(1),
-    })
-  ).optional().default([]),
 });
 
 /** Workflow configuration schema - raw YAML format */
@@ -99,7 +119,6 @@ export const CustomAgentConfigSchema = z.object({
   prompt_file: z.string().optional(),
   prompt: z.string().optional(),
   allowed_tools: z.array(z.string()).optional(),
-  status_patterns: z.record(z.string(), z.string()).optional(),
   claude_agent: z.string().optional(),
   claude_skill: z.string().optional(),
   provider: z.enum(['claude', 'codex', 'mock']).optional(),
@@ -138,18 +157,3 @@ export const ProjectConfigSchema = z.object({
   provider: z.enum(['claude', 'codex', 'mock']).optional(),
 });
 
-/**
- * Generic status patterns that match any role name
- * Format: [ROLE:COMMAND] where ROLE is any word characters
- *
- * This allows new agents to be added without modifying this file.
- * Custom agents can override these patterns in their configuration.
- */
-export const GENERIC_STATUS_PATTERNS: Record<string, string> = {
-  approved: '\\[[\\w-]+:APPROVE\\]',
-  rejected: '\\[[\\w-]+:REJECT\\]',
-  improve: '\\[[\\w-]+:IMPROVE\\]',
-  done: '\\[[\\w-]+:(DONE|FIXED)\\]',
-  blocked: '\\[[\\w-]+:BLOCKED\\]',
-  answer: '\\[[\\w-]+:ANSWER\\]',
-};

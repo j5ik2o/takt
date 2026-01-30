@@ -12,7 +12,6 @@
 #   {step_iteration} - Per-step iteration count (how many times THIS step has been executed)
 #   {task}           - Original user request
 #   {previous_response} - Output from the previous step
-#   {git_diff}       - Current uncommitted changes (git diff)
 #   {user_inputs}    - Accumulated user inputs during workflow
 #   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
 
@@ -30,30 +29,6 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## Output Format
-
-      | Situation | Tag |
-      |-----------|-----|
-      | Plan complete | `[PLANNER:DONE]` |
-      | Insufficient info | `[PLANNER:BLOCKED]` |
-
-      ### Output Examples
-
-      **DONE case:**
-      ```
-      [PLANNER:DONE]
-      ```
-
-      **BLOCKED case:**
-      ```
-      [PLANNER:BLOCKED]
-
-      Clarifications needed:
-      - {Question 1}
-      ```
     instruction_template: |
       ## Workflow Status
       - Iteration: {iteration}/{max_iterations} (workflow-wide)
@@ -77,11 +52,11 @@ steps:
       - If multiple interpretations exist, include all in the research scope
       - If there is feedback from Supervisor, incorporate it into the plan
     pass_previous_response: true
-    transitions:
-      - condition: done
-        next_step: dig
-      - condition: blocked
-        next_step: ABORT
+    rules:
+      - condition: Planning is complete
+        next: dig
+      - condition: Insufficient information to create a plan
+        next: ABORT
 
   - name: dig
     agent: ~/.takt/agents/research/digger.md
@@ -91,29 +66,6 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## Output Format
-
-      | Situation | Tag |
-      |-----------|-----|
-      | Research complete | `[DIGGER:DONE]` |
-      | Unable to research | `[DIGGER:BLOCKED]` |
-
-      ### Output Examples
-
-      **DONE case:**
-      ```
-      [DIGGER:DONE]
-      ```
-
-      **BLOCKED case:**
-      ```
-      [DIGGER:BLOCKED]
-
-      Reason: {Why research was not possible}
-      ```
     instruction_template: |
       ## Workflow Status
       - Iteration: {iteration}/{max_iterations} (workflow-wide)
@@ -142,11 +94,11 @@ steps:
       - Codebase search
       - File reading
     pass_previous_response: true
-    transitions:
-      - condition: done
-        next_step: supervise
-      - condition: blocked
-        next_step: ABORT
+    rules:
+      - condition: Research is complete
+        next: supervise
+      - condition: Unable to conduct research
+        next: ABORT
 
   - name: supervise
     agent: ~/.takt/agents/research/supervisor.md
@@ -156,39 +108,6 @@ steps:
       - Grep
       - WebSearch
       - WebFetch
-    status_rules_prompt: |
-
-
-      ## Judgment Criteria
-
-      | Situation | Judgment |
-      |-----------|----------|
-      | Research results sufficient | APPROVE |
-      | Research results insufficient | REJECT |
-
-      ## Output Format
-
-      | Situation | Tag |
-      |-----------|-----|
-      | Research complete, results sufficient | `[SUPERVISOR:APPROVE]` |
-      | Insufficient, restart from planning | `[SUPERVISOR:REJECT]` |
-
-      ### Output Examples
-
-      **APPROVE case:**
-      ```
-      [SUPERVISOR:APPROVE]
-
-      Research results adequately answer the original request.
-      ```
-
-      **REJECT case:**
-      ```
-      [SUPERVISOR:REJECT]
-
-      Missing:
-      - {Specific missing items}
-      ```
     instruction_template: |
       ## Workflow Status
       - Iteration: {iteration}/{max_iterations} (workflow-wide)
@@ -206,10 +125,10 @@ steps:
 
       **Important**: If there are issues, include specific instructions for the Planner.
     pass_previous_response: true
-    transitions:
-      - condition: approved
-        next_step: COMPLETE
-      - condition: rejected
-        next_step: plan
+    rules:
+      - condition: Research results adequately answer the original request
+        next: COMPLETE
+      - condition: Research results are insufficient and replanning is needed
+        next: plan
 
 initial_step: plan

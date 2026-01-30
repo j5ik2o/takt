@@ -6,8 +6,6 @@
 
 import { Codex } from '@openai/codex-sdk';
 import type { AgentResponse, Status } from '../models/types.js';
-import { GENERIC_STATUS_PATTERNS } from '../models/schemas.js';
-import { detectStatus } from '../claude/client.js';
 import type { StreamCallback } from '../claude/process.js';
 import { createLogger } from '../utils/debug.js';
 
@@ -19,7 +17,6 @@ export interface CodexCallOptions {
   sessionId?: string;
   model?: string;
   systemPrompt?: string;
-  statusPatterns?: Record<string, string>;
   /** Enable streaming mode with callback (best-effort) */
   onStream?: StreamCallback;
 }
@@ -101,8 +98,8 @@ function emitResult(
   });
 }
 
-function determineStatus(content: string, patterns: Record<string, string>): Status {
-  return detectStatus(content, patterns);
+function determineStatus(success: boolean): Status {
+  return success ? 'done' : 'blocked';
 }
 
 type CodexEvent = {
@@ -476,8 +473,7 @@ export async function callCodex(
     const trimmed = content.trim();
     emitResult(options.onStream, true, trimmed, threadId);
 
-    const patterns = options.statusPatterns || GENERIC_STATUS_PATTERNS;
-    const status = determineStatus(trimmed, patterns);
+    const status = determineStatus(true);
 
     return {
       agent: agentType,

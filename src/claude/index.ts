@@ -57,8 +57,7 @@ export {
   callClaudeCustom,
   callClaudeAgent,
   callClaudeSkill,
-  detectStatus,
+  detectRuleIndex,
   isRegexSafe,
-  getBuiltinStatusPatterns,
   type ClaudeCallOptions,
 } from './client.js';
