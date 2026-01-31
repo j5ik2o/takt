@@ -4,6 +4,8 @@
 
 > **Note**: このプロジェクトは個人のペースで開発されています。詳細は[免責事項](#免責事項)をご覧ください。
 
+TAKTはTAKT自身で開発されています（ドッグフーディング）。
+
 ## 必要条件
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) または Codex がインストール・設定済みであること
@@ -264,18 +266,6 @@ TAKTには複数のビルトインワークフローが同梱されています:
 | **security-reviewer** | セキュリティ脆弱性の評価 |
 | **supervisor** | 最終検証、バリデーション、承認 |
 
-## モデル選択
-
-`model` フィールド（ワークフローステップ、エージェント設定、グローバル設定）はプロバイダー（Claude Code CLI / Codex SDK）にそのまま渡されます。TAKTはモデルエイリアスの解決を行いません。
-
-### Claude Code
-
-Claude Code はエイリアス（`opus`、`sonnet`、`haiku`、`opusplan`、`default`）およびフルモデル名（例: `claude-sonnet-4-5-20250929`）をサポートしています。利用可能なモデルは [Claude Code ドキュメント](https://docs.anthropic.com/en/docs/claude-code)を参照してください。
-
-### Codex
-
-モデル文字列はCodex SDKに渡されます。未指定の場合は `codex` がデフォルトです。利用可能なモデルはCodexのドキュメントを参照してください。
-
 ## カスタムエージェント
 
 `.takt/agents.yaml`でカスタムエージェントを定義:
@@ -301,6 +291,18 @@ agents:
 - 入力バリデーションを検証
 - 認証ロジックをレビュー
 ```
+
+## モデル選択
+
+`model` フィールド（ワークフローステップ、エージェント設定、グローバル設定）はプロバイダー（Claude Code CLI / Codex SDK）にそのまま渡されます。TAKTはモデルエイリアスの解決を行いません。
+
+### Claude Code
+
+Claude Code はエイリアス（`opus`、`sonnet`、`haiku`、`opusplan`、`default`）およびフルモデル名（例: `claude-sonnet-4-5-20250929`）をサポートしています。利用可能なモデルは [Claude Code ドキュメント](https://docs.anthropic.com/en/docs/claude-code)を参照してください。
+
+### Codex
+
+モデル文字列はCodex SDKに渡されます。未指定の場合は `codex` がデフォルトです。利用可能なモデルはCodexのドキュメントを参照してください。
 
 ## プロジェクト構造
 
@@ -364,6 +366,16 @@ trusted_directories:
 4. プロバイダーデフォルト（Claude: sonnet、Codex: codex）
 
 ## 実践的な使い方ガイド
+
+### 対話ワークフロー
+
+`takt ログイン機能を追加して` を実行すると、以下の流れで案内されます:
+
+1. **ワークフロー選択** - 利用可能なワークフローから選択（矢印キーで移動、ESCでキャンセル）
+2. **隔離クローン作成**（オプション） - `git clone --shared` による隔離環境でタスクを実行
+3. **PR作成**（worktree実行後） - タスクブランチからPRを作成
+
+`--auto-pr` を指定している場合、PR作成の確認はスキップされ自動で作成されます。
 
 ### タスク管理
 

@@ -11,7 +11,7 @@ TAKT is built with TAKT (dogfooding).
 ## Requirements
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or Codex must be installed and configured
-- [GitHub CLI](https://cli.github.com/) (`gh`) — required only for `takt "#N"` (GitHub Issue execution)
+- [GitHub CLI](https://cli.github.com/) (`gh`) — required only for `takt #N` (GitHub Issue execution)
 
 TAKT supports both Claude Code and Codex as providers; you can choose the provider during setup.
 
