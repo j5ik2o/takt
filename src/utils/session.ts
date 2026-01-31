@@ -48,6 +48,8 @@ export interface NdjsonStepStart {
   agent: string;
   iteration: number;
   timestamp: string;
+  /** Instruction (prompt) sent to the agent. Empty for parallel parent steps. */
+  instruction?: string;
 }
 
 /** NDJSON record: streaming chunk received */

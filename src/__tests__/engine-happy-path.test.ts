@@ -256,6 +256,76 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       expect(startedSteps).toEqual(['plan', 'implement', 'ai_review', 'reviewers', 'supervise']);
     });
 
+    it('should pass instruction to step:start for normal steps', async () => {
+      const simpleConfig: WorkflowConfig = {
+        name: 'test',
+        maxIterations: 10,
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
+            rules: [makeRule('done', 'COMPLETE')],
+          }),
+        ],
+      };
+      const engine = new WorkflowEngine(simpleConfig, tmpDir, 'test task');
+
+      mockRunAgentSequence([
+        makeResponse({ agent: 'plan', content: 'Plan done' }),
+      ]);
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const startFn = vi.fn();
+      engine.on('step:start', startFn);
+
+      await engine.run();
+
+      expect(startFn).toHaveBeenCalledTimes(1);
+      // step:start should receive (step, iteration, instruction)
+      const [_step, _iteration, instruction] = startFn.mock.calls[0];
+      expect(typeof instruction).toBe('string');
+      expect(instruction.length).toBeGreaterThan(0);
+    });
+
+    it('should pass empty instruction to step:start for parallel steps', async () => {
+      const config = buildDefaultWorkflowConfig();
+      const engine = new WorkflowEngine(config, tmpDir, 'test task');
+
+      mockRunAgentSequence([
+        makeResponse({ agent: 'plan', content: 'Plan' }),
+        makeResponse({ agent: 'implement', content: 'Impl' }),
+        makeResponse({ agent: 'ai_review', content: 'OK' }),
+        makeResponse({ agent: 'arch-review', content: 'OK' }),
+        makeResponse({ agent: 'security-review', content: 'OK' }),
+        makeResponse({ agent: 'supervise', content: 'Pass' }),
+      ]);
+
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'aggregate' },
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const startFn = vi.fn();
+      engine.on('step:start', startFn);
+
+      await engine.run();
+
+      // Find the "reviewers" step:start call (parallel step)
+      const reviewersCall = startFn.mock.calls.find(
+        (call) => (call[0] as WorkflowStep).name === 'reviewers'
+      );
+      expect(reviewersCall).toBeDefined();
+      // Parallel steps emit empty string for instruction
+      const [, , instruction] = reviewersCall!;
+      expect(instruction).toBe('');
+    });
+
     it('should emit iteration:limit when max iterations reached', async () => {
       const config = buildDefaultWorkflowConfig({ maxIterations: 1 });
       const engine = new WorkflowEngine(config, tmpDir, 'test task');

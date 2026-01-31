@@ -199,11 +199,11 @@ export class WorkflowEngine extends EventEmitter {
   }
 
   /** Run a single step (delegates to runParallelStep if step has parallel sub-steps) */
-  private async runStep(step: WorkflowStep): Promise<{ response: AgentResponse; instruction: string }> {
+  private async runStep(step: WorkflowStep, prebuiltInstruction?: string): Promise<{ response: AgentResponse; instruction: string }> {
     if (step.parallel && step.parallel.length > 0) {
       return this.runParallelStep(step);
     }
-    return this.runNormalStep(step);
+    return this.runNormalStep(step, prebuiltInstruction);
   }
 
   /** Build common RunAgentOptions shared by all phases */
@@ -272,9 +272,11 @@ export class WorkflowEngine extends EventEmitter {
   }
 
   /** Run a normal (non-parallel) step */
-  private async runNormalStep(step: WorkflowStep): Promise<{ response: AgentResponse; instruction: string }> {
-    const stepIteration = incrementStepIteration(this.state, step.name);
-    const instruction = this.buildInstruction(step, stepIteration);
+  private async runNormalStep(step: WorkflowStep, prebuiltInstruction?: string): Promise<{ response: AgentResponse; instruction: string }> {
+    const stepIteration = prebuiltInstruction
+      ? this.state.stepIterations.get(step.name) ?? 1
+      : incrementStepIteration(this.state, step.name);
+    const instruction = prebuiltInstruction ?? this.buildInstruction(step, stepIteration);
     log.debug('Running step', {
       step: step.name,
       agent: step.agent,
@@ -475,10 +477,18 @@ export class WorkflowEngine extends EventEmitter {
       }
 
       this.state.iteration++;
-      this.emit('step:start', step, this.state.iteration);
+
+      // Build instruction before emitting step:start so listeners can log it
+      const isParallel = step.parallel && step.parallel.length > 0;
+      let prebuiltInstruction: string | undefined;
+      if (!isParallel) {
+        const stepIteration = incrementStepIteration(this.state, step.name);
+        prebuiltInstruction = this.buildInstruction(step, stepIteration);
+      }
+      this.emit('step:start', step, this.state.iteration, prebuiltInstruction ?? '');
 
       try {
-        const { response, instruction } = await this.runStep(step);
+        const { response, instruction } = await this.runStep(step, prebuiltInstruction);
         this.emit('step:complete', step, response, instruction);
 
         if (response.status === 'blocked') {

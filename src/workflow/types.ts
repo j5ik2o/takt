@@ -11,7 +11,7 @@ import type { PermissionHandler, AskUserQuestionHandler } from '../claude/proces
 
 /** Events emitted by workflow engine */
 export interface WorkflowEvents {
-  'step:start': (step: WorkflowStep, iteration: number) => void;
+  'step:start': (step: WorkflowStep, iteration: number, instruction: string) => void;
   'step:complete': (step: WorkflowStep, response: AgentResponse, instruction: string) => void;
   'step:report': (step: WorkflowStep, filePath: string, fileName: string) => void;
   'step:blocked': (step: WorkflowStep, response: AgentResponse) => void;

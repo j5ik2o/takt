@@ -201,9 +201,15 @@ export async function executeWorkflow(
 
   let abortReason: string | undefined;
 
-  engine.on('step:start', (step, iteration) => {
+  engine.on('step:start', (step, iteration, instruction) => {
     log.debug('Step starting', { step: step.name, agent: step.agentDisplayName, iteration });
     info(`[${iteration}/${workflowConfig.maxIterations}] ${step.name} (${step.agentDisplayName})`);
+
+    // Log prompt content for debugging
+    if (instruction) {
+      log.debug('Step instruction', instruction);
+    }
+
     displayRef.current = new StreamDisplay(step.agentDisplayName);
     stepRef.current = step.name;
 
@@ -214,6 +220,7 @@ export async function executeWorkflow(
       agent: step.agentDisplayName,
       iteration,
       timestamp: new Date().toISOString(),
+      ...(instruction ? { instruction } : {}),
     };
     appendNdjsonLine(ndjsonLogPath, record);
   });
