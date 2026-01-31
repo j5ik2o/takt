@@ -20,23 +20,23 @@ npm install -g takt
 ## クイックスタート
 
 ```bash
-# タスクを実行（ワークフロー選択・worktree・PR作成を対話的に案内）
-takt ログイン機能を追加して
-
-# GitHub Issueをタスクとして実行（どちらも同じ）
-takt '#6'
-takt --issue 6
-
 # 対話モードでAIとタスク要件を詰めてから実行
 takt
 
+# 最初のメッセージを指定して会話を開始することも可能
+takt こんにちは
+
+# GitHub Issueをタスクとして実行（どちらも同じ）
+takt #6
+takt --issue 6
+
 # パイプライン実行（非対話・スクリプト/CI向け）
-takt --task "バグを修正して" --auto-pr
+takt --pipeline --task "バグを修正して" --auto-pr
 ```
 
 ### タスク実行の流れ
 
-`takt ログイン機能を追加して` を実行すると、以下の対話フローが表示されます:
+`takt #6` (GitHub Issue参照) を実行すると、以下の対話フローが表示されます:
 
 **1. ワークフロー選択**
 
@@ -88,44 +88,47 @@ Select workflow:
 日常の開発で使う基本モード。ワークフロー選択、worktree作成、PR作成を対話的に確認します。
 
 ```bash
-# タスクを実行
-takt ログイン機能を追加して
-
-# GitHub Issueをタスクとして実行（どちらも同じ）
-takt '#6'
-takt --issue 6
-
 # 対話モードでAIとタスク要件を詰めてから実行
 takt
 
-# タスクを実行してPRを自動作成（確認プロンプトをスキップ）
-takt '#6' --auto-pr
+# 最初のメッセージを指定して会話を開始することも可能
+takt こんにちは
+
+# GitHub Issueをタスクとして実行（どちらも同じ）
+takt #6
+takt --issue 6
+
+# PR自動作成（確認プロンプトをスキップ）
+takt #6 --auto-pr
+
+# --taskオプションでタスク内容を指定（GitHub Issueの代わり）
+takt --task "ログイン機能を追加"
 ```
 
 `--auto-pr` を指定しない場合、worktreeでの実行成功後に「PR作成する？」と確認されます。
 
-### パイプラインモード（`--task`）
+### パイプラインモード（`--pipeline`）
 
-`--task` を指定すると非対話のパイプラインモードに入ります。ブランチ作成 → ワークフロー実行 → commit & push を自動で行います。スクリプトやCI連携に適しています。
+`--pipeline` を指定すると非対話のパイプラインモードに入ります。ブランチ作成 → ワークフロー実行 → commit & push を自動で行います。スクリプトやCI連携に適しています。
 
 ```bash
 # タスクをパイプライン実行
-takt --task "バグを修正"
+takt --pipeline --task "バグを修正"
 
 # パイプライン実行 + PR自動作成
-takt --task "バグを修正" --auto-pr
+takt --pipeline --task "バグを修正" --auto-pr
 
 # Issue情報を紐付け
-takt --task "バグを修正" --issue 99 --auto-pr
+takt --pipeline --issue 99 --auto-pr
 
 # ワークフロー・ブランチ指定
-takt --task "バグを修正" -w magi -b feat/fix-bug
+takt --pipeline --task "バグを修正" -w magi -b feat/fix-bug
 
 # リポジトリ指定（PR作成時）
-takt --task "バグを修正" --auto-pr --repo owner/repo
+takt --pipeline --task "バグを修正" --auto-pr --repo owner/repo
 
 # ワークフロー実行のみ（ブランチ作成・commit・pushをスキップ）
-takt --task "バグを修正" --skip-git
+takt --pipeline --task "バグを修正" --skip-git
 ```
 
 パイプラインモードでは `--auto-pr` を指定しない限りPRは作成されません。
@@ -148,13 +151,15 @@ takt --task "バグを修正" --skip-git
 
 | オプション | 説明 |
 |-----------|------|
-| `-t, --task <text>` | タスク内容 — **パイプライン（非対話）モードのトリガー** |
+| `--pipeline` | **パイプライン（非対話）モードを有効化** — CI/自動化に必須 |
+| `-t, --task <text>` | タスク内容（GitHub Issueの代わり） |
 | `-i, --issue <N>` | GitHub Issue番号（対話モードでは `#N` と同じ） |
 | `-w, --workflow <name>` | ワークフロー指定 |
 | `-b, --branch <name>` | ブランチ名指定（省略時は自動生成） |
 | `--auto-pr` | PR作成（対話: 確認スキップ、パイプライン: PR有効化） |
 | `--skip-git` | ブランチ作成・commit・pushをスキップ（パイプラインモード、ワークフロー実行のみ） |
 | `--repo <owner/repo>` | リポジトリ指定（PR作成時） |
+| `--create-worktree <yes\|no>` | worktree確認プロンプトをスキップ |
 
 ## ワークフロー
 
@@ -371,7 +376,7 @@ trusted_directories:
 
 ### 対話ワークフロー
 
-`takt ログイン機能を追加して` を実行すると、以下の流れで案内されます:
+`takt` （対話モード）または `takt #6` （GitHub Issue）を実行すると、以下の流れで案内されます:
 
 1. **ワークフロー選択** - 利用可能なワークフローから選択（矢印キーで移動、ESCでキャンセル）
 2. **隔離クローン作成**（オプション） - `git clone --shared` による隔離環境でタスクを実行
@@ -601,6 +606,57 @@ await engine.run();
 ## コントリビュート
 
 詳細は[CONTRIBUTING.md](../CONTRIBUTING.md)を参照。
+
+## CI/CD連携
+
+### GitHub Actions
+
+TAKTはPRレビューやタスク実行を自動化するGitHub Actionを提供しています。詳細は [takt-action](https://github.com/nrslib/takt-action) を参照してください。
+
+**ワークフロー例** (このリポジトリの [.github/workflows/takt-action.yml](../.github/workflows/takt-action.yml) を参照):
+
+```yaml
+name: TAKT
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  takt:
+    if: contains(github.event.comment.body, '@takt')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run TAKT
+        uses: nrslib/takt-action@main
+        with:
+          anthropic_api_key: ${{ secrets.TAKT_ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+**コスト警告**: TAKTはAI API（ClaudeまたはOpenAI）を使用するため、特にCI/CD環境でタスクが自動実行される場合、かなりのコストが発生する可能性があります。API使用量を監視し、請求アラートを設定してください。
+
+### その他のCIシステム
+
+GitHub以外のCIシステムでは、パイプラインモードを使用します:
+
+```bash
+# taktをインストール
+npm install -g takt
+
+# パイプラインモードで実行
+takt --pipeline --task "バグ修正" --auto-pr --repo owner/repo
+```
+
+認証には `ANTHROPIC_API_KEY` または `OPENAI_API_KEY` 環境変数を設定してください。
 
 ## Docker サポート
 

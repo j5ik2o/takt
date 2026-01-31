@@ -22,23 +22,23 @@ npm install -g takt
 ## Quick Start
 
 ```bash
-# Run a task (prompts for workflow selection, worktree, and PR creation)
-takt "Add a login feature"
-
-# Run a GitHub issue as a task (both are equivalent)
-takt '#6'
-takt --issue 6
-
-# Interactive mode — refine task requirements with AI, then execute
+# Interactive planning — refine task requirements with AI, then execute
 takt
 
+# You can also provide an initial message to start the conversation
+takt hello
+
+# Run a GitHub issue as a task (both are equivalent)
+takt #6
+takt --issue 6
+
 # Pipeline mode (non-interactive, for scripts and CI)
-takt --task "fix the auth bug" --auto-pr
+takt --pipeline --task "fix the auth bug" --auto-pr
 ```
 
 ### What happens when you run a task
 
-When you run `takt "Add a login feature"`, TAKT guides you through an interactive flow:
+When you run `takt #6` (GitHub issue reference), TAKT guides you through an interactive flow:
 
 **1. Workflow selection**
 
@@ -90,44 +90,47 @@ If `--auto-pr` is specified, the PR is created automatically without asking.
 The standard mode for everyday development. Workflow selection, worktree creation, and PR creation are handled interactively.
 
 ```bash
-# Run a task
-takt "Add a login feature"
-
-# Run a GitHub issue as a task (both are equivalent)
-takt '#6'
-takt --issue 6
-
-# Interactive mode — refine task requirements with AI before executing
+# Interactive planning — start AI conversation to refine task requirements
 takt
 
-# Run a task and automatically create a PR (skip the confirmation prompt)
-takt '#6' --auto-pr
+# You can also provide an initial message to start the conversation
+takt hello
+
+# Run a GitHub issue as a task (both are equivalent)
+takt #6
+takt --issue 6
+
+# Automatically create a PR (skip the confirmation prompt)
+takt #6 --auto-pr
+
+# Use --task option to specify task content (alternative to GitHub issue)
+takt --task "Add login feature"
 ```
 
 When `--auto-pr` is not specified, you will be asked whether to create a PR after a successful worktree execution.
 
-### Pipeline Mode (`--task`)
+### Pipeline Mode (`--pipeline`)
 
-Specifying `--task` enters pipeline mode — fully non-interactive, suitable for scripts and CI integration. TAKT automatically creates a branch, runs the workflow, commits, and pushes.
+Specifying `--pipeline` enters pipeline mode — fully non-interactive, suitable for scripts and CI integration. TAKT automatically creates a branch, runs the workflow, commits, and pushes.
 
 ```bash
 # Run a task in pipeline mode
-takt --task "fix the auth bug"
+takt --pipeline --task "fix the auth bug"
 
 # Pipeline mode + automatic PR creation
-takt --task "fix the auth bug" --auto-pr
+takt --pipeline --task "fix the auth bug" --auto-pr
 
 # Attach GitHub issue context
-takt --task "fix the auth bug" --issue 99 --auto-pr
+takt --pipeline --issue 99 --auto-pr
 
 # Specify workflow and branch
-takt --task "fix the auth bug" -w magi -b feat/fix-auth
+takt --pipeline --task "fix the auth bug" -w magi -b feat/fix-auth
 
 # Specify repository (for PR creation)
-takt --task "fix the auth bug" --auto-pr --repo owner/repo
+takt --pipeline --task "fix the auth bug" --auto-pr --repo owner/repo
 
 # Run workflow only — skip branch creation, commit, and push
-takt --task "fix the auth bug" --skip-git
+takt --pipeline --task "fix the auth bug" --skip-git
 ```
 
 In pipeline mode, PRs are **not** created unless `--auto-pr` is explicitly specified.
@@ -150,13 +153,15 @@ In pipeline mode, PRs are **not** created unless `--auto-pr` is explicitly speci
 
 | Option | Description |
 |--------|-------------|
-| `-t, --task <text>` | Task content — **triggers pipeline (non-interactive) mode** |
+| `--pipeline` | **Enable pipeline (non-interactive) mode** — required for CI/automation |
+| `-t, --task <text>` | Task content (as alternative to GitHub issue) |
 | `-i, --issue <N>` | GitHub issue number (equivalent to `#N` in interactive mode) |
 | `-w, --workflow <name>` | Workflow to use |
 | `-b, --branch <name>` | Branch name (auto-generated if omitted) |
 | `--auto-pr` | Create PR after execution (interactive: skip confirmation, pipeline: enable PR) |
 | `--skip-git` | Skip branch creation, commit, and push (pipeline mode, workflow-only) |
 | `--repo <owner/repo>` | Repository for PR creation |
+| `--create-worktree <yes\|no>` | Skip worktree confirmation prompt |
 
 ## Workflows
 
@@ -374,7 +379,7 @@ trusted_directories:
 
 ### Interactive Workflow
 
-When running `takt "Add a feature"`, you are prompted to:
+When running `takt` (interactive planning mode) or `takt #6` (GitHub issue), you are prompted to:
 
 1. **Select a workflow** - Choose from available workflows (arrow keys, ESC to cancel)
 2. **Create an isolated clone** (optional) - Run the task in a `git clone --shared` for isolation
@@ -604,6 +609,57 @@ await engine.run();
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
+
+## CI/CD Integration
+
+### GitHub Actions
+
+TAKT provides a GitHub Action for automated PR reviews and task execution. See [takt-action](https://github.com/nrslib/takt-action) for details.
+
+**Example workflow** (see [.github/workflows/takt-action.yml](.github/workflows/takt-action.yml) in this repository):
+
+```yaml
+name: TAKT
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  takt:
+    if: contains(github.event.comment.body, '@takt')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run TAKT
+        uses: nrslib/takt-action@main
+        with:
+          anthropic_api_key: ${{ secrets.TAKT_ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+**Cost Warning**: TAKT uses AI APIs (Claude or OpenAI) which can incur significant costs, especially in CI/CD environments where tasks run automatically. Monitor your API usage and set billing alerts.
+
+### Other CI Systems
+
+For non-GitHub CI systems, use pipeline mode:
+
+```bash
+# Install takt
+npm install -g takt
+
+# Run in pipeline mode
+takt --pipeline --task "fix bug" --auto-pr --repo owner/repo
+```
+
+Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` environment variables for authentication.
 
 ## Docker Support
 
