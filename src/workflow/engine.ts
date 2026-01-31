@@ -156,7 +156,7 @@ export class WorkflowEngine extends EventEmitter {
       projectCwd: this.projectCwd,
       userInputs: this.state.userInputs,
       previousOutput: getPreviousOutput(this.state),
-      reportDir: join(this.projectCwd, this.reportDir),
+      reportDir: join(this.cwd, this.reportDir),
       language: this.language,
     });
   }
@@ -263,7 +263,7 @@ export class WorkflowEngine extends EventEmitter {
   private buildPhaseRunnerContext() {
     return {
       cwd: this.cwd,
-      reportDir: join(this.projectCwd, this.reportDir),
+      reportDir: join(this.cwd, this.reportDir),
       language: this.language,
       getSessionId: (agent: string) => this.state.agentSessions.get(agent),
       buildResumeOptions: this.buildResumeOptions.bind(this),
