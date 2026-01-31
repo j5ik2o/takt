@@ -24,6 +24,11 @@ import {
   addToInputHistory,
   getInputHistoryPath,
   MAX_INPUT_HISTORY,
+  // Agent session functions
+  type AgentSessionData,
+  loadAgentSessions,
+  updateAgentSession,
+  getAgentSessionsPath,
   // Worktree session functions
   getWorktreeSessionsDir,
   encodeWorktreePath,
@@ -795,5 +800,102 @@ describe('updateWorktreeSession', () => {
 
     expect(sessions1.coder).toBe('wt1-session');
     expect(sessions2.coder).toBe('wt2-session');
+  });
+});
+
+describe('provider-based session management', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `takt-test-${randomUUID()}`);
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  describe('loadAgentSessions with provider', () => {
+    it('should return sessions when provider matches', () => {
+      updateAgentSession(testDir, 'coder', 'session-1', 'claude');
+
+      const sessions = loadAgentSessions(testDir, 'claude');
+      expect(sessions.coder).toBe('session-1');
+    });
+
+    it('should return empty when provider has changed', () => {
+      updateAgentSession(testDir, 'coder', 'session-1', 'claude');
+
+      const sessions = loadAgentSessions(testDir, 'codex');
+      expect(sessions).toEqual({});
+    });
+
+    it('should return sessions when no provider is specified (legacy)', () => {
+      updateAgentSession(testDir, 'coder', 'session-1');
+
+      const sessions = loadAgentSessions(testDir);
+      expect(sessions.coder).toBe('session-1');
+    });
+  });
+
+  describe('updateAgentSession with provider', () => {
+    it('should discard old sessions when provider changes', () => {
+      updateAgentSession(testDir, 'coder', 'claude-session', 'claude');
+      updateAgentSession(testDir, 'coder', 'codex-session', 'codex');
+
+      const sessions = loadAgentSessions(testDir, 'codex');
+      expect(sessions.coder).toBe('codex-session');
+      // Old claude sessions should not remain
+      expect(Object.keys(sessions)).toHaveLength(1);
+    });
+
+    it('should store provider in session data', () => {
+      updateAgentSession(testDir, 'coder', 'session-1', 'claude');
+
+      const path = getAgentSessionsPath(testDir);
+      const data = JSON.parse(readFileSync(path, 'utf-8')) as AgentSessionData;
+      expect(data.provider).toBe('claude');
+    });
+  });
+
+  describe('loadWorktreeSessions with provider', () => {
+    it('should return sessions when provider matches', () => {
+      const worktreePath = '/project/worktree';
+      updateWorktreeSession(testDir, worktreePath, 'coder', 'session-1', 'claude');
+
+      const sessions = loadWorktreeSessions(testDir, worktreePath, 'claude');
+      expect(sessions.coder).toBe('session-1');
+    });
+
+    it('should return empty when provider has changed', () => {
+      const worktreePath = '/project/worktree';
+      updateWorktreeSession(testDir, worktreePath, 'coder', 'session-1', 'claude');
+
+      const sessions = loadWorktreeSessions(testDir, worktreePath, 'codex');
+      expect(sessions).toEqual({});
+    });
+  });
+
+  describe('updateWorktreeSession with provider', () => {
+    it('should discard old sessions when provider changes', () => {
+      const worktreePath = '/project/worktree';
+      updateWorktreeSession(testDir, worktreePath, 'coder', 'claude-session', 'claude');
+      updateWorktreeSession(testDir, worktreePath, 'coder', 'codex-session', 'codex');
+
+      const sessions = loadWorktreeSessions(testDir, worktreePath, 'codex');
+      expect(sessions.coder).toBe('codex-session');
+      expect(Object.keys(sessions)).toHaveLength(1);
+    });
+
+    it('should store provider in session data', () => {
+      const worktreePath = '/project/worktree';
+      updateWorktreeSession(testDir, worktreePath, 'coder', 'session-1', 'claude');
+
+      const sessionPath = getWorktreeSessionPath(testDir, worktreePath);
+      const data = JSON.parse(readFileSync(sessionPath, 'utf-8')) as AgentSessionData;
+      expect(data.provider).toBe('claude');
+    });
   });
 });

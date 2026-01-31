@@ -207,16 +207,20 @@ export function getWorktreeSessionPath(projectDir: string, worktreePath: string)
   return join(dir, `${encoded}.json`);
 }
 
-/** Load saved agent sessions for a worktree */
+/** Load saved agent sessions for a worktree. Returns empty if provider has changed. */
 export function loadWorktreeSessions(
   projectDir: string,
-  worktreePath: string
+  worktreePath: string,
+  currentProvider?: string
 ): Record<string, string> {
   const sessionPath = getWorktreeSessionPath(projectDir, worktreePath);
   if (existsSync(sessionPath)) {
     try {
       const content = readFileSync(sessionPath, 'utf-8');
       const data = JSON.parse(content) as AgentSessionData;
+      if (currentProvider && data.provider !== currentProvider) {
+        return {};
+      }
       return data.agentSessions || {};
     } catch {
       return {};
@@ -230,19 +234,26 @@ export function updateWorktreeSession(
   projectDir: string,
   worktreePath: string,
   agentName: string,
-  sessionId: string
+  sessionId: string,
+  provider?: string
 ): void {
   const dir = getWorktreeSessionsDir(projectDir);
   ensureDir(dir);
 
   const sessionPath = getWorktreeSessionPath(projectDir, worktreePath);
   let sessions: Record<string, string> = {};
+  let existingProvider: string | undefined;
 
   if (existsSync(sessionPath)) {
     try {
       const content = readFileSync(sessionPath, 'utf-8');
       const data = JSON.parse(content) as AgentSessionData;
-      sessions = data.agentSessions || {};
+      existingProvider = data.provider;
+      if (provider && existingProvider && existingProvider !== provider) {
+        sessions = {};
+      } else {
+        sessions = data.agentSessions || {};
+      }
     } catch {
       sessions = {};
     }
@@ -253,6 +264,7 @@ export function updateWorktreeSession(
   const data: AgentSessionData = {
     agentSessions: sessions,
     updatedAt: new Date().toISOString(),
+    provider: provider ?? existingProvider,
   };
   writeFileAtomic(sessionPath, JSON.stringify(data, null, 2));
 }

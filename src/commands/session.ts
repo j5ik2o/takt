@@ -3,6 +3,7 @@
  */
 
 import { loadAgentSessions, updateAgentSession } from '../config/paths.js';
+import { loadGlobalConfig } from '../config/globalConfig.js';
 import type { AgentResponse } from '../models/types.js';
 
 /**
@@ -15,13 +16,14 @@ export async function withAgentSession(
   fn: (sessionId?: string) => Promise<AgentResponse>,
   provider?: string
 ): Promise<AgentResponse> {
-  const sessions = loadAgentSessions(cwd, provider);
+  const resolvedProvider = provider ?? loadGlobalConfig().provider ?? 'claude';
+  const sessions = loadAgentSessions(cwd, resolvedProvider);
   const sessionId = sessions[agentName];
 
   const result = await fn(sessionId);
 
   if (result.sessionId) {
-    updateAgentSession(cwd, agentName, result.sessionId, provider);
+    updateAgentSession(cwd, agentName, result.sessionId, resolvedProvider);
   }
 
   return result;

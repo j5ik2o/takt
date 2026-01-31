@@ -182,17 +182,20 @@ describe('NDJSON log', () => {
       };
       appendNdjsonLine(filepath, stepStart);
 
-      const streamRecord: NdjsonRecord = {
-        type: 'stream',
+      const stepComplete: NdjsonStepComplete = {
+        type: 'step_complete',
         step: 'plan',
-        event: { type: 'text', data: { text: 'hello' } },
+        agent: 'planner',
+        status: 'done',
+        content: 'Plan completed',
+        instruction: 'Create a plan',
         timestamp: new Date().toISOString(),
       };
-      appendNdjsonLine(filepath, streamRecord);
+      appendNdjsonLine(filepath, stepComplete);
 
       const content = readFileSync(filepath, 'utf-8');
       const lines = content.trim().split('\n');
-      expect(lines).toHaveLength(3); // workflow_start + step_start + stream
+      expect(lines).toHaveLength(3); // workflow_start + step_start + step_complete
 
       const parsed0 = JSON.parse(lines[0]!) as NdjsonRecord;
       expect(parsed0.type).toBe('workflow_start');
@@ -206,9 +209,10 @@ describe('NDJSON log', () => {
       }
 
       const parsed2 = JSON.parse(lines[2]!) as NdjsonRecord;
-      expect(parsed2.type).toBe('stream');
-      if (parsed2.type === 'stream') {
-        expect(parsed2.event.type).toBe('text');
+      expect(parsed2.type).toBe('step_complete');
+      if (parsed2.type === 'step_complete') {
+        expect(parsed2.step).toBe('plan');
+        expect(parsed2.content).toBe('Plan completed');
       }
     });
   });
@@ -311,7 +315,7 @@ describe('NDJSON log', () => {
       expect(result).toBeNull();
     });
 
-    it('should skip stream and step_start records when reconstructing SessionLog', () => {
+    it('should skip step_start records when reconstructing SessionLog', () => {
       const filepath = initNdjsonLog('sess-005', 'task', 'wf', projectDir);
 
       // Add various records
@@ -321,13 +325,6 @@ describe('NDJSON log', () => {
         agent: 'planner',
         iteration: 1,
         timestamp: '2025-01-01T00:00:01.000Z',
-      });
-
-      appendNdjsonLine(filepath, {
-        type: 'stream',
-        step: 'plan',
-        event: { type: 'text', data: { text: 'working...' } },
-        timestamp: '2025-01-01T00:00:01.500Z',
       });
 
       appendNdjsonLine(filepath, {
@@ -412,9 +409,10 @@ describe('NDJSON log', () => {
 
       // Append more records
       appendNdjsonLine(filepath, {
-        type: 'stream',
+        type: 'step_start',
         step: 'plan',
-        event: { type: 'text', data: { text: 'chunk1' } },
+        agent: 'planner',
+        iteration: 1,
         timestamp: '2025-01-01T00:00:01.000Z',
       });
 
@@ -429,16 +427,17 @@ describe('NDJSON log', () => {
 
       for (let i = 0; i < 5; i++) {
         appendNdjsonLine(filepath, {
-          type: 'stream',
-          step: 'plan',
-          event: { type: 'text', data: { text: `chunk-${i}` } },
+          type: 'step_start',
+          step: `step-${i}`,
+          agent: 'planner',
+          iteration: i + 1,
           timestamp: new Date().toISOString(),
         });
       }
 
       const content = readFileSync(filepath, 'utf-8');
       const lines = content.trim().split('\n');
-      expect(lines).toHaveLength(6); // 1 init + 5 stream
+      expect(lines).toHaveLength(6); // 1 init + 5 step_start
 
       // Every line should be valid JSON
       for (const line of lines) {

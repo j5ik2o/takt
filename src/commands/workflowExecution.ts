@@ -31,7 +31,6 @@ import {
   appendNdjsonLine,
   type NdjsonStepStart,
   type NdjsonStepComplete,
-  type NdjsonStream,
   type NdjsonWorkflowComplete,
   type NdjsonWorkflowAbort,
 } from '../utils/session.js';
@@ -103,28 +102,13 @@ export async function executeWorkflow(
   const ndjsonLogPath = initNdjsonLog(workflowSessionId, task, workflowConfig.name, projectCwd);
   updateLatestPointer(sessionLog, workflowSessionId, projectCwd, { copyToPrevious: true });
 
-  // Track current step name for stream log records
-  const stepRef: { current: string } = { current: '' };
-
   // Track current display for streaming
   const displayRef: { current: StreamDisplay | null } = { current: null };
 
-  // Create stream handler that delegates to UI display + writes NDJSON log
+  // Create stream handler that delegates to UI display
   const streamHandler = (
     event: Parameters<ReturnType<StreamDisplay['createHandler']>>[0]
   ): void => {
-    // Write stream event to NDJSON log (real-time)
-    if (stepRef.current) {
-      const record: NdjsonStream = {
-        type: 'stream',
-        step: stepRef.current,
-        event,
-        timestamp: new Date().toISOString(),
-      };
-      appendNdjsonLine(ndjsonLogPath, record);
-    }
-
-    // Delegate to UI display
     if (!displayRef.current) return;
     if (event.type === 'result') return;
     displayRef.current.createHandler()(event);
@@ -134,14 +118,14 @@ export async function executeWorkflow(
   const isWorktree = cwd !== projectCwd;
   const currentProvider = loadGlobalConfig().provider ?? 'claude';
   const savedSessions = isWorktree
-    ? loadWorktreeSessions(projectCwd, cwd)
+    ? loadWorktreeSessions(projectCwd, cwd, currentProvider)
     : loadAgentSessions(projectCwd, currentProvider);
 
   // Session update handler - persist session IDs when they change
   // Clone sessions are stored separately per clone path
   const sessionUpdateHandler = isWorktree
     ? (agentName: string, agentSessionId: string): void => {
-        updateWorktreeSession(projectCwd, cwd, agentName, agentSessionId);
+        updateWorktreeSession(projectCwd, cwd, agentName, agentSessionId, currentProvider);
       }
     : (agentName: string, agentSessionId: string): void => {
         updateAgentSession(projectCwd, agentName, agentSessionId, currentProvider);
@@ -211,7 +195,6 @@ export async function executeWorkflow(
     }
 
     displayRef.current = new StreamDisplay(step.agentDisplayName);
-    stepRef.current = step.name;
 
     // Write step_start record to NDJSON log
     const record: NdjsonStepStart = {

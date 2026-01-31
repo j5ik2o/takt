@@ -4,7 +4,6 @@
 
 import { existsSync, readFileSync, copyFileSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { StreamEvent } from '../claude/types.js';
 import { getProjectLogsDir, getGlobalLogsDir, ensureDir, writeFileAtomic } from '../config/paths.js';
 
 /** Session log entry */
@@ -52,14 +51,6 @@ export interface NdjsonStepStart {
   instruction?: string;
 }
 
-/** NDJSON record: streaming chunk received */
-export interface NdjsonStream {
-  type: 'stream';
-  step: string;
-  event: StreamEvent;
-  timestamp: string;
-}
-
 /** NDJSON record: step completed */
 export interface NdjsonStepComplete {
   type: 'step_complete';
@@ -93,7 +84,6 @@ export interface NdjsonWorkflowAbort {
 export type NdjsonRecord =
   | NdjsonWorkflowStart
   | NdjsonStepStart
-  | NdjsonStream
   | NdjsonStepComplete
   | NdjsonWorkflowComplete
   | NdjsonWorkflowAbort;
@@ -194,7 +184,7 @@ export function loadNdjsonLog(filepath: string): SessionLog | null {
         }
         break;
 
-      // stream and step_start records are not stored in SessionLog
+      // step_start records are not stored in SessionLog
       default:
         break;
     }

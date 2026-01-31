@@ -25,7 +25,6 @@ import {
   createCanUseToolCallback,
   createAskUserQuestionHooks,
 } from './options-builder.js';
-import { resolveAnthropicApiKey } from '../config/globalConfig.js';
 import type {
   StreamCallback,
   PermissionHandler,
@@ -94,11 +93,10 @@ function buildSdkOptions(options: ExecuteOptions): Options {
   if (canUseTool) sdkOptions.canUseTool = canUseTool;
   if (hooks) sdkOptions.hooks = hooks;
 
-  const anthropicApiKey = options.anthropicApiKey ?? resolveAnthropicApiKey();
-  if (anthropicApiKey) {
+  if (options.anthropicApiKey) {
     sdkOptions.env = {
       ...process.env as Record<string, string>,
-      ANTHROPIC_API_KEY: anthropicApiKey,
+      ANTHROPIC_API_KEY: options.anthropicApiKey,
     };
   }
 
