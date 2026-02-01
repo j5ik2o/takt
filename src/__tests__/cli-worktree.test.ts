@@ -71,9 +71,13 @@ vi.mock('../config/workflowLoader.js', () => ({
   listWorkflows: vi.fn(() => []),
 }));
 
-vi.mock('../constants.js', () => ({
-  DEFAULT_WORKFLOW_NAME: 'default',
-}));
+vi.mock('../constants.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../constants.js')>();
+  return {
+    ...actual,
+    DEFAULT_WORKFLOW_NAME: 'default',
+  };
+});
 
 vi.mock('../github/issue.js', () => ({
   isIssueReference: vi.fn((s: string) => /^#\d+$/.test(s)),
@@ -88,7 +92,7 @@ import { confirm } from '../prompt/index.js';
 import { createSharedClone } from '../task/clone.js';
 import { summarizeTaskName } from '../task/summarize.js';
 import { info } from '../utils/ui.js';
-import { confirmAndCreateWorktree } from '../cli.js';
+import { confirmAndCreateWorktree } from '../commands/selectAndExecute.js';
 
 const mockConfirm = vi.mocked(confirm);
 const mockCreateSharedClone = vi.mocked(createSharedClone);

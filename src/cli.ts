@@ -27,10 +27,10 @@ import {
   getEffectiveDebugConfig,
 } from './config/index.js';
 import { clearAgentSessions, getCurrentWorkflow, isVerboseMode } from './config/paths.js';
+import { setQuietMode } from './context.js';
 import { info, error, success, setLogLevel } from './utils/ui.js';
 import { initDebugLogger, createLogger, setVerboseConsole } from './utils/debug.js';
 import {
-  executeTask,
   runAllTasks,
   switchWorkflow,
   switchConfig,
@@ -41,16 +41,14 @@ import {
   interactiveMode,
   executePipeline,
 } from './commands/index.js';
-import { listWorkflows, isWorkflowPath } from './config/workflowLoader.js';
-import { selectOptionWithDefault, confirm } from './prompt/index.js';
-import { createSharedClone } from './task/clone.js';
-import { autoCommitAndPush } from './task/autoCommit.js';
-import { summarizeTaskName } from './task/summarize.js';
 import { DEFAULT_WORKFLOW_NAME } from './constants.js';
 import { checkForUpdates } from './utils/updateNotifier.js';
 import { getErrorMessage } from './utils/error.js';
 import { resolveIssueTask, isIssueReference } from './github/issue.js';
-import { createPullRequest, buildPrBody } from './github/pr.js';
+import {
+  selectAndExecuteTask,
+  type SelectAndExecuteOptions,
+} from './commands/selectAndExecute.js';
 import type { TaskExecutionOptions } from './commands/taskExecution.js';
 import type { ProviderType } from './providers/index.js';
 
@@ -69,168 +67,6 @@ let pipelineMode = false;
 
 /** Whether quiet mode is active (--quiet flag or config, set in preAction) */
 let quietMode = false;
-
-export interface WorktreeConfirmationResult {
-  execCwd: string;
-  isWorktree: boolean;
-  branch?: string;
-}
-
-/**
- * Select a workflow interactively.
- * Returns the selected workflow name, or null if cancelled.
- */
-async function selectWorkflow(cwd: string): Promise<string | null> {
-  const availableWorkflows = listWorkflows(cwd);
-  const currentWorkflow = getCurrentWorkflow(cwd);
-
-  if (availableWorkflows.length === 0) {
-    info(`No workflows found. Using default: ${DEFAULT_WORKFLOW_NAME}`);
-    return DEFAULT_WORKFLOW_NAME;
-  }
-
-  if (availableWorkflows.length === 1 && availableWorkflows[0]) {
-    return availableWorkflows[0];
-  }
-
-  const options = availableWorkflows.map((name) => ({
-    label: name === currentWorkflow ? `${name} (current)` : name,
-    value: name,
-  }));
-
-  const defaultWorkflow = availableWorkflows.includes(currentWorkflow)
-    ? currentWorkflow
-    : (availableWorkflows.includes(DEFAULT_WORKFLOW_NAME)
-        ? DEFAULT_WORKFLOW_NAME
-        : availableWorkflows[0] || DEFAULT_WORKFLOW_NAME);
-
-  return selectOptionWithDefault('Select workflow:', options, defaultWorkflow);
-}
-
-/**
- * Execute a task with workflow selection, optional worktree, and auto-commit.
- * Shared by direct task execution and interactive mode.
- */
-export interface SelectAndExecuteOptions {
-  autoPr?: boolean;
-  repo?: string;
-  workflow?: string;
-  createWorktree?: boolean | undefined;
-}
-
-async function selectAndExecuteTask(
-  cwd: string,
-  task: string,
-  options?: SelectAndExecuteOptions,
-  agentOverrides?: TaskExecutionOptions,
-): Promise<void> {
-  const workflowIdentifier = await determineWorkflow(cwd, options?.workflow);
-
-  if (workflowIdentifier === null) {
-    info('Cancelled');
-    return;
-  }
-
-  const { execCwd, isWorktree, branch } = await confirmAndCreateWorktree(
-    cwd,
-    task,
-    options?.createWorktree,
-  );
-
-  log.info('Starting task execution', { workflow: workflowIdentifier, worktree: isWorktree });
-  const taskSuccess = await executeTask({
-    task,
-    cwd: execCwd,
-    workflowIdentifier,
-    projectCwd: cwd,
-    agentOverrides,
-  });
-
-  if (taskSuccess && isWorktree) {
-    const commitResult = autoCommitAndPush(execCwd, task, cwd);
-    if (commitResult.success && commitResult.commitHash) {
-      success(`Auto-committed & pushed: ${commitResult.commitHash}`);
-    } else if (!commitResult.success) {
-      error(`Auto-commit failed: ${commitResult.message}`);
-    }
-
-    // PR creation: --auto-pr → create automatically, otherwise ask
-    if (commitResult.success && commitResult.commitHash && branch) {
-      const shouldCreatePr = options?.autoPr === true || await confirm('Create pull request?', false);
-      if (shouldCreatePr) {
-        info('Creating pull request...');
-        const prBody = buildPrBody(undefined, `Workflow \`${workflowIdentifier}\` completed successfully.`);
-        const prResult = createPullRequest(execCwd, {
-          branch,
-          title: task.length > 100 ? `${task.slice(0, 97)}...` : task,
-          body: prBody,
-          repo: options?.repo,
-        });
-        if (prResult.success) {
-          success(`PR created: ${prResult.url}`);
-        } else {
-          error(`PR creation failed: ${prResult.error}`);
-        }
-      }
-    }
-  }
-
-  if (!taskSuccess) {
-    process.exit(1);
-  }
-}
-
-/**
- * Determine workflow to use.
- *
- * - If override looks like a path (isWorkflowPath), return it directly (validation is done at load time).
- * - If override is a name, validate it exists in available workflows.
- * - If no override, prompt user to select interactively.
- */
-async function determineWorkflow(cwd: string, override?: string): Promise<string | null> {
-  if (override) {
-    // Path-based: skip name validation (loader handles existence check)
-    if (isWorkflowPath(override)) {
-      return override;
-    }
-    // Name-based: validate workflow name exists
-    const availableWorkflows = listWorkflows(cwd);
-    const knownWorkflows = availableWorkflows.length === 0 ? [DEFAULT_WORKFLOW_NAME] : availableWorkflows;
-    if (!knownWorkflows.includes(override)) {
-      error(`Workflow not found: ${override}`);
-      return null;
-    }
-    return override;
-  }
-  return selectWorkflow(cwd);
-}
-
-export async function confirmAndCreateWorktree(
-  cwd: string,
-  task: string,
-  createWorktreeOverride?: boolean | undefined,
-): Promise<WorktreeConfirmationResult> {
-  const useWorktree =
-    typeof createWorktreeOverride === 'boolean'
-      ? createWorktreeOverride
-      : await confirm('Create worktree?', true);
-
-  if (!useWorktree) {
-    return { execCwd: cwd, isWorktree: false };
-  }
-
-  // Summarize task name to English slug using AI
-  info('Generating branch name...');
-  const taskSlug = await summarizeTaskName(task, { cwd });
-
-  const result = createSharedClone(cwd, {
-    worktree: true,
-    taskSlug,
-  });
-  info(`Clone created: ${result.path} (branch: ${result.branch})`);
-
-  return { execCwd: result.path, isWorktree: true, branch: result.branch };
-}
 
 const program = new Command();
 
@@ -315,14 +151,12 @@ program.hook('preAction', async () => {
 
   // Quiet mode: CLI flag takes precedence over config
   quietMode = rootOpts.quiet === true || config.minimalOutput === true;
+  setQuietMode(quietMode);
 
   log.info('TAKT CLI starting', { version: cliVersion, cwd: resolvedCwd, verbose, pipelineMode, quietMode });
 });
 
-/** Get whether quiet mode is active (CLI flag or config, resolved in preAction) */
-export function isQuietMode(): boolean {
-  return quietMode;
-}
+// isQuietMode is now exported from context.ts to avoid circular dependencies
 
 // --- Subcommands ---
 

@@ -13,3 +13,9 @@ export { switchConfig, getCurrentPermissionMode, setPermissionMode, type Permiss
 export { listTasks } from './listTasks.js';
 export { interactiveMode } from './interactive.js';
 export { executePipeline, type PipelineExecutionOptions } from './pipelineExecution.js';
+export {
+  selectAndExecuteTask,
+  confirmAndCreateWorktree,
+  type SelectAndExecuteOptions,
+  type WorktreeConfirmationResult,
+} from './selectAndExecute.js';

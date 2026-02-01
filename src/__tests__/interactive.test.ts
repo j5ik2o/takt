@@ -20,7 +20,7 @@ vi.mock('../utils/debug.js', () => ({
   }),
 }));
 
-vi.mock('../cli.js', () => ({
+vi.mock('../context.js', () => ({
   isQuietMode: vi.fn(() => false),
 }));
 

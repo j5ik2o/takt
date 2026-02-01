@@ -13,7 +13,7 @@
 import * as readline from 'node:readline';
 import chalk from 'chalk';
 import { loadGlobalConfig } from '../config/globalConfig.js';
-import { isQuietMode } from '../cli.js';
+import { isQuietMode } from '../context.js';
 import { loadAgentSessions, updateAgentSession } from '../config/paths.js';
 import { getProvider, type ProviderType } from '../providers/index.js';
 import { createLogger } from '../utils/debug.js';

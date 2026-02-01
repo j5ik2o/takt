@@ -122,7 +122,7 @@ vi.mock('../config/projectConfig.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../cli.js', () => ({
+vi.mock('../context.js', () => ({
   isQuietMode: vi.fn().mockReturnValue(true),
 }));
 

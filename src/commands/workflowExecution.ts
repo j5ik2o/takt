@@ -14,7 +14,7 @@ import {
   updateWorktreeSession,
 } from '../config/paths.js';
 import { loadGlobalConfig } from '../config/globalConfig.js';
-import { isQuietMode } from '../cli.js';
+import { isQuietMode } from '../context.js';
 import {
   header,
   info,
