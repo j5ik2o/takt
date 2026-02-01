@@ -29,6 +29,11 @@ function shouldLog(level: LogLevel): boolean {
   return LOG_PRIORITIES[level] >= LOG_PRIORITIES[currentLogLevel];
 }
 
+/** Print a blank line */
+export function blankLine(): void {
+  console.log();
+}
+
 /** Log a debug message */
 export function debug(message: string): void {
   if (shouldLog('debug')) {

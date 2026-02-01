@@ -27,6 +27,7 @@ export {
 export {
   loadGlobalConfig,
   saveGlobalConfig,
+  invalidateGlobalConfigCache,
   addTrustedDirectory,
   isDirectoryTrusted,
   loadProjectDebugConfig,

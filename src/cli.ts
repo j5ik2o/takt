@@ -48,6 +48,7 @@ import { autoCommitAndPush } from './task/autoCommit.js';
 import { summarizeTaskName } from './task/summarize.js';
 import { DEFAULT_WORKFLOW_NAME } from './constants.js';
 import { checkForUpdates } from './utils/updateNotifier.js';
+import { getErrorMessage } from './utils/error.js';
 import { resolveIssueTask, isIssueReference } from './github/issue.js';
 import { createPullRequest, buildPrBody } from './github/pr.js';
 import type { TaskExecutionOptions } from './commands/taskExecution.js';
@@ -137,7 +138,13 @@ async function selectAndExecuteTask(
   );
 
   log.info('Starting task execution', { workflow: workflowIdentifier, worktree: isWorktree });
-  const taskSuccess = await executeTask(task, execCwd, workflowIdentifier, cwd, agentOverrides);
+  const taskSuccess = await executeTask({
+    task,
+    cwd: execCwd,
+    workflowIdentifier,
+    projectCwd: cwd,
+    agentOverrides,
+  });
 
   if (taskSuccess && isWorktree) {
     const commitResult = autoCommitAndPush(execCwd, task, cwd);
@@ -449,7 +456,7 @@ program
         const resolvedTask = resolveIssueTask(`#${issueFromOption}`);
         await selectAndExecuteTask(resolvedCwd, resolvedTask, selectOptions, agentOverrides);
       } catch (e) {
-        error(e instanceof Error ? e.message : String(e));
+        error(getErrorMessage(e));
         process.exit(1);
       }
       return;
@@ -463,7 +470,7 @@ program
           info('Fetching GitHub Issue...');
           resolvedTask = resolveIssueTask(task);
         } catch (e) {
-          error(e instanceof Error ? e.message : String(e));
+          error(getErrorMessage(e));
           process.exit(1);
         }
       }

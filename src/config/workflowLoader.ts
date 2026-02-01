@@ -246,10 +246,10 @@ function loadWorkflowFromFile(filePath: string): WorkflowConfig {
 /**
  * Resolve a path that may be relative, absolute, or home-directory-relative.
  * @param pathInput Path to resolve
- * @param basePath Base directory for relative paths (defaults to cwd)
+ * @param basePath Base directory for relative paths
  * @returns Absolute resolved path
  */
-function resolvePath(pathInput: string, basePath: string = process.cwd()): string {
+function resolvePath(pathInput: string, basePath: string): string {
   // Home directory expansion
   if (pathInput.startsWith('~')) {
     const home = homedir();
@@ -270,12 +270,12 @@ function resolvePath(pathInput: string, basePath: string = process.cwd()): strin
  * Called internally by loadWorkflowByIdentifier when the identifier is detected as a path.
  *
  * @param filePath Path to workflow file (absolute, relative, or home-dir prefixed with ~)
- * @param basePath Base directory for resolving relative paths (default: cwd)
+ * @param basePath Base directory for resolving relative paths
  * @returns WorkflowConfig or null if file not found
  */
 function loadWorkflowFromPath(
   filePath: string,
-  basePath: string = process.cwd()
+  basePath: string
 ): WorkflowConfig | null {
   const resolvedPath = resolvePath(filePath, basePath);
 
@@ -295,11 +295,11 @@ function loadWorkflowFromPath(
  * 3. Builtin workflows → resources/global/{lang}/workflows/{name}.yaml
  *
  * @param name Workflow name (not a file path)
- * @param projectCwd Project root directory (default: cwd, for project-local workflow resolution)
+ * @param projectCwd Project root directory (for project-local workflow resolution)
  */
 export function loadWorkflow(
   name: string,
-  projectCwd: string = process.cwd()
+  projectCwd: string
 ): WorkflowConfig | null {
   // 1. Project-local workflow (.takt/workflows/{name}.yaml)
   const projectWorkflowsDir = join(getProjectConfigDir(projectCwd), 'workflows');

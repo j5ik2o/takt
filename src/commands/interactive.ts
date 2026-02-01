@@ -17,7 +17,8 @@ import { isQuietMode } from '../cli.js';
 import { loadAgentSessions, updateAgentSession } from '../config/paths.js';
 import { getProvider, type ProviderType } from '../providers/index.js';
 import { createLogger } from '../utils/debug.js';
-import { info, StreamDisplay } from '../utils/ui.js';
+import { getErrorMessage } from '../utils/error.js';
+import { info, error, blankLine, StreamDisplay } from '../utils/ui.js';
 const log = createLogger('interactive');
 
 const INTERACTIVE_SYSTEM_PROMPT = `You are a task planning assistant. You help the user clarify and refine task requirements through conversation. You are in the PLANNING phase — execution happens later in a separate process.
@@ -148,7 +149,7 @@ export async function interactiveMode(cwd: string, initialInput?: string): Promi
   if (sessionId) {
     info('Resuming previous session');
   }
-  console.log();
+  blankLine();
 
   /** Call AI with automatic retry on session error (stale/invalid session ID). */
   async function callAIWithRetry(prompt: string): Promise<CallAIResult | null> {
@@ -173,10 +174,10 @@ export async function interactiveMode(cwd: string, initialInput?: string): Promi
       }
       return result;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = getErrorMessage(e);
       log.error('AI call failed', { error: msg });
-      console.log(chalk.red(`Error: ${msg}`));
-      console.log();
+      error(msg);
+      blankLine();
       return null;
     }
   }
@@ -189,7 +190,7 @@ export async function interactiveMode(cwd: string, initialInput?: string): Promi
     const result = await callAIWithRetry(initialInput);
     if (result) {
       history.push({ role: 'assistant', content: result.content });
-      console.log();
+      blankLine();
     } else {
       history.pop();
     }
@@ -200,7 +201,7 @@ export async function interactiveMode(cwd: string, initialInput?: string): Promi
 
     // EOF (Ctrl+D)
     if (input === null) {
-      console.log();
+      blankLine();
       info('Cancelled');
       return { confirmed: false, task: '' };
     }
@@ -238,7 +239,7 @@ export async function interactiveMode(cwd: string, initialInput?: string): Promi
     const result = await callAIWithRetry(trimmed);
     if (result) {
       history.push({ role: 'assistant', content: result.content });
-      console.log();
+      blankLine();
     } else {
       history.pop();
     }

@@ -75,7 +75,7 @@ describe('loadWorkflowByIdentifier', () => {
   });
 
   it('should load workflow by name (builtin)', () => {
-    const workflow = loadWorkflowByIdentifier('default');
+    const workflow = loadWorkflowByIdentifier('default', process.cwd());
     expect(workflow).not.toBeNull();
     expect(workflow!.name).toBe('default');
   });
@@ -108,7 +108,7 @@ describe('loadWorkflowByIdentifier', () => {
   });
 
   it('should return null for non-existent name', () => {
-    const workflow = loadWorkflowByIdentifier('non-existent-workflow-xyz');
+    const workflow = loadWorkflowByIdentifier('non-existent-workflow-xyz', process.cwd());
     expect(workflow).toBeNull();
   });
 

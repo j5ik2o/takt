@@ -200,22 +200,22 @@ steps:
 
 describe('loadWorkflow (builtin fallback)', () => {
   it('should load builtin workflow when user workflow does not exist', () => {
-    const workflow = loadWorkflow('default');
+    const workflow = loadWorkflow('default', process.cwd());
     expect(workflow).not.toBeNull();
     expect(workflow!.name).toBe('default');
   });
 
   it('should return null for non-existent workflow', () => {
-    const workflow = loadWorkflow('does-not-exist');
+    const workflow = loadWorkflow('does-not-exist', process.cwd());
     expect(workflow).toBeNull();
   });
 
   it('should load builtin workflows like simple, research', () => {
-    const simple = loadWorkflow('simple');
+    const simple = loadWorkflow('simple', process.cwd());
     expect(simple).not.toBeNull();
     expect(simple!.name).toBe('simple');
 
-    const research = loadWorkflow('research');
+    const research = loadWorkflow('research', process.cwd());
     expect(research).not.toBeNull();
     expect(research!.name).toBe('research');
   });

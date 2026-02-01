@@ -49,6 +49,7 @@ vi.mock('../utils/ui.js', () => ({
   error: vi.fn(),
   success: vi.fn(),
   status: vi.fn(),
+  blankLine: vi.fn(),
   StreamDisplay: vi.fn().mockImplementation(() => ({
     createHandler: () => vi.fn(),
     flush: vi.fn(),

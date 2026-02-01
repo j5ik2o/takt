@@ -168,6 +168,7 @@ describe('Workflow Engine IT: Happy Path', () => {
 
     const config = buildSimpleWorkflow(agentPaths);
     const engine = new WorkflowEngine(config, testDir, 'Test task', {
+      projectCwd: testDir,
       provider: 'mock',
     });
 
@@ -184,6 +185,7 @@ describe('Workflow Engine IT: Happy Path', () => {
 
     const config = buildSimpleWorkflow(agentPaths);
     const engine = new WorkflowEngine(config, testDir, 'Vague task', {
+      projectCwd: testDir,
       provider: 'mock',
     });
 
@@ -226,6 +228,7 @@ describe('Workflow Engine IT: Fix Loop', () => {
 
     const config = buildLoopWorkflow(agentPaths);
     const engine = new WorkflowEngine(config, testDir, 'Task needing fix', {
+      projectCwd: testDir,
       provider: 'mock',
     });
 
@@ -245,6 +248,7 @@ describe('Workflow Engine IT: Fix Loop', () => {
 
     const config = buildLoopWorkflow(agentPaths);
     const engine = new WorkflowEngine(config, testDir, 'Unfixable task', {
+      projectCwd: testDir,
       provider: 'mock',
     });
 
@@ -282,6 +286,7 @@ describe('Workflow Engine IT: Max Iterations', () => {
     config.maxIterations = 5;
 
     const engine = new WorkflowEngine(config, testDir, 'Looping task', {
+      projectCwd: testDir,
       provider: 'mock',
     });
 
@@ -317,6 +322,7 @@ describe('Workflow Engine IT: Step Output Tracking', () => {
 
     const config = buildSimpleWorkflow(agentPaths);
     const engine = new WorkflowEngine(config, testDir, 'Track outputs', {
+      projectCwd: testDir,
       provider: 'mock',
     });
 

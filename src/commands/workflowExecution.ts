@@ -22,6 +22,7 @@ import {
   error,
   success,
   status,
+  blankLine,
   StreamDisplay,
 } from '../utils/ui.js';
 import {
@@ -71,8 +72,8 @@ export interface WorkflowExecutionResult {
 export interface WorkflowExecutionOptions {
   /** Header prefix for display */
   headerPrefix?: string;
-  /** Project root directory (where .takt/ lives). Defaults to cwd. */
-  projectCwd?: string;
+  /** Project root directory (where .takt/ lives). */
+  projectCwd: string;
   /** Language for instruction metadata */
   language?: Language;
   provider?: ProviderType;
@@ -86,14 +87,14 @@ export async function executeWorkflow(
   workflowConfig: WorkflowConfig,
   task: string,
   cwd: string,
-  options: WorkflowExecutionOptions = {}
+  options: WorkflowExecutionOptions
 ): Promise<WorkflowExecutionResult> {
   const {
     headerPrefix = 'Running Workflow:',
   } = options;
 
   // projectCwd is where .takt/ lives (project root, not the clone)
-  const projectCwd = options.projectCwd ?? cwd;
+  const projectCwd = options.projectCwd;
 
   // Always continue from previous sessions (use /clear to reset)
   log.debug('Continuing session (use /clear to reset)');
@@ -144,7 +145,7 @@ export async function executeWorkflow(
       displayRef.current = null;
     }
 
-    console.log();
+    blankLine();
     warn(
       `最大イテレーションに到達しました (${request.currentIteration}/${request.maxIterations})`
     );
@@ -230,7 +231,7 @@ export async function executeWorkflow(
       displayRef.current.flush();
       displayRef.current = null;
     }
-    console.log();
+    blankLine();
 
     if (response.matchedRuleIndex != null && step.rules) {
       const rule = step.rules[response.matchedRuleIndex];
@@ -334,11 +335,11 @@ export async function executeWorkflow(
   const onSigInt = () => {
     sigintCount++;
     if (sigintCount === 1) {
-      console.log();
+      blankLine();
       warn('Ctrl+C: ワークフローを中断しています...');
       engine.abort();
     } else {
-      console.log();
+      blankLine();
       error('Ctrl+C: 強制終了します');
       process.exit(EXIT_SIGINT);
     }

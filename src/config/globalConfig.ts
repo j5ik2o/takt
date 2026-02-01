@@ -23,16 +23,29 @@ function createDefaultGlobalConfig(): GlobalConfig {
   };
 }
 
+/** Module-level cache for global configuration */
+let cachedConfig: GlobalConfig | null = null;
+
+/** Invalidate the cached global configuration (call after mutation) */
+export function invalidateGlobalConfigCache(): void {
+  cachedConfig = null;
+}
+
 /** Load global configuration */
 export function loadGlobalConfig(): GlobalConfig {
+  if (cachedConfig !== null) {
+    return cachedConfig;
+  }
   const configPath = getGlobalConfigPath();
   if (!existsSync(configPath)) {
-    return createDefaultGlobalConfig();
+    const defaultConfig = createDefaultGlobalConfig();
+    cachedConfig = defaultConfig;
+    return defaultConfig;
   }
   const content = readFileSync(configPath, 'utf-8');
   const raw = parseYaml(content);
   const parsed = GlobalConfigSchema.parse(raw);
-  return {
+  const config: GlobalConfig = {
     language: parsed.language,
     trustedDirectories: parsed.trusted_directories,
     defaultWorkflow: parsed.default_workflow,
@@ -54,6 +67,8 @@ export function loadGlobalConfig(): GlobalConfig {
     } : undefined,
     minimalOutput: parsed.minimal_output,
   };
+  cachedConfig = config;
+  return config;
 }
 
 /** Save global configuration */
@@ -100,6 +115,7 @@ export function saveGlobalConfig(config: GlobalConfig): void {
     raw.minimal_output = config.minimalOutput;
   }
   writeFileSync(configPath, stringifyYaml(raw), 'utf-8');
+  invalidateGlobalConfigCache();
 }
 
 /** Get list of disabled builtin names */

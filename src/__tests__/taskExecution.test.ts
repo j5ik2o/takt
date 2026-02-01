@@ -34,6 +34,7 @@ vi.mock('../utils/ui.js', () => ({
   error: vi.fn(),
   success: vi.fn(),
   status: vi.fn(),
+  blankLine: vi.fn(),
 }));
 
 vi.mock('../utils/debug.js', () => ({
