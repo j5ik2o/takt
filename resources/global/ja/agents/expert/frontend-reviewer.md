@@ -343,7 +343,9 @@ function OrderList() {
 }
 ```
 
-### 6. データと表示形式の責務分離
+### 6. フロントエンドとバックエンドの責務分離
+
+#### 6.1 表示形式の責務
 
 **原則: バックエンドは「データ」を返し、フロントエンドが「表示形式」に変換する。**
 
@@ -370,6 +372,97 @@ export function formatDate(date: Date): string {
 | バックエンドが表示用文字列を返している | 設計見直しを提案 |
 | 同じフォーマット処理が複数箇所にコピペ | ユーティリティ関数に統一 |
 | コンポーネント内でインラインフォーマット | 関数に抽出 |
+
+#### 6.2 ドメインロジックの配置（SmartUI排除）
+
+**原則: ドメインロジック（ビジネスルール）はバックエンドに配置。フロントエンドは状態の表示・編集のみ。**
+
+**ドメインロジックとは:**
+- 集約のビジネスルール（在庫判定、価格計算、ステータス遷移）
+- バリデーション（業務制約の検証）
+- 不変条件の保証
+
+**フロントエンドの責務:**
+- サーバーから受け取った状態を表示
+- ユーザー入力を収集し、コマンドとしてバックエンドに送信
+- UI専用の一時状態管理（フォーカス、ホバー、モーダル開閉）
+- 表示形式の変換（フォーマット、ソート、フィルタ）
+
+**必須チェック:**
+
+| 基準 | 判定 |
+|------|------|
+| フロントエンドで価格計算・在庫判定 | バックエンドに移動 → **REJECT** |
+| フロントエンドでステータス遷移ルール | バックエンドに移動 → **REJECT** |
+| フロントエンドでビジネスバリデーション | バックエンドに移動 → **REJECT** |
+| サーバー側で計算可能な値をフロントで再計算 | 冗長 → **REJECT** |
+
+**良い例 vs 悪い例:**
+
+```tsx
+// ❌ BAD - フロントエンドでビジネスルール
+function OrderForm({ order }: { order: Order }) {
+  const totalPrice = order.items.reduce((sum, item) =>
+    sum + item.price * item.quantity, 0
+  )
+  const canCheckout = totalPrice >= 1000 && order.items.every(i => i.stock > 0)
+
+  return <button disabled={!canCheckout}>注文確定</button>
+}
+
+// ✅ GOOD - バックエンドから受け取った状態を表示
+function OrderForm({ order }: { order: Order }) {
+  // totalPrice, canCheckout はサーバーから受け取る
+  return (
+    <>
+      <div>{formatPrice(order.totalPrice)}</div>
+      <button disabled={!order.canCheckout}>注文確定</button>
+    </>
+  )
+}
+```
+
+```tsx
+// ❌ BAD - フロントエンドでステータス遷移判定
+function TaskCard({ task }: { task: Task }) {
+  const canStart = task.status === 'pending' && task.assignee !== null
+  const canComplete = task.status === 'in_progress' && /* 複雑な条件... */
+
+  return (
+    <>
+      <button onClick={startTask} disabled={!canStart}>開始</button>
+      <button onClick={completeTask} disabled={!canComplete}>完了</button>
+    </>
+  )
+}
+
+// ✅ GOOD - サーバーが許可するアクションを返す
+function TaskCard({ task }: { task: Task }) {
+  // task.allowedActions = ['start', 'cancel'] など、サーバーが計算
+  const canStart = task.allowedActions.includes('start')
+  const canComplete = task.allowedActions.includes('complete')
+
+  return (
+    <>
+      <button onClick={startTask} disabled={!canStart}>開始</button>
+      <button onClick={completeTask} disabled={!canComplete}>完了</button>
+    </>
+  )
+}
+```
+
+**例外（フロントエンドにロジックを置いてもOK）:**
+
+| ケース | 理由 |
+|--------|------|
+| UI専用バリデーション | 「必須入力」「文字数制限」等のUXフィードバック（サーバー側でも検証必須） |
+| クライアント側フィルタ/ソート | サーバーから受け取ったリストの表示順序変更 |
+| 表示条件の分岐 | 「ログイン済みなら詳細表示」等のUI制御 |
+| リアルタイムフィードバック | 入力中のプレビュー表示 |
+
+**判断基準: 「この計算結果がサーバーとズレたら業務が壊れるか？」**
+- YES → バックエンドに配置（ドメインロジック）
+- NO → フロントエンドでもOK（表示ロジック）
 
 ### 7. パフォーマンス
 
