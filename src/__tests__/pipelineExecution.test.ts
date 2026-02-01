@@ -150,7 +150,7 @@ describe('executePipeline', () => {
       'Fix the bug',
       '/tmp/test',
       'default',
-      undefined,
+      '/tmp/test',
       undefined,
     );
   });
@@ -172,7 +172,7 @@ describe('executePipeline', () => {
       'Fix the bug',
       '/tmp/test',
       'default',
-      undefined,
+      '/tmp/test',
       { provider: 'codex', model: 'codex-model' },
     );
   });
@@ -229,7 +229,7 @@ describe('executePipeline', () => {
       'From --task flag',
       '/tmp/test',
       'magi',
-      undefined,
+      '/tmp/test',
       undefined,
     );
   });
@@ -389,7 +389,7 @@ describe('executePipeline', () => {
         'Fix the bug',
         '/tmp/test',
         'default',
-        undefined,
+        '/tmp/test',
         undefined,
       );
 

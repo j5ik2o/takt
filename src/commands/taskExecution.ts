@@ -2,7 +2,7 @@
  * Task execution logic
  */
 
-import { loadWorkflow, loadGlobalConfig } from '../config/index.js';
+import { loadWorkflowByIdentifier, isWorkflowPath, loadGlobalConfig } from '../config/index.js';
 import { TaskRunner, type TaskInfo } from '../task/index.js';
 import { createSharedClone } from '../task/clone.js';
 import { autoCommitAndPush } from '../task/autoCommit.js';
@@ -28,31 +28,38 @@ export interface TaskExecutionOptions {
 }
 
 /**
- * Execute a single task with workflow
+ * Execute a single task with workflow.
+ *
  * @param task - Task content
  * @param cwd - Working directory (may be a clone path)
- * @param workflowName - Workflow to use
+ * @param workflowIdentifier - Workflow name or path (auto-detected by isWorkflowPath)
  * @param projectCwd - Project root (where .takt/ lives). Defaults to cwd.
  */
 export async function executeTask(
   task: string,
   cwd: string,
-  workflowName: string = DEFAULT_WORKFLOW_NAME,
+  workflowIdentifier: string = DEFAULT_WORKFLOW_NAME,
   projectCwd?: string,
   options?: TaskExecutionOptions
 ): Promise<boolean> {
-  const workflowConfig = loadWorkflow(workflowName);
+  const effectiveProjectCwd = projectCwd || cwd;
+
+  const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, effectiveProjectCwd);
 
   if (!workflowConfig) {
-    error(`Workflow "${workflowName}" not found.`);
-    info('Available workflows are in ~/.takt/workflows/');
-    info('Use "takt switch" to select a workflow.');
+    if (isWorkflowPath(workflowIdentifier)) {
+      error(`Workflow file not found: ${workflowIdentifier}`);
+    } else {
+      error(`Workflow "${workflowIdentifier}" not found.`);
+      info('Available workflows are in ~/.takt/workflows/ or .takt/workflows/');
+      info('Use "takt switch" to select a workflow.');
+    }
     return false;
   }
 
   log.debug('Running workflow', {
     name: workflowConfig.name,
-    steps: workflowConfig.steps.map(s => s.name),
+    steps: workflowConfig.steps.map((s: { name: string }) => s.name),
   });
 
   const globalConfig = loadGlobalConfig();

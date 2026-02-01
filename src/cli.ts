@@ -41,7 +41,7 @@ import {
   interactiveMode,
   executePipeline,
 } from './commands/index.js';
-import { listWorkflows } from './config/workflowLoader.js';
+import { listWorkflows, isWorkflowPath } from './config/workflowLoader.js';
 import { selectOptionWithDefault, confirm } from './prompt/index.js';
 import { createSharedClone } from './task/clone.js';
 import { autoCommitAndPush } from './task/autoCommit.js';
@@ -80,7 +80,7 @@ export interface WorktreeConfirmationResult {
  * Returns the selected workflow name, or null if cancelled.
  */
 async function selectWorkflow(cwd: string): Promise<string | null> {
-  const availableWorkflows = listWorkflows();
+  const availableWorkflows = listWorkflows(cwd);
   const currentWorkflow = getCurrentWorkflow(cwd);
 
   if (availableWorkflows.length === 0) {
@@ -123,9 +123,9 @@ async function selectAndExecuteTask(
   options?: SelectAndExecuteOptions,
   agentOverrides?: TaskExecutionOptions,
 ): Promise<void> {
-  const selectedWorkflow = await determineWorkflow(cwd, options?.workflow);
+  const workflowIdentifier = await determineWorkflow(cwd, options?.workflow);
 
-  if (selectedWorkflow === null) {
+  if (workflowIdentifier === null) {
     info('Cancelled');
     return;
   }
@@ -136,8 +136,8 @@ async function selectAndExecuteTask(
     options?.createWorktree,
   );
 
-  log.info('Starting task execution', { workflow: selectedWorkflow, worktree: isWorktree });
-  const taskSuccess = await executeTask(task, execCwd, selectedWorkflow, cwd, agentOverrides);
+  log.info('Starting task execution', { workflow: workflowIdentifier, worktree: isWorktree });
+  const taskSuccess = await executeTask(task, execCwd, workflowIdentifier, cwd, agentOverrides);
 
   if (taskSuccess && isWorktree) {
     const commitResult = autoCommitAndPush(execCwd, task, cwd);
@@ -152,7 +152,7 @@ async function selectAndExecuteTask(
       const shouldCreatePr = options?.autoPr === true || await confirm('Create pull request?', false);
       if (shouldCreatePr) {
         info('Creating pull request...');
-        const prBody = buildPrBody(undefined, `Workflow \`${selectedWorkflow}\` completed successfully.`);
+        const prBody = buildPrBody(undefined, `Workflow \`${workflowIdentifier}\` completed successfully.`);
         const prResult = createPullRequest(execCwd, {
           branch,
           title: task.length > 100 ? `${task.slice(0, 97)}...` : task,
@@ -174,13 +174,20 @@ async function selectAndExecuteTask(
 }
 
 /**
- * Ask user whether to create a shared clone, and create one if confirmed.
- * Returns the execution directory and whether a clone was created.
- * Task name is summarized to English by AI for use in branch/clone names.
+ * Determine workflow to use.
+ *
+ * - If override looks like a path (isWorkflowPath), return it directly (validation is done at load time).
+ * - If override is a name, validate it exists in available workflows.
+ * - If no override, prompt user to select interactively.
  */
 async function determineWorkflow(cwd: string, override?: string): Promise<string | null> {
   if (override) {
-    const availableWorkflows = listWorkflows();
+    // Path-based: skip name validation (loader handles existence check)
+    if (isWorkflowPath(override)) {
+      return override;
+    }
+    // Name-based: validate workflow name exists
+    const availableWorkflows = listWorkflows(cwd);
     const knownWorkflows = availableWorkflows.length === 0 ? [DEFAULT_WORKFLOW_NAME] : availableWorkflows;
     if (!knownWorkflows.includes(override)) {
       error(`Workflow not found: ${override}`);
@@ -257,7 +264,7 @@ program
 // --- Global options ---
 program
   .option('-i, --issue <number>', 'GitHub issue number (equivalent to #N)', (val: string) => parseInt(val, 10))
-  .option('-w, --workflow <name>', 'Workflow to use')
+  .option('-w, --workflow <name>', 'Workflow name or path to workflow file')
   .option('-b, --branch <name>', 'Branch name (auto-generated if omitted)')
   .option('--auto-pr', 'Create PR after successful execution')
   .option('--repo <owner/repo>', 'Repository (defaults to current)')

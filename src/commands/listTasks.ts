@@ -222,7 +222,7 @@ export function deleteBranch(projectDir: string, item: BranchListItem): boolean 
  * If multiple workflows available, prompt user to select.
  */
 async function selectWorkflowForInstruction(projectDir: string): Promise<string | null> {
-  const availableWorkflows = listWorkflows();
+  const availableWorkflows = listWorkflows(projectDir);
   const currentWorkflow = getCurrentWorkflow(projectDir);
 
   if (availableWorkflows.length === 0) {
