@@ -1,23 +1,36 @@
 # TAKT
 
-**T**ask **A**gent **K**oordination **T**ool - Claude CodeとOpenAI Codex向けのマルチエージェントオーケストレーションシステム
+**T**ask **A**gent **K**oordination **T**ool - AIエージェントを「安全に」「責任を持って」運用するための協調制御システム
+
+TAKTは、Claude CodeやCodexなどのAIエージェントを、組織のルールとワークフローに従って協調させます。誰が責任を持つか・どこまで許可するか・失敗時にどう戻すか を明確にしながら、複雑な開発タスクを自動化します。
 
 TAKTはTAKT自身で開発されています（ドッグフーディング）。
 
+## TAKTが向いているチーム
+
+- **CI/CDにAIを組み込みたいが、暴走が怖い** — ワークフロー定義で制御範囲を明確化
+- **PRの自動生成をしたいが、監査ログが必要** — 全ての実行履歴を記録・追跡可能
+- **複数のAIモデルを使い分けたいが、統一的に管理したい** — Claude/Codex/モックを同じワークフローで制御
+- **エージェントの失敗を再現・デバッグしたい** — セッションログとレポートで完全な履歴を保持
+
+## TAKTとは何でないか
+
+- **自律型AIエンジニアの代替ではありません** — TAKT自身が実装を完結するのではなく、複数のエージェントを統治・協調させます
+- **Claude Code Swarmの競合ではありません** — Swarmの実行力を活かしつつ、TAKTはワークフロー/権限/監査ログなど「運用のガードレール」を提供します
+- **単なるワークフローエンジンではありません** — 非決定性、責任所在、監査要件、再現性といったAI特有の課題に対応した設計です
+
 ## 必要条件
 
-次のいずれかが必要です。
+次のいずれかを選択してください。
 
-- **Anthropic API Key** または **OpenAI API Key**
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) または [Codex](https://github.com/openai/codex) がインストール・設定済みであること
+- **プロバイダーCLIを使用**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) または [Codex](https://github.com/openai/codex) をインストール
+- **API直接利用**: **Anthropic API Key** または **OpenAI API Key**（CLI不要）
 
 追加で必要なもの:
 
 - [GitHub CLI](https://cli.github.com/) (`gh`) — `takt #N`（GitHub Issue実行）を使う場合のみ必要
 
-**料金について**: TAKT は API Key を使用する場合、Claude API（Anthropic）または OpenAI API を直接呼び出します。これは Claude Code や Codex を使った場合と同じ料金体系になります。特に CI/CD で自動実行する場合、API 使用量が増えるため、コストに注意してください。
-
-TAKTは Claude（Anthropic）と Codex（OpenAI）の両方をプロバイダーとしてサポートしています。
+**料金について**: API Key を使用する場合、TAKT は Claude API（Anthropic）または OpenAI API を直接呼び出します。料金体系は Claude Code や Codex を使った場合と同じです。特に CI/CD で自動実行する場合、API 使用量が増えるため、コストに注意してください。
 
 ## インストール
 

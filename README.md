@@ -2,24 +2,37 @@
 
 🇯🇵 [日本語ドキュメント](./docs/README.ja.md)
 
-**T**ask **A**gent **K**oordination **T**ool - Multi-agent orchestration system for Claude Code and OpenAI Codex
+**T**ask **A**gent **K**oordination **T**ool - A governance-first orchestrator for running coding agents safely and responsibly
+
+TAKT coordinates AI agents like Claude Code and Codex according to your organization's rules and workflows. It clarifies who is responsible, what is permitted, and how to recover from failures, while automating complex development tasks.
 
 TAKT is built with TAKT itself (dogfooding).
 
+## TAKT is For Teams That Need
+
+- **Want to integrate AI into CI/CD but fear runaway execution** — Clarify control scope with workflow definitions
+- **Want automated PR generation but need audit logs** — Record and track all execution history
+- **Want to use multiple AI models but manage them uniformly** — Control Claude/Codex/Mock with the same workflow
+- **Want to reproduce and debug agent failures** — Maintain complete history with session logs and reports
+
+## What TAKT is NOT
+
+- **Not an autonomous engineer** — TAKT doesn't complete implementations itself; it governs and coordinates multiple agents
+- **Not competing with Claude Code Swarm** — While leveraging Swarm's execution power, TAKT provides "operational guardrails" such as workflow definitions, permission controls, and audit logs
+- **Not just a workflow engine** — TAKT is designed to address AI-specific challenges (non-determinism, accountability, audit requirements, and reproducibility)
+
 ## Requirements
 
-You need one of the following:
+Choose one:
 
-- **Anthropic API Key** or **OpenAI API Key**
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://github.com/openai/codex) installed and configured
+- **Use provider CLIs**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://github.com/openai/codex) installed
+- **Use direct API**: **Anthropic API Key** or **OpenAI API Key** (no CLI required)
 
 Additionally required:
 
 - [GitHub CLI](https://cli.github.com/) (`gh`) — Only needed for `takt #N` (GitHub Issue execution)
 
-**Pricing Note**: When using API Keys, TAKT directly calls the Claude API (Anthropic) or OpenAI API. This uses the same pricing structure as using Claude Code or Codex. Be mindful of costs, especially when running automated tasks in CI/CD environments, as API usage can accumulate.
-
-TAKT supports both Claude (Anthropic) and Codex (OpenAI) as providers.
+**Pricing Note**: When using API Keys, TAKT directly calls the Claude API (Anthropic) or OpenAI API. The pricing structure is the same as using Claude Code or Codex. Be mindful of costs, especially when running automated tasks in CI/CD environments, as API usage can accumulate.
 
 ## Installation
 
