@@ -73,12 +73,48 @@ export interface NdjsonWorkflowAbort {
   endTime: string;
 }
 
+export interface NdjsonPhaseStart {
+  type: 'phase_start';
+  step: string;
+  phase: 1 | 2 | 3;
+  phaseName: 'execute' | 'report' | 'judge';
+  timestamp: string;
+  instruction?: string;
+}
+
+export interface NdjsonPhaseComplete {
+  type: 'phase_complete';
+  step: string;
+  phase: 1 | 2 | 3;
+  phaseName: 'execute' | 'report' | 'judge';
+  status: string;
+  content?: string;
+  timestamp: string;
+  error?: string;
+}
+
+export interface NdjsonInteractiveStart {
+  type: 'interactive_start';
+  timestamp: string;
+}
+
+export interface NdjsonInteractiveEnd {
+  type: 'interactive_end';
+  confirmed: boolean;
+  task?: string;
+  timestamp: string;
+}
+
 export type NdjsonRecord =
   | NdjsonWorkflowStart
   | NdjsonStepStart
   | NdjsonStepComplete
   | NdjsonWorkflowComplete
-  | NdjsonWorkflowAbort;
+  | NdjsonWorkflowAbort
+  | NdjsonPhaseStart
+  | NdjsonPhaseComplete
+  | NdjsonInteractiveStart
+  | NdjsonInteractiveEnd;
 
 // --- Conversation log types ---
 

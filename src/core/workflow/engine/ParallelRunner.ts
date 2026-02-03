@@ -18,7 +18,7 @@ import { incrementStepIteration } from './state-manager.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
 import type { StepExecutor } from './StepExecutor.js';
-import type { WorkflowEngineOptions } from '../types.js';
+import type { WorkflowEngineOptions, PhaseName } from '../types.js';
 
 const log = createLogger('parallel-runner');
 
@@ -35,6 +35,8 @@ export interface ParallelRunnerDeps {
     conditions: Array<{ index: number; text: string }>,
     options: { cwd: string }
   ) => Promise<number>;
+  readonly onPhaseStart?: (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void;
+  readonly onPhaseComplete?: (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void;
 }
 
 export class ParallelRunner {
@@ -69,7 +71,7 @@ export class ParallelRunner {
         })
       : undefined;
 
-    const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(state, updateAgentSession);
+    const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(state, updateAgentSession, this.deps.onPhaseStart, this.deps.onPhaseComplete);
     const ruleCtx = {
       state,
       cwd: this.deps.getCwd(),
@@ -93,8 +95,10 @@ export class ParallelRunner {
           : baseOptions;
 
         const subSessionKey = subStep.agent ?? subStep.name;
+        this.deps.onPhaseStart?.(subStep, 1, 'execute', subInstruction);
         const subResponse = await runAgent(subStep.agent, subInstruction, agentOptions);
         updateAgentSession(subSessionKey, subResponse.sessionId);
+        this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error);
 
         // Phase 2: report output for sub-step
         if (subStep.report) {

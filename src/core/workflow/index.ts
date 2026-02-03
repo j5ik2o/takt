@@ -14,6 +14,7 @@ export { COMPLETE_STEP, ABORT_STEP, ERROR_MESSAGES } from './constants.js';
 // Types
 export type {
   WorkflowEvents,
+  PhaseName,
   UserInputRequest,
   IterationLimitRequest,
   SessionUpdateCallback,

@@ -8,6 +8,7 @@
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
 import type { WorkflowStep, Language } from '../models/types.js';
+import type { PhaseName } from './types.js';
 import { runAgent, type RunAgentOptions } from '../../agents/runner.js';
 import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder.js';
 import { StatusJudgmentBuilder } from './instruction/StatusJudgmentBuilder.js';
@@ -32,6 +33,10 @@ export interface PhaseRunnerContext {
   buildResumeOptions: (step: WorkflowStep, sessionId: string, overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>) => RunAgentOptions;
   /** Update agent session after a phase run */
   updateAgentSession: (agent: string, sessionId: string | undefined) => void;
+  /** Callback for phase lifecycle logging */
+  onPhaseStart?: (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void;
+  /** Callback for phase completion logging */
+  onPhaseComplete?: (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void;
 }
 
 /**
@@ -145,16 +150,26 @@ export async function runReportPhase(
     language: ctx.language,
   }).build();
 
+  ctx.onPhaseStart?.(step, 2, 'report', reportInstruction);
+
   const reportOptions = ctx.buildResumeOptions(step, sessionId, {
     allowedTools: [],
     maxTurns: 3,
   });
 
-  const reportResponse = await runAgent(step.agent, reportInstruction, reportOptions);
+  let reportResponse;
+  try {
+    reportResponse = await runAgent(step.agent, reportInstruction, reportOptions);
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    ctx.onPhaseComplete?.(step, 2, 'report', '', 'error', errorMsg);
+    throw error;
+  }
 
   // Check for errors in report phase
   if (reportResponse.status !== 'done') {
     const errorMsg = reportResponse.error || reportResponse.content || 'Unknown error';
+    ctx.onPhaseComplete?.(step, 2, 'report', reportResponse.content, reportResponse.status, errorMsg);
     throw new Error(`Report phase failed: ${errorMsg}`);
   }
 
@@ -166,6 +181,7 @@ export async function runReportPhase(
   // Update session (phase 2 may update it)
   ctx.updateAgentSession(sessionKey, reportResponse.sessionId);
 
+  ctx.onPhaseComplete?.(step, 2, 'report', reportResponse.content, reportResponse.status);
   log.debug('Report phase complete', { step: step.name, status: reportResponse.status });
 }
 
@@ -191,22 +207,33 @@ export async function runStatusJudgmentPhase(
     interactive: ctx.interactive,
   }).build();
 
+  ctx.onPhaseStart?.(step, 3, 'judge', judgmentInstruction);
+
   const judgmentOptions = ctx.buildResumeOptions(step, sessionId, {
     allowedTools: [],
     maxTurns: 3,
   });
 
-  const judgmentResponse = await runAgent(step.agent, judgmentInstruction, judgmentOptions);
+  let judgmentResponse;
+  try {
+    judgmentResponse = await runAgent(step.agent, judgmentInstruction, judgmentOptions);
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    ctx.onPhaseComplete?.(step, 3, 'judge', '', 'error', errorMsg);
+    throw error;
+  }
 
   // Check for errors in status judgment phase
   if (judgmentResponse.status !== 'done') {
     const errorMsg = judgmentResponse.error || judgmentResponse.content || 'Unknown error';
+    ctx.onPhaseComplete?.(step, 3, 'judge', judgmentResponse.content, judgmentResponse.status, errorMsg);
     throw new Error(`Status judgment phase failed: ${errorMsg}`);
   }
 
   // Update session (phase 3 may update it)
   ctx.updateAgentSession(sessionKey, judgmentResponse.sessionId);
 
+  ctx.onPhaseComplete?.(step, 3, 'judge', judgmentResponse.content, judgmentResponse.status);
   log.debug('Status judgment phase complete', { step: step.name, status: judgmentResponse.status });
   return judgmentResponse.content;
 }

@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import type { WorkflowStep, WorkflowState, Language } from '../../models/types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { PhaseRunnerContext } from '../phase-runner.js';
-import type { WorkflowEngineOptions } from '../types.js';
+import type { WorkflowEngineOptions, PhaseName } from '../types.js';
 
 export class OptionsBuilder {
   constructor(
@@ -75,6 +75,8 @@ export class OptionsBuilder {
   buildPhaseRunnerContext(
     state: WorkflowState,
     updateAgentSession: (agent: string, sessionId: string | undefined) => void,
+    onPhaseStart?: (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void,
+    onPhaseComplete?: (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void,
   ): PhaseRunnerContext {
     return {
       cwd: this.getCwd(),
@@ -84,6 +86,8 @@ export class OptionsBuilder {
       getSessionId: (agent: string) => state.agentSessions.get(agent),
       buildResumeOptions: this.buildResumeOptions.bind(this),
       updateAgentSession,
+      onPhaseStart,
+      onPhaseComplete,
     };
   }
 }

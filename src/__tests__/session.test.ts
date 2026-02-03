@@ -19,6 +19,10 @@ import {
   type NdjsonStepComplete,
   type NdjsonWorkflowComplete,
   type NdjsonWorkflowAbort,
+  type NdjsonPhaseStart,
+  type NdjsonPhaseComplete,
+  type NdjsonInteractiveStart,
+  type NdjsonInteractiveEnd,
 } from '../infra/fs/session.js';
 
 /** Create a temp project directory with .takt/logs structure */
@@ -443,6 +447,195 @@ describe('NDJSON log', () => {
       for (const line of lines) {
         expect(() => JSON.parse(line)).not.toThrow();
       }
+    });
+  });
+
+  describe('phase NDJSON records', () => {
+    it('should serialize and append phase_start records', () => {
+      const filepath = initNdjsonLog('sess-phase-001', 'task', 'wf', projectDir);
+
+      const record: NdjsonPhaseStart = {
+        type: 'phase_start',
+        step: 'plan',
+        phase: 1,
+        phaseName: 'execute',
+        timestamp: '2025-01-01T00:00:01.000Z',
+        instruction: 'Do the planning',
+      };
+      appendNdjsonLine(filepath, record);
+
+      const content = readFileSync(filepath, 'utf-8');
+      const lines = content.trim().split('\n');
+      expect(lines).toHaveLength(2); // workflow_start + phase_start
+
+      const parsed = JSON.parse(lines[1]!) as NdjsonRecord;
+      expect(parsed.type).toBe('phase_start');
+      if (parsed.type === 'phase_start') {
+        expect(parsed.step).toBe('plan');
+        expect(parsed.phase).toBe(1);
+        expect(parsed.phaseName).toBe('execute');
+        expect(parsed.instruction).toBe('Do the planning');
+      }
+    });
+
+    it('should serialize and append phase_complete records', () => {
+      const filepath = initNdjsonLog('sess-phase-002', 'task', 'wf', projectDir);
+
+      const record: NdjsonPhaseComplete = {
+        type: 'phase_complete',
+        step: 'plan',
+        phase: 2,
+        phaseName: 'report',
+        status: 'done',
+        content: 'Report output',
+        timestamp: '2025-01-01T00:00:02.000Z',
+      };
+      appendNdjsonLine(filepath, record);
+
+      const content = readFileSync(filepath, 'utf-8');
+      const lines = content.trim().split('\n');
+      expect(lines).toHaveLength(2);
+
+      const parsed = JSON.parse(lines[1]!) as NdjsonRecord;
+      expect(parsed.type).toBe('phase_complete');
+      if (parsed.type === 'phase_complete') {
+        expect(parsed.step).toBe('plan');
+        expect(parsed.phase).toBe(2);
+        expect(parsed.phaseName).toBe('report');
+        expect(parsed.status).toBe('done');
+        expect(parsed.content).toBe('Report output');
+      }
+    });
+
+    it('should serialize phase_complete with error', () => {
+      const filepath = initNdjsonLog('sess-phase-003', 'task', 'wf', projectDir);
+
+      const record: NdjsonPhaseComplete = {
+        type: 'phase_complete',
+        step: 'impl',
+        phase: 3,
+        phaseName: 'judge',
+        status: 'error',
+        timestamp: '2025-01-01T00:00:03.000Z',
+        error: 'Status judgment phase failed',
+      };
+      appendNdjsonLine(filepath, record);
+
+      const content = readFileSync(filepath, 'utf-8');
+      const lines = content.trim().split('\n');
+      const parsed = JSON.parse(lines[1]!) as NdjsonRecord;
+      expect(parsed.type).toBe('phase_complete');
+      if (parsed.type === 'phase_complete') {
+        expect(parsed.error).toBe('Status judgment phase failed');
+        expect(parsed.phase).toBe(3);
+        expect(parsed.phaseName).toBe('judge');
+      }
+    });
+
+    it('should be skipped by loadNdjsonLog (default case)', () => {
+      const filepath = initNdjsonLog('sess-phase-004', 'task', 'wf', projectDir);
+
+      // Add phase records
+      appendNdjsonLine(filepath, {
+        type: 'phase_start',
+        step: 'plan',
+        phase: 1,
+        phaseName: 'execute',
+        timestamp: '2025-01-01T00:00:01.000Z',
+        instruction: 'Plan it',
+      } satisfies NdjsonPhaseStart);
+
+      appendNdjsonLine(filepath, {
+        type: 'phase_complete',
+        step: 'plan',
+        phase: 1,
+        phaseName: 'execute',
+        status: 'done',
+        content: 'Planned',
+        timestamp: '2025-01-01T00:00:02.000Z',
+      } satisfies NdjsonPhaseComplete);
+
+      // Add a step_complete so we can verify history
+      appendNdjsonLine(filepath, {
+        type: 'step_complete',
+        step: 'plan',
+        agent: 'planner',
+        status: 'done',
+        content: 'Plan completed',
+        instruction: 'Plan it',
+        timestamp: '2025-01-01T00:00:03.000Z',
+      } satisfies NdjsonStepComplete);
+
+      const log = loadNdjsonLog(filepath);
+      expect(log).not.toBeNull();
+      // Only step_complete should contribute to history
+      expect(log!.history).toHaveLength(1);
+      expect(log!.iterations).toBe(1);
+    });
+  });
+
+  describe('interactive NDJSON records', () => {
+    it('should serialize and append interactive_start records', () => {
+      const filepath = initNdjsonLog('sess-interactive-001', 'task', 'wf', projectDir);
+
+      const record: NdjsonInteractiveStart = {
+        type: 'interactive_start',
+        timestamp: '2025-01-01T00:00:01.000Z',
+      };
+      appendNdjsonLine(filepath, record);
+
+      const content = readFileSync(filepath, 'utf-8');
+      const lines = content.trim().split('\n');
+      expect(lines).toHaveLength(2);
+
+      const parsed = JSON.parse(lines[1]!) as NdjsonRecord;
+      expect(parsed.type).toBe('interactive_start');
+      if (parsed.type === 'interactive_start') {
+        expect(parsed.timestamp).toBe('2025-01-01T00:00:01.000Z');
+      }
+    });
+
+    it('should serialize and append interactive_end records', () => {
+      const filepath = initNdjsonLog('sess-interactive-002', 'task', 'wf', projectDir);
+
+      const record: NdjsonInteractiveEnd = {
+        type: 'interactive_end',
+        confirmed: true,
+        task: 'Build a feature',
+        timestamp: '2025-01-01T00:00:02.000Z',
+      };
+      appendNdjsonLine(filepath, record);
+
+      const content = readFileSync(filepath, 'utf-8');
+      const lines = content.trim().split('\n');
+      expect(lines).toHaveLength(2);
+
+      const parsed = JSON.parse(lines[1]!) as NdjsonRecord;
+      expect(parsed.type).toBe('interactive_end');
+      if (parsed.type === 'interactive_end') {
+        expect(parsed.confirmed).toBe(true);
+        expect(parsed.task).toBe('Build a feature');
+      }
+    });
+
+    it('should be skipped by loadNdjsonLog (default case)', () => {
+      const filepath = initNdjsonLog('sess-interactive-003', 'task', 'wf', projectDir);
+
+      appendNdjsonLine(filepath, {
+        type: 'interactive_start',
+        timestamp: '2025-01-01T00:00:01.000Z',
+      } satisfies NdjsonInteractiveStart);
+
+      appendNdjsonLine(filepath, {
+        type: 'interactive_end',
+        confirmed: true,
+        task: 'Some task',
+        timestamp: '2025-01-01T00:00:02.000Z',
+      } satisfies NdjsonInteractiveEnd);
+
+      const log = loadNdjsonLog(filepath);
+      expect(log).not.toBeNull();
+      expect(log!.history).toHaveLength(0);
     });
   });
 });

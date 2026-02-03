@@ -11,6 +11,14 @@ export interface WorkflowExecutionResult {
   reason?: string;
 }
 
+/** Metadata from interactive mode, passed through to NDJSON logging */
+export interface InteractiveMetadata {
+  /** Whether the user confirmed with /go */
+  confirmed: boolean;
+  /** The assembled task text (only meaningful when confirmed=true) */
+  task?: string;
+}
+
 /** Options for workflow execution */
 export interface WorkflowExecutionOptions {
   /** Header prefix for display */
@@ -23,6 +31,8 @@ export interface WorkflowExecutionOptions {
   model?: string;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
+  /** Interactive mode result metadata for NDJSON logging */
+  interactiveMetadata?: InteractiveMetadata;
 }
 
 export interface TaskExecutionOptions {
@@ -43,6 +53,8 @@ export interface ExecuteTaskOptions {
   agentOverrides?: TaskExecutionOptions;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
+  /** Interactive mode result metadata for NDJSON logging */
+  interactiveMetadata?: InteractiveMetadata;
 }
 
 export interface PipelineExecutionOptions {
@@ -79,4 +91,6 @@ export interface SelectAndExecuteOptions {
   createWorktree?: boolean | undefined;
   /** Enable interactive user input during step transitions */
   interactiveUserInput?: boolean;
+  /** Interactive mode result metadata for NDJSON logging */
+  interactiveMetadata?: InteractiveMetadata;
 }

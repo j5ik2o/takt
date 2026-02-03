@@ -153,6 +153,7 @@ export async function selectAndExecuteTask(
     projectCwd: cwd,
     agentOverrides,
     interactiveUserInput: options?.interactiveUserInput === true,
+    interactiveMetadata: options?.interactiveMetadata,
   });
 
   if (taskSuccess && isWorktree) {

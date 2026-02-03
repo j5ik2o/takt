@@ -384,7 +384,90 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   });
 
   // =====================================================
-  // 7. Config validation
+  // 7. Phase events
+  // =====================================================
+  describe('Phase events', () => {
+    it('should emit phase:start and phase:complete events for Phase 1', async () => {
+      const simpleConfig: WorkflowConfig = {
+        name: 'test',
+        maxIterations: 10,
+        initialStep: 'plan',
+        steps: [
+          makeStep('plan', {
+            rules: [makeRule('done', 'COMPLETE')],
+          }),
+        ],
+      };
+      const engine = new WorkflowEngine(simpleConfig, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      mockRunAgentSequence([
+        makeResponse({ agent: 'plan', content: 'Plan done' }),
+      ]);
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const phaseStartFn = vi.fn();
+      const phaseCompleteFn = vi.fn();
+      engine.on('phase:start', phaseStartFn);
+      engine.on('phase:complete', phaseCompleteFn);
+
+      await engine.run();
+
+      expect(phaseStartFn).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'plan' }),
+        1, 'execute', expect.any(String)
+      );
+      expect(phaseCompleteFn).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'plan' }),
+        1, 'execute', expect.any(String), 'done', undefined
+      );
+    });
+
+    it('should emit phase events for all steps in happy path', async () => {
+      const config = buildDefaultWorkflowConfig();
+      const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      mockRunAgentSequence([
+        makeResponse({ agent: 'plan', content: 'Plan' }),
+        makeResponse({ agent: 'implement', content: 'Impl' }),
+        makeResponse({ agent: 'ai_review', content: 'OK' }),
+        makeResponse({ agent: 'arch-review', content: 'OK' }),
+        makeResponse({ agent: 'security-review', content: 'OK' }),
+        makeResponse({ agent: 'supervise', content: 'Pass' }),
+      ]);
+
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'aggregate' },
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const phaseStartFn = vi.fn();
+      const phaseCompleteFn = vi.fn();
+      engine.on('phase:start', phaseStartFn);
+      engine.on('phase:complete', phaseCompleteFn);
+
+      await engine.run();
+
+      // 4 normal steps + 2 parallel sub-steps = 6 Phase 1 invocations
+      expect(phaseStartFn).toHaveBeenCalledTimes(6);
+      expect(phaseCompleteFn).toHaveBeenCalledTimes(6);
+
+      // All calls should be Phase 1 (execute) since report/judgment are mocked off
+      for (const call of phaseStartFn.mock.calls) {
+        expect(call[1]).toBe(1);
+        expect(call[2]).toBe('execute');
+      }
+    });
+  });
+
+  // =====================================================
+  // 8. Config validation
   // =====================================================
   describe('Config validation', () => {
     it('should throw when initial step does not exist', () => {

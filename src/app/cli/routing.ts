@@ -104,5 +104,6 @@ program
 
     selectOptions.interactiveUserInput = true;
     selectOptions.workflow = workflowId;
+    selectOptions.interactiveMetadata = { confirmed: result.confirmed, task: result.task };
     await selectAndExecuteTask(resolvedCwd, result.task, selectOptions, agentOverrides);
   });

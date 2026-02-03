@@ -39,6 +39,10 @@ import {
   type NdjsonStepComplete,
   type NdjsonWorkflowComplete,
   type NdjsonWorkflowAbort,
+  type NdjsonPhaseStart,
+  type NdjsonPhaseComplete,
+  type NdjsonInteractiveStart,
+  type NdjsonInteractiveEnd,
 } from '../../../infra/fs/index.js';
 import { createLogger, notifySuccess, notifyError } from '../../../shared/utils/index.js';
 import { selectOption, promptInput } from '../../../shared/prompt/index.js';
@@ -93,6 +97,23 @@ export async function executeWorkflow(
   // Initialize NDJSON log file + pointer at workflow start
   const ndjsonLogPath = initNdjsonLog(workflowSessionId, task, workflowConfig.name, projectCwd);
   updateLatestPointer(sessionLog, workflowSessionId, projectCwd, { copyToPrevious: true });
+
+  // Write interactive mode records if interactive mode was used before this workflow
+  if (options.interactiveMetadata) {
+    const startRecord: NdjsonInteractiveStart = {
+      type: 'interactive_start',
+      timestamp: new Date().toISOString(),
+    };
+    appendNdjsonLine(ndjsonLogPath, startRecord);
+
+    const endRecord: NdjsonInteractiveEnd = {
+      type: 'interactive_end',
+      confirmed: options.interactiveMetadata.confirmed,
+      ...(options.interactiveMetadata.task ? { task: options.interactiveMetadata.task } : {}),
+      timestamp: new Date().toISOString(),
+    };
+    appendNdjsonLine(ndjsonLogPath, endRecord);
+  }
 
   // Track current display for streaming
   const displayRef: { current: StreamDisplay | null } = { current: null };
@@ -198,6 +219,34 @@ export async function executeWorkflow(
   });
 
   let abortReason: string | undefined;
+
+  engine.on('phase:start', (step, phase, phaseName, instruction) => {
+    log.debug('Phase starting', { step: step.name, phase, phaseName });
+    const record: NdjsonPhaseStart = {
+      type: 'phase_start',
+      step: step.name,
+      phase,
+      phaseName,
+      timestamp: new Date().toISOString(),
+      ...(instruction ? { instruction } : {}),
+    };
+    appendNdjsonLine(ndjsonLogPath, record);
+  });
+
+  engine.on('phase:complete', (step, phase, phaseName, content, phaseStatus, phaseError) => {
+    log.debug('Phase completed', { step: step.name, phase, phaseName, status: phaseStatus });
+    const record: NdjsonPhaseComplete = {
+      type: 'phase_complete',
+      step: step.name,
+      phase,
+      phaseName,
+      status: phaseStatus,
+      ...(content ? { content } : {}),
+      timestamp: new Date().toISOString(),
+      ...(phaseError ? { error: phaseError } : {}),
+    };
+    appendNdjsonLine(ndjsonLogPath, record);
+  });
 
   engine.on('step:start', (step, iteration, instruction) => {
     log.debug('Step starting', { step: step.name, agent: step.agentDisplayName, iteration });

@@ -104,6 +104,12 @@ export class WorkflowEngine extends EventEmitter {
       getWorkflowSteps: () => this.config.steps.map(s => ({ name: s.name, description: s.description })),
       detectRuleIndex: this.detectRuleIndex,
       callAiJudge: this.callAiJudge,
+      onPhaseStart: (step, phase, phaseName, instruction) => {
+        this.emit('phase:start', step, phase, phaseName, instruction);
+      },
+      onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error) => {
+        this.emit('phase:complete', step, phase, phaseName, content, phaseStatus, error);
+      },
     });
 
     this.parallelRunner = new ParallelRunner({
@@ -115,6 +121,12 @@ export class WorkflowEngine extends EventEmitter {
       getInteractive: () => this.options.interactive === true,
       detectRuleIndex: this.detectRuleIndex,
       callAiJudge: this.callAiJudge,
+      onPhaseStart: (step, phase, phaseName, instruction) => {
+        this.emit('phase:start', step, phase, phaseName, instruction);
+      },
+      onPhaseComplete: (step, phase, phaseName, content, phaseStatus, error) => {
+        this.emit('phase:complete', step, phase, phaseName, content, phaseStatus, error);
+      },
     });
 
     log.debug('WorkflowEngine initialized', {

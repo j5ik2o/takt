@@ -25,7 +25,7 @@ const log = createLogger('task');
  * Execute a single task with workflow.
  */
 export async function executeTask(options: ExecuteTaskOptions): Promise<boolean> {
-  const { task, cwd, workflowIdentifier, projectCwd, agentOverrides, interactiveUserInput } = options;
+  const { task, cwd, workflowIdentifier, projectCwd, agentOverrides, interactiveUserInput, interactiveMetadata } = options;
   const workflowConfig = loadWorkflowByIdentifier(workflowIdentifier, projectCwd);
 
   if (!workflowConfig) {
@@ -51,6 +51,7 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<boolean>
     provider: agentOverrides?.provider,
     model: agentOverrides?.model,
     interactiveUserInput,
+    interactiveMetadata,
   });
   return result.success;
 }

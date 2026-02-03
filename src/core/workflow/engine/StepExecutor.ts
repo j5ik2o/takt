@@ -14,6 +14,7 @@ import type {
   AgentResponse,
   Language,
 } from '../../models/types.js';
+import type { PhaseName } from '../types.js';
 import { runAgent } from '../../../agents/runner.js';
 import { InstructionBuilder, isReportObjectConfig } from '../instruction/InstructionBuilder.js';
 import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../phase-runner.js';
@@ -38,6 +39,8 @@ export interface StepExecutorDeps {
     conditions: Array<{ index: number; text: string }>,
     options: { cwd: string }
   ) => Promise<number>;
+  readonly onPhaseStart?: (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void;
+  readonly onPhaseComplete?: (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void;
 }
 
 export class StepExecutor {
@@ -99,11 +102,13 @@ export class StepExecutor {
     });
 
     // Phase 1: main execution (Write excluded if step has report)
+    this.deps.onPhaseStart?.(step, 1, 'execute', instruction);
     const agentOptions = this.deps.optionsBuilder.buildAgentOptions(step);
     let response = await runAgent(step.agent, instruction, agentOptions);
     updateAgentSession(sessionKey, response.sessionId);
+    this.deps.onPhaseComplete?.(step, 1, 'execute', response.content, response.status, response.error);
 
-    const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(state, updateAgentSession);
+    const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(state, updateAgentSession, this.deps.onPhaseStart, this.deps.onPhaseComplete);
 
     // Phase 2: report output (resume same session, Write only)
     if (step.report) {

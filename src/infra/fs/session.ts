@@ -21,6 +21,10 @@ export type {
   NdjsonStepComplete,
   NdjsonWorkflowComplete,
   NdjsonWorkflowAbort,
+  NdjsonPhaseStart,
+  NdjsonPhaseComplete,
+  NdjsonInteractiveStart,
+  NdjsonInteractiveEnd,
   NdjsonRecord,
   LatestLogPointer,
 } from '../../shared/utils/index.js';

@@ -104,6 +104,8 @@ export type AiJudgeCaller = (
   options: { cwd: string }
 ) => Promise<number>;
 
+export type PhaseName = 'execute' | 'report' | 'judge';
+
 /** Events emitted by workflow engine */
 export interface WorkflowEvents {
   'step:start': (step: WorkflowStep, iteration: number, instruction: string) => void;
@@ -111,6 +113,8 @@ export interface WorkflowEvents {
   'step:report': (step: WorkflowStep, filePath: string, fileName: string) => void;
   'step:blocked': (step: WorkflowStep, response: AgentResponse) => void;
   'step:user_input': (step: WorkflowStep, userInput: string) => void;
+  'phase:start': (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void;
+  'phase:complete': (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void;
   'workflow:complete': (state: WorkflowState) => void;
   'workflow:abort': (state: WorkflowState, reason: string) => void;
   'iteration:limit': (iteration: number, maxIterations: number) => void;
