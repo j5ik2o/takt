@@ -4,6 +4,42 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] - 2026-02-04
+
+### Added
+
+- Externalized prompt system: all internal prompts moved to versioned, translatable files (`src/shared/prompts/en/`, `src/shared/prompts/ja/`)
+- i18n label system: UI labels extracted to separate YAML files (`labels_en.yaml`, `labels_ja.yaml`) with `src/shared/i18n/` module
+- Prompt preview functionality (`src/features/prompt/preview.ts`)
+- Phase system injection into agents for improved workflow phase awareness
+- Enhanced debug capabilities with new debug log viewer (`tools/debug-log-viewer.html`)
+- Comprehensive test coverage:
+  - i18n system tests (`i18n.test.ts`)
+  - Prompt system tests (`prompts.test.ts`)
+  - Session management tests (`session.test.ts`)
+  - Worktree integration tests (`it-worktree-delete.test.ts`, `it-worktree-sessions.test.ts`)
+
+### Changed
+
+- **BREAKING:** Internal terminology renamed: `WorkflowStep` → `WorkflowMovement`, `StepExecutor` → `MovementExecutor`, `ParallelSubStepRawSchema` → `ParallelSubMovementRawSchema`, `WorkflowStepRawSchema` → `WorkflowMovementRawSchema`
+- **BREAKING:** Removed unnecessary backward compatibility code
+- **BREAKING:** Disabled interactive prompt override feature
+- Workflow resource directory renamed: `resources/global/*/workflows/` → `resources/global/*/pieces/`
+- Prompts restructured for better readability and maintainability
+- Removed unnecessary task requirement summarization from conversation flow
+- Suppressed unnecessary report output during workflow execution
+
+### Fixed
+
+- `takt worktree` bug fix for worktree operations
+
+### Internal
+
+- Extracted prompt management into `src/shared/prompts/index.ts` with language-aware file loading
+- Created `src/shared/i18n/index.ts` for centralized label management
+- Enhanced `tools/jsonl-viewer.html` with additional features
+- Major refactoring across 162 files (~5,800 insertions, ~2,900 deletions)
+
 ## [0.3.9] - 2026-02-03
 
 ### Added

@@ -266,9 +266,9 @@ TAKT uses YAML-based workflow definitions and rule-based routing. Builtin workfl
 ```yaml
 name: default
 max_iterations: 10
-initial_step: plan
+initial_movement: plan
 
-steps:
+movements:
   - name: plan
     agent: ../agents/default/planner.md
     model: opus
@@ -303,9 +303,9 @@ steps:
       Review the implementation from architecture and code quality perspectives.
 ```
 
-### Agentless Steps
+### Agentless Movements
 
-The `agent` field is optional. When omitted, the step executes using only the `instruction_template` without a system prompt. This is useful for simple tasks that don't require agent behavior customization.
+The `agent` field is optional. When omitted, the movement executes using only the `instruction_template` without a system prompt. This is useful for simple tasks that don't require agent behavior customization.
 
 ```yaml
   - name: summarize
@@ -328,9 +328,9 @@ You can also write an inline system prompt as the `agent` value (if the specifie
       Review code quality.
 ```
 
-### Parallel Steps
+### Parallel Movements
 
-Execute sub-steps in parallel within a step and evaluate with aggregate conditions:
+Execute sub-movements in parallel within a movement and evaluate with aggregate conditions:
 
 ```yaml
   - name: reviewers
@@ -356,15 +356,15 @@ Execute sub-steps in parallel within a step and evaluate with aggregate conditio
         next: fix
 ```
 
-- `all("X")`: true if ALL sub-steps matched condition X
-- `any("X")`: true if ANY sub-step matched condition X
-- Sub-step `rules` define possible outcomes, but `next` is optional (parent controls transition)
+- `all("X")`: true if ALL sub-movements matched condition X
+- `any("X")`: true if ANY sub-movement matched condition X
+- Sub-movement `rules` define possible outcomes, but `next` is optional (parent controls transition)
 
 ### Rule Condition Types
 
 | Type | Syntax | Description |
 |------|--------|-------------|
-| Tag-based | `"condition text"` | Agent outputs `[STEP:N]` tag, matched by index |
+| Tag-based | `"condition text"` | Agent outputs `[MOVEMENTNAME:N]` tag, matched by index |
 | AI judge | `ai("condition text")` | AI evaluates condition against agent output |
 | Aggregate | `all("X")` / `any("X")` | Aggregates parallel sub-step matched conditions |
 
@@ -579,9 +579,9 @@ takt eject default
 name: my-workflow
 description: Custom workflow
 max_iterations: 5
-initial_step: analyze
+initial_movement: analyze
 
-steps:
+movements:
   - name: analyze
     agent: ~/.takt/agents/my-agents/analyzer.md
     edit: false
@@ -629,7 +629,7 @@ Variables available in `instruction_template`:
 | `{task}` | Original user request (auto-injected if not in template) |
 | `{iteration}` | Workflow-wide turn count (total steps executed) |
 | `{max_iterations}` | Maximum iteration count |
-| `{step_iteration}` | Per-step iteration count (times this step has been executed) |
+| `{movement_iteration}` | Per-movement iteration count (times this movement has been executed) |
 | `{previous_response}` | Output from previous step (auto-injected if not in template) |
 | `{user_inputs}` | Additional user inputs during workflow (auto-injected if not in template) |
 | `{report_dir}` | Report directory path (e.g., `.takt/reports/20250126-143052-task-summary`) |
@@ -637,7 +637,7 @@ Variables available in `instruction_template`:
 
 ### Workflow Design
 
-Elements needed for each workflow step:
+Elements needed for each workflow movement:
 
 **1. Agent** - Markdown file containing system prompt:
 
@@ -646,7 +646,7 @@ agent: ../agents/default/coder.md    # Path to agent prompt file
 agent_name: coder                    # Display name (optional)
 ```
 
-**2. Rules** - Define routing from step to next step. The instruction builder auto-injects status output rules, so agents know which tags to output:
+**2. Rules** - Define routing from movement to next movement. The instruction builder auto-injects status output rules, so agents know which tags to output:
 
 ```yaml
 rules:
@@ -658,15 +658,15 @@ rules:
 
 Special `next` values: `COMPLETE` (success), `ABORT` (failure)
 
-**3. Step Options:**
+**3. Movement Options:**
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `edit` | - | Whether step can edit project files (`true`/`false`) |
-| `pass_previous_response` | `true` | Pass previous step output to `{previous_response}` |
+| `edit` | - | Whether movement can edit project files (`true`/`false`) |
+| `pass_previous_response` | `true` | Pass previous movement output to `{previous_response}` |
 | `allowed_tools` | - | List of tools agent can use (Read, Glob, Grep, Edit, Write, Bash, etc.) |
-| `provider` | - | Override provider for this step (`claude` or `codex`) |
-| `model` | - | Override model for this step |
+| `provider` | - | Override provider for this movement (`claude` or `codex`) |
+| `model` | - | Override model for this movement |
 | `permission_mode` | - | Permission mode: `readonly`, `edit`, `full` (provider-independent) |
 | `report` | - | Auto-generated report file settings (name, format) |
 

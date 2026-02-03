@@ -33,7 +33,8 @@ export function renderMenu<T extends string>(
   const lines: string[] = [];
 
   for (let i = 0; i < options.length; i++) {
-    const opt = options[i]!;
+    const opt = options[i];
+    if (!opt) continue;
     const isSelected = i === selectedIndex;
     const cursor = isSelected ? chalk.cyan('❯') : ' ';
     const truncatedLabel = truncateText(opt.label, maxWidth - labelPrefix);

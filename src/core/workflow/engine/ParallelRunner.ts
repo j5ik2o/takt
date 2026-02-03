@@ -55,7 +55,10 @@ export class ParallelRunner {
     maxIterations: number,
     updateAgentSession: (agent: string, sessionId: string | undefined) => void,
   ): Promise<{ response: AgentResponse; instruction: string }> {
-    const subMovements = step.parallel!;
+    if (!step.parallel) {
+      throw new Error(`Movement "${step.name}" has no parallel sub-movements`);
+    }
+    const subMovements = step.parallel;
     const movementIteration = incrementMovementIteration(state, step.name);
     log.debug('Running parallel movement', {
       movement: step.name,

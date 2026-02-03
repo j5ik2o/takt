@@ -109,7 +109,7 @@ function parseAggregateConditions(argsText: string): string[] {
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(argsText)) !== null) {
-    conditions.push(match[1]!);
+    if (match[1]) conditions.push(match[1]);
   }
 
   if (conditions.length === 0) {
@@ -146,7 +146,9 @@ function normalizeRule(r: {
   const aggMatch = r.condition.match(AGGREGATE_CONDITION_REGEX);
   if (aggMatch?.[1] && aggMatch[2]) {
     const conditions = parseAggregateConditions(aggMatch[2]);
-    const aggregateConditionText = conditions.length === 1 ? conditions[0]! : conditions;
+    // parseAggregateConditions guarantees conditions.length >= 1
+    const aggregateConditionText: string | string[] =
+      conditions.length === 1 ? (conditions[0] as string) : conditions;
     return {
       condition: r.condition,
       next,

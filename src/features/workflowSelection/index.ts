@@ -106,7 +106,7 @@ export function buildCategoryWorkflowOptions(
   if (!categoryItem || categoryItem.type !== 'category') return null;
 
   return categoryItem.workflows.map((qualifiedName) => {
-    const displayName = qualifiedName.split('/').pop()!;
+    const displayName = qualifiedName.split('/').pop() ?? qualifiedName;
     const isCurrent = qualifiedName === currentWorkflow;
     const label = isCurrent ? `${displayName} (current)` : displayName;
     return { label, value: qualifiedName };

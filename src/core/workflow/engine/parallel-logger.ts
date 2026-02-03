@@ -50,7 +50,7 @@ export class ParallelLogger {
    * Format: `\x1b[COLORm[name]\x1b[0m` + padding spaces
    */
   buildPrefix(name: string, index: number): string {
-    const color = COLORS[index % COLORS.length]!;
+    const color = COLORS[index % COLORS.length];
     const padding = ' '.repeat(this.maxNameLength - name.length);
     return `${color}[${name}]${RESET}${padding} `;
   }
@@ -99,7 +99,8 @@ export class ParallelLogger {
     const parts = combined.split('\n');
 
     // Last part is incomplete (no trailing newline) — keep in buffer
-    this.lineBuffers.set(name, parts.pop()!);
+    const remainder = parts.pop() ?? '';
+    this.lineBuffers.set(name, remainder);
 
     // Output all complete lines
     for (const line of parts) {

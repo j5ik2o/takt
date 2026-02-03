@@ -38,7 +38,8 @@ export class AggregateEvaluator {
     if (!this.step.rules || !this.step.parallel || this.step.parallel.length === 0) return -1;
 
     for (let i = 0; i < this.step.rules.length; i++) {
-      const rule = this.step.rules[i]!;
+      const rule = this.step.rules[i];
+      if (!rule) continue;
       if (!rule.isAggregateCondition || !rule.aggregateType || !rule.aggregateConditionText) {
         continue;
       }

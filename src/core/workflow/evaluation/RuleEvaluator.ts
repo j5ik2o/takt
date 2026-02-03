@@ -115,7 +115,8 @@ export class RuleEvaluator {
 
     const aiConditions: { index: number; text: string }[] = [];
     for (let i = 0; i < this.step.rules.length; i++) {
-      const rule = this.step.rules[i]!;
+      const rule = this.step.rules[i];
+      if (!rule) continue;
       if (rule.interactiveOnly && this.ctx.interactive !== true) {
         continue;
       }
@@ -135,7 +136,8 @@ export class RuleEvaluator {
     const judgeResult = await this.ctx.callAiJudge(agentOutput, judgeConditions, { cwd: this.ctx.cwd });
 
     if (judgeResult >= 0 && judgeResult < aiConditions.length) {
-      const matched = aiConditions[judgeResult]!;
+      const matched = aiConditions[judgeResult];
+      if (!matched) return -1;
       log.debug('AI judge matched condition', {
         movement: this.step.name,
         judgeResult,
@@ -172,7 +174,7 @@ export class RuleEvaluator {
       log.debug('AI judge (fallback) matched condition', {
         movement: this.step.name,
         ruleIndex: judgeResult,
-        condition: conditions[judgeResult]!.text,
+        condition: conditions[judgeResult]?.text,
       });
       return judgeResult;
     }

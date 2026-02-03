@@ -11,7 +11,7 @@ import { stringify as stringifyYaml } from 'yaml';
 import { promptInput, confirm } from '../../../shared/prompt/index.js';
 import { success, info } from '../../../shared/ui/index.js';
 import { summarizeTaskName, type TaskFileData } from '../../../infra/task/index.js';
-import { loadGlobalConfig, getWorkflowDescription } from '../../../infra/config/index.js';
+import { getWorkflowDescription } from '../../../infra/config/index.js';
 import { determineWorkflow } from '../execute/selectAndExecute.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { isIssueReference, resolveIssueTask, parseIssueNumbers } from '../../../infra/github/index.js';

@@ -77,7 +77,8 @@ export function loadAgentPrompt(agent: CustomAgentConfig): string {
   }
 
   if (agent.promptFile) {
-    const isValid = getAllowedAgentBases().some((base) => isPathSafe(base, agent.promptFile!));
+    const promptFile = agent.promptFile;
+    const isValid = getAllowedAgentBases().some((base) => isPathSafe(base, promptFile));
     if (!isValid) {
       throw new Error(`Agent prompt file path is not allowed: ${agent.promptFile}`);
     }

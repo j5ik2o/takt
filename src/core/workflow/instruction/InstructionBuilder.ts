@@ -49,8 +49,8 @@ export class InstructionBuilder {
     const hasReport = !!(this.step.report && this.context.reportDir);
     let reportInfo = '';
     let phaseNote = '';
-    if (hasReport) {
-      reportInfo = renderReportContext(this.step.report!, this.context.reportDir!);
+    if (hasReport && this.step.report && this.context.reportDir) {
+      reportInfo = renderReportContext(this.step.report, this.context.reportDir);
       phaseNote = language === 'ja'
         ? '**注意:** これはPhase 1（本来の作業）です。作業完了後、Phase 2で自動的にレポートを生成します。'
         : '**Note:** This is Phase 1 (main work). After you complete your work, Phase 2 will automatically generate the report based on your findings.';
@@ -72,8 +72,8 @@ export class InstructionBuilder {
       this.context.previousOutput &&
       !hasPreviousResponsePlaceholder
     );
-    const previousResponse = hasPreviousResponse
-      ? escapeTemplateChars(this.context.previousOutput!.content)
+    const previousResponse = hasPreviousResponse && this.context.previousOutput
+      ? escapeTemplateChars(this.context.previousOutput.content)
       : '';
 
     // User Inputs
