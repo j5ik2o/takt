@@ -9,7 +9,7 @@ import type { AgentResponse } from './response.js';
 export interface WorkflowRule {
   /** Human-readable condition text */
   condition: string;
-  /** Next step name (e.g., implement, COMPLETE, ABORT). Optional for parallel sub-steps. */
+  /** Next movement name (e.g., implement, COMPLETE, ABORT). Optional for parallel sub-movements. */
   next?: string;
   /** Template for additional AI output */
   appendix?: string;
@@ -23,16 +23,16 @@ export interface WorkflowRule {
   aiConditionText?: string;
   /** Whether this condition uses all()/any() aggregate expression (set by loader) */
   isAggregateCondition?: boolean;
-  /** Aggregate type: 'all' requires all sub-steps match, 'any' requires at least one (set by loader) */
+  /** Aggregate type: 'all' requires all sub-movements match, 'any' requires at least one (set by loader) */
   aggregateType?: 'all' | 'any';
-  /** The condition text(s) inside all("...")/any("...") to match against sub-step results (set by loader).
-   * - string: all sub-steps must match this single condition (e.g., all("approved"))
-   * - string[]: each sub-step must match the corresponding condition by index (e.g., all("A", "B"))
+  /** The condition text(s) inside all("...")/any("...") to match against sub-movement results (set by loader).
+   * - string: all sub-movements must match this single condition (e.g., all("approved"))
+   * - string[]: each sub-movement must match the corresponding condition by index (e.g., all("A", "B"))
    */
   aggregateConditionText?: string | string[];
 }
 
-/** Report file configuration for a workflow step (label: path pair) */
+/** Report file configuration for a workflow movement (label: path pair) */
 export interface ReportConfig {
   /** Display label (e.g., "Scope", "Decisions") */
   label: string;
@@ -50,38 +50,41 @@ export interface ReportObjectConfig {
   format?: string;
 }
 
-/** Single step in a workflow */
-export interface WorkflowStep {
+/** Single movement in a workflow */
+export interface WorkflowMovement {
   name: string;
-  /** Brief description of this step's role in the workflow */
+  /** Brief description of this movement's role in the workflow */
   description?: string;
-  /** Agent name, path, or inline prompt as specified in workflow YAML. Undefined when step runs without an agent. */
+  /** Agent name, path, or inline prompt as specified in workflow YAML. Undefined when movement runs without an agent. */
   agent?: string;
-  /** Session handling for this step */
+  /** Session handling for this movement */
   session?: 'continue' | 'refresh';
   /** Display name for the agent (shown in output). Falls back to agent basename if not specified */
   agentDisplayName: string;
-  /** Allowed tools for this step (optional, passed to agent execution) */
+  /** Allowed tools for this movement (optional, passed to agent execution) */
   allowedTools?: string[];
   /** Resolved absolute path to agent prompt file (set by loader) */
   agentPath?: string;
-  /** Provider override for this step */
+  /** Provider override for this movement */
   provider?: 'claude' | 'codex' | 'mock';
-  /** Model override for this step */
+  /** Model override for this movement */
   model?: string;
-  /** Permission mode for tool execution in this step */
+  /** Permission mode for tool execution in this movement */
   permissionMode?: PermissionMode;
-  /** Whether this step is allowed to edit project files (true=allowed, false=prohibited, undefined=no prompt) */
+  /** Whether this movement is allowed to edit project files (true=allowed, false=prohibited, undefined=no prompt) */
   edit?: boolean;
   instructionTemplate: string;
-  /** Rules for step routing */
+  /** Rules for movement routing */
   rules?: WorkflowRule[];
   /** Report file configuration. Single string, array of label:path, or object with order/format. */
   report?: string | ReportConfig[] | ReportObjectConfig;
   passPreviousResponse: boolean;
-  /** Sub-steps to execute in parallel. When set, this step runs all sub-steps concurrently. */
-  parallel?: WorkflowStep[];
+  /** Sub-movements to execute in parallel. When set, this movement runs all sub-movements concurrently. */
+  parallel?: WorkflowMovement[];
 }
+
+/** @deprecated Use WorkflowMovement instead */
+export type WorkflowStep = WorkflowMovement;
 
 /** Loop detection configuration */
 export interface LoopDetectionConfig {
@@ -95,8 +98,8 @@ export interface LoopDetectionConfig {
 export interface WorkflowConfig {
   name: string;
   description?: string;
-  steps: WorkflowStep[];
-  initialStep: string;
+  movements: WorkflowMovement[];
+  initialMovement: string;
   maxIterations: number;
   /** Loop detection settings */
   loopDetection?: LoopDetectionConfig;
@@ -111,12 +114,12 @@ export interface WorkflowConfig {
 /** Runtime state of a workflow execution */
 export interface WorkflowState {
   workflowName: string;
-  currentStep: string;
+  currentMovement: string;
   iteration: number;
-  stepOutputs: Map<string, AgentResponse>;
+  movementOutputs: Map<string, AgentResponse>;
   userInputs: string[];
   agentSessions: Map<string, string>;
-  /** Per-step iteration counters (how many times each step has been executed) */
-  stepIterations: Map<string, number>;
+  /** Per-movement iteration counters (how many times each movement has been executed) */
+  movementIterations: Map<string, number>;
   status: 'running' | 'completed' | 'aborted';
 }

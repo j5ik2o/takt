@@ -6,7 +6,7 @@
  */
 
 import { join } from 'node:path';
-import type { WorkflowStep, WorkflowState, Language } from '../../models/types.js';
+import type { WorkflowMovement, WorkflowState, Language } from '../../models/types.js';
 import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { PhaseRunnerContext } from '../phase-runner.js';
 import type { WorkflowEngineOptions, PhaseName } from '../types.js';
@@ -22,13 +22,14 @@ export class OptionsBuilder {
   ) {}
 
   /** Build common RunAgentOptions shared by all phases */
-  buildBaseOptions(step: WorkflowStep): RunAgentOptions {
+  buildBaseOptions(step: WorkflowMovement): RunAgentOptions {
     return {
       cwd: this.getCwd(),
       agentPath: step.agentPath,
       provider: step.provider ?? this.engineOptions.provider,
       model: step.model ?? this.engineOptions.model,
       permissionMode: step.permissionMode,
+      language: this.getLanguage(),
       onStream: this.engineOptions.onStream,
       onPermissionRequest: this.engineOptions.onPermissionRequest,
       onAskUserQuestion: this.engineOptions.onAskUserQuestion,
@@ -37,8 +38,8 @@ export class OptionsBuilder {
   }
 
   /** Build RunAgentOptions for Phase 1 (main execution) */
-  buildAgentOptions(step: WorkflowStep): RunAgentOptions {
-    // Phase 1: exclude Write from allowedTools when step has report config AND edit is NOT enabled
+  buildAgentOptions(step: WorkflowMovement): RunAgentOptions {
+    // Phase 1: exclude Write from allowedTools when movement has report config AND edit is NOT enabled
     // (If edit is enabled, Write is needed for code implementation even if report exists)
     // Note: edit defaults to undefined, so check !== true to catch both false and undefined
     const allowedTools = step.report && step.edit !== true
@@ -57,7 +58,7 @@ export class OptionsBuilder {
 
   /** Build RunAgentOptions for session-resume phases (Phase 2, Phase 3) */
   buildResumeOptions(
-    step: WorkflowStep,
+    step: WorkflowMovement,
     sessionId: string,
     overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>,
   ): RunAgentOptions {
@@ -75,8 +76,8 @@ export class OptionsBuilder {
   buildPhaseRunnerContext(
     state: WorkflowState,
     updateAgentSession: (agent: string, sessionId: string | undefined) => void,
-    onPhaseStart?: (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void,
-    onPhaseComplete?: (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void,
+    onPhaseStart?: (step: WorkflowMovement, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void,
+    onPhaseComplete?: (step: WorkflowMovement, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void,
   ): PhaseRunnerContext {
     return {
       cwd: this.getCwd(),

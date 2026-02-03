@@ -304,15 +304,15 @@ describe('Workflow Patterns IT: review-only workflow', () => {
     expect(state.status).toBe('completed');
   });
 
-  it('should verify no steps have edit: true', () => {
+  it('should verify no movements have edit: true', () => {
     const config = loadWorkflow('review-only', testDir);
     expect(config).not.toBeNull();
 
-    for (const step of config!.steps) {
-      expect(step.edit).not.toBe(true);
-      if (step.parallel) {
-        for (const subStep of step.parallel) {
-          expect(subStep.edit).not.toBe(true);
+    for (const movement of config!.movements) {
+      expect(movement.edit).not.toBe(true);
+      if (movement.parallel) {
+        for (const subMovement of movement.parallel) {
+          expect(subMovement.edit).not.toBe(true);
         }
       }
     }

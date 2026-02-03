@@ -8,14 +8,14 @@
 #   -> COMPLETE (local: console output only)
 #   -> ABORT (rejected)
 #
-# All steps have edit: false (no file modifications)
+# All movements have edit: false (no file modifications)
 #
 # Template Variables:
 #   {iteration}         - Workflow-wide turn count
 #   {max_iterations}    - Maximum iterations allowed
-#   {step_iteration}    - Per-step iteration count
+#   {movement_iteration}    - Per-movement iteration count
 #   {task}              - Original user request
-#   {previous_response} - Output from the previous step
+#   {previous_response} - Output from the previous movement
 #   {user_inputs}       - Accumulated user inputs
 #   {report_dir}        - Report directory name
 
@@ -24,9 +24,9 @@ description: Review-only workflow - reviews code without making edits
 
 max_iterations: 10
 
-initial_step: plan
+initial_movement: plan
 
-steps:
+movements:
   - name: plan
     edit: false
     agent: ../agents/default/planner.md
@@ -108,7 +108,7 @@ steps:
           - condition: approved
           - condition: needs_fix
         instruction_template: |
-          Focus on **architecture and design** review. Do NOT review AI-specific issues (that's the ai_review step).
+          Focus on **architecture and design** review. Do NOT review AI-specific issues (that's the ai_review movement).
 
           Review the code and provide feedback.
 
@@ -248,7 +248,7 @@ steps:
       3. Produce a consolidated review summary with overall verdict
       4. Determine routing:
          - If the task mentions posting to a PR (e.g., "post comments to PR", "comment on PR"),
-           route to `pr-comment` step (condition: "approved, PR comment requested")
+           route to `pr-comment` movement (condition: "approved, PR comment requested")
          - If local review only, route to COMPLETE (condition: "approved")
          - If critical issues found, route to ABORT (condition: "rejected")
 

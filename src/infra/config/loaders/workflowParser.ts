@@ -9,11 +9,11 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { z } from 'zod';
-import { WorkflowConfigRawSchema, WorkflowStepRawSchema } from '../../../core/models/index.js';
-import type { WorkflowConfig, WorkflowStep, WorkflowRule, ReportConfig, ReportObjectConfig } from '../../../core/models/index.js';
+import { WorkflowConfigRawSchema, WorkflowMovementRawSchema } from '../../../core/models/index.js';
+import type { WorkflowConfig, WorkflowMovement, WorkflowRule, ReportConfig, ReportObjectConfig } from '../../../core/models/index.js';
 
-/** Parsed step type from Zod schema (replaces `any`) */
-type RawStep = z.output<typeof WorkflowStepRawSchema>;
+/** Parsed movement type from Zod schema (replaces `any`) */
+type RawStep = z.output<typeof WorkflowMovementRawSchema>;
 
 /**
  * Resolve agent path from workflow specification.
@@ -168,8 +168,8 @@ function normalizeRule(r: {
   };
 }
 
-/** Normalize a raw step into internal WorkflowStep format. */
-function normalizeStepFromRaw(step: RawStep, workflowDir: string): WorkflowStep {
+/** Normalize a raw step into internal WorkflowMovement format. */
+function normalizeStepFromRaw(step: RawStep, workflowDir: string): WorkflowMovement {
   const rules: WorkflowRule[] | undefined = step.rules?.map(normalizeRule);
   const agentSpec: string | undefined = step.agent || undefined;
 
@@ -183,7 +183,7 @@ function normalizeStepFromRaw(step: RawStep, workflowDir: string): WorkflowStep 
     }
   }
 
-  const result: WorkflowStep = {
+  const result: WorkflowMovement = {
     name: step.name,
     description: step.description,
     agent: agentSpec,
@@ -215,15 +215,20 @@ function normalizeStepFromRaw(step: RawStep, workflowDir: string): WorkflowStep 
 export function normalizeWorkflowConfig(raw: unknown, workflowDir: string): WorkflowConfig {
   const parsed = WorkflowConfigRawSchema.parse(raw);
 
-  const steps: WorkflowStep[] = parsed.steps.map((step) =>
+  // Prefer `movements` over legacy `steps`
+  const rawMovements = parsed.movements ?? parsed.steps ?? [];
+  const movements: WorkflowMovement[] = rawMovements.map((step) =>
     normalizeStepFromRaw(step, workflowDir),
   );
+
+  // Prefer `initial_movement` over legacy `initial_step`
+  const initialMovement = parsed.initial_movement ?? parsed.initial_step ?? movements[0]?.name ?? '';
 
   return {
     name: parsed.name,
     description: parsed.description,
-    steps,
-    initialStep: parsed.initial_step || steps[0]?.name || '',
+    movements,
+    initialMovement,
     maxIterations: parsed.max_iterations,
     answerAgent: parsed.answer_agent,
   };

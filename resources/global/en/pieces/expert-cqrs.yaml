@@ -1,45 +1,33 @@
-# Expert Review Workflow
-# Review workflow with Architecture, Frontend, Security, and QA experts
+# Expert CQRS Review Workflow
+# Review workflow with CQRS+ES, Frontend, Security, and QA experts
 #
 # Flow:
 # plan -> implement -> ai_review -> reviewers (parallel) -> supervise -> COMPLETE
-#                          ↓              ├─ arch-review        ↓
-#                        ai_fix           ├─ frontend-review  fix_supervisor
+#                          ↓              ├─ cqrs-es-review      ↓
+#                        ai_fix           ├─ frontend-review   fix_supervisor
 #                                         ├─ security-review
 #                                         └─ qa-review
 #                                    any("needs_fix") → fix → reviewers
 #
-# AI review runs immediately after implementation to catch AI-specific issues early,
-# before expert reviews begin.
-#
-# Boilerplate sections (Workflow Context, User Request, Previous Response,
-# Additional User Inputs, Instructions heading) are auto-injected by buildInstruction().
-# Only step-specific content belongs in instruction_template.
-#
-# Template Variables (available in instruction_template):
-#   {iteration}         - Workflow-wide turn count (total steps executed across all agents)
-#   {max_iterations}    - Maximum iterations allowed for the workflow
-#   {step_iteration}    - Per-step iteration count (how many times THIS step has been executed)
-#   {previous_response} - Output from the previous step (only when pass_previous_response: true)
-#   {report_dir}        - Report directory name (e.g., "20250126-143052-task-summary")
-#
-# Step-level Fields:
-#   report:  - Report file(s) for the step (auto-injected as Report File/Files in Workflow Context)
-#              Single: report: 00-plan.md
-#              Multiple: report:
-#                          - Scope: 01-coder-scope.md
-#                          - Decisions: 02-coder-decisions.md
+# Template Variables:
+#   {iteration}      - Workflow-wide turn count (total movements executed across all agents)
+#   {max_iterations} - Maximum iterations allowed for the workflow
+#   {movement_iteration} - Per-movement iteration count (how many times THIS movement has been executed)
+#   {task}           - Original user request
+#   {previous_response} - Output from the previous movement
+#   {user_inputs}    - Accumulated user inputs during workflow
+#   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
 
-name: expert
-description: Architecture, Frontend, Security, QA Expert Review
+name: expert-cqrs
+description: CQRS+ES, Frontend, Security, QA Expert Review
 
 max_iterations: 30
 
-initial_step: plan
+initial_movement: plan
 
-steps:
+movements:
   # ===========================================
-  # Phase 0: Planning
+  # Movement 0: Planning
   # ===========================================
   - name: plan
     edit: false
@@ -77,7 +65,7 @@ steps:
     instruction_template: |
       Analyze the task and create an implementation plan.
 
-      **Note:** If returned from implement step (Previous Response exists),
+      **Note:** If returned from implement movement (Previous Response exists),
       review and revise the plan based on that feedback (replan).
 
       **Tasks:**
@@ -92,7 +80,7 @@ steps:
         next: ABORT
 
   # ===========================================
-  # Phase 1: Implementation
+  # Movement 1: Implementation
   # ===========================================
   - name: implement
     edit: true
@@ -111,7 +99,7 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      Follow the plan from the plan step and implement.
+      Follow the plan from the plan movement and implement.
       Refer to the plan report ({report:00-plan.md}) and proceed with implementation.
       Use only the Report Directory files shown in Workflow Context. Do not search or open reports outside that directory.
 
@@ -165,7 +153,7 @@ steps:
         interactive_only: true
 
   # ===========================================
-  # Phase 2: AI Review
+  # Movement 2: AI Review
   # ===========================================
   - name: ai_review
     edit: false
@@ -197,8 +185,8 @@ steps:
         ```
 
         **Cognitive load reduction rules:**
-        - No issues -> Summary 1 line + check table only (10 lines or less)
-        - Issues found -> + Issues in table format (25 lines or less)
+        - No issues → Summary 1 line + check table only (10 lines or less)
+        - Issues found → + Issues in table format (25 lines or less)
     allowed_tools:
       - Read
       - Glob
@@ -231,7 +219,7 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      **This is AI Review iteration {step_iteration}.**
+      **This is AI Review iteration {movement_iteration}.**
 
       If this is iteration 2 or later, it means your previous fixes were not actually applied.
       **Your belief that you "already fixed it" is wrong.**
@@ -256,13 +244,12 @@ steps:
       - Reporting "fixed" without opening files
       - Judging based on assumptions
       - Leaving problems that AI Reviewer REJECTED
-      - Removing scope creep
-      
+
       **Handling "no fix needed" (required)**
       - Do not claim "no fix needed" unless you can show the checked target file(s) for each AI Review issue
       - If an issue involves generated code or spec sync, and you cannot verify the source spec, output the tag for "Unable to proceed with fixes"
       - When "no fix needed", output the tag for "Unable to proceed with fixes" and include the reason + checked scope
-      
+
       **Required output (include headings)**
       ## Files checked
       - {path:line}
@@ -284,31 +271,32 @@ steps:
         next: plan
 
   # ===========================================
-  # Phase 3: Expert Reviews (Parallel)
+  # Movement 3: Expert Reviews (Parallel)
   # ===========================================
   - name: reviewers
     parallel:
-      - name: arch-review
+      - name: cqrs-es-review
         edit: false
-        agent: ../agents/default/architecture-reviewer.md
+        agent: ../agents/expert-cqrs/cqrs-es-reviewer.md
         report:
-          name: 04-architect-review.md
+          name: 04-cqrs-es-review.md
           format: |
             ```markdown
-            # Architecture Review
+            # CQRS+ES Review
 
             ## Result: APPROVE / REJECT
 
             ## Summary
             {1-2 sentences summarizing result}
 
-            ## Reviewed Aspects
-            - [x] Structure/Design
-            - [x] Code Quality
-            - [x] Change Scope
-            - [x] Test Coverage
-            - [x] Dead Code
-            - [x] Call Chain Verification
+            ## Reviewed Perspectives
+            | Perspective | Result | Notes |
+            |-------------|--------|-------|
+            | Aggregate Design | ✅ | - |
+            | Event Design | ✅ | - |
+            | Command/Query Separation | ✅ | - |
+            | Projections | ✅ | - |
+            | Eventual Consistency | ✅ | - |
 
             ## Issues (if REJECT)
             | # | Scope | Location | Issue | Fix |
@@ -320,10 +308,6 @@ steps:
             ## Existing Issues (informational, non-blocking)
             - {Record of existing issues unrelated to current change}
             ```
-
-            **Cognitive load reduction rules:**
-            - APPROVE -> Summary only (5 lines or less)
-            - REJECT -> Issues in table format (30 lines or less)
         allowed_tools:
           - Read
           - Glob
@@ -335,15 +319,18 @@ steps:
           - condition: approved
           - condition: needs_fix
         instruction_template: |
-          Focus on **architecture and design** review. Do NOT review AI-specific issues (that's the ai_review step).
+          Review the changes from the CQRS (Command Query Responsibility Segregation)
+          and Event Sourcing perspective. Do NOT review AI-specific issues (that's the ai_review movement).
 
           **Review Criteria:**
-          - Structure/design validity
-          - Code quality
-          - Change scope appropriateness
-          - Test coverage
-          - Dead code
-          - Call chain verification
+          - Aggregate design validity
+          - Event design (granularity, naming, schema)
+          - Command/Query separation
+          - Projection design
+          - Eventual consistency considerations
+
+          **Note**: If this project does not use CQRS+ES patterns,
+          review from a general domain design perspective.
 
       - name: frontend-review
         edit: false
@@ -395,7 +382,7 @@ steps:
           - TypeScript type safety
 
           **Note**: If this project does not include frontend code,
-          approve and proceed to the next step.
+          approve and proceed to the next movement.
 
       - name: security-review
         edit: false
@@ -538,7 +525,7 @@ steps:
     pass_previous_response: true
 
   # ===========================================
-  # Phase 4: Supervision
+  # Movement 4: Supervision
   # ===========================================
   - name: supervise
     edit: false
@@ -554,10 +541,10 @@ steps:
       - WebFetch
     instruction_template: |
       ## Previous Reviews Summary
-      Reaching this step means all the following reviews have been APPROVED:
-      - Architecture Review: APPROVED
-      - Frontend Review: APPROVED
+      Reaching this movement means all the following reviews have been APPROVED:
       - AI Review: APPROVED
+      - CQRS+ES Review: APPROVED
+      - Frontend Review: APPROVED
       - Security Review: APPROVED
       - QA Review: APPROVED
 
@@ -565,7 +552,7 @@ steps:
 
       **Workflow Overall Review:**
       1. Does the implementation match the plan ({report:00-plan.md})?
-      2. Were all review step issues addressed?
+      2. Were all review movement issues addressed?
       3. Was the original task objective achieved?
 
       **Review Reports:** Read all reports in Report Directory and
@@ -613,9 +600,9 @@ steps:
       ## Review Results
       | Review | Result |
       |--------|--------|
-      | Architecture | ✅ APPROVE |
-      | Frontend | ✅ APPROVE |
       | AI Review | ✅ APPROVE |
+      | CQRS+ES | ✅ APPROVE |
+      | Frontend | ✅ APPROVE |
       | Security | ✅ APPROVE |
       | QA | ✅ APPROVE |
       | Supervisor | ✅ APPROVE |

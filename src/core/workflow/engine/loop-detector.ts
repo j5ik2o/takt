@@ -1,7 +1,7 @@
 /**
  * Loop detection for workflow execution
  *
- * Detects when a workflow step is executed repeatedly without progress,
+ * Detects when a workflow movement is executed repeatedly without progress,
  * which may indicate an infinite loop.
  */
 
@@ -15,10 +15,10 @@ const DEFAULT_LOOP_DETECTION: Required<LoopDetectionConfig> = {
 };
 
 /**
- * Loop detector for tracking consecutive same-step executions.
+ * Loop detector for tracking consecutive same-movement executions.
  */
 export class LoopDetector {
-  private lastStepName: string | null = null;
+  private lastMovementName: string | null = null;
   private consecutiveCount = 0;
   private config: Required<LoopDetectionConfig>;
 
@@ -30,15 +30,15 @@ export class LoopDetector {
   }
 
   /**
-   * Check if the given step execution would be a loop.
+   * Check if the given movement execution would be a loop.
    * Updates internal tracking state.
    */
-  check(stepName: string): LoopCheckResult {
-    if (this.lastStepName === stepName) {
+  check(movementName: string): LoopCheckResult {
+    if (this.lastMovementName === movementName) {
       this.consecutiveCount++;
     } else {
       this.consecutiveCount = 1;
-      this.lastStepName = stepName;
+      this.lastMovementName = movementName;
     }
 
     const isLoop = this.consecutiveCount > this.config.maxConsecutiveSameStep;
@@ -57,7 +57,7 @@ export class LoopDetector {
    * Reset the detector state.
    */
   reset(): void {
-    this.lastStepName = null;
+    this.lastMovementName = null;
     this.consecutiveCount = 0;
   }
 

@@ -38,7 +38,7 @@ import { WorkflowEngine } from '../core/workflow/index.js';
 import { runReportPhase } from '../core/workflow/index.js';
 import {
   makeResponse,
-  makeStep,
+  makeMovement,
   makeRule,
   mockRunAgentSequence,
   mockDetectMatchedRuleSequence,
@@ -69,9 +69,9 @@ function buildSimpleConfig(): WorkflowConfig {
     name: 'worktree-test',
     description: 'Test workflow for worktree',
     maxIterations: 10,
-    initialStep: 'review',
-    steps: [
-      makeStep('review', {
+    initialMovement: 'review',
+    movements: [
+      makeMovement('review', {
         report: '00-review.md',
         rules: [
           makeRule('approved', 'COMPLETE'),
@@ -132,14 +132,14 @@ describe('WorkflowEngine: worktree reportDir resolution', () => {
   });
 
   it('should pass projectCwd-based reportDir to buildInstruction (used by {report_dir} placeholder)', async () => {
-    // Given: worktree environment with a step that uses {report_dir} in template
+    // Given: worktree environment with a movement that uses {report_dir} in template
     const config: WorkflowConfig = {
       name: 'worktree-test',
       description: 'Test',
       maxIterations: 10,
-      initialStep: 'review',
-      steps: [
-        makeStep('review', {
+      initialMovement: 'review',
+      movements: [
+        makeMovement('review', {
           instructionTemplate: 'Write report to {report_dir}',
           report: '00-review.md',
           rules: [

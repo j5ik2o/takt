@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { WorkflowStep, WorkflowState, WorkflowRule, AgentResponse } from '../core/models/index.js';
+import type { WorkflowMovement, WorkflowState, WorkflowRule, AgentResponse } from '../core/models/index.js';
 
 // --- Mocks ---
 
@@ -43,11 +43,11 @@ function makeRule(condition: string, next: string, extra?: Partial<WorkflowRule>
   return { condition, next, ...extra };
 }
 
-function makeStep(
+function makeMovement(
   name: string,
   rules: WorkflowRule[],
-  parallel?: WorkflowStep[],
-): WorkflowStep {
+  parallel?: WorkflowMovement[],
+): WorkflowMovement {
   return {
     name,
     agent: 'test-agent',
@@ -59,22 +59,22 @@ function makeStep(
   };
 }
 
-function makeState(stepOutputs?: Map<string, AgentResponse>): WorkflowState {
+function makeState(movementOutputs?: Map<string, AgentResponse>): WorkflowState {
   return {
     workflowName: 'it-test',
-    currentStep: 'test',
+    currentMovement: 'test',
     iteration: 1,
     status: 'running',
-    stepOutputs: stepOutputs ?? new Map(),
-    stepIterations: new Map(),
+    movementOutputs: movementOutputs ?? new Map(),
+    movementIterations: new Map(),
     agentSessions: new Map(),
     userInputs: [],
   };
 }
 
-function makeCtx(stepOutputs?: Map<string, AgentResponse>): RuleEvaluatorContext {
+function makeCtx(movementOutputs?: Map<string, AgentResponse>): RuleEvaluatorContext {
   return {
-    state: makeState(stepOutputs),
+    state: makeState(movementOutputs),
     cwd: '/tmp/test',
     detectRuleIndex,
     callAiJudge: mockCallAiJudge,
@@ -88,7 +88,7 @@ describe('Rule Evaluation IT: Phase 3 tag detection', () => {
   });
 
   it('should detect rule from Phase 3 tag content', async () => {
-    const step = makeStep('plan', [
+    const step = makeMovement('plan', [
       makeRule('Clear', 'implement'),
       makeRule('Unclear', 'ABORT'),
     ]);
@@ -99,7 +99,7 @@ describe('Rule Evaluation IT: Phase 3 tag detection', () => {
   });
 
   it('should prefer Phase 3 tag over Phase 1 tag', async () => {
-    const step = makeStep('plan', [
+    const step = makeMovement('plan', [
       makeRule('Clear', 'implement'),
       makeRule('Unclear', 'ABORT'),
     ]);
@@ -118,7 +118,7 @@ describe('Rule Evaluation IT: Phase 1 tag fallback', () => {
   });
 
   it('should fall back to Phase 1 tag when Phase 3 has no tag', async () => {
-    const step = makeStep('plan', [
+    const step = makeMovement('plan', [
       makeRule('Clear', 'implement'),
       makeRule('Unclear', 'ABORT'),
     ]);
@@ -129,7 +129,7 @@ describe('Rule Evaluation IT: Phase 1 tag fallback', () => {
   });
 
   it('should detect last tag when multiple tags in Phase 1', async () => {
-    const step = makeStep('plan', [
+    const step = makeMovement('plan', [
       makeRule('Clear', 'implement'),
       makeRule('Unclear', 'ABORT'),
     ]);
@@ -147,17 +147,17 @@ describe('Rule Evaluation IT: Aggregate conditions (all/any)', () => {
     mockCallAiJudge.mockResolvedValue(-1);
   });
 
-  it('should match all("approved") when all sub-steps have "approved"', () => {
-    const subStep1 = makeStep('arch-review', [
+  it('should match all("approved") when all sub-movements have "approved"', () => {
+    const subStep1 = makeMovement('arch-review', [
       makeRule('approved', ''),
       makeRule('needs_fix', ''),
     ]);
-    const subStep2 = makeStep('security-review', [
+    const subStep2 = makeMovement('security-review', [
       makeRule('approved', ''),
       makeRule('needs_fix', ''),
     ]);
 
-    const parentStep = makeStep('reviewers', [
+    const parentStep = makeMovement('reviewers', [
       makeRule('all("approved")', 'supervise', {
         isAggregateCondition: true,
         aggregateType: 'all',
@@ -185,17 +185,17 @@ describe('Rule Evaluation IT: Aggregate conditions (all/any)', () => {
     expect(result).toBe(0); // all("approved") is rule index 0
   });
 
-  it('should match any("needs_fix") when one sub-step has "needs_fix"', () => {
-    const subStep1 = makeStep('arch-review', [
+  it('should match any("needs_fix") when one sub-movement has "needs_fix"', () => {
+    const subStep1 = makeMovement('arch-review', [
       makeRule('approved', ''),
       makeRule('needs_fix', ''),
     ]);
-    const subStep2 = makeStep('security-review', [
+    const subStep2 = makeMovement('security-review', [
       makeRule('approved', ''),
       makeRule('needs_fix', ''),
     ]);
 
-    const parentStep = makeStep('reviewers', [
+    const parentStep = makeMovement('reviewers', [
       makeRule('all("approved")', 'supervise', {
         isAggregateCondition: true,
         aggregateType: 'all',
@@ -224,16 +224,16 @@ describe('Rule Evaluation IT: Aggregate conditions (all/any)', () => {
   });
 
   it('should return -1 when no aggregate condition matches', () => {
-    const subStep1 = makeStep('review-a', [
+    const subStep1 = makeMovement('review-a', [
       makeRule('approved', ''),
       makeRule('needs_fix', ''),
     ]);
-    const subStep2 = makeStep('review-b', [
+    const subStep2 = makeMovement('review-b', [
       makeRule('approved', ''),
       makeRule('needs_fix', ''),
     ]);
 
-    const parentStep = makeStep('reviews', [
+    const parentStep = makeMovement('reviews', [
       makeRule('all("approved")', 'done', {
         isAggregateCondition: true,
         aggregateType: 'all',
@@ -256,8 +256,8 @@ describe('Rule Evaluation IT: Aggregate conditions (all/any)', () => {
     expect(result).toBe(-1);
   });
 
-  it('should return -1 for non-parallel step', () => {
-    const step = makeStep('step', [
+  it('should return -1 for non-parallel movement', () => {
+    const step = makeMovement('step', [
       makeRule('all("done")', 'COMPLETE', {
         isAggregateCondition: true,
         aggregateType: 'all',
@@ -279,7 +279,7 @@ describe('Rule Evaluation IT: ai() judge condition', () => {
   it('should call AI judge for ai() conditions when no tag match', async () => {
     mockCallAiJudge.mockResolvedValue(0); // Judge says first ai() condition matches
 
-    const step = makeStep('step', [
+    const step = makeMovement('step', [
       makeRule('ai("The code is approved")', 'COMPLETE', {
         isAiCondition: true,
         aiConditionText: 'The code is approved',
@@ -297,7 +297,7 @@ describe('Rule Evaluation IT: ai() judge condition', () => {
   });
 
   it('should skip AI judge if tag already matched', async () => {
-    const step = makeStep('plan', [
+    const step = makeMovement('plan', [
       makeRule('ai("Clear")', 'implement', {
         isAiCondition: true,
         aiConditionText: 'Clear',
@@ -321,7 +321,7 @@ describe('Rule Evaluation IT: AI judge fallback', () => {
     // Second call (all conditions fallback): returns 0
     mockCallAiJudge.mockResolvedValue(0);
 
-    const step = makeStep('review', [
+    const step = makeMovement('review', [
       makeRule('Approved', 'COMPLETE'),
       makeRule('Rejected', 'fix'),
     ]);
@@ -335,7 +335,7 @@ describe('Rule Evaluation IT: AI judge fallback', () => {
   it('should throw when no rule matches (AI judge returns -1 for all phases)', async () => {
     mockCallAiJudge.mockResolvedValue(-1);
 
-    const step = makeStep('review', [
+    const step = makeMovement('review', [
       makeRule('Approved', 'COMPLETE'),
       makeRule('Rejected', 'fix'),
     ]);
@@ -353,8 +353,8 @@ describe('Rule Evaluation IT: RuleMatchMethod tracking', () => {
   });
 
   it('should record method as "aggregate" for aggregate matches', () => {
-    const subStep = makeStep('sub', [makeRule('ok', '')]);
-    const parentStep = makeStep('parent', [
+    const subStep = makeMovement('sub', [makeRule('ok', '')]);
+    const parentStep = makeMovement('parent', [
       makeRule('all("ok")', 'COMPLETE', {
         isAggregateCondition: true,
         aggregateType: 'all',
@@ -374,7 +374,7 @@ describe('Rule Evaluation IT: RuleMatchMethod tracking', () => {
   });
 
   it('should record method as "phase3_tag" for Phase 3 matches', async () => {
-    const step = makeStep('step', [
+    const step = makeMovement('step', [
       makeRule('Done', 'COMPLETE'),
     ]);
 
@@ -383,7 +383,7 @@ describe('Rule Evaluation IT: RuleMatchMethod tracking', () => {
   });
 
   it('should record method as "phase1_tag" for Phase 1 fallback matches', async () => {
-    const step = makeStep('step', [
+    const step = makeMovement('step', [
       makeRule('Done', 'COMPLETE'),
     ]);
 
@@ -392,13 +392,13 @@ describe('Rule Evaluation IT: RuleMatchMethod tracking', () => {
   });
 });
 
-describe('Rule Evaluation IT: steps without rules', () => {
+describe('Rule Evaluation IT: movements without rules', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('should return undefined for step with no rules', async () => {
-    const step: WorkflowStep = {
+  it('should return undefined for movement with no rules', async () => {
+    const step: WorkflowMovement = {
       name: 'step',
       agent: 'agent',
       agentDisplayName: 'step',
@@ -410,8 +410,8 @@ describe('Rule Evaluation IT: steps without rules', () => {
     expect(result).toBeUndefined();
   });
 
-  it('should return undefined for step with empty rules array', async () => {
-    const step = makeStep('step', []);
+  it('should return undefined for movement with empty rules array', async () => {
+    const step = makeMovement('step', []);
 
     const result = await detectMatchedRule(step, 'content', '', makeCtx());
     expect(result).toBeUndefined();

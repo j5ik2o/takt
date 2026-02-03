@@ -36,23 +36,23 @@ export class StateManager {
 
     this.state = {
       workflowName: config.name,
-      currentStep: config.initialStep,
+      currentMovement: config.initialMovement,
       iteration: 0,
-      stepOutputs: new Map(),
+      movementOutputs: new Map(),
       userInputs,
       agentSessions,
-      stepIterations: new Map(),
+      movementIterations: new Map(),
       status: 'running',
     };
   }
 
   /**
-   * Increment the iteration counter for a step and return the new value.
+   * Increment the iteration counter for a movement and return the new value.
    */
-  incrementStepIteration(stepName: string): number {
-    const current = this.state.stepIterations.get(stepName) ?? 0;
+  incrementMovementIteration(movementName: string): number {
+    const current = this.state.movementIterations.get(movementName) ?? 0;
     const next = current + 1;
-    this.state.stepIterations.set(stepName, next);
+    this.state.movementIterations.set(movementName, next);
     return next;
   }
 
@@ -68,10 +68,10 @@ export class StateManager {
   }
 
   /**
-   * Get the most recent step output.
+   * Get the most recent movement output.
    */
   getPreviousOutput(): AgentResponse | undefined {
-    const outputs = Array.from(this.state.stepOutputs.values());
+    const outputs = Array.from(this.state.movementOutputs.values());
     return outputs[outputs.length - 1];
   }
 }
@@ -89,12 +89,12 @@ export function createInitialState(
 }
 
 /**
- * Increment the iteration counter for a step and return the new value.
+ * Increment the iteration counter for a movement and return the new value.
  */
-export function incrementStepIteration(state: WorkflowState, stepName: string): number {
-  const current = state.stepIterations.get(stepName) ?? 0;
+export function incrementMovementIteration(state: WorkflowState, movementName: string): number {
+  const current = state.movementIterations.get(movementName) ?? 0;
   const next = current + 1;
-  state.stepIterations.set(stepName, next);
+  state.movementIterations.set(movementName, next);
   return next;
 }
 
@@ -110,9 +110,9 @@ export function addUserInput(state: WorkflowState, input: string): void {
 }
 
 /**
- * Get the most recent step output.
+ * Get the most recent movement output.
  */
 export function getPreviousOutput(state: WorkflowState): AgentResponse | undefined {
-  const outputs = Array.from(state.stepOutputs.values());
+  const outputs = Array.from(state.movementOutputs.values());
   return outputs[outputs.length - 1];
 }

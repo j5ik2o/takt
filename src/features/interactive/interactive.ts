@@ -19,8 +19,8 @@ import { getProvider, type ProviderType } from '../../infra/providers/index.js';
 import { selectOption } from '../../shared/prompt/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { info, error, blankLine, StreamDisplay } from '../../shared/ui/index.js';
-import { getPrompt } from '../../shared/prompts/index.js';
-import { getLabelObject } from '../../shared/i18n/index.js';
+import { loadTemplate } from '../../shared/prompts/index.js';
+import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 const log = createLogger('interactive');
 
 /** Shape of interactive UI text */
@@ -40,25 +40,20 @@ function resolveLanguage(lang?: Language): 'en' | 'ja' {
 }
 
 function getInteractivePrompts(lang: 'en' | 'ja', workflowContext?: WorkflowContext) {
-  let systemPrompt = getPrompt('interactive.systemPrompt', lang);
-  let summaryPrompt = getPrompt('interactive.summaryPrompt', lang);
+  const hasWorkflow = !!workflowContext;
 
-  // Add workflow context to prompts if available
-  if (workflowContext) {
-    const workflowInfo = getPrompt('interactive.workflowInfo', lang, {
-      name: workflowContext.name,
-      description: workflowContext.description,
-    });
-
-    systemPrompt += workflowInfo;
-    summaryPrompt += workflowInfo;
-  }
+  const systemPrompt = loadTemplate('score_interactive_system_prompt', lang, {
+    workflowInfo: hasWorkflow,
+    workflowName: workflowContext?.name ?? '',
+    workflowDescription: workflowContext?.description ?? '',
+  });
 
   return {
     systemPrompt,
-    summaryPrompt,
-    conversationLabel: getPrompt('interactive.conversationLabel', lang),
-    noTranscript: getPrompt('interactive.noTranscript', lang),
+    lang,
+    workflowContext,
+    conversationLabel: getLabel('interactive.conversationLabel', lang),
+    noTranscript: getLabel('interactive.noTranscript', lang),
     ui: getLabelObject<InteractiveUIText>('interactive.ui', lang),
   };
 }
@@ -83,21 +78,36 @@ function buildTaskFromHistory(history: ConversationMessage[]): string {
     .join('\n\n');
 }
 
+/**
+ * Build the summary prompt (used as both system prompt and user message).
+ * Renders the complete score_summary_system_prompt template with conversation data.
+ * Returns empty string if there is no conversation to summarize.
+ */
 function buildSummaryPrompt(
   history: ConversationMessage[],
   hasSession: boolean,
-  summaryPrompt: string,
+  lang: 'en' | 'ja',
   noTranscriptNote: string,
   conversationLabel: string,
+  workflowContext?: WorkflowContext,
 ): string {
+  let conversation = '';
   if (history.length > 0) {
     const historyText = buildTaskFromHistory(history);
-    return `${summaryPrompt}\n\n${conversationLabel}\n${historyText}`;
+    conversation = `${conversationLabel}\n${historyText}`;
+  } else if (hasSession) {
+    conversation = `${conversationLabel}\n${noTranscriptNote}`;
+  } else {
+    return '';
   }
-  if (hasSession) {
-    return `${summaryPrompt}\n\n${conversationLabel}\n${noTranscriptNote}`;
-  }
-  return '';
+
+  const hasWorkflow = !!workflowContext;
+  return loadTemplate('score_summary_system_prompt', lang, {
+    workflowInfo: hasWorkflow,
+    workflowName: workflowContext?.name ?? '',
+    workflowDescription: workflowContext?.description ?? '',
+    conversation,
+  });
 }
 
 async function confirmTask(task: string, message: string, confirmLabel: string, yesLabel: string, noLabel: string): Promise<boolean> {
@@ -305,18 +315,19 @@ export async function interactiveMode(
       let summaryPrompt = buildSummaryPrompt(
         history,
         !!sessionId,
-        prompts.summaryPrompt,
+        prompts.lang,
         prompts.noTranscript,
         prompts.conversationLabel,
+        prompts.workflowContext,
       );
-      if (summaryPrompt && userNote) {
-        summaryPrompt = `${summaryPrompt}\n\nUser Note:\n${userNote}`;
-      }
       if (!summaryPrompt) {
         info(prompts.ui.noConversation);
         continue;
       }
-      const summaryResult = await callAIWithRetry(summaryPrompt, prompts.summaryPrompt);
+      if (userNote) {
+        summaryPrompt = `${summaryPrompt}\n\nUser Note:\n${userNote}`;
+      }
+      const summaryResult = await callAIWithRetry(summaryPrompt, summaryPrompt);
       if (!summaryResult) {
         info(prompts.ui.summarizeFailed);
         continue;

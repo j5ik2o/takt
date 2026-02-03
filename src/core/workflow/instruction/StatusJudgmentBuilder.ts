@@ -4,14 +4,13 @@
  * Resumes the agent session and asks it to evaluate its work
  * and output the appropriate status tag. No tools are allowed.
  *
- * Includes:
- * - Header instruction (review and determine status)
- * - Status rules (criteria table + output format)
+ * Renders a single complete template combining the judgment header
+ * and status rules (criteria table + output format).
  */
 
-import type { WorkflowStep, Language } from '../../models/types.js';
-import { generateStatusRulesFromRules } from './status-rules.js';
-import { getPrompt } from '../../../shared/prompts/index.js';
+import type { WorkflowMovement, Language } from '../../models/types.js';
+import { generateStatusRulesComponents } from './status-rules.js';
+import { loadTemplate } from '../../../shared/prompts/index.js';
 
 /**
  * Context for building status judgment instruction.
@@ -25,33 +24,34 @@ export interface StatusJudgmentContext {
 
 /**
  * Builds Phase 3 (status judgment) instructions.
+ *
+ * Renders a single complete template with all variables.
  */
 export class StatusJudgmentBuilder {
   constructor(
-    private readonly step: WorkflowStep,
+    private readonly step: WorkflowMovement,
     private readonly context: StatusJudgmentContext,
   ) {}
 
   build(): string {
     if (!this.step.rules || this.step.rules.length === 0) {
-      throw new Error(`StatusJudgmentBuilder called for step "${this.step.name}" which has no rules`);
+      throw new Error(`StatusJudgmentBuilder called for movement "${this.step.name}" which has no rules`);
     }
 
     const language = this.context.language ?? 'en';
-    const sections: string[] = [];
 
-    // Header
-    sections.push(getPrompt('instruction.statusJudgment.header', language));
-
-    // Status rules (criteria table + output format)
-    const generatedPrompt = generateStatusRulesFromRules(
+    const components = generateStatusRulesComponents(
       this.step.name,
       this.step.rules,
       language,
       { interactive: this.context.interactive },
     );
-    sections.push(generatedPrompt);
 
-    return sections.join('\n\n');
+    return loadTemplate('perform_phase3_message', language, {
+      criteriaTable: components.criteriaTable,
+      outputList: components.outputList,
+      hasAppendix: components.hasAppendix,
+      appendixContent: components.appendixContent,
+    });
   }
 }

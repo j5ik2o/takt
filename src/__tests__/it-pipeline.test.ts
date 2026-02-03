@@ -154,9 +154,9 @@ function createTestWorkflowDir(): { dir: string; workflowPath: string } {
 name: it-simple
 description: Integration test workflow
 max_iterations: 10
-initial_step: plan
+initial_movement: plan
 
-steps:
+movements:
   - name: plan
     agent: ./agents/planner.md
     rules:
@@ -209,7 +209,7 @@ describe('Pipeline Integration Tests', () => {
 
   it('should complete pipeline with workflow path + skip-git + mock scenario', async () => {
     // Scenario: plan -> implement -> review -> COMPLETE
-    // agent field must match extractAgentName(step.agent), i.e., the .md filename without extension
+    // agent field must match extractAgentName(movement.agent), i.e., the .md filename without extension
     setMockScenario([
       { agent: 'planner', status: 'done', content: '[PLAN:1]\n\nPlan completed. Requirements are clear.' },
       { agent: 'coder', status: 'done', content: '[IMPLEMENT:1]\n\nImplementation complete.' },
@@ -231,7 +231,7 @@ describe('Pipeline Integration Tests', () => {
   it('should complete pipeline with workflow name + skip-git + mock scenario', async () => {
     // Use builtin 'minimal' workflow
     // agent field: extractAgentName result (from .md filename)
-    // tag in content: [STEP_NAME:N] where STEP_NAME is the step name uppercased
+    // tag in content: [MOVEMENT_NAME:N] where MOVEMENT_NAME is the movement name uppercased
     setMockScenario([
       { agent: 'coder', status: 'done', content: 'Implementation complete' },
       { agent: 'ai-antipattern-reviewer', status: 'done', content: 'No AI-specific issues' },

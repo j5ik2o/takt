@@ -3,7 +3,7 @@
  */
 
 import type { StreamCallback, PermissionHandler, AskUserQuestionHandler } from '../infra/claude/index.js';
-import type { PermissionMode } from '../core/models/index.js';
+import type { PermissionMode, Language } from '../core/models/index.js';
 
 export type { StreamCallback };
 
@@ -26,4 +26,6 @@ export interface RunAgentOptions {
   onAskUserQuestion?: AskUserQuestionHandler;
   /** Bypass all permission checks (sacrifice-my-pc mode) */
   bypassPermissions?: boolean;
+  /** Language for template resolution */
+  language?: Language;
 }

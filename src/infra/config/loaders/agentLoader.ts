@@ -11,9 +11,9 @@ import { join, basename } from 'node:path';
 import type { CustomAgentConfig } from '../../../core/models/index.js';
 import {
   getGlobalAgentsDir,
-  getGlobalWorkflowsDir,
+  getGlobalPiecesDir,
   getBuiltinAgentsDir,
-  getBuiltinWorkflowsDir,
+  getBuiltinPiecesDir,
   isPathSafe,
 } from '../paths.js';
 import { getLanguage } from '../global/globalConfig.js';
@@ -23,9 +23,9 @@ function getAllowedAgentBases(): string[] {
   const lang = getLanguage();
   return [
     getGlobalAgentsDir(),
-    getGlobalWorkflowsDir(),
+    getGlobalPiecesDir(),
     getBuiltinAgentsDir(lang),
-    getBuiltinWorkflowsDir(lang),
+    getBuiltinPiecesDir(lang),
   ];
 }
 

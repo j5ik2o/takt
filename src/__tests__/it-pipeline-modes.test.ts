@@ -172,9 +172,9 @@ function createTestWorkflowDir(): { dir: string; workflowPath: string } {
 name: it-pipeline
 description: Pipeline test workflow
 max_iterations: 10
-initial_step: plan
+initial_movement: plan
 
-steps:
+movements:
   - name: plan
     agent: ./agents/planner.md
     rules:

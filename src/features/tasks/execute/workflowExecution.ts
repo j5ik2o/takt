@@ -159,7 +159,7 @@ export async function executeWorkflow(
         maxIterations: String(request.maxIterations),
       })
     );
-    info(getLabel('workflow.iterationLimit.currentStep', undefined, { currentStep: request.currentStep }));
+    info(getLabel('workflow.iterationLimit.currentMovement', undefined, { currentMovement: request.currentMovement }));
 
     const action = await selectOption(getLabel('workflow.iterationLimit.continueQuestion'), [
       {
@@ -248,8 +248,8 @@ export async function executeWorkflow(
     appendNdjsonLine(ndjsonLogPath, record);
   });
 
-  engine.on('step:start', (step, iteration, instruction) => {
-    log.debug('Step starting', { step: step.name, agent: step.agentDisplayName, iteration });
+  engine.on('movement:start', (step, iteration, instruction) => {
+    log.debug('Movement starting', { step: step.name, agent: step.agentDisplayName, iteration });
     info(`[${iteration}/${workflowConfig.maxIterations}] ${step.name} (${step.agentDisplayName})`);
 
     // Log prompt content for debugging
@@ -273,8 +273,8 @@ export async function executeWorkflow(
 
   });
 
-  engine.on('step:complete', (step, response, instruction) => {
-    log.debug('Step completed', {
+  engine.on('movement:complete', (step, response, instruction) => {
+    log.debug('Movement completed', {
       step: step.name,
       status: response.status,
       matchedRuleIndex: response.matchedRuleIndex,
@@ -329,7 +329,7 @@ export async function executeWorkflow(
     updateLatestPointer(sessionLog, workflowSessionId, projectCwd);
   });
 
-  engine.on('step:report', (_step, filePath, fileName) => {
+  engine.on('movement:report', (_step, filePath, fileName) => {
     const content = readFileSync(filePath, 'utf-8');
     console.log(`\n📄 Report: ${fileName}\n`);
     console.log(content);

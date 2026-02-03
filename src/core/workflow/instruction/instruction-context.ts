@@ -1,12 +1,10 @@
 /**
- * Instruction context types and execution metadata rendering
+ * Instruction context types and edit rule generation
  *
- * Defines the context structures used by instruction builders,
- * and renders execution metadata (working directory, rules) as markdown.
+ * Defines the context structures used by instruction builders.
  */
 
 import type { AgentResponse, Language } from '../../models/types.js';
-import { getPromptObject } from '../../../shared/prompts/index.js';
 
 /**
  * Context for building instruction from template.
@@ -18,15 +16,15 @@ export interface InstructionContext {
   iteration: number;
   /** Maximum iterations allowed */
   maxIterations: number;
-  /** Current step's iteration number (how many times this step has been executed) */
-  stepIteration: number;
+  /** Current movement's iteration number (how many times this movement has been executed) */
+  movementIteration: number;
   /** Working directory (agent work dir, may be a clone) */
   cwd: string;
   /** Project root directory (where .takt/ lives). */
   projectCwd: string;
   /** User inputs accumulated during workflow */
   userInputs: string[];
-  /** Previous step output if available */
+  /** Previous movement output if available */
   previousOutput?: AgentResponse;
   /** Report directory path */
   reportDir?: string;
@@ -34,78 +32,30 @@ export interface InstructionContext {
   language?: Language;
   /** Whether interactive-only rules are enabled */
   interactive?: boolean;
-  /** Top-level workflow steps for workflow structure display */
-  workflowSteps?: ReadonlyArray<{ name: string; description?: string }>;
-  /** Index of the current step in workflowSteps (0-based) */
-  currentStepIndex?: number;
-}
-
-/** Execution environment metadata prepended to agent instructions */
-export interface ExecutionMetadata {
-  /** The agent's working directory (may be a clone) */
-  readonly workingDirectory: string;
-  /** Language for metadata rendering */
-  readonly language: Language;
-  /** Whether file editing is allowed for this step (undefined = no prompt) */
-  readonly edit?: boolean;
+  /** Top-level workflow movements for workflow structure display */
+  workflowMovements?: ReadonlyArray<{ name: string; description?: string }>;
+  /** Index of the current movement in workflowMovements (0-based) */
+  currentMovementIndex?: number;
 }
 
 /**
- * Build execution metadata from instruction context and step config.
+ * Build the edit rule string for the execution context section.
  *
- * Pure function: (InstructionContext, edit?) → ExecutionMetadata.
+ * Returns a localized string describing the edit permission for this movement.
+ * Returns empty string when edit is undefined (no explicit permission).
  */
-export function buildExecutionMetadata(context: InstructionContext, edit?: boolean): ExecutionMetadata {
-  return {
-    workingDirectory: context.cwd,
-    language: context.language ?? 'en',
-    edit,
-  };
-}
-
-/** Shape of localized metadata strings from YAML */
-export interface MetadataStrings {
-  heading: string;
-  workingDirectory: string;
-  rulesHeading: string;
-  noCommit: string;
-  noCd: string;
-  editEnabled: string;
-  editDisabled: string;
-  note: string;
-}
-
-/** Load metadata strings for the given language from YAML */
-export function getMetadataStrings(language: Language): MetadataStrings {
-  return getPromptObject<MetadataStrings>('instruction.metadata', language);
-}
-
-/**
- * Render execution metadata as a markdown string.
- *
- * Pure function: ExecutionMetadata → string.
- * Always includes heading + Working Directory + Execution Rules.
- * Language determines the output language; 'en' includes a note about language consistency.
- */
-export function renderExecutionMetadata(metadata: ExecutionMetadata): string {
-  const strings = getMetadataStrings(metadata.language);
-  const lines = [
-    strings.heading,
-    `- ${strings.workingDirectory}: ${metadata.workingDirectory}`,
-    '',
-    strings.rulesHeading,
-    `- ${strings.noCommit}`,
-    `- ${strings.noCd}`,
-  ];
-  if (metadata.edit === true) {
-    lines.push(`- ${strings.editEnabled}`);
-  } else if (metadata.edit === false) {
-    lines.push(`- ${strings.editDisabled}`);
+export function buildEditRule(edit: boolean | undefined, language: Language): string {
+  if (edit === true) {
+    if (language === 'ja') {
+      return '**このムーブメントでは編集が許可されています。** ユーザーの要求に応じて、ファイルの作成・変更・削除を行ってください。';
+    }
+    return '**Editing is ENABLED for this movement.** You may create, modify, and delete files as needed to fulfill the user\'s request.';
   }
-  if (strings.note) {
-    lines.push('');
-    lines.push(strings.note);
+  if (edit === false) {
+    if (language === 'ja') {
+      return '**このムーブメントでは編集が禁止されています。** プロジェクトのソースファイルを作成・変更・削除しないでください。コードの読み取り・検索のみ行ってください。レポート出力は後のフェーズで自動的に行われます。';
+    }
+    return '**Editing is DISABLED for this movement.** Do NOT create, modify, or delete any project source files. You may only read and search code. Report output will be handled automatically in a later phase.';
   }
-  lines.push('');
-  return lines.join('\n');
+  return '';
 }

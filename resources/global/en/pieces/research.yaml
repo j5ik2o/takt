@@ -7,11 +7,11 @@
 #                          -> plan (rejected: restart from planning)
 #
 # Template Variables:
-#   {iteration}      - Workflow-wide turn count (total steps executed across all agents)
+#   {iteration}      - Workflow-wide turn count (total movements executed across all agents)
 #   {max_iterations} - Maximum iterations allowed for the workflow
-#   {step_iteration} - Per-step iteration count (how many times THIS step has been executed)
+#   {movement_iteration} - Per-movement iteration count (how many times THIS movement has been executed)
 #   {task}           - Original user request
-#   {previous_response} - Output from the previous step
+#   {previous_response} - Output from the previous movement
 #   {user_inputs}    - Accumulated user inputs during workflow
 #   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
 
@@ -20,7 +20,7 @@ description: Research workflow - autonomously executes research without asking q
 
 max_iterations: 10
 
-steps:
+movements:
   - name: plan
     agent: ../agents/research/planner.md
     allowed_tools:
@@ -32,8 +32,8 @@ steps:
     instruction_template: |
       ## Workflow Status
       - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: plan
+      - Movement Iteration: {movement_iteration} (times this movement has run)
+      - Movement: plan
 
       ## Research Request
       {task}
@@ -69,8 +69,8 @@ steps:
     instruction_template: |
       ## Workflow Status
       - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: dig
+      - Movement Iteration: {movement_iteration} (times this movement has run)
+      - Movement: dig
 
       ## Original Research Request
       {task}
@@ -111,8 +111,8 @@ steps:
     instruction_template: |
       ## Workflow Status
       - Iteration: {iteration}/{max_iterations} (workflow-wide)
-      - Step Iteration: {step_iteration} (times this step has run)
-      - Step: supervise (research quality evaluation)
+      - Movement Iteration: {movement_iteration} (times this movement has run)
+      - Movement: supervise (research quality evaluation)
 
       ## Original Research Request
       {task}
@@ -131,4 +131,4 @@ steps:
       - condition: Research results are insufficient and replanning is needed
         next: plan
 
-initial_step: plan
+initial_movement: plan

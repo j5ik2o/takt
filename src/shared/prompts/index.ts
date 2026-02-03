@@ -1,110 +1,144 @@
 /**
- * Prompt loader utility
+ * Markdown template loader
  *
- * Loads prompt strings from language-specific YAML files
- * (prompts_en.yaml / prompts_ja.yaml) and provides
- * key-based access with template variable substitution.
+ * Loads prompt strings from Markdown template files (.md),
+ * applies {{variable}} substitution and {{#if}}...{{else}}...{{/if}}
+ * conditional blocks.
+ *
+ * Templates are organized in language subdirectories:
+ *   {lang}/{name}.md  — localized templates
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parse as parseYaml } from 'yaml';
 import type { Language } from '../../core/models/types.js';
-import { DEFAULT_LANGUAGE } from '../constants.js';
 
-/** Cached YAML data per language */
-const promptCache = new Map<Language, Record<string, unknown>>();
+/** Cached raw template text (before variable substitution) */
+const templateCache = new Map<string, string>();
 
-function loadPrompts(lang: Language): Record<string, unknown> {
-  const cached = promptCache.get(lang);
-  if (cached) return cached;
+/**
+ * Resolve template file path.
+ *
+ * Loads `{lang}/{name}.md`.
+ * Throws if the file does not exist.
+ */
+function resolveTemplatePath(name: string, lang: Language): string {
   const __dirname = dirname(fileURLToPath(import.meta.url));
-  const yamlPath = join(__dirname, `prompts_${lang}.yaml`);
-  const content = readFileSync(yamlPath, 'utf-8');
-  const data = parseYaml(content) as Record<string, unknown>;
-  promptCache.set(lang, data);
-  return data;
-}
 
-/**
- * Resolve a dot-separated key path to a value in a nested object.
- * Returns undefined if the path does not exist.
- */
-function resolveKey(obj: Record<string, unknown>, keyPath: string): unknown {
-  const parts = keyPath.split('.');
-  let current: unknown = obj;
-  for (const part of parts) {
-    if (current === null || current === undefined || typeof current !== 'object') {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[part];
+  const localizedPath = join(__dirname, lang, `${name}.md`);
+  if (existsSync(localizedPath)) {
+    return localizedPath;
   }
-  return current;
+
+  throw new Error(
+    `Template not found: ${name} (lang: ${lang})`,
+  );
 }
 
 /**
- * Replace {key} placeholders in a template string with values from vars.
- * Unmatched placeholders are left as-is.
+ * Strip HTML meta comments (<!-- ... -->) from template content.
  */
-function applyVars(template: string, vars: Record<string, string>): string {
-  return template.replace(/\{(\w+)\}/g, (match, key: string) => {
-    if (key in vars) {
-      const value: string = vars[key] as string;
-      return value;
-    }
-    return match;
-  });
+function stripMetaComments(content: string): string {
+  return content.replace(/<!--[\s\S]*?-->/g, '');
 }
 
 /**
- * Get a prompt string from the language-specific YAML by dot-separated key.
- *
- * When `lang` is provided, loads the corresponding language file.
- * When `lang` is omitted, uses DEFAULT_LANGUAGE.
- *
- * Template variables in `{name}` format are replaced when `vars` is given.
+ * Read raw template text with caching.
  */
-export function getPrompt(
-  key: string,
-  lang?: Language,
-  vars?: Record<string, string>,
+function readTemplate(filePath: string): string {
+  const cached = templateCache.get(filePath);
+  if (cached !== undefined) return cached;
+
+  const raw = readFileSync(filePath, 'utf-8');
+  const content = stripMetaComments(raw);
+  templateCache.set(filePath, content);
+  return content;
+}
+
+/**
+ * Process {{#if variable}}...{{else}}...{{/if}} conditional blocks.
+ *
+ * A variable is truthy when:
+ * - It is a non-empty string
+ * - It is boolean true
+ *
+ * Nesting is NOT supported (per architecture decision).
+ */
+function processConditionals(
+  template: string,
+  vars: Record<string, string | boolean>,
 ): string {
-  const effectiveLang = lang ?? DEFAULT_LANGUAGE;
-  const data = loadPrompts(effectiveLang);
+  // Pattern: {{#if varName}}...content...{{else}}...altContent...{{/if}}
+  // or:      {{#if varName}}...content...{{/if}}
+  return template.replace(
+    /\{\{#if\s+(\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g,
+    (_match, varName: string, body: string): string => {
+      const value = vars[varName];
+      const isTruthy = value !== undefined && value !== false && value !== '';
 
-  const value = resolveKey(data, key);
-  if (typeof value !== 'string') {
-    throw new Error(`Prompt key not found: ${key}${lang ? ` (lang: ${lang})` : ''}`);
-  }
+      const elseIndex = body.indexOf('{{else}}');
+      if (isTruthy) {
+        return elseIndex >= 0 ? body.slice(0, elseIndex) : body;
+      }
+      return elseIndex >= 0 ? body.slice(elseIndex + '{{else}}'.length) : '';
+    },
+  );
+}
+
+/**
+ * Replace {{variableName}} placeholders with values from vars.
+ * Undefined variables are replaced with empty string.
+ */
+function substituteVariables(
+  template: string,
+  vars: Record<string, string | boolean>,
+): string {
+  return template.replace(
+    /\{\{(\w+)\}\}/g,
+    (_match, varName: string) => {
+      const value = vars[varName];
+      if (value === undefined || value === false) return '';
+      if (value === true) return 'true';
+      return value;
+    },
+  );
+}
+
+/**
+ * Render a template string by processing conditionals then substituting variables.
+ */
+export function renderTemplate(
+  template: string,
+  vars: Record<string, string | boolean>,
+): string {
+  const afterConditionals = processConditionals(template, vars);
+  return substituteVariables(afterConditionals, vars);
+}
+
+/**
+ * Load a Markdown template, apply variable substitution and conditional blocks.
+ *
+ * @param name  Template name (without extension), e.g. 'score_interactive_system_prompt'
+ * @param lang  Language ('en' | 'ja').
+ * @param vars  Variable values to substitute
+ * @returns Final prompt string
+ */
+export function loadTemplate(
+  name: string,
+  lang: Language,
+  vars?: Record<string, string | boolean>,
+): string {
+  const filePath = resolveTemplatePath(name, lang);
+  const raw = readTemplate(filePath);
 
   if (vars) {
-    return applyVars(value, vars);
+    return renderTemplate(raw, vars);
   }
-  return value;
+  return raw;
 }
 
-/**
- * Get a nested object from the language-specific YAML by dot-separated key.
- *
- * When `lang` is provided, loads the corresponding language file.
- * When `lang` is omitted, uses DEFAULT_LANGUAGE.
- *
- * Useful for structured prompt groups (e.g. UI text objects, metadata strings).
- */
-export function getPromptObject<T>(key: string, lang?: Language): T {
-  const effectiveLang = lang ?? DEFAULT_LANGUAGE;
-  const data = loadPrompts(effectiveLang);
-
-  const value = resolveKey(data, key);
-  if (value === undefined || value === null) {
-    throw new Error(`Prompt key not found: ${key}${lang ? ` (lang: ${lang})` : ''}`);
-  }
-
-  return value as T;
-}
-
-/** Reset cached data (for testing) */
+/** Reset cache (for tests) */
 export function _resetCache(): void {
-  promptCache.clear();
+  templateCache.clear();
 }

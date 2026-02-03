@@ -11,17 +11,17 @@
 #
 # ボイラープレートセクション（Workflow Context, User Request, Previous Response,
 # Additional User Inputs, Instructions heading）はbuildInstruction()が自動挿入。
-# instruction_templateにはステップ固有の内容のみ記述。
+# instruction_templateにはムーブメント固有の内容のみ記述。
 #
 # テンプレート変数（instruction_template内で使用可能）:
-#   {iteration}         - ワークフロー全体のターン数（全エージェントで実行されたステップの合計）
+#   {iteration}         - ワークフロー全体のターン数（全エージェントで実行されたムーブメントの合計）
 #   {max_iterations}    - ワークフローの最大イテレーション数
-#   {step_iteration}    - ステップごとのイテレーション数（このステップが何回実行されたか）
-#   {previous_response} - 前のステップの出力（pass_previous_response: true の場合のみ）
+#   {movement_iteration}    - ムーブメントごとのイテレーション数（このムーブメントが何回実行されたか）
+#   {previous_response} - 前のムーブメントの出力（pass_previous_response: true の場合のみ）
 #   {report_dir}        - レポートディレクトリ名（例: "20250126-143052-task-summary"）
 #
-# ステップレベルフィールド:
-#   report:  - ステップのレポートファイル（Workflow ContextにReport File/Filesとして自動挿入）
+# ムーブメントレベルフィールド:
+#   report:  - ムーブメントのレポートファイル（Workflow ContextにReport File/Filesとして自動挿入）
 #              単一: report: 00-plan.md
 #              複数: report:
 #                      - Scope: 01-coder-scope.md
@@ -32,11 +32,11 @@ description: CQRS+ES・フロントエンド・セキュリティ・QA専門家�
 
 max_iterations: 30
 
-initial_step: plan
+initial_movement: plan
 
-steps:
+movements:
   # ===========================================
-  # Phase 0: Planning
+  # Movement 0: Planning
   # ===========================================
   - name: plan
     edit: false
@@ -89,7 +89,7 @@ steps:
         next: ABORT
 
   # ===========================================
-  # Phase 1: Implementation
+  # Movement 1: Implementation
   # ===========================================
   - name: implement
     edit: true
@@ -108,7 +108,7 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      planステップで立てた計画に従って実装してください。
+      planムーブメントで立てた計画に従って実装してください。
       計画レポート（{report:00-plan.md}）を参照し、実装を進めてください。
       Workflow Contextに示されたReport Directory内のファイルのみ参照してください。他のレポートディレクトリは検索/参照しないでください。
 
@@ -162,7 +162,7 @@ steps:
         interactive_only: true
 
   # ===========================================
-  # Phase 2: AI Review
+  # Movement 2: AI Review
   # ===========================================
   - name: ai_review
     edit: false
@@ -228,7 +228,7 @@ steps:
       - WebSearch
       - WebFetch
     instruction_template: |
-      **これは {step_iteration} 回目の AI Review です。**
+      **これは {movement_iteration} 回目の AI Review です。**
 
       2回目以降は、前回の修正が実際には行われていなかったということです。
       **あなたの「修正済み」という認識が間違っています。**
@@ -279,7 +279,7 @@ steps:
         next: plan
 
   # ===========================================
-  # Phase 3: Expert Reviews (Parallel)
+  # Movement 3: Expert Reviews (Parallel)
   # ===========================================
   - name: reviewers
     parallel:
@@ -328,7 +328,7 @@ steps:
           - condition: needs_fix
         instruction_template: |
           CQRS（コマンドクエリ責務分離）とEvent Sourcing（イベントソーシング）の観点から
-          変更をレビューしてください。AI特有の問題のレビューは不要です（ai_reviewステップで実施済み）。
+          変更をレビューしてください。AI特有の問題のレビューは不要です（ai_reviewムーブメントで実施済み）。
 
           **レビュー観点:**
           - Aggregate設計の妥当性
@@ -533,7 +533,7 @@ steps:
     pass_previous_response: true
 
   # ===========================================
-  # Phase 4: Supervision
+  # Movement 4: Supervision
   # ===========================================
   - name: supervise
     edit: false
@@ -549,7 +549,7 @@ steps:
       - WebFetch
     instruction_template: |
       ## Previous Reviews Summary
-      このステップに到達したということは、以下のレビューがすべてAPPROVEされています：
+      このムーブメントに到達したということは、以下のレビューがすべてAPPROVEされています：
       - AI Review: APPROVED
       - CQRS+ES Review: APPROVED
       - Frontend Review: APPROVED
@@ -560,7 +560,7 @@ steps:
 
       **ワークフロー全体の確認:**
       1. 計画（{report:00-plan.md}）と実装結果が一致しているか
-      2. 各レビューステップの指摘が対応されているか
+      2. 各レビュームーブメントの指摘が対応されているか
       3. 元のタスク目的が達成されているか
 
       **レポートの確認:** Report Directory内の全レポートを読み、

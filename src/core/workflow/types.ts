@@ -6,7 +6,7 @@
  */
 
 import type { PermissionResult, PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
-import type { WorkflowStep, AgentResponse, WorkflowState, Language } from '../models/types.js';
+import type { WorkflowMovement, WorkflowStep, AgentResponse, WorkflowState, Language } from '../models/types.js';
 
 export type ProviderType = 'claude' | 'codex' | 'mock';
 
@@ -91,7 +91,7 @@ export type AskUserQuestionHandler = (
   input: AskUserQuestionInput
 ) => Promise<Record<string, string>>;
 
-export type RuleIndexDetector = (content: string, stepName: string) => number;
+export type RuleIndexDetector = (content: string, movementName: string) => number;
 
 export interface AiJudgeCondition {
   index: number;
@@ -108,23 +108,23 @@ export type PhaseName = 'execute' | 'report' | 'judge';
 
 /** Events emitted by workflow engine */
 export interface WorkflowEvents {
-  'step:start': (step: WorkflowStep, iteration: number, instruction: string) => void;
-  'step:complete': (step: WorkflowStep, response: AgentResponse, instruction: string) => void;
-  'step:report': (step: WorkflowStep, filePath: string, fileName: string) => void;
-  'step:blocked': (step: WorkflowStep, response: AgentResponse) => void;
-  'step:user_input': (step: WorkflowStep, userInput: string) => void;
-  'phase:start': (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void;
-  'phase:complete': (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void;
+  'movement:start': (step: WorkflowMovement, iteration: number, instruction: string) => void;
+  'movement:complete': (step: WorkflowMovement, response: AgentResponse, instruction: string) => void;
+  'movement:report': (step: WorkflowMovement, filePath: string, fileName: string) => void;
+  'movement:blocked': (step: WorkflowMovement, response: AgentResponse) => void;
+  'movement:user_input': (step: WorkflowMovement, userInput: string) => void;
+  'phase:start': (step: WorkflowMovement, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void;
+  'phase:complete': (step: WorkflowMovement, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void;
   'workflow:complete': (state: WorkflowState) => void;
   'workflow:abort': (state: WorkflowState, reason: string) => void;
   'iteration:limit': (iteration: number, maxIterations: number) => void;
-  'step:loop_detected': (step: WorkflowStep, consecutiveCount: number) => void;
+  'movement:loop_detected': (step: WorkflowMovement, consecutiveCount: number) => void;
 }
 
 /** User input request for blocked state */
 export interface UserInputRequest {
-  /** The step that is blocked */
-  step: WorkflowStep;
+  /** The movement that is blocked */
+  movement: WorkflowMovement;
   /** The blocked response from the agent */
   response: AgentResponse;
   /** Prompt for the user (extracted from blocked message) */
@@ -137,8 +137,8 @@ export interface IterationLimitRequest {
   currentIteration: number;
   /** Current max iterations */
   maxIterations: number;
-  /** Current step name */
-  currentStep: string;
+  /** Current movement name */
+  currentMovement: string;
 }
 
 /** Callback for session updates (when agent session IDs change) */

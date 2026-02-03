@@ -8,7 +8,7 @@ import { executeClaudeCli } from './process.js';
 import type { ClaudeSpawnOptions, ClaudeCallOptions } from './types.js';
 import type { AgentResponse, Status } from '../../core/models/index.js';
 import { createLogger } from '../../shared/utils/index.js';
-import { getPrompt } from '../../shared/prompts/index.js';
+import { loadTemplate } from '../../shared/prompts/index.js';
 
 // Re-export for backward compatibility
 export type { ClaudeCallOptions } from './types.js';
@@ -21,8 +21,8 @@ const log = createLogger('client');
  *
  * Example: detectRuleIndex("... [PLAN:2] ...", "plan") → 1
  */
-export function detectRuleIndex(content: string, stepName: string): number {
-  const tag = stepName.toUpperCase();
+export function detectRuleIndex(content: string, movementName: string): number {
+  const tag = movementName.toUpperCase();
   const regex = new RegExp(`\\[${tag}:(\\d+)\\]`, 'gi');
   const matches = [...content.matchAll(regex)];
   const match = matches.at(-1);
@@ -153,7 +153,7 @@ export class ClaudeClient {
     prompt: string,
     options: ClaudeCallOptions,
   ): Promise<AgentResponse> {
-    const systemPrompt = getPrompt('claude.agentDefault', undefined, { agentName: claudeAgentName });
+    const systemPrompt = loadTemplate('perform_builtin_agent_system_prompt', 'en', { agentName: claudeAgentName });
     return this.callCustom(claudeAgentName, prompt, systemPrompt, options);
   }
 
@@ -219,7 +219,7 @@ export class ClaudeClient {
       .map((c) => `| ${c.index + 1} | ${c.text} |`)
       .join('\n');
 
-    return getPrompt('claude.judgePrompt', undefined, { agentOutput, conditionList });
+    return loadTemplate('perform_judge_message', 'en', { agentOutput, conditionList });
   }
 
   /**

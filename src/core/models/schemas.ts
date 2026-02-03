@@ -103,7 +103,7 @@ export const ReportFieldSchema = z.union([
 export const WorkflowRuleSchema = z.object({
   /** Human-readable condition text */
   condition: z.string().min(1),
-  /** Next step name (e.g., implement, COMPLETE, ABORT). Optional for parallel sub-steps (parent handles routing). */
+  /** Next movement name (e.g., implement, COMPLETE, ABORT). Optional for parallel sub-movements (parent handles routing). */
   next: z.string().min(1).optional(),
   /** Template for additional AI output */
   appendix: z.string().optional(),
@@ -113,8 +113,8 @@ export const WorkflowRuleSchema = z.object({
   interactive_only: z.boolean().optional(),
 });
 
-/** Sub-step schema for parallel execution */
-export const ParallelSubStepRawSchema = z.object({
+/** Sub-movement schema for parallel execution */
+export const ParallelSubMovementRawSchema = z.object({
   name: z.string().min(1),
   agent: z.string().optional(),
   agent_name: z.string().optional(),
@@ -130,43 +130,58 @@ export const ParallelSubStepRawSchema = z.object({
   pass_previous_response: z.boolean().optional().default(true),
 });
 
-/** Workflow step schema - raw YAML format */
-export const WorkflowStepRawSchema = z.object({
+/** Workflow movement schema - raw YAML format */
+export const WorkflowMovementRawSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
-  /** Agent is required for normal steps, optional for parallel container steps */
+  /** Agent is required for normal movements, optional for parallel container movements */
   agent: z.string().optional(),
-  /** Session handling for this step */
+  /** Session handling for this movement */
   session: z.enum(['continue', 'refresh']).optional(),
   /** Display name for the agent (shown in output). Falls back to agent basename if not specified */
   agent_name: z.string().optional(),
   allowed_tools: z.array(z.string()).optional(),
   provider: z.enum(['claude', 'codex', 'mock']).optional(),
   model: z.string().optional(),
-  /** Permission mode for tool execution in this step */
+  /** Permission mode for tool execution in this movement */
   permission_mode: PermissionModeSchema.optional(),
-  /** Whether this step is allowed to edit project files */
+  /** Whether this movement is allowed to edit project files */
   edit: z.boolean().optional(),
   instruction: z.string().optional(),
   instruction_template: z.string().optional(),
-  /** Rules for step routing */
+  /** Rules for movement routing */
   rules: z.array(WorkflowRuleSchema).optional(),
-  /** Report file(s) for this step */
+  /** Report file(s) for this movement */
   report: ReportFieldSchema.optional(),
   pass_previous_response: z.boolean().optional().default(true),
-  /** Sub-steps to execute in parallel */
-  parallel: z.array(ParallelSubStepRawSchema).optional(),
+  /** Sub-movements to execute in parallel */
+  parallel: z.array(ParallelSubMovementRawSchema).optional(),
 });
 
-/** Workflow configuration schema - raw YAML format */
+/** @deprecated Use WorkflowMovementRawSchema instead */
+export const WorkflowStepRawSchema = WorkflowMovementRawSchema;
+
+/** @deprecated Use ParallelSubMovementRawSchema instead */
+export const ParallelSubStepRawSchema = ParallelSubMovementRawSchema;
+
+/** Workflow configuration schema - raw YAML format (accepts both `movements` and legacy `steps`) */
 export const WorkflowConfigRawSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
-  steps: z.array(WorkflowStepRawSchema).min(1),
+  /** Preferred key: movements */
+  movements: z.array(WorkflowMovementRawSchema).min(1).optional(),
+  /** @deprecated Use `movements` instead */
+  steps: z.array(WorkflowMovementRawSchema).min(1).optional(),
+  /** Preferred key: initial_movement */
+  initial_movement: z.string().optional(),
+  /** @deprecated Use `initial_movement` instead */
   initial_step: z.string().optional(),
   max_iterations: z.number().int().positive().optional().default(10),
   answer_agent: z.string().optional(),
-});
+}).refine(
+  (data) => (data.movements && data.movements.length > 0) || (data.steps && data.steps.length > 0),
+  { message: 'Workflow must have at least one movement (use `movements` or legacy `steps` key)' }
+);
 
 /** Custom agent configuration schema */
 export const CustomAgentConfigSchema = z.object({

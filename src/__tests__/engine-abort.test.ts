@@ -3,7 +3,7 @@
  *
  * Covers:
  * - abort() sets state to aborted and emits workflow:abort
- * - abort() during step execution interrupts the step
+ * - abort() during movement execution interrupts the movement
  * - isAbortRequested() reflects abort state
  * - Double abort() is idempotent
  */
@@ -39,7 +39,7 @@ import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import {
   makeResponse,
-  makeStep,
+  makeMovement,
   makeRule,
   mockRunAgentSequence,
   mockDetectMatchedRuleSequence,
@@ -66,15 +66,15 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
     return {
       name: 'test',
       maxIterations: 10,
-      initialStep: 'step1',
-      steps: [
-        makeStep('step1', {
+      initialMovement: 'step1',
+      movements: [
+        makeMovement('step1', {
           rules: [
             makeRule('done', 'step2'),
             makeRule('fail', 'ABORT'),
           ],
         }),
-        makeStep('step2', {
+        makeMovement('step2', {
           rules: [
             makeRule('done', 'COMPLETE'),
           ],
@@ -84,7 +84,7 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
   }
 
   describe('abort() before run loop iteration', () => {
-    it('should abort immediately when abort() called before step execution', async () => {
+    it('should abort immediately when abort() called before movement execution', async () => {
       const config = makeSimpleConfig();
       const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
@@ -100,17 +100,17 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
       expect(state.status).toBe('aborted');
       expect(abortFn).toHaveBeenCalledOnce();
       expect(abortFn.mock.calls[0][1]).toContain('SIGINT');
-      // runAgent should never be called since abort was requested before first step
+      // runAgent should never be called since abort was requested before first movement
       expect(vi.mocked(runAgent)).not.toHaveBeenCalled();
     });
   });
 
-  describe('abort() during step execution', () => {
+  describe('abort() during movement execution', () => {
     it('should abort when abort() is called during runAgent', async () => {
       const config = makeSimpleConfig();
       const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
-      // Simulate abort during step execution: runAgent rejects after abort() is called
+      // Simulate abort during movement execution: runAgent rejects after abort() is called
       vi.mocked(runAgent).mockImplementation(async () => {
         engine.abort();
         throw new Error('Query interrupted');
@@ -158,14 +158,14 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
     });
   });
 
-  describe('abort between steps', () => {
-    it('should stop after completing current step when abort() is called', async () => {
+  describe('abort between movements', () => {
+    it('should stop after completing current movement when abort() is called', async () => {
       const config = makeSimpleConfig();
       const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
-      // First step completes normally, but abort is called during it
+      // First movement completes normally, but abort is called during it
       vi.mocked(runAgent).mockImplementation(async () => {
-        // Simulate abort during execution (but the step itself completes)
+        // Simulate abort during execution (but the movement itself completes)
         engine.abort();
         return makeResponse({ agent: 'step1', content: 'Step 1 done' });
       });
@@ -181,7 +181,7 @@ describe('WorkflowEngine: Abort (SIGINT)', () => {
 
       expect(state.status).toBe('aborted');
       expect(state.iteration).toBe(1);
-      // Only step1 runs; step2 should not start because abort is checked at loop top
+      // Only step1 runs; step2 should not start because abort is checked at loop top (movement names kept as step1/step2 for simplicity)
       expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(1);
       expect(abortFn).toHaveBeenCalledOnce();
     });

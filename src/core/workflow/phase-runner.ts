@@ -7,7 +7,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
-import type { WorkflowStep, Language } from '../models/types.js';
+import type { WorkflowMovement, Language } from '../models/types.js';
 import type { PhaseName } from './types.js';
 import { runAgent, type RunAgentOptions } from '../../agents/runner.js';
 import { ReportInstructionBuilder } from './instruction/ReportInstructionBuilder.js';
@@ -29,25 +29,25 @@ export interface PhaseRunnerContext {
   interactive?: boolean;
   /** Get agent session ID */
   getSessionId: (agent: string) => string | undefined;
-  /** Build resume options for a step */
-  buildResumeOptions: (step: WorkflowStep, sessionId: string, overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>) => RunAgentOptions;
+  /** Build resume options for a movement */
+  buildResumeOptions: (step: WorkflowMovement, sessionId: string, overrides: Pick<RunAgentOptions, 'allowedTools' | 'maxTurns'>) => RunAgentOptions;
   /** Update agent session after a phase run */
   updateAgentSession: (agent: string, sessionId: string | undefined) => void;
   /** Callback for phase lifecycle logging */
-  onPhaseStart?: (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void;
+  onPhaseStart?: (step: WorkflowMovement, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void;
   /** Callback for phase completion logging */
-  onPhaseComplete?: (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void;
+  onPhaseComplete?: (step: WorkflowMovement, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void;
 }
 
 /**
- * Check if a step needs Phase 3 (status judgment).
+ * Check if a movement needs Phase 3 (status judgment).
  * Returns true when at least one rule requires tag-based detection.
  */
-export function needsStatusJudgmentPhase(step: WorkflowStep): boolean {
+export function needsStatusJudgmentPhase(step: WorkflowMovement): boolean {
   return hasTagBasedRules(step);
 }
 
-function getReportFiles(report: WorkflowStep['report']): string[] {
+function getReportFiles(report: WorkflowMovement['report']): string[] {
   if (!report) return [];
   if (typeof report === 'string') return [report];
   if (isReportObjectConfig(report)) return [report.name];
@@ -76,17 +76,17 @@ function writeReportFile(reportDir: string, fileName: string, content: string): 
  * Plain text responses are written directly to files (no JSON parsing).
  */
 export async function runReportPhase(
-  step: WorkflowStep,
-  stepIteration: number,
+  step: WorkflowMovement,
+  movementIteration: number,
   ctx: PhaseRunnerContext,
 ): Promise<void> {
   const sessionKey = step.agent ?? step.name;
   let currentSessionId = ctx.getSessionId(sessionKey);
   if (!currentSessionId) {
-    throw new Error(`Report phase requires a session to resume, but no sessionId found for agent "${sessionKey}" in step "${step.name}"`);
+    throw new Error(`Report phase requires a session to resume, but no sessionId found for agent "${sessionKey}" in movement "${step.name}"`);
   }
 
-  log.debug('Running report phase', { step: step.name, sessionId: currentSessionId });
+  log.debug('Running report phase', { movement: step.name, sessionId: currentSessionId });
 
   const reportFiles = getReportFiles(step.report);
   if (reportFiles.length === 0) {
@@ -99,12 +99,12 @@ export async function runReportPhase(
       throw new Error(`Invalid report file name: ${fileName}`);
     }
 
-    log.debug('Generating report file', { step: step.name, fileName });
+    log.debug('Generating report file', { movement: step.name, fileName });
 
     const reportInstruction = new ReportInstructionBuilder(step, {
       cwd: ctx.cwd,
       reportDir: ctx.reportDir,
-      stepIteration,
+      movementIteration: movementIteration,
       language: ctx.language,
       targetFile: fileName,
     }).build();
@@ -144,10 +144,10 @@ export async function runReportPhase(
     }
 
     ctx.onPhaseComplete?.(step, 2, 'report', reportResponse.content, reportResponse.status);
-    log.debug('Report file generated', { step: step.name, fileName });
+    log.debug('Report file generated', { movement: step.name, fileName });
   }
 
-  log.debug('Report phase complete', { step: step.name, filesGenerated: reportFiles.length });
+  log.debug('Report phase complete', { movement: step.name, filesGenerated: reportFiles.length });
 }
 
 /**
@@ -156,16 +156,16 @@ export async function runReportPhase(
  * Returns the Phase 3 response content (containing the status tag).
  */
 export async function runStatusJudgmentPhase(
-  step: WorkflowStep,
+  step: WorkflowMovement,
   ctx: PhaseRunnerContext,
 ): Promise<string> {
   const sessionKey = step.agent ?? step.name;
   const sessionId = ctx.getSessionId(sessionKey);
   if (!sessionId) {
-    throw new Error(`Status judgment phase requires a session to resume, but no sessionId found for agent "${sessionKey}" in step "${step.name}"`);
+    throw new Error(`Status judgment phase requires a session to resume, but no sessionId found for agent "${sessionKey}" in movement "${step.name}"`);
   }
 
-  log.debug('Running status judgment phase', { step: step.name, sessionId });
+  log.debug('Running status judgment phase', { movement: step.name, sessionId });
 
   const judgmentInstruction = new StatusJudgmentBuilder(step, {
     language: ctx.language,
@@ -199,6 +199,6 @@ export async function runStatusJudgmentPhase(
   ctx.updateAgentSession(sessionKey, judgmentResponse.sessionId);
 
   ctx.onPhaseComplete?.(step, 3, 'judge', judgmentResponse.content, judgmentResponse.status);
-  log.debug('Status judgment phase complete', { step: step.name, status: judgmentResponse.status });
+  log.debug('Status judgment phase complete', { movement: step.name, status: judgmentResponse.status });
   return judgmentResponse.content;
 }

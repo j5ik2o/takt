@@ -1,20 +1,20 @@
 /**
- * Parallel step log display
+ * Parallel movement log display
  *
- * Provides prefixed, color-coded interleaved output for parallel sub-steps.
- * Each sub-step's stream output gets a `[name]` prefix with right-padding
- * aligned to the longest sub-step name.
+ * Provides prefixed, color-coded interleaved output for parallel sub-movements.
+ * Each sub-movement's stream output gets a `[name]` prefix with right-padding
+ * aligned to the longest sub-movement name.
  */
 
 import type { StreamCallback, StreamEvent } from '../types.js';
 
-/** ANSI color codes for sub-step prefixes (cycled in order) */
+/** ANSI color codes for sub-movement prefixes (cycled in order) */
 const COLORS = ['\x1b[36m', '\x1b[33m', '\x1b[35m', '\x1b[32m'] as const; // cyan, yellow, magenta, green
 const RESET = '\x1b[0m';
 
 export interface ParallelLoggerOptions {
-  /** Sub-step names (used to calculate prefix width) */
-  subStepNames: string[];
+  /** Sub-movement names (used to calculate prefix width) */
+  subMovementNames: string[];
   /** Parent onStream callback to delegate non-prefixed events */
   parentOnStream?: StreamCallback;
   /** Override process.stdout.write for testing */
@@ -22,9 +22,9 @@ export interface ParallelLoggerOptions {
 }
 
 /**
- * Logger for parallel step execution.
+ * Logger for parallel movement execution.
  *
- * Creates per-sub-step StreamCallback wrappers that:
+ * Creates per-sub-movement StreamCallback wrappers that:
  * - Buffer partial lines until newline
  * - Prepend colored `[name]` prefix to each complete line
  * - Delegate init/result/error events to the parent callback
@@ -36,17 +36,17 @@ export class ParallelLogger {
   private readonly writeFn: (text: string) => void;
 
   constructor(options: ParallelLoggerOptions) {
-    this.maxNameLength = Math.max(...options.subStepNames.map((n) => n.length));
+    this.maxNameLength = Math.max(...options.subMovementNames.map((n) => n.length));
     this.parentOnStream = options.parentOnStream;
     this.writeFn = options.writeFn ?? ((text: string) => process.stdout.write(text));
 
-    for (const name of options.subStepNames) {
+    for (const name of options.subMovementNames) {
       this.lineBuffers.set(name, '');
     }
   }
 
   /**
-   * Build the colored prefix string for a sub-step.
+   * Build the colored prefix string for a sub-movement.
    * Format: `\x1b[COLORm[name]\x1b[0m` + padding spaces
    */
   buildPrefix(name: string, index: number): string {
@@ -56,19 +56,19 @@ export class ParallelLogger {
   }
 
   /**
-   * Create a StreamCallback wrapper for a specific sub-step.
+   * Create a StreamCallback wrapper for a specific sub-movement.
    *
    * - `text`: buffered line-by-line with prefix
    * - `tool_use`, `tool_result`, `tool_output`, `thinking`: prefixed per-line, no buffering
    * - `init`, `result`, `error`: delegated to parent callback (no prefix)
    */
-  createStreamHandler(subStepName: string, index: number): StreamCallback {
-    const prefix = this.buildPrefix(subStepName, index);
+  createStreamHandler(subMovementName: string, index: number): StreamCallback {
+    const prefix = this.buildPrefix(subMovementName, index);
 
     return (event: StreamEvent) => {
       switch (event.type) {
         case 'text':
-          this.handleTextEvent(subStepName, prefix, event.data.text);
+          this.handleTextEvent(subMovementName, prefix, event.data.text);
           break;
 
         case 'tool_use':
@@ -144,13 +144,13 @@ export class ParallelLogger {
   }
 
   /**
-   * Flush remaining line buffers for all sub-steps.
-   * Call after all sub-steps complete to output any trailing partial lines.
+   * Flush remaining line buffers for all sub-movements.
+   * Call after all sub-movements complete to output any trailing partial lines.
    */
   flush(): void {
     // Build prefixes for flush — need index mapping
     // Since we don't store index, iterate lineBuffers in insertion order
-    // (Map preserves insertion order, matching subStepNames order)
+    // (Map preserves insertion order, matching subMovementNames order)
     let index = 0;
     for (const [name, buffer] of this.lineBuffers) {
       if (buffer !== '') {
@@ -163,7 +163,7 @@ export class ParallelLogger {
   }
 
   /**
-   * Print completion summary after all sub-steps finish.
+   * Print completion summary after all sub-movements finish.
    *
    * Format:
    * ```
@@ -174,7 +174,7 @@ export class ParallelLogger {
    * ```
    */
   printSummary(
-    parentStepName: string,
+    parentMovementName: string,
     results: Array<{ name: string; condition: string | undefined }>,
   ): void {
     this.flush();
@@ -188,7 +188,7 @@ export class ParallelLogger {
     });
 
     // Header line: ── name results ──
-    const headerText = ` ${parentStepName} results `;
+    const headerText = ` ${parentMovementName} results `;
     const maxLineLength = Math.max(
       headerText.length + 4, // 4 for "── " + " ──"
       ...resultLines.map((l) => l.length),

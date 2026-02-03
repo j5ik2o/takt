@@ -9,7 +9,7 @@
 export { WorkflowEngine } from './engine/index.js';
 
 // Constants
-export { COMPLETE_STEP, ABORT_STEP, ERROR_MESSAGES } from './constants.js';
+export { COMPLETE_MOVEMENT, ABORT_MOVEMENT, COMPLETE_STEP, ABORT_STEP, ERROR_MESSAGES } from './constants.js';
 
 // Types
 export type {
@@ -30,7 +30,7 @@ export type {
 } from './types.js';
 
 // Transitions (engine/)
-export { determineNextStepByRules, extractBlockedPrompt } from './engine/transitions.js';
+export { determineNextMovementByRules, extractBlockedPrompt } from './engine/transitions.js';
 
 // Loop detection (engine/)
 export { LoopDetector } from './engine/loop-detector.js';
@@ -40,6 +40,7 @@ export {
   createInitialState,
   addUserInput,
   getPreviousOutput,
+  incrementMovementIteration,
 } from './engine/state-manager.js';
 
 // Blocked handling (engine/)
@@ -52,8 +53,8 @@ export { ParallelLogger } from './engine/parallel-logger.js';
 export { InstructionBuilder, isReportObjectConfig } from './instruction/InstructionBuilder.js';
 export { ReportInstructionBuilder, type ReportInstructionContext } from './instruction/ReportInstructionBuilder.js';
 export { StatusJudgmentBuilder, type StatusJudgmentContext } from './instruction/StatusJudgmentBuilder.js';
-export { buildExecutionMetadata, renderExecutionMetadata, type InstructionContext, type ExecutionMetadata } from './instruction/instruction-context.js';
-export { generateStatusRulesFromRules } from './instruction/status-rules.js';
+export { buildEditRule, type InstructionContext } from './instruction/instruction-context.js';
+export { generateStatusRulesComponents, type StatusRulesComponents } from './instruction/status-rules.js';
 
 // Rule evaluation
 export { RuleEvaluator, type RuleMatch, type RuleEvaluatorContext, detectMatchedRule, evaluateAggregateConditions } from './evaluation/index.js';

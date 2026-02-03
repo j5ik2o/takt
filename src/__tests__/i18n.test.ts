@@ -102,7 +102,7 @@ describe('label integrity', () => {
 
   it('contains all expected workflow keys in en', () => {
     expect(() => getLabel('workflow.iterationLimit.maxReached')).not.toThrow();
-    expect(() => getLabel('workflow.iterationLimit.currentStep')).not.toThrow();
+    expect(() => getLabel('workflow.iterationLimit.currentMovement')).not.toThrow();
     expect(() => getLabel('workflow.iterationLimit.continueQuestion')).not.toThrow();
     expect(() => getLabel('workflow.iterationLimit.continueLabel')).not.toThrow();
     expect(() => getLabel('workflow.iterationLimit.continueDescription')).not.toThrow();

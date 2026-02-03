@@ -7,6 +7,8 @@
 
 # ===== Interactive Mode UI =====
 interactive:
+  conversationLabel: "Conversation:"
+  noTranscript: "(No local transcript. Summarize the current session context.)"
   ui:
     intro: "Interactive mode - describe your task. Commands: /go (execute), /cancel (exit)"
     resume: "Resuming previous session"
@@ -21,7 +23,7 @@ interactive:
 workflow:
   iterationLimit:
     maxReached: "最大イテレーションに到達しました ({currentIteration}/{maxIterations})"
-    currentStep: "現在のステップ: {currentStep}"
+    currentMovement: "現在のムーブメント: {currentMovement}"
     continueQuestion: "続行しますか？"
     continueLabel: "続行する（追加イテレーション数を入力）"
     continueDescription: "入力した回数だけ上限を増やします"

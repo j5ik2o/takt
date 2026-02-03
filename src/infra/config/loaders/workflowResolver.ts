@@ -9,7 +9,7 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve, isAbsolute } from 'node:path';
 import { homedir } from 'node:os';
 import type { WorkflowConfig } from '../../../core/models/index.js';
-import { getGlobalWorkflowsDir, getBuiltinWorkflowsDir, getProjectConfigDir } from '../paths.js';
+import { getGlobalPiecesDir, getBuiltinPiecesDir, getProjectConfigDir } from '../paths.js';
 import { getLanguage, getDisabledBuiltins, getBuiltinWorkflowsEnabled } from '../global/globalConfig.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { loadWorkflowFromFile } from './workflowParser.js';
@@ -25,7 +25,7 @@ export interface WorkflowWithSource {
 
 export function listBuiltinWorkflowNames(options?: { includeDisabled?: boolean }): string[] {
   const lang = getLanguage();
-  const dir = getBuiltinWorkflowsDir(lang);
+  const dir = getBuiltinPiecesDir(lang);
   const disabled = options?.includeDisabled ? undefined : getDisabledBuiltins();
   const names = new Set<string>();
   for (const entry of iterateWorkflowDir(dir, 'builtin', disabled)) {
@@ -41,7 +41,7 @@ export function getBuiltinWorkflow(name: string): WorkflowConfig | null {
   const disabled = getDisabledBuiltins();
   if (disabled.includes(name)) return null;
 
-  const builtinDir = getBuiltinWorkflowsDir(lang);
+  const builtinDir = getBuiltinPiecesDir(lang);
   const yamlPath = join(builtinDir, `${name}.yaml`);
   if (existsSync(yamlPath)) {
     return loadWorkflowFromFile(yamlPath);
@@ -109,10 +109,18 @@ export function loadWorkflow(
     return loadWorkflowFromFile(projectMatch);
   }
 
-  const globalWorkflowsDir = getGlobalWorkflowsDir();
-  const globalMatch = resolveWorkflowFile(globalWorkflowsDir, name);
+  const globalPiecesDir = getGlobalPiecesDir();
+  const globalMatch = resolveWorkflowFile(globalPiecesDir, name);
   if (globalMatch) {
     return loadWorkflowFromFile(globalMatch);
+  }
+
+  // Fallback: legacy ~/.takt/workflows/ directory (deprecated)
+  const legacyGlobalDir = join(homedir(), '.takt', 'workflows');
+  const legacyMatch = resolveWorkflowFile(legacyGlobalDir, name);
+  if (legacyMatch) {
+    log.info(`Loading workflow from deprecated path ~/.takt/workflows/. Please move to ~/.takt/pieces/.`);
+    return loadWorkflowFromFile(legacyMatch);
   }
 
   return getBuiltinWorkflow(name);
@@ -219,9 +227,15 @@ function getWorkflowDirs(cwd: string): { dir: string; source: WorkflowSource; di
   const lang = getLanguage();
   const dirs: { dir: string; source: WorkflowSource; disabled?: string[] }[] = [];
   if (getBuiltinWorkflowsEnabled()) {
-    dirs.push({ dir: getBuiltinWorkflowsDir(lang), disabled, source: 'builtin' });
+    dirs.push({ dir: getBuiltinPiecesDir(lang), disabled, source: 'builtin' });
   }
-  dirs.push({ dir: getGlobalWorkflowsDir(), source: 'user' });
+  // Legacy fallback: ~/.takt/workflows/ (deprecated, lowest user priority)
+  const legacyGlobalDir = join(homedir(), '.takt', 'workflows');
+  if (existsSync(legacyGlobalDir)) {
+    log.info(`Scanning deprecated path ~/.takt/workflows/. Please move to ~/.takt/pieces/.`);
+    dirs.push({ dir: legacyGlobalDir, source: 'user' });
+  }
+  dirs.push({ dir: getGlobalPiecesDir(), source: 'user' });
   dirs.push({ dir: join(getProjectConfigDir(cwd), 'workflows'), source: 'project' });
   return dirs;
 }

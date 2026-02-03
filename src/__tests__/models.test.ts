@@ -62,7 +62,7 @@ describe('WorkflowConfigRawSchema', () => {
     const config = {
       name: 'test-workflow',
       description: 'A test workflow',
-      steps: [
+      movements: [
         {
           name: 'step1',
           agent: 'coder',
@@ -77,15 +77,15 @@ describe('WorkflowConfigRawSchema', () => {
 
     const result = WorkflowConfigRawSchema.parse(config);
     expect(result.name).toBe('test-workflow');
-    expect(result.steps).toHaveLength(1);
-    expect(result.steps[0]?.allowed_tools).toEqual(['Read', 'Grep']);
+    expect(result.movements).toHaveLength(1);
+    expect(result.movements![0]?.allowed_tools).toEqual(['Read', 'Grep']);
     expect(result.max_iterations).toBe(10);
   });
 
-  it('should parse step with permission_mode', () => {
+  it('should parse movement with permission_mode', () => {
     const config = {
       name: 'test-workflow',
-      steps: [
+      movements: [
         {
           name: 'implement',
           agent: 'coder',
@@ -100,13 +100,13 @@ describe('WorkflowConfigRawSchema', () => {
     };
 
     const result = WorkflowConfigRawSchema.parse(config);
-    expect(result.steps[0]?.permission_mode).toBe('edit');
+    expect(result.movements![0]?.permission_mode).toBe('edit');
   });
 
   it('should allow omitting permission_mode', () => {
     const config = {
       name: 'test-workflow',
-      steps: [
+      movements: [
         {
           name: 'plan',
           agent: 'planner',
@@ -116,13 +116,13 @@ describe('WorkflowConfigRawSchema', () => {
     };
 
     const result = WorkflowConfigRawSchema.parse(config);
-    expect(result.steps[0]?.permission_mode).toBeUndefined();
+    expect(result.movements![0]?.permission_mode).toBeUndefined();
   });
 
   it('should reject invalid permission_mode', () => {
     const config = {
       name: 'test-workflow',
-      steps: [
+      movements: [
         {
           name: 'step1',
           agent: 'coder',
@@ -135,10 +135,10 @@ describe('WorkflowConfigRawSchema', () => {
     expect(() => WorkflowConfigRawSchema.parse(config)).toThrow();
   });
 
-  it('should require at least one step', () => {
+  it('should require at least one movement', () => {
     const config = {
       name: 'empty-workflow',
-      steps: [],
+      movements: [],
     };
 
     expect(() => WorkflowConfigRawSchema.parse(config)).toThrow();

@@ -2,7 +2,7 @@
  * Error recovery integration tests.
  *
  * Tests agent error, blocked responses, max iteration limits,
- * loop detection, scenario queue exhaustion, and step execution exceptions.
+ * loop detection, scenario queue exhaustion, and movement execution exceptions.
  *
  * Mocked: UI, session, phase-runner, notifications, config, callAiJudge
  * Not mocked: WorkflowEngine, runAgent, detectMatchedRule, rule-evaluator
@@ -59,7 +59,7 @@ function makeRule(condition: string, next: string): WorkflowRule {
   return { condition, next };
 }
 
-function makeStep(name: string, agentPath: string, rules: WorkflowRule[]): WorkflowStep {
+function makeMovement(name: string, agentPath: string, rules: WorkflowRule[]): WorkflowStep {
   return {
     name,
     agent: `./agents/${name}.md`,
@@ -78,7 +78,7 @@ function createTestEnv(): { dir: string; agentPaths: Record<string, string> } {
   const agentsDir = join(dir, 'agents');
   mkdirSync(agentsDir, { recursive: true });
 
-  // Agent file names match step names used in makeStep()
+  // Agent file names match movement names used in makeMovement()
   const agents = ['plan', 'implement', 'review', 'supervisor'];
   const agentPaths: Record<string, string> = {};
   for (const agent of agents) {
@@ -103,17 +103,17 @@ function buildWorkflow(agentPaths: Record<string, string>, maxIterations: number
     name: 'it-error',
     description: 'IT error recovery workflow',
     maxIterations,
-    initialStep: 'plan',
-    steps: [
-      makeStep('plan', agentPaths.plan, [
+    initialMovement: 'plan',
+    movements: [
+      makeMovement('plan', agentPaths.plan, [
         makeRule('Requirements are clear', 'implement'),
         makeRule('Requirements unclear', 'ABORT'),
       ]),
-      makeStep('implement', agentPaths.implement, [
+      makeMovement('implement', agentPaths.implement, [
         makeRule('Implementation complete', 'review'),
         makeRule('Cannot proceed', 'plan'),
       ]),
-      makeStep('review', agentPaths.review, [
+      makeMovement('review', agentPaths.review, [
         makeRule('All checks passed', 'COMPLETE'),
         makeRule('Issues found', 'implement'),
       ]),
@@ -189,7 +189,7 @@ describe('Error Recovery IT: max iterations reached', () => {
   });
 
   it('should abort when max iterations reached (tight limit)', async () => {
-    // Only 2 iterations allowed, but workflow needs 3 steps
+    // Only 2 iterations allowed, but workflow needs 3 movements
     setMockScenario([
       { agent: 'plan', status: 'done', content: '[PLAN:1]\n\nClear.' },
       { agent: 'implement', status: 'done', content: '[IMPLEMENT:1]\n\nDone.' },
@@ -246,7 +246,7 @@ describe('Error Recovery IT: scenario queue exhaustion', () => {
   });
 
   it('should handle scenario queue exhaustion mid-workflow', async () => {
-    // Only 1 entry, but workflow needs 3 steps
+    // Only 1 entry, but workflow needs 3 movements
     setMockScenario([
       { agent: 'plan', status: 'done', content: '[PLAN:1]\n\nClear.' },
     ]);
@@ -265,7 +265,7 @@ describe('Error Recovery IT: scenario queue exhaustion', () => {
   });
 });
 
-describe('Error Recovery IT: step events on error paths', () => {
+describe('Error Recovery IT: movement events on error paths', () => {
   let testDir: string;
   let agentPaths: Record<string, string>;
 
@@ -304,7 +304,7 @@ describe('Error Recovery IT: step events on error paths', () => {
     expect(abortReason).toBeDefined();
   });
 
-  it('should emit step:start and step:complete for each executed step before abort', async () => {
+  it('should emit movement:start and movement:complete for each executed movement before abort', async () => {
     setMockScenario([
       { agent: 'plan', status: 'done', content: '[PLAN:2]\n\nRequirements unclear.' },
     ]);
@@ -318,10 +318,10 @@ describe('Error Recovery IT: step events on error paths', () => {
     const startedSteps: string[] = [];
     const completedSteps: string[] = [];
 
-    engine.on('step:start', (step) => {
+    engine.on('movement:start', (step) => {
       startedSteps.push(step.name);
     });
-    engine.on('step:complete', (step) => {
+    engine.on('movement:complete', (step) => {
       completedSteps.push(step.name);
     });
 
@@ -362,15 +362,15 @@ describe('Error Recovery IT: programmatic abort', () => {
       provider: 'mock',
     });
 
-    // Abort after the first step completes
-    engine.on('step:complete', () => {
+    // Abort after the first movement completes
+    engine.on('movement:complete', () => {
       engine.abort();
     });
 
     const state = await engine.run();
 
     expect(state.status).toBe('aborted');
-    // Should have aborted after 1 step
+    // Should have aborted after 1 movement
     expect(state.iteration).toBeLessThanOrEqual(2);
   });
 });

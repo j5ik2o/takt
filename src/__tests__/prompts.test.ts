@@ -1,178 +1,230 @@
 /**
- * Tests for prompt loader utility (src/shared/prompts/index.ts)
+ * Tests for Markdown template loader (src/shared/prompts/index.ts)
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { getPrompt, getPromptObject, _resetCache } from '../shared/prompts/index.js';
+import { loadTemplate, renderTemplate, _resetCache } from '../shared/prompts/index.js';
 
 beforeEach(() => {
   _resetCache();
 });
 
-describe('getPrompt', () => {
-  it('returns a language-independent prompt by key (defaults to en)', () => {
-    const result = getPrompt('summarize.slugGenerator');
+describe('loadTemplate', () => {
+  it('loads an English template', () => {
+    const result = loadTemplate('score_slug_system_prompt', 'en');
     expect(result).toContain('You are a slug generator');
   });
 
-  it('returns an English prompt when lang is "en"', () => {
-    const result = getPrompt('interactive.systemPrompt', 'en');
+  it('loads an English interactive template', () => {
+    const result = loadTemplate('score_interactive_system_prompt', 'en');
     expect(result).toContain('You are a task planning assistant');
   });
 
-  it('returns a Japanese prompt when lang is "ja"', () => {
-    const result = getPrompt('interactive.systemPrompt', 'ja');
+  it('loads a Japanese template', () => {
+    const result = loadTemplate('score_interactive_system_prompt', 'ja');
     expect(result).toContain('あなたはTAKT');
   });
 
-  it('throws for a non-existent key', () => {
-    expect(() => getPrompt('nonexistent.key')).toThrow('Prompt key not found: nonexistent.key');
-  });
-
-  it('throws for a non-existent key with language', () => {
-    expect(() => getPrompt('nonexistent.key', 'en')).toThrow('Prompt key not found: nonexistent.key (lang: en)');
-  });
-
-  it('returns prompt from en file when lang is explicitly "en"', () => {
-    const result = getPrompt('summarize.slugGenerator', 'en');
+  it('loads score_slug_system_prompt with explicit lang', () => {
+    const result = loadTemplate('score_slug_system_prompt', 'en');
     expect(result).toContain('You are a slug generator');
   });
 
-  describe('template variable substitution', () => {
-    it('replaces {variableName} placeholders with provided values', () => {
-      const result = getPrompt('claude.agentDefault', undefined, { agentName: 'test-agent' });
-      expect(result).toContain('You are the test-agent agent');
-      expect(result).toContain('Follow the standard test-agent workflow');
-    });
-
-    it('leaves unmatched placeholders as-is', () => {
-      const result = getPrompt('claude.agentDefault', undefined, {});
-      expect(result).toContain('{agentName}');
-    });
-
-    it('replaces multiple different variables', () => {
-      const result = getPrompt('claude.judgePrompt', undefined, {
-        agentOutput: 'test output',
-        conditionList: '| 1 | Success |',
-      });
-      expect(result).toContain('test output');
-      expect(result).toContain('| 1 | Success |');
-    });
+  it('throws for a non-existent template with language', () => {
+    expect(() => loadTemplate('nonexistent_template', 'en')).toThrow('Template not found: nonexistent_template (lang: en)');
   });
 });
 
-describe('getPromptObject', () => {
-  it('returns an object for a given key and language', () => {
-    const result = getPromptObject<{ heading: string }>('instruction.metadata', 'en');
-    expect(result.heading).toBe('## Execution Context');
+describe('variable substitution', () => {
+  it('replaces {{variableName}} placeholders with provided values', () => {
+    const result = loadTemplate('perform_builtin_agent_system_prompt', 'en', { agentName: 'test-agent' });
+    expect(result).toContain('You are the test-agent agent');
+    expect(result).toContain('Follow the standard test-agent workflow');
   });
 
-  it('returns a Japanese object when lang is "ja"', () => {
-    const result = getPromptObject<{ heading: string }>('instruction.metadata', 'ja');
-    expect(result.heading).toBe('## 実行コンテキスト');
+  it('replaces undefined variables with empty string', () => {
+    const result = loadTemplate('perform_builtin_agent_system_prompt', 'en', {});
+    expect(result).not.toContain('{{agentName}}');
+    expect(result).toContain('You are the  agent');
   });
 
-  it('throws for a non-existent key', () => {
-    expect(() => getPromptObject('nonexistent.key')).toThrow('Prompt key not found: nonexistent.key');
+  it('replaces multiple different variables', () => {
+    const result = loadTemplate('perform_judge_message', 'en', {
+      agentOutput: 'test output',
+      conditionList: '| 1 | Success |',
+    });
+    expect(result).toContain('test output');
+    expect(result).toContain('| 1 | Success |');
   });
+
+  it('replaces workflow info variables in interactive prompt', () => {
+    const result = loadTemplate('score_interactive_system_prompt', 'en', {
+      workflowInfo: true,
+      workflowName: 'my-workflow',
+      workflowDescription: 'Test description',
+    });
+    expect(result).toContain('"my-workflow"');
+    expect(result).toContain('Test description');
+  });
+});
+
+describe('renderTemplate', () => {
+  it('processes {{#if}} blocks with truthy value', () => {
+    const template = 'before{{#if show}}visible{{/if}}after';
+    const result = renderTemplate(template, { show: true });
+    expect(result).toBe('beforevisibleafter');
+  });
+
+  it('processes {{#if}} blocks with falsy value', () => {
+    const template = 'before{{#if show}}visible{{/if}}after';
+    const result = renderTemplate(template, { show: false });
+    expect(result).toBe('beforeafter');
+  });
+
+  it('processes {{#if}}...{{else}}...{{/if}} blocks', () => {
+    const template = '{{#if flag}}yes{{else}}no{{/if}}';
+    expect(renderTemplate(template, { flag: true })).toBe('yes');
+    expect(renderTemplate(template, { flag: false })).toBe('no');
+  });
+
+  it('treats empty string as falsy', () => {
+    const template = '{{#if value}}has value{{else}}empty{{/if}}';
+    expect(renderTemplate(template, { value: '' })).toBe('empty');
+  });
+
+  it('treats non-empty string as truthy', () => {
+    const template = '{{#if value}}has value{{else}}empty{{/if}}';
+    expect(renderTemplate(template, { value: 'hello' })).toBe('has value');
+  });
+
+  it('handles undefined variable in condition as falsy', () => {
+    const template = '{{#if missing}}yes{{else}}no{{/if}}';
+    expect(renderTemplate(template, {})).toBe('no');
+  });
+
+  it('replaces boolean true with "true" string', () => {
+    const template = 'value is {{flag}}';
+    expect(renderTemplate(template, { flag: true })).toBe('value is true');
+  });
+
+  it('replaces boolean false with empty string', () => {
+    const template = 'value is [{{flag}}]';
+    expect(renderTemplate(template, { flag: false })).toBe('value is []');
+  });
+});
+
+describe('template file existence', () => {
+  const allTemplates = [
+    'score_interactive_system_prompt',
+    'score_summary_system_prompt',
+    'score_slug_system_prompt',
+    'perform_phase1_message',
+    'perform_phase2_message',
+    'perform_phase3_message',
+    'perform_agent_system_prompt',
+    'perform_builtin_agent_system_prompt',
+    'perform_judge_message',
+  ];
+
+  for (const name of allTemplates) {
+    it(`en/${name}.md exists and is loadable`, () => {
+      expect(() => loadTemplate(name, 'en')).not.toThrow();
+    });
+
+    it(`ja/${name}.md exists and is loadable`, () => {
+      expect(() => loadTemplate(name, 'ja')).not.toThrow();
+    });
+  }
 });
 
 describe('caching', () => {
-  it('returns the same data on repeated calls', () => {
-    const first = getPrompt('summarize.slugGenerator');
-    const second = getPrompt('summarize.slugGenerator');
+  it('returns consistent results on repeated calls', () => {
+    const first = loadTemplate('score_slug_system_prompt', 'en');
+    const second = loadTemplate('score_slug_system_prompt', 'en');
     expect(first).toBe(second);
   });
 
   it('reloads after cache reset', () => {
-    const first = getPrompt('summarize.slugGenerator');
+    const first = loadTemplate('score_slug_system_prompt', 'en');
     _resetCache();
-    const second = getPrompt('summarize.slugGenerator');
+    const second = loadTemplate('score_slug_system_prompt', 'en');
     expect(first).toBe(second);
   });
 });
 
-describe('YAML content integrity', () => {
-  it('contains all expected top-level keys in en', () => {
-    expect(() => getPrompt('interactive.systemPrompt', 'en')).not.toThrow();
-    expect(() => getPrompt('interactive.summaryPrompt', 'en')).not.toThrow();
-    expect(() => getPrompt('interactive.workflowInfo', 'en')).not.toThrow();
-    expect(() => getPrompt('interactive.conversationLabel', 'en')).not.toThrow();
-    expect(() => getPrompt('interactive.noTranscript', 'en')).not.toThrow();
-    expect(() => getPrompt('summarize.slugGenerator')).not.toThrow();
-    expect(() => getPrompt('claude.agentDefault')).not.toThrow();
-    expect(() => getPrompt('claude.judgePrompt')).not.toThrow();
-    expect(() => getPromptObject('instruction.metadata', 'en')).not.toThrow();
-    expect(() => getPromptObject('instruction.sections', 'en')).not.toThrow();
-    expect(() => getPromptObject('instruction.reportOutput', 'en')).not.toThrow();
-    expect(() => getPromptObject('instruction.reportPhase', 'en')).not.toThrow();
-    expect(() => getPromptObject('instruction.reportSections', 'en')).not.toThrow();
-    expect(() => getPrompt('instruction.statusJudgment.header', 'en')).not.toThrow();
-    expect(() => getPromptObject('instruction.statusRules', 'en')).not.toThrow();
+describe('template content integrity', () => {
+  it('score_interactive_system_prompt contains core instructions', () => {
+    const en = loadTemplate('score_interactive_system_prompt', 'en');
+    expect(en).toContain('task planning assistant');
+
+    const ja = loadTemplate('score_interactive_system_prompt', 'ja');
+    expect(ja).toContain('あなたはTAKT');
   });
 
-  it('contains all expected top-level keys in ja', () => {
-    expect(() => getPrompt('interactive.systemPrompt', 'ja')).not.toThrow();
-    expect(() => getPrompt('interactive.summaryPrompt', 'ja')).not.toThrow();
-    expect(() => getPrompt('interactive.workflowInfo', 'ja')).not.toThrow();
-    expect(() => getPrompt('interactive.conversationLabel', 'ja')).not.toThrow();
-    expect(() => getPrompt('interactive.noTranscript', 'ja')).not.toThrow();
-    expect(() => getPrompt('summarize.slugGenerator', 'ja')).not.toThrow();
-    expect(() => getPrompt('claude.agentDefault', 'ja')).not.toThrow();
-    expect(() => getPrompt('claude.judgePrompt', 'ja')).not.toThrow();
-    expect(() => getPromptObject('instruction.metadata', 'ja')).not.toThrow();
-    expect(() => getPromptObject('instruction.sections', 'ja')).not.toThrow();
-    expect(() => getPromptObject('instruction.reportOutput', 'ja')).not.toThrow();
-    expect(() => getPromptObject('instruction.reportPhase', 'ja')).not.toThrow();
-    expect(() => getPromptObject('instruction.reportSections', 'ja')).not.toThrow();
-    expect(() => getPrompt('instruction.statusJudgment.header', 'ja')).not.toThrow();
-    expect(() => getPromptObject('instruction.statusRules', 'ja')).not.toThrow();
+  it('score_slug_system_prompt contains format specification', () => {
+    const result = loadTemplate('score_slug_system_prompt', 'en');
+    expect(result).toContain('verb-noun');
+    expect(result).toContain('max 30 chars');
   });
 
-  it('instruction.metadata has all required fields', () => {
-    const en = getPromptObject<Record<string, string>>('instruction.metadata', 'en');
-    expect(en).toHaveProperty('heading');
-    expect(en).toHaveProperty('workingDirectory');
-    expect(en).toHaveProperty('rulesHeading');
-    expect(en).toHaveProperty('noCommit');
-    expect(en).toHaveProperty('noCd');
-    expect(en).toHaveProperty('editEnabled');
-    expect(en).toHaveProperty('editDisabled');
-    expect(en).toHaveProperty('note');
+  it('perform_builtin_agent_system_prompt contains {{agentName}} placeholder', () => {
+    const result = loadTemplate('perform_builtin_agent_system_prompt', 'en');
+    expect(result).toContain('{{agentName}}');
   });
 
-  it('instruction.sections has all required fields', () => {
-    const en = getPromptObject<Record<string, string>>('instruction.sections', 'en');
-    expect(en).toHaveProperty('workflowContext');
-    expect(en).toHaveProperty('iteration');
-    expect(en).toHaveProperty('step');
-    expect(en).toHaveProperty('userRequest');
-    expect(en).toHaveProperty('instructions');
+  it('perform_agent_system_prompt contains {{agentDefinition}} placeholder', () => {
+    const result = loadTemplate('perform_agent_system_prompt', 'en');
+    expect(result).toContain('{{agentDefinition}}');
   });
 
-  it('instruction.statusRules has appendixInstruction with {tag} placeholder', () => {
-    const en = getPromptObject<{ appendixInstruction: string }>('instruction.statusRules', 'en');
-    expect(en.appendixInstruction).toContain('{tag}');
+  it('perform_judge_message contains {{agentOutput}} and {{conditionList}} placeholders', () => {
+    const result = loadTemplate('perform_judge_message', 'en');
+    expect(result).toContain('{{agentOutput}}');
+    expect(result).toContain('{{conditionList}}');
   });
 
-  it('en and ja files have the same key structure', () => {
-    // Verify a sampling of keys exist in both languages
-    const stringKeys = [
-      'interactive.systemPrompt',
-      'summarize.slugGenerator',
-      'claude.agentDefault',
+  it('perform_phase1_message contains execution context and rules sections', () => {
+    const en = loadTemplate('perform_phase1_message', 'en');
+    expect(en).toContain('## Execution Context');
+    expect(en).toContain('## Execution Rules');
+    expect(en).toContain('Do NOT run git commit');
+    expect(en).toContain('Do NOT use `cd`');
+    expect(en).toContain('## Workflow Context');
+    expect(en).toContain('## Instructions');
+  });
+
+  it('perform_phase1_message contains workflow context variables', () => {
+    const en = loadTemplate('perform_phase1_message', 'en');
+    expect(en).toContain('{{iteration}}');
+    expect(en).toContain('{{movement}}');
+    expect(en).toContain('{{workingDirectory}}');
+  });
+
+  it('perform_phase2_message contains report-specific rules', () => {
+    const en = loadTemplate('perform_phase2_message', 'en');
+    expect(en).toContain('Do NOT modify project source files');
+    expect(en).toContain('## Instructions');
+
+    const ja = loadTemplate('perform_phase2_message', 'ja');
+    expect(ja).toContain('プロジェクトのソースファイルを変更しないでください');
+  });
+
+  it('perform_phase3_message contains criteria and output variables', () => {
+    const en = loadTemplate('perform_phase3_message', 'en');
+    expect(en).toContain('{{criteriaTable}}');
+    expect(en).toContain('{{outputList}}');
+  });
+
+  it('MD files contain only prompt body (no front matter)', () => {
+    const templates = [
+      'score_interactive_system_prompt',
+      'score_summary_system_prompt',
+      'perform_phase1_message',
+      'perform_phase2_message',
     ];
-    for (const key of stringKeys) {
-      expect(() => getPrompt(key, 'en')).not.toThrow();
-      expect(() => getPrompt(key, 'ja')).not.toThrow();
-    }
-    const objectKeys = [
-      'instruction.metadata',
-      'instruction.sections',
-    ];
-    for (const key of objectKeys) {
-      expect(() => getPromptObject(key, 'en')).not.toThrow();
-      expect(() => getPromptObject(key, 'ja')).not.toThrow();
+    for (const name of templates) {
+      const content = loadTemplate(name, 'en');
+      expect(content).not.toMatch(/^---\n/);
     }
   });
 });

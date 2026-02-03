@@ -2,11 +2,11 @@
 # Plan -> Architect -> Implement -> AI Review -> Reviewers (parallel: Architect + Security) -> Supervisor Approval
 #
 # Template Variables (auto-injected by buildInstruction):
-#   {iteration}      - Workflow-wide turn count (total steps executed across all agents)
+#   {iteration}      - Workflow-wide turn count (total movements executed across all agents)
 #   {max_iterations} - Maximum iterations allowed for the workflow
-#   {step_iteration} - Per-step iteration count (how many times THIS step has been executed)
+#   {movement_iteration} - Per-movement iteration count (how many times THIS movement has been executed)
 #   {task}           - Original user request
-#   {previous_response} - Output from the previous step
+#   {previous_response} - Output from the previous movement
 #   {user_inputs}    - Accumulated user inputs during workflow
 #   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
 
@@ -15,9 +15,9 @@ description: Standard development workflow with planning and specialized reviews
 
 max_iterations: 30
 
-initial_step: plan
+initial_movement: plan
 
-steps:
+movements:
   - name: plan
     edit: false
     agent: ../agents/default/planner.md
@@ -168,7 +168,7 @@ steps:
         requires_user_input: true
         interactive_only: true
     instruction_template: |
-      planステップで立てた計画と、architectステップで決定した設計に従って実装してください。
+      planムーブメントで立てた計画と、architectムーブメントで決定した設計に従って実装してください。
 
       **参照するレポート:**
       - 計画: {report:00-plan.md}
@@ -176,7 +176,7 @@ steps:
 
       Workflow Contextに示されたReport Directory内のファイルのみ参照してください。他のレポートディレクトリは検索/参照しないでください。
 
-      **重要:** 設計判断はせず、architectステップで決定された設計に従ってください。
+      **重要:** 設計判断はせず、architectムーブメントで決定された設計に従ってください。
       不明点や設計の変更が必要な場合は報告してください。
 
       **重要**: 実装と同時に単体テストを追加してください。
@@ -296,7 +296,7 @@ steps:
       - condition: 判断できない、情報不足
         next: plan
     instruction_template: |
-      **これは {step_iteration} 回目の AI Review です。**
+      **これは {movement_iteration} 回目の AI Review です。**
 
       2回目以降は、前回の修正が実際には行われていなかったということです。
       **あなたの「修正済み」という認識が間違っています。**
@@ -385,8 +385,8 @@ steps:
           - condition: approved
           - condition: needs_fix
         instruction_template: |
-          **実装がarchitectステップの設計に従っているか**を確認してください。
-          AI特有の問題はレビューしないでください（ai_reviewステップで行います）。
+          **実装がarchitectムーブメントの設計に従っているか**を確認してください。
+          AI特有の問題はレビューしないでください（ai_reviewムーブメントで行います）。
 
           **参照するレポート:**
           - 設計: {report:01-architecture.md}（存在する場合）
@@ -400,7 +400,7 @@ steps:
           - デッドコード
           - 呼び出しチェーン検証
 
-          **注意:** architectステップをスキップした小規模タスクの場合は、従来通り設計の妥当性も確認してください。
+          **注意:** architectムーブメントをスキップした小規模タスクの場合は、従来通り設計の妥当性も確認してください。
 
       - name: security-review
         edit: false
@@ -514,7 +514,7 @@ steps:
 
       **ワークフロー全体の確認:**
       1. 計画（{report:00-plan.md}）と設計（{report:01-architecture.md}、存在する場合）に従った実装か
-      2. 各レビューステップの指摘が対応されているか
+      2. 各レビュームーブメントの指摘が対応されているか
       3. 元のタスク目的が達成されているか
 
       **レポートの確認:** Report Directory内の全レポートを読み、

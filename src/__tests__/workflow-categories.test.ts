@@ -23,10 +23,10 @@ import {
 
 const SAMPLE_WORKFLOW = `name: test-workflow
 description: Test workflow
-initial_step: step1
+initial_movement: step1
 max_iterations: 1
 
-steps:
+movements:
   - name: step1
     agent: coder
     instruction: "{task}"

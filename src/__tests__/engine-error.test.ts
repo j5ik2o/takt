@@ -39,7 +39,7 @@ import { runAgent } from '../agents/runner.js';
 import { detectMatchedRule } from '../core/workflow/index.js';
 import {
   makeResponse,
-  makeStep,
+  makeMovement,
   makeRule,
   buildDefaultWorkflowConfig,
   mockRunAgentSequence,
@@ -119,9 +119,9 @@ describe('WorkflowEngine Integration: Error Handling', () => {
       const config = buildDefaultWorkflowConfig({
         maxIterations: 100,
         loopDetection: { maxConsecutiveSameStep: 3, action: 'abort' },
-        initialStep: 'loop-step',
-        steps: [
-          makeStep('loop-step', {
+        initialMovement: 'loop-step',
+        movements: [
+          makeMovement('loop-step', {
             rules: [makeRule('continue', 'loop-step')],
           }),
         ],

@@ -1,5 +1,5 @@
 /**
- * Tests for engine report event emission (step:report)
+ * Tests for engine report event emission (movement:report)
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -9,50 +9,50 @@ import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import { isReportObjectConfig } from '../core/workflow/index.js';
-import type { WorkflowStep, ReportObjectConfig, ReportConfig } from '../core/models/index.js';
+import type { WorkflowMovement, ReportObjectConfig, ReportConfig } from '../core/models/index.js';
 
 /**
- * Extracted emitStepReports logic for unit testing.
- * Mirrors engine.ts emitStepReports + emitIfReportExists.
+ * Extracted emitMovementReports logic for unit testing.
+ * Mirrors engine.ts emitMovementReports + emitIfReportExists.
  *
  * reportDir already includes the `.takt/reports/` prefix (set by engine constructor).
  */
-function emitStepReports(
+function emitMovementReports(
   emitter: EventEmitter,
-  step: WorkflowStep,
+  movement: WorkflowMovement,
   reportDir: string,
   projectCwd: string,
 ): void {
-  if (!step.report || !reportDir) return;
+  if (!movement.report || !reportDir) return;
   const baseDir = join(projectCwd, reportDir);
 
-  if (typeof step.report === 'string') {
-    emitIfReportExists(emitter, step, baseDir, step.report);
-  } else if (isReportObjectConfig(step.report)) {
-    emitIfReportExists(emitter, step, baseDir, step.report.name);
+  if (typeof movement.report === 'string') {
+    emitIfReportExists(emitter, movement, baseDir, movement.report);
+  } else if (isReportObjectConfig(movement.report)) {
+    emitIfReportExists(emitter, movement, baseDir, movement.report.name);
   } else {
-    for (const rc of step.report) {
-      emitIfReportExists(emitter, step, baseDir, rc.path);
+    for (const rc of movement.report) {
+      emitIfReportExists(emitter, movement, baseDir, rc.path);
     }
   }
 }
 
 function emitIfReportExists(
   emitter: EventEmitter,
-  step: WorkflowStep,
+  movement: WorkflowMovement,
   baseDir: string,
   fileName: string,
 ): void {
   const filePath = join(baseDir, fileName);
   if (existsSync(filePath)) {
-    emitter.emit('step:report', step, filePath, fileName);
+    emitter.emit('movement:report', movement, filePath, fileName);
   }
 }
 
-/** Create a minimal WorkflowStep for testing */
-function createStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+/** Create a minimal WorkflowMovement for testing */
+function createMovement(overrides: Partial<WorkflowMovement> = {}): WorkflowMovement {
   return {
-    name: 'test-step',
+    name: 'test-movement',
     agent: 'coder',
     agentDisplayName: 'Coder',
     instructionTemplate: '',
@@ -61,7 +61,7 @@ function createStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
   };
 }
 
-describe('emitStepReports', () => {
+describe('emitMovementReports', () => {
   let tmpDir: string;
   let reportBaseDir: string;
   // reportDir now includes .takt/reports/ prefix (matches engine constructor behavior)
@@ -77,100 +77,100 @@ describe('emitStepReports', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('should emit step:report when string report file exists', () => {
-    // Given: a step with string report and the file exists
-    const step = createStep({ report: 'plan.md' });
+  it('should emit movement:report when string report file exists', () => {
+    // Given: a movement with string report and the file exists
+    const movement = createMovement({ report: 'plan.md' });
     writeFileSync(join(reportBaseDir, 'plan.md'), '# Plan', 'utf-8');
     const emitter = new EventEmitter();
     const handler = vi.fn();
-    emitter.on('step:report', handler);
+    emitter.on('movement:report', handler);
 
     // When
-    emitStepReports(emitter, step, reportDirName, tmpDir);
+    emitMovementReports(emitter, movement, reportDirName, tmpDir);
 
     // Then
     expect(handler).toHaveBeenCalledOnce();
-    expect(handler).toHaveBeenCalledWith(step, join(reportBaseDir, 'plan.md'), 'plan.md');
+    expect(handler).toHaveBeenCalledWith(movement, join(reportBaseDir, 'plan.md'), 'plan.md');
   });
 
   it('should not emit when string report file does not exist', () => {
-    // Given: a step with string report but file doesn't exist
-    const step = createStep({ report: 'missing.md' });
+    // Given: a movement with string report but file doesn't exist
+    const movement = createMovement({ report: 'missing.md' });
     const emitter = new EventEmitter();
     const handler = vi.fn();
-    emitter.on('step:report', handler);
+    emitter.on('movement:report', handler);
 
     // When
-    emitStepReports(emitter, step, reportDirName, tmpDir);
+    emitMovementReports(emitter, movement, reportDirName, tmpDir);
 
     // Then
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it('should emit step:report when ReportObjectConfig report file exists', () => {
-    // Given: a step with ReportObjectConfig and the file exists
+  it('should emit movement:report when ReportObjectConfig report file exists', () => {
+    // Given: a movement with ReportObjectConfig and the file exists
     const report: ReportObjectConfig = { name: '03-review.md', format: '# Review' };
-    const step = createStep({ report });
+    const movement = createMovement({ report });
     writeFileSync(join(reportBaseDir, '03-review.md'), '# Review\nOK', 'utf-8');
     const emitter = new EventEmitter();
     const handler = vi.fn();
-    emitter.on('step:report', handler);
+    emitter.on('movement:report', handler);
 
     // When
-    emitStepReports(emitter, step, reportDirName, tmpDir);
+    emitMovementReports(emitter, movement, reportDirName, tmpDir);
 
     // Then
     expect(handler).toHaveBeenCalledOnce();
-    expect(handler).toHaveBeenCalledWith(step, join(reportBaseDir, '03-review.md'), '03-review.md');
+    expect(handler).toHaveBeenCalledWith(movement, join(reportBaseDir, '03-review.md'), '03-review.md');
   });
 
   it('should emit for each existing file in ReportConfig[] array', () => {
-    // Given: a step with array report, two files exist, one missing
+    // Given: a movement with array report, two files exist, one missing
     const report: ReportConfig[] = [
       { label: 'Scope', path: '01-scope.md' },
       { label: 'Decisions', path: '02-decisions.md' },
       { label: 'Missing', path: '03-missing.md' },
     ];
-    const step = createStep({ report });
+    const movement = createMovement({ report });
     writeFileSync(join(reportBaseDir, '01-scope.md'), '# Scope', 'utf-8');
     writeFileSync(join(reportBaseDir, '02-decisions.md'), '# Decisions', 'utf-8');
     const emitter = new EventEmitter();
     const handler = vi.fn();
-    emitter.on('step:report', handler);
+    emitter.on('movement:report', handler);
 
     // When
-    emitStepReports(emitter, step, reportDirName, tmpDir);
+    emitMovementReports(emitter, movement, reportDirName, tmpDir);
 
     // Then: emitted for scope and decisions, not for missing
     expect(handler).toHaveBeenCalledTimes(2);
-    expect(handler).toHaveBeenCalledWith(step, join(reportBaseDir, '01-scope.md'), '01-scope.md');
-    expect(handler).toHaveBeenCalledWith(step, join(reportBaseDir, '02-decisions.md'), '02-decisions.md');
+    expect(handler).toHaveBeenCalledWith(movement, join(reportBaseDir, '01-scope.md'), '01-scope.md');
+    expect(handler).toHaveBeenCalledWith(movement, join(reportBaseDir, '02-decisions.md'), '02-decisions.md');
   });
 
-  it('should not emit when step has no report', () => {
-    // Given: a step without report
-    const step = createStep({ report: undefined });
+  it('should not emit when movement has no report', () => {
+    // Given: a movement without report
+    const movement = createMovement({ report: undefined });
     const emitter = new EventEmitter();
     const handler = vi.fn();
-    emitter.on('step:report', handler);
+    emitter.on('movement:report', handler);
 
     // When
-    emitStepReports(emitter, step, reportDirName, tmpDir);
+    emitMovementReports(emitter, movement, reportDirName, tmpDir);
 
     // Then
     expect(handler).not.toHaveBeenCalled();
   });
 
   it('should not emit when reportDir is empty', () => {
-    // Given: a step with report but empty reportDir
-    const step = createStep({ report: 'plan.md' });
+    // Given: a movement with report but empty reportDir
+    const movement = createMovement({ report: 'plan.md' });
     writeFileSync(join(reportBaseDir, 'plan.md'), '# Plan', 'utf-8');
     const emitter = new EventEmitter();
     const handler = vi.fn();
-    emitter.on('step:report', handler);
+    emitter.on('movement:report', handler);
 
     // When: empty reportDir
-    emitStepReports(emitter, step, '', tmpDir);
+    emitMovementReports(emitter, movement, '', tmpDir);
 
     // Then
     expect(handler).not.toHaveBeenCalled();

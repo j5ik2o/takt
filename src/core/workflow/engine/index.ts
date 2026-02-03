@@ -5,6 +5,7 @@
  */
 
 export { WorkflowEngine } from './WorkflowEngine.js';
-export { StepExecutor } from './StepExecutor.js';
+export { MovementExecutor } from './MovementExecutor.js';
+export type { MovementExecutorDeps } from './MovementExecutor.js';
 export { ParallelRunner } from './ParallelRunner.js';
 export { OptionsBuilder } from './OptionsBuilder.js';

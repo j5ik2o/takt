@@ -1,13 +1,13 @@
 /**
- * Rule evaluation logic for workflow steps
+ * Rule evaluation logic for workflow movements
  *
- * Evaluates workflow step rules to determine the matched rule index.
+ * Evaluates workflow movement rules to determine the matched rule index.
  * Supports tag-based detection, ai() conditions, aggregate conditions,
  * and AI judge fallback.
  */
 
 import type {
-  WorkflowStep,
+  WorkflowMovement,
   WorkflowState,
   RuleMatchMethod,
 } from '../../models/types.js';
@@ -23,7 +23,7 @@ export interface RuleMatch {
 }
 
 export interface RuleEvaluatorContext {
-  /** Workflow state (for accessing stepOutputs in aggregate evaluation) */
+  /** Workflow state (for accessing movementOutputs in aggregate evaluation) */
   state: WorkflowState;
   /** Working directory (for AI judge calls) */
   cwd: string;
@@ -36,21 +36,21 @@ export interface RuleEvaluatorContext {
 }
 
 /**
- * Evaluates rules for a workflow step to determine the next transition.
+ * Evaluates rules for a workflow movement to determine the next transition.
  *
  * Evaluation order (first match wins):
- * 1. Aggregate conditions: all()/any() — evaluate sub-step results
+ * 1. Aggregate conditions: all()/any() — evaluate sub-movement results
  * 2. Tag detection from Phase 3 output
  * 3. Tag detection from Phase 1 output (fallback)
  * 4. ai() condition evaluation via AI judge
  * 5. All-conditions AI judge (final fallback)
  *
- * Returns undefined for steps without rules.
+ * Returns undefined for movements without rules.
  * Throws if rules exist but no rule matched (Fail Fast).
  */
 export class RuleEvaluator {
   constructor(
-    private readonly step: WorkflowStep,
+    private readonly step: WorkflowMovement,
     private readonly ctx: RuleEvaluatorContext,
   ) {}
 
@@ -58,7 +58,7 @@ export class RuleEvaluator {
     if (!this.step.rules || this.step.rules.length === 0) return undefined;
     const interactiveEnabled = this.ctx.interactive === true;
 
-    // 1. Aggregate conditions (all/any) — only meaningful for parallel parent steps
+    // 1. Aggregate conditions (all/any) — only meaningful for parallel parent movements
     const aggEvaluator = new AggregateEvaluator(this.step, this.ctx.state);
     const aggIndex = aggEvaluator.evaluate();
     if (aggIndex >= 0) {
@@ -103,7 +103,7 @@ export class RuleEvaluator {
       return { index: fallbackIndex, method: 'ai_judge_fallback' };
     }
 
-    throw new Error(`Status not found for step "${this.step.name}": no rule matched after all detection phases`);
+    throw new Error(`Status not found for movement "${this.step.name}": no rule matched after all detection phases`);
   }
 
   /**
@@ -127,7 +127,7 @@ export class RuleEvaluator {
     if (aiConditions.length === 0) return -1;
 
     log.debug('Evaluating ai() conditions via judge', {
-      step: this.step.name,
+      movement: this.step.name,
       conditionCount: aiConditions.length,
     });
 
@@ -137,7 +137,7 @@ export class RuleEvaluator {
     if (judgeResult >= 0 && judgeResult < aiConditions.length) {
       const matched = aiConditions[judgeResult]!;
       log.debug('AI judge matched condition', {
-        step: this.step.name,
+        movement: this.step.name,
         judgeResult,
         originalRuleIndex: matched.index,
         condition: matched.text,
@@ -145,7 +145,7 @@ export class RuleEvaluator {
       return matched.index;
     }
 
-    log.debug('AI judge did not match any condition', { step: this.step.name });
+    log.debug('AI judge did not match any condition', { movement: this.step.name });
     return -1;
   }
 
@@ -162,7 +162,7 @@ export class RuleEvaluator {
       .map((rule) => ({ index: rule.index, text: rule.text }));
 
     log.debug('Evaluating all conditions via AI judge (final fallback)', {
-      step: this.step.name,
+      movement: this.step.name,
       conditionCount: conditions.length,
     });
 
@@ -170,14 +170,14 @@ export class RuleEvaluator {
 
     if (judgeResult >= 0 && judgeResult < conditions.length) {
       log.debug('AI judge (fallback) matched condition', {
-        step: this.step.name,
+        movement: this.step.name,
         ruleIndex: judgeResult,
         condition: conditions[judgeResult]!.text,
       });
       return judgeResult;
     }
 
-    log.debug('AI judge (fallback) did not match any condition', { step: this.step.name });
+    log.debug('AI judge (fallback) did not match any condition', { movement: this.step.name });
     return -1;
   }
 

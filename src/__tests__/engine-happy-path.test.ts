@@ -7,13 +7,13 @@
  * - AI review reject and fix
  * - ABORT transition
  * - Event emissions
- * - Step output tracking
+ * - Movement output tracking
  * - Config validation
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, rmSync } from 'node:fs';
-import type { WorkflowConfig, WorkflowStep } from '../core/models/index.js';
+import type { WorkflowConfig, WorkflowMovement } from '../core/models/index.js';
 
 // --- Mock setup (must be before imports that use these modules) ---
 
@@ -42,7 +42,7 @@ import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import {
   makeResponse,
-  makeStep,
+  makeMovement,
   makeRule,
   buildDefaultWorkflowConfig,
   mockRunAgentSequence,
@@ -101,7 +101,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       expect(state.status).toBe('completed');
       expect(state.iteration).toBe(5); // plan, implement, ai_review, reviewers, supervise
       expect(completeFn).toHaveBeenCalledOnce();
-      expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(6); // 4 normal + 2 parallel sub-steps
+      expect(vi.mocked(runAgent)).toHaveBeenCalledTimes(6); // 4 normal + 2 parallel sub-movements
     });
   });
 
@@ -192,7 +192,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   // 4. ABORT transition
   // =====================================================
   describe('ABORT transition', () => {
-    it('should abort when step transitions to ABORT', async () => {
+    it('should abort when movement transitions to ABORT', async () => {
       const config = buildDefaultWorkflowConfig();
       const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
@@ -219,7 +219,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   // 5. Event emissions
   // =====================================================
   describe('Event emissions', () => {
-    it('should emit step:start and step:complete for each step', async () => {
+    it('should emit movement:start and movement:complete for each movement', async () => {
       const config = buildDefaultWorkflowConfig();
       const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
@@ -244,26 +244,26 @@ describe('WorkflowEngine Integration: Happy Path', () => {
 
       const startFn = vi.fn();
       const completeFn = vi.fn();
-      engine.on('step:start', startFn);
-      engine.on('step:complete', completeFn);
+      engine.on('movement:start', startFn);
+      engine.on('movement:complete', completeFn);
 
       await engine.run();
 
-      // 5 steps: plan, implement, ai_review, reviewers, supervise
+      // 5 movements: plan, implement, ai_review, reviewers, supervise
       expect(startFn).toHaveBeenCalledTimes(5);
       expect(completeFn).toHaveBeenCalledTimes(5);
 
-      const startedSteps = startFn.mock.calls.map(call => (call[0] as WorkflowStep).name);
-      expect(startedSteps).toEqual(['plan', 'implement', 'ai_review', 'reviewers', 'supervise']);
+      const startedMovements = startFn.mock.calls.map(call => (call[0] as WorkflowMovement).name);
+      expect(startedMovements).toEqual(['plan', 'implement', 'ai_review', 'reviewers', 'supervise']);
     });
 
-    it('should pass instruction to step:start for normal steps', async () => {
+    it('should pass instruction to movement:start for normal movements', async () => {
       const simpleConfig: WorkflowConfig = {
         name: 'test',
         maxIterations: 10,
-        initialStep: 'plan',
-        steps: [
-          makeStep('plan', {
+        initialMovement: 'plan',
+        movements: [
+          makeMovement('plan', {
             rules: [makeRule('done', 'COMPLETE')],
           }),
         ],
@@ -278,18 +278,18 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       ]);
 
       const startFn = vi.fn();
-      engine.on('step:start', startFn);
+      engine.on('movement:start', startFn);
 
       await engine.run();
 
       expect(startFn).toHaveBeenCalledTimes(1);
-      // step:start should receive (step, iteration, instruction)
-      const [_step, _iteration, instruction] = startFn.mock.calls[0];
+      // movement:start should receive (movement, iteration, instruction)
+      const [_movement, _iteration, instruction] = startFn.mock.calls[0];
       expect(typeof instruction).toBe('string');
       expect(instruction.length).toBeGreaterThan(0);
     });
 
-    it('should pass empty instruction to step:start for parallel steps', async () => {
+    it('should pass empty instruction to movement:start for parallel movements', async () => {
       const config = buildDefaultWorkflowConfig();
       const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
@@ -313,16 +313,16 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       ]);
 
       const startFn = vi.fn();
-      engine.on('step:start', startFn);
+      engine.on('movement:start', startFn);
 
       await engine.run();
 
-      // Find the "reviewers" step:start call (parallel step)
+      // Find the "reviewers" movement:start call (parallel movement)
       const reviewersCall = startFn.mock.calls.find(
-        (call) => (call[0] as WorkflowStep).name === 'reviewers'
+        (call) => (call[0] as WorkflowMovement).name === 'reviewers'
       );
       expect(reviewersCall).toBeDefined();
-      // Parallel steps emit empty string for instruction
+      // Parallel movements emit empty string for instruction
       const [, , instruction] = reviewersCall!;
       expect(instruction).toBe('');
     });
@@ -348,10 +348,10 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   });
 
   // =====================================================
-  // 6. Step output tracking
+  // 6. Movement output tracking
   // =====================================================
-  describe('Step output tracking', () => {
-    it('should store outputs for all executed steps', async () => {
+  describe('Movement output tracking', () => {
+    it('should store outputs for all executed movements', async () => {
       const config = buildDefaultWorkflowConfig();
       const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
@@ -376,10 +376,10 @@ describe('WorkflowEngine Integration: Happy Path', () => {
 
       const state = await engine.run();
 
-      expect(state.stepOutputs.get('plan')!.content).toBe('Plan output');
-      expect(state.stepOutputs.get('implement')!.content).toBe('Implement output');
-      expect(state.stepOutputs.get('ai_review')!.content).toBe('AI review output');
-      expect(state.stepOutputs.get('supervise')!.content).toBe('Supervise output');
+      expect(state.movementOutputs.get('plan')!.content).toBe('Plan output');
+      expect(state.movementOutputs.get('implement')!.content).toBe('Implement output');
+      expect(state.movementOutputs.get('ai_review')!.content).toBe('AI review output');
+      expect(state.movementOutputs.get('supervise')!.content).toBe('Supervise output');
     });
   });
 
@@ -391,9 +391,9 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       const simpleConfig: WorkflowConfig = {
         name: 'test',
         maxIterations: 10,
-        initialStep: 'plan',
-        steps: [
-          makeStep('plan', {
+        initialMovement: 'plan',
+        movements: [
+          makeMovement('plan', {
             rules: [makeRule('done', 'COMPLETE')],
           }),
         ],
@@ -424,7 +424,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
       );
     });
 
-    it('should emit phase events for all steps in happy path', async () => {
+    it('should emit phase events for all movements in happy path', async () => {
       const config = buildDefaultWorkflowConfig();
       const engine = new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
@@ -454,7 +454,7 @@ describe('WorkflowEngine Integration: Happy Path', () => {
 
       await engine.run();
 
-      // 4 normal steps + 2 parallel sub-steps = 6 Phase 1 invocations
+      // 4 normal movements + 2 parallel sub-movements = 6 Phase 1 invocations
       expect(phaseStartFn).toHaveBeenCalledTimes(6);
       expect(phaseCompleteFn).toHaveBeenCalledTimes(6);
 
@@ -470,21 +470,21 @@ describe('WorkflowEngine Integration: Happy Path', () => {
   // 8. Config validation
   // =====================================================
   describe('Config validation', () => {
-    it('should throw when initial step does not exist', () => {
-      const config = buildDefaultWorkflowConfig({ initialStep: 'nonexistent' });
+    it('should throw when initial movement does not exist', () => {
+      const config = buildDefaultWorkflowConfig({ initialMovement: 'nonexistent' });
 
       expect(() => {
         new WorkflowEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
-      }).toThrow('Unknown step: nonexistent');
+      }).toThrow('Unknown movement: nonexistent');
     });
 
-    it('should throw when rule references nonexistent step', () => {
+    it('should throw when rule references nonexistent movement', () => {
       const config: WorkflowConfig = {
         name: 'test',
         maxIterations: 10,
-        initialStep: 'step1',
-        steps: [
-          makeStep('step1', {
+        initialMovement: 'step1',
+        movements: [
+          makeMovement('step1', {
             rules: [makeRule('done', 'nonexistent_step')],
           }),
         ],

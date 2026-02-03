@@ -5,7 +5,7 @@
  * requesting user input to continue.
  */
 
-import type { WorkflowStep, AgentResponse } from '../../models/types.js';
+import type { WorkflowMovement, AgentResponse } from '../../models/types.js';
 import type { UserInputRequest, WorkflowEngineOptions } from '../types.js';
 import { extractBlockedPrompt } from './transitions.js';
 
@@ -22,13 +22,13 @@ export interface BlockedHandlerResult {
 /**
  * Handle blocked status by requesting user input.
  *
- * @param step - The step that is blocked
+ * @param step - The movement that is blocked
  * @param response - The blocked response from the agent
  * @param options - Workflow engine options containing callbacks
  * @returns Result indicating whether to continue and any user input
  */
 export async function handleBlocked(
-  step: WorkflowStep,
+  step: WorkflowMovement,
   response: AgentResponse,
   options: WorkflowEngineOptions
 ): Promise<BlockedHandlerResult> {
@@ -42,7 +42,7 @@ export async function handleBlocked(
 
   // Build the request
   const request: UserInputRequest = {
-    step,
+    movement: step,
     response,
     prompt,
   };

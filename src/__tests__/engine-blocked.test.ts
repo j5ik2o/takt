@@ -72,7 +72,7 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
 
     const blockedFn = vi.fn();
     const abortFn = vi.fn();
-    engine.on('step:blocked', blockedFn);
+    engine.on('movement:blocked', blockedFn);
     engine.on('workflow:abort', abortFn);
 
     const state = await engine.run();
@@ -132,7 +132,7 @@ describe('WorkflowEngine Integration: Blocked Handling', () => {
     ]);
 
     const userInputFn = vi.fn();
-    engine.on('step:user_input', userInputFn);
+    engine.on('movement:user_input', userInputFn);
 
     const state = await engine.run();
 

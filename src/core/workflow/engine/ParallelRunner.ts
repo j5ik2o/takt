@@ -1,12 +1,12 @@
 /**
- * Executes parallel workflow steps concurrently and aggregates results.
+ * Executes parallel workflow movements concurrently and aggregates results.
  *
  * When onStream is provided, uses ParallelLogger to prefix each
- * sub-step's output with `[name]` for readable interleaved display.
+ * sub-movement's output with `[name]` for readable interleaved display.
  */
 
 import type {
-  WorkflowStep,
+  WorkflowMovement,
   WorkflowState,
   AgentResponse,
 } from '../../models/types.js';
@@ -14,29 +14,29 @@ import { runAgent } from '../../../agents/runner.js';
 import { ParallelLogger } from './parallel-logger.js';
 import { needsStatusJudgmentPhase, runReportPhase, runStatusJudgmentPhase } from '../phase-runner.js';
 import { detectMatchedRule } from '../evaluation/index.js';
-import { incrementStepIteration } from './state-manager.js';
+import { incrementMovementIteration } from './state-manager.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import type { OptionsBuilder } from './OptionsBuilder.js';
-import type { StepExecutor } from './StepExecutor.js';
+import type { MovementExecutor } from './MovementExecutor.js';
 import type { WorkflowEngineOptions, PhaseName } from '../types.js';
 
 const log = createLogger('parallel-runner');
 
 export interface ParallelRunnerDeps {
   readonly optionsBuilder: OptionsBuilder;
-  readonly stepExecutor: StepExecutor;
+  readonly movementExecutor: MovementExecutor;
   readonly engineOptions: WorkflowEngineOptions;
   readonly getCwd: () => string;
   readonly getReportDir: () => string;
   readonly getInteractive: () => boolean;
-  readonly detectRuleIndex: (content: string, stepName: string) => number;
+  readonly detectRuleIndex: (content: string, movementName: string) => number;
   readonly callAiJudge: (
     agentOutput: string,
     conditions: Array<{ index: number; text: string }>,
     options: { cwd: string }
   ) => Promise<number>;
-  readonly onPhaseStart?: (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void;
-  readonly onPhaseComplete?: (step: WorkflowStep, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void;
+  readonly onPhaseStart?: (step: WorkflowMovement, phase: 1 | 2 | 3, phaseName: PhaseName, instruction: string) => void;
+  readonly onPhaseComplete?: (step: WorkflowMovement, phase: 1 | 2 | 3, phaseName: PhaseName, content: string, status: string, error?: string) => void;
 }
 
 export class ParallelRunner {
@@ -45,28 +45,28 @@ export class ParallelRunner {
   ) {}
 
   /**
-   * Run a parallel step: execute all sub-steps concurrently, then aggregate results.
-   * The aggregated output becomes the parent step's response for rules evaluation.
+   * Run a parallel movement: execute all sub-movements concurrently, then aggregate results.
+   * The aggregated output becomes the parent movement's response for rules evaluation.
    */
-  async runParallelStep(
-    step: WorkflowStep,
+  async runParallelMovement(
+    step: WorkflowMovement,
     state: WorkflowState,
     task: string,
     maxIterations: number,
     updateAgentSession: (agent: string, sessionId: string | undefined) => void,
   ): Promise<{ response: AgentResponse; instruction: string }> {
-    const subSteps = step.parallel!;
-    const stepIteration = incrementStepIteration(state, step.name);
-    log.debug('Running parallel step', {
-      step: step.name,
-      subSteps: subSteps.map(s => s.name),
-      stepIteration,
+    const subMovements = step.parallel!;
+    const movementIteration = incrementMovementIteration(state, step.name);
+    log.debug('Running parallel movement', {
+      movement: step.name,
+      subMovements: subMovements.map(s => s.name),
+      movementIteration,
     });
 
     // Create parallel logger for prefixed output (only when streaming is enabled)
     const parallelLogger = this.deps.engineOptions.onStream
       ? new ParallelLogger({
-          subStepNames: subSteps.map((s) => s.name),
+          subMovementNames: subMovements.map((s) => s.name),
           parentOnStream: this.deps.engineOptions.onStream,
         })
       : undefined;
@@ -80,46 +80,46 @@ export class ParallelRunner {
       callAiJudge: this.deps.callAiJudge,
     };
 
-    // Run all sub-steps concurrently
+    // Run all sub-movements concurrently
     const subResults = await Promise.all(
-      subSteps.map(async (subStep, index) => {
-        const subIteration = incrementStepIteration(state, subStep.name);
-        const subInstruction = this.deps.stepExecutor.buildInstruction(subStep, subIteration, state, task, maxIterations);
+      subMovements.map(async (subMovement, index) => {
+        const subIteration = incrementMovementIteration(state, subMovement.name);
+        const subInstruction = this.deps.movementExecutor.buildInstruction(subMovement, subIteration, state, task, maxIterations);
 
-        // Phase 1: main execution (Write excluded if sub-step has report)
-        const baseOptions = this.deps.optionsBuilder.buildAgentOptions(subStep);
+        // Phase 1: main execution (Write excluded if sub-movement has report)
+        const baseOptions = this.deps.optionsBuilder.buildAgentOptions(subMovement);
 
         // Override onStream with parallel logger's prefixed handler (immutable)
         const agentOptions = parallelLogger
-          ? { ...baseOptions, onStream: parallelLogger.createStreamHandler(subStep.name, index) }
+          ? { ...baseOptions, onStream: parallelLogger.createStreamHandler(subMovement.name, index) }
           : baseOptions;
 
-        const subSessionKey = subStep.agent ?? subStep.name;
-        this.deps.onPhaseStart?.(subStep, 1, 'execute', subInstruction);
-        const subResponse = await runAgent(subStep.agent, subInstruction, agentOptions);
+        const subSessionKey = subMovement.agent ?? subMovement.name;
+        this.deps.onPhaseStart?.(subMovement, 1, 'execute', subInstruction);
+        const subResponse = await runAgent(subMovement.agent, subInstruction, agentOptions);
         updateAgentSession(subSessionKey, subResponse.sessionId);
-        this.deps.onPhaseComplete?.(subStep, 1, 'execute', subResponse.content, subResponse.status, subResponse.error);
+        this.deps.onPhaseComplete?.(subMovement, 1, 'execute', subResponse.content, subResponse.status, subResponse.error);
 
-        // Phase 2: report output for sub-step
-        if (subStep.report) {
-          await runReportPhase(subStep, subIteration, phaseCtx);
+        // Phase 2: report output for sub-movement
+        if (subMovement.report) {
+          await runReportPhase(subMovement, subIteration, phaseCtx);
         }
 
-        // Phase 3: status judgment for sub-step
+        // Phase 3: status judgment for sub-movement
         let subTagContent = '';
-        if (needsStatusJudgmentPhase(subStep)) {
-          subTagContent = await runStatusJudgmentPhase(subStep, phaseCtx);
+        if (needsStatusJudgmentPhase(subMovement)) {
+          subTagContent = await runStatusJudgmentPhase(subMovement, phaseCtx);
         }
 
-        const match = await detectMatchedRule(subStep, subResponse.content, subTagContent, ruleCtx);
+        const match = await detectMatchedRule(subMovement, subResponse.content, subTagContent, ruleCtx);
         const finalResponse = match
           ? { ...subResponse, matchedRuleIndex: match.index, matchedRuleMethod: match.method }
           : subResponse;
 
-        state.stepOutputs.set(subStep.name, finalResponse);
-        this.deps.stepExecutor.emitStepReports(subStep);
+        state.movementOutputs.set(subMovement.name, finalResponse);
+        this.deps.movementExecutor.emitMovementReports(subMovement);
 
-        return { subStep, response: finalResponse, instruction: subInstruction };
+        return { subMovement, response: finalResponse, instruction: subInstruction };
       }),
     );
 
@@ -128,24 +128,24 @@ export class ParallelRunner {
       parallelLogger.printSummary(
         step.name,
         subResults.map((r) => ({
-          name: r.subStep.name,
-          condition: r.response.matchedRuleIndex != null && r.subStep.rules
-            ? r.subStep.rules[r.response.matchedRuleIndex]?.condition
+          name: r.subMovement.name,
+          condition: r.response.matchedRuleIndex != null && r.subMovement.rules
+            ? r.subMovement.rules[r.response.matchedRuleIndex]?.condition
             : undefined,
         })),
       );
     }
 
-    // Aggregate sub-step outputs into parent step's response
+    // Aggregate sub-movement outputs into parent movement's response
     const aggregatedContent = subResults
-      .map((r) => `## ${r.subStep.name}\n${r.response.content}`)
+      .map((r) => `## ${r.subMovement.name}\n${r.response.content}`)
       .join('\n\n---\n\n');
 
     const aggregatedInstruction = subResults
       .map((r) => r.instruction)
       .join('\n\n');
 
-    // Parent step uses aggregate conditions, so tagContent is empty
+    // Parent movement uses aggregate conditions, so tagContent is empty
     const match = await detectMatchedRule(step, aggregatedContent, '', ruleCtx);
 
     const aggregatedResponse: AgentResponse = {
@@ -156,8 +156,8 @@ export class ParallelRunner {
       ...(match && { matchedRuleIndex: match.index, matchedRuleMethod: match.method }),
     };
 
-    state.stepOutputs.set(step.name, aggregatedResponse);
-    this.deps.stepExecutor.emitStepReports(step);
+    state.movementOutputs.set(step.name, aggregatedResponse);
+    this.deps.movementExecutor.emitMovementReports(step);
     return { response: aggregatedResponse, instruction: aggregatedInstruction };
   }
 

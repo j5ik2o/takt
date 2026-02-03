@@ -13,6 +13,7 @@ import { loadCustomAgents, loadAgentPrompt, loadGlobalConfig, loadProjectConfig 
 import { getProvider, type ProviderType, type ProviderCallOptions } from '../infra/providers/index.js';
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
 import { createLogger } from '../shared/utils/index.js';
+import { loadTemplate } from '../shared/prompts/index.js';
 import type { RunAgentOptions } from './types.js';
 
 // Re-export for backward compatibility
@@ -192,8 +193,11 @@ export class AgentRunner {
     });
 
     // 1. If agentPath is provided (resolved file exists), load prompt from file
+    //    and wrap it through the perform_agent_system_prompt template
     if (options.agentPath) {
-      const systemPrompt = AgentRunner.loadAgentPromptFromPath(options.agentPath);
+      const agentDefinition = AgentRunner.loadAgentPromptFromPath(options.agentPath);
+      const language = options.language ?? 'en';
+      const systemPrompt = loadTemplate('perform_agent_system_prompt', language, { agentDefinition });
       const providerType = AgentRunner.resolveProvider(options.cwd, options);
       const provider = getProvider(providerType);
       return provider.call(agentName, task, AgentRunner.buildProviderCallOptions(options, systemPrompt));

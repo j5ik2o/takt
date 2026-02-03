@@ -1,24 +1,24 @@
-# Minimal TAKT Workflow
-# Implement -> Parallel Review (AI + Supervisor) -> Fix if needed -> Complete
-# (Simplest configuration - no plan, no architect review)
+# Review-Fix Minimal TAKT Workflow
+# Review -> Fix (if needed) -> Re-review -> Complete
+# (Starts with review, no implementation movement)
 #
 # Template Variables (auto-injected):
-#   {iteration}      - Workflow-wide turn count (total steps executed across all agents)
+#   {iteration}      - Workflow-wide turn count (total movements executed across all agents)
 #   {max_iterations} - Maximum iterations allowed for the workflow
-#   {step_iteration} - Per-step iteration count (how many times THIS step has been executed)
+#   {movement_iteration} - Per-movement iteration count (how many times THIS movement has been executed)
 #   {task}           - Original user request (auto-injected)
-#   {previous_response} - Output from the previous step (auto-injected)
+#   {previous_response} - Output from the previous movement (auto-injected)
 #   {user_inputs}    - Accumulated user inputs during workflow (auto-injected)
 #   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
 
-name: minimal
-description: Minimal development workflow (implement -> parallel review -> fix if needed -> complete)
+name: review-fix-minimal
+description: Review and fix workflow for existing code (starts with review, no implementation)
 
 max_iterations: 20
 
-initial_step: implement
+initial_movement: reviewers
 
-steps:
+movements:
   - name: implement
     edit: true
     agent: ../agents/default/coder.md
@@ -248,7 +248,7 @@ steps:
           - condition: No fix needed (verified target files/spec)
           - condition: Cannot proceed, insufficient info
         instruction_template: |
-          **This is AI Review iteration {step_iteration}.**
+          **This is AI Review iteration {movement_iteration}.**
 
           If this is iteration 2 or later, it means your previous fixes were not actually applied.
           **Your belief that you "already fixed it" is wrong.**
@@ -350,7 +350,7 @@ steps:
       - condition: Cannot proceed, insufficient info
         next: implement
     instruction_template: |
-      **This is AI Review iteration {step_iteration}.**
+      **This is AI Review iteration {movement_iteration}.**
 
       If this is iteration 2 or later, it means your previous fixes were not actually applied.
       **Your belief that you "already fixed it" is wrong.**

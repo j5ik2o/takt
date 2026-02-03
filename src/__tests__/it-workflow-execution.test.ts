@@ -3,7 +3,7 @@
  *
  * Tests WorkflowEngine with real runAgent + MockProvider + ScenarioQueue.
  * No vi.mock on runAgent or detectMatchedRule — rules are matched via
- * [STEP_NAME:N] tags in scenario content (tag-based detection).
+ * [MOVEMENT_NAME:N] tags in scenario content (tag-based detection).
  *
  * Mocked: UI, session, phase-runner (report/judgment phases), notifications, config
  * Not mocked: WorkflowEngine, runAgent, detectMatchedRule, rule-evaluator
@@ -62,7 +62,7 @@ function makeRule(condition: string, next: string): WorkflowRule {
   return { condition, next };
 }
 
-function makeStep(name: string, agentPath: string, rules: WorkflowRule[]): WorkflowStep {
+function makeMovement(name: string, agentPath: string, rules: WorkflowRule[]): WorkflowStep {
   return {
     name,
     agent: `./agents/${name}.md`,
@@ -105,17 +105,17 @@ function buildSimpleWorkflow(agentPaths: Record<string, string>): WorkflowConfig
     name: 'it-simple',
     description: 'IT simple workflow',
     maxIterations: 15,
-    initialStep: 'plan',
-    steps: [
-      makeStep('plan', agentPaths.planner, [
+    initialMovement: 'plan',
+    movements: [
+      makeMovement('plan', agentPaths.planner, [
         makeRule('Requirements are clear', 'implement'),
         makeRule('Requirements unclear', 'ABORT'),
       ]),
-      makeStep('implement', agentPaths.coder, [
+      makeMovement('implement', agentPaths.coder, [
         makeRule('Implementation complete', 'review'),
         makeRule('Cannot proceed', 'plan'),
       ]),
-      makeStep('review', agentPaths.reviewer, [
+      makeMovement('review', agentPaths.reviewer, [
         makeRule('All checks passed', 'COMPLETE'),
         makeRule('Issues found', 'implement'),
       ]),
@@ -128,25 +128,25 @@ function buildLoopWorkflow(agentPaths: Record<string, string>): WorkflowConfig {
     name: 'it-loop',
     description: 'IT workflow with fix loop',
     maxIterations: 20,
-    initialStep: 'plan',
-    steps: [
-      makeStep('plan', agentPaths.planner, [
+    initialMovement: 'plan',
+    movements: [
+      makeMovement('plan', agentPaths.planner, [
         makeRule('Requirements are clear', 'implement'),
         makeRule('Requirements unclear', 'ABORT'),
       ]),
-      makeStep('implement', agentPaths.coder, [
+      makeMovement('implement', agentPaths.coder, [
         makeRule('Implementation complete', 'review'),
         makeRule('Cannot proceed', 'plan'),
       ]),
-      makeStep('review', agentPaths.reviewer, [
+      makeMovement('review', agentPaths.reviewer, [
         makeRule('Approved', 'supervise'),
         makeRule('Needs fix', 'fix'),
       ]),
-      makeStep('fix', agentPaths.fixer, [
+      makeMovement('fix', agentPaths.fixer, [
         makeRule('Fix complete', 'review'),
         makeRule('Cannot fix', 'ABORT'),
       ]),
-      makeStep('supervise', agentPaths.supervisor, [
+      makeMovement('supervise', agentPaths.supervisor, [
         makeRule('All checks passed', 'COMPLETE'),
         makeRule('Requirements unmet', 'plan'),
       ]),
@@ -308,7 +308,7 @@ describe('Workflow Engine IT: Max Iterations', () => {
   });
 });
 
-describe('Workflow Engine IT: Step Output Tracking', () => {
+describe('Workflow Engine IT: Movement Output Tracking', () => {
   let testDir: string;
   let agentPaths: Record<string, string>;
 
@@ -324,7 +324,7 @@ describe('Workflow Engine IT: Step Output Tracking', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should track step outputs through events', async () => {
+  it('should track movement outputs through events', async () => {
     setMockScenario([
       { agent: 'plan', status: 'done', content: '[PLAN:1]\n\nPlan output.' },
       { agent: 'implement', status: 'done', content: '[IMPLEMENT:1]\n\nImplement output.' },
@@ -337,14 +337,14 @@ describe('Workflow Engine IT: Step Output Tracking', () => {
       provider: 'mock',
     });
 
-    const completedSteps: string[] = [];
-    engine.on('step:complete', (step) => {
-      completedSteps.push(step.name);
+    const completedMovements: string[] = [];
+    engine.on('movement:complete', (movement) => {
+      completedMovements.push(movement.name);
     });
 
     const state = await engine.run();
 
     expect(state.status).toBe('completed');
-    expect(completedSteps).toEqual(['plan', 'implement', 'review']);
+    expect(completedMovements).toEqual(['plan', 'implement', 'review']);
   });
 });

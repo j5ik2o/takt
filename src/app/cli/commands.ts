@@ -1,13 +1,14 @@
 /**
  * CLI subcommand definitions
  *
- * Registers all named subcommands (run, watch, add, list, switch, clear, eject, config).
+ * Registers all named subcommands (run, watch, add, list, switch, clear, eject, config, prompt).
  */
 
 import { clearAgentSessions, getCurrentWorkflow } from '../../infra/config/index.js';
 import { success } from '../../shared/ui/index.js';
 import { runAllTasks, addTask, watchTasks, listTasks } from '../../features/tasks/index.js';
 import { switchWorkflow, switchConfig, ejectBuiltin } from '../../features/config/index.js';
+import { previewPrompts } from '../../features/prompt/index.js';
 import { program, resolvedCwd } from './program.js';
 import { resolveAgentOverrides } from './helpers.js';
 
@@ -71,4 +72,12 @@ program
   .argument('[key]', 'Configuration key')
   .action(async (key?: string) => {
     await switchConfig(resolvedCwd, key);
+  });
+
+program
+  .command('prompt')
+  .description('Preview assembled prompts for each movement and phase')
+  .argument('[workflow]', 'Workflow name or path (defaults to current)')
+  .action(async (workflow?: string) => {
+    await previewPrompts(resolvedCwd, workflow);
   });

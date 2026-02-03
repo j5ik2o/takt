@@ -105,7 +105,7 @@ export {
   COMPLETE_STEP,
   ABORT_STEP,
   ERROR_MESSAGES,
-  determineNextStepByRules,
+  determineNextMovementByRules,
   extractBlockedPrompt,
   LoopDetector,
   createInitialState,
@@ -117,8 +117,7 @@ export {
   isReportObjectConfig,
   ReportInstructionBuilder,
   StatusJudgmentBuilder,
-  buildExecutionMetadata,
-  renderExecutionMetadata,
+  buildEditRule,
   RuleEvaluator,
   detectMatchedRule,
   evaluateAggregateConditions,
@@ -141,7 +140,7 @@ export type {
   ReportInstructionContext,
   StatusJudgmentContext,
   InstructionContext,
-  ExecutionMetadata,
+  StatusRulesComponents,
   BlockedHandlerResult,
 } from './core/workflow/index.js';
 

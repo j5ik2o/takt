@@ -2,13 +2,13 @@
  * Instruction builder integration tests.
  *
  * Tests template variable expansion and auto-injection in buildInstruction().
- * Uses real workflow step configs (not mocked) against the buildInstruction function.
+ * Uses real workflow movement configs (not mocked) against the buildInstruction function.
  *
  * Not mocked: buildInstruction, buildReportInstruction, buildStatusJudgmentInstruction
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import type { WorkflowStep, WorkflowRule, AgentResponse } from '../core/models/index.js';
+import type { WorkflowMovement, WorkflowRule, AgentResponse } from '../core/models/index.js';
 
 vi.mock('../infra/config/global/globalConfig.js', () => ({
   loadGlobalConfig: vi.fn().mockReturnValue({}),
@@ -22,14 +22,14 @@ import { StatusJudgmentBuilder, type StatusJudgmentContext } from '../core/workf
 import type { InstructionContext } from '../core/workflow/index.js';
 
 // Function wrappers for test readability
-function buildInstruction(step: WorkflowStep, ctx: InstructionContext): string {
-  return new InstructionBuilder(step, ctx).build();
+function buildInstruction(movement: WorkflowMovement, ctx: InstructionContext): string {
+  return new InstructionBuilder(movement, ctx).build();
 }
-function buildReportInstruction(step: WorkflowStep, ctx: ReportInstructionContext): string {
-  return new ReportInstructionBuilder(step, ctx).build();
+function buildReportInstruction(movement: WorkflowMovement, ctx: ReportInstructionContext): string {
+  return new ReportInstructionBuilder(movement, ctx).build();
 }
-function buildStatusJudgmentInstruction(step: WorkflowStep, ctx: StatusJudgmentContext): string {
-  return new StatusJudgmentBuilder(step, ctx).build();
+function buildStatusJudgmentInstruction(movement: WorkflowMovement, ctx: StatusJudgmentContext): string {
+  return new StatusJudgmentBuilder(movement, ctx).build();
 }
 
 // --- Test helpers ---
@@ -38,7 +38,7 @@ function makeRule(condition: string, next: string, extra?: Partial<WorkflowRule>
   return { condition, next, ...extra };
 }
 
-function makeStep(overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+function makeMovement(overrides: Partial<WorkflowMovement> = {}): WorkflowMovement {
   return {
     name: 'test-step',
     agent: 'test-agent',
@@ -58,7 +58,7 @@ function makeContext(overrides: Partial<InstructionContext> = {}): InstructionCo
     task: 'Test task description',
     iteration: 3,
     maxIterations: 30,
-    stepIteration: 2,
+    movementIteration: 2,
     cwd: '/tmp/test-project',
     projectCwd: '/tmp/test-project',
     userInputs: [],
@@ -69,7 +69,7 @@ function makeContext(overrides: Partial<InstructionContext> = {}): InstructionCo
 
 describe('Instruction Builder IT: task auto-injection', () => {
   it('should auto-inject task as "User Request" section when template has no {task}', () => {
-    const step = makeStep({ instructionTemplate: 'Do the work.' });
+    const step = makeMovement({ instructionTemplate: 'Do the work.' });
     const ctx = makeContext({ task: 'Build the login page' });
 
     const result = buildInstruction(step, ctx);
@@ -79,7 +79,7 @@ describe('Instruction Builder IT: task auto-injection', () => {
   });
 
   it('should NOT auto-inject task section when template contains {task}', () => {
-    const step = makeStep({ instructionTemplate: 'Here is the task: {task}' });
+    const step = makeMovement({ instructionTemplate: 'Here is the task: {task}' });
     const ctx = makeContext({ task: 'Build the login page' });
 
     const result = buildInstruction(step, ctx);
@@ -94,7 +94,7 @@ describe('Instruction Builder IT: task auto-injection', () => {
 
 describe('Instruction Builder IT: previous_response auto-injection', () => {
   it('should auto-inject previous response when passPreviousResponse is true', () => {
-    const step = makeStep({
+    const step = makeMovement({
       passPreviousResponse: true,
       instructionTemplate: 'Continue the work.',
     });
@@ -113,7 +113,7 @@ describe('Instruction Builder IT: previous_response auto-injection', () => {
   });
 
   it('should NOT inject previous response when passPreviousResponse is false', () => {
-    const step = makeStep({
+    const step = makeMovement({
       passPreviousResponse: false,
       instructionTemplate: 'Do fresh work.',
     });
@@ -132,7 +132,7 @@ describe('Instruction Builder IT: previous_response auto-injection', () => {
   });
 
   it('should NOT auto-inject when template contains {previous_response}', () => {
-    const step = makeStep({
+    const step = makeMovement({
       passPreviousResponse: true,
       instructionTemplate: '## Context\n{previous_response}\n\nDo work.',
     });
@@ -153,7 +153,7 @@ describe('Instruction Builder IT: previous_response auto-injection', () => {
 
 describe('Instruction Builder IT: user_inputs auto-injection', () => {
   it('should auto-inject user inputs section', () => {
-    const step = makeStep();
+    const step = makeMovement();
     const ctx = makeContext({ userInputs: ['Fix the typo', 'Use TypeScript'] });
 
     const result = buildInstruction(step, ctx);
@@ -164,7 +164,7 @@ describe('Instruction Builder IT: user_inputs auto-injection', () => {
   });
 
   it('should NOT auto-inject when template contains {user_inputs}', () => {
-    const step = makeStep({ instructionTemplate: 'Inputs: {user_inputs}' });
+    const step = makeMovement({ instructionTemplate: 'Inputs: {user_inputs}' });
     const ctx = makeContext({ userInputs: ['Input A'] });
 
     const result = buildInstruction(step, ctx);
@@ -176,31 +176,31 @@ describe('Instruction Builder IT: user_inputs auto-injection', () => {
 });
 
 describe('Instruction Builder IT: iteration variables', () => {
-  it('should replace {iteration}, {max_iterations}, {step_iteration} in template', () => {
-    const step = makeStep({
-      instructionTemplate: 'Iter: {iteration}/{max_iterations}, step iter: {step_iteration}',
+  it('should replace {iteration}, {max_iterations}, {movement_iteration} in template', () => {
+    const step = makeMovement({
+      instructionTemplate: 'Iter: {iteration}/{max_iterations}, movement iter: {movement_iteration}',
     });
-    const ctx = makeContext({ iteration: 5, maxIterations: 30, stepIteration: 2 });
+    const ctx = makeContext({ iteration: 5, maxIterations: 30, movementIteration: 2 });
 
     const result = buildInstruction(step, ctx);
 
-    expect(result).toContain('Iter: 5/30, step iter: 2');
+    expect(result).toContain('Iter: 5/30, movement iter: 2');
   });
 
   it('should include iteration in Workflow Context section', () => {
-    const step = makeStep();
-    const ctx = makeContext({ iteration: 7, maxIterations: 20, stepIteration: 3 });
+    const step = makeMovement();
+    const ctx = makeContext({ iteration: 7, maxIterations: 20, movementIteration: 3 });
 
     const result = buildInstruction(step, ctx);
 
     expect(result).toContain('Iteration: 7/20');
-    expect(result).toContain('Step Iteration: 3');
+    expect(result).toContain('Movement Iteration: 3');
   });
 });
 
 describe('Instruction Builder IT: report_dir expansion', () => {
   it('should replace {report_dir} in template', () => {
-    const step = makeStep({
+    const step = makeMovement({
       instructionTemplate: 'Read the plan from {report_dir}/00-plan.md',
     });
     const ctx = makeContext({ reportDir: '/tmp/test-project/.takt/reports/20250126-task' });
@@ -211,7 +211,7 @@ describe('Instruction Builder IT: report_dir expansion', () => {
   });
 
   it('should replace {report:filename} with full path', () => {
-    const step = makeStep({
+    const step = makeMovement({
       instructionTemplate: 'Read {report:00-plan.md} for the plan.',
     });
     const ctx = makeContext({ reportDir: '/tmp/reports' });
@@ -224,7 +224,7 @@ describe('Instruction Builder IT: report_dir expansion', () => {
 
 describe('Instruction Builder IT: status output rules injection', () => {
   it('should inject status rules for steps with tag-based rules', () => {
-    const step = makeStep({
+    const step = makeMovement({
       name: 'plan',
       rules: [
         makeRule('Requirements clear', 'implement'),
@@ -235,14 +235,13 @@ describe('Instruction Builder IT: status output rules injection', () => {
 
     const result = buildInstruction(step, ctx);
 
-    // Should contain status rules section with the tag format
-    expect(result).toContain('[PLAN:');
-    expect(result).toContain('Requirements clear');
-    expect(result).toContain('Requirements unclear');
+    // Status rules are NO LONGER injected in Phase 1 (buildInstruction).
+    // They are only injected in Phase 3 (buildStatusJudgmentInstruction).
+    expect(result).not.toContain('[PLAN:');
   });
 
   it('should NOT inject status rules for steps with only ai() conditions', () => {
-    const step = makeStep({
+    const step = makeMovement({
       name: 'review',
       rules: [
         makeRule('ai("approved")', 'COMPLETE', { isAiCondition: true, aiConditionText: 'approved' }),
@@ -260,7 +259,7 @@ describe('Instruction Builder IT: status output rules injection', () => {
 
 describe('Instruction Builder IT: edit permission in execution context', () => {
   it('should include edit permission rules when edit is true', () => {
-    const step = makeStep({ edit: true });
+    const step = makeMovement({ edit: true });
     const ctx = makeContext();
 
     const result = buildInstruction(step, ctx);
@@ -270,7 +269,7 @@ describe('Instruction Builder IT: edit permission in execution context', () => {
   });
 
   it('should indicate read-only when edit is false', () => {
-    const step = makeStep({ edit: false });
+    const step = makeMovement({ edit: false });
     const ctx = makeContext();
 
     const result = buildInstruction(step, ctx);
@@ -283,15 +282,15 @@ describe('Instruction Builder IT: edit permission in execution context', () => {
 
 describe('Instruction Builder IT: buildReportInstruction', () => {
   it('should build report instruction with report context', () => {
-    const step = makeStep({
+    const step = makeMovement({
       name: 'plan',
-      report: { name: '00-plan.md', format: '# Plan\n{step_iteration}' },
+      report: { name: '00-plan.md', format: '# Plan\n{movement_iteration}' },
     });
 
     const result = buildReportInstruction(step, {
       cwd: '/tmp/test',
       reportDir: '/tmp/test/.takt/reports/test-dir',
-      stepIteration: 1,
+      movementIteration: 1,
       language: 'en',
     });
 
@@ -301,13 +300,13 @@ describe('Instruction Builder IT: buildReportInstruction', () => {
   });
 
   it('should throw for step without report config', () => {
-    const step = makeStep({ report: undefined });
+    const step = makeMovement({ report: undefined });
 
     expect(() =>
       buildReportInstruction(step, {
         cwd: '/tmp',
         reportDir: '/tmp/reports',
-        stepIteration: 1,
+        movementIteration: 1,
       }),
     ).toThrow(/no report config/);
   });
@@ -315,7 +314,7 @@ describe('Instruction Builder IT: buildReportInstruction', () => {
 
 describe('Instruction Builder IT: buildStatusJudgmentInstruction', () => {
   it('should build Phase 3 instruction with status rules', () => {
-    const step = makeStep({
+    const step = makeMovement({
       name: 'plan',
       rules: [
         makeRule('Clear', 'implement'),
@@ -331,7 +330,7 @@ describe('Instruction Builder IT: buildStatusJudgmentInstruction', () => {
   });
 
   it('should throw for step without rules', () => {
-    const step = makeStep({ rules: undefined });
+    const step = makeMovement({ rules: undefined });
 
     expect(() =>
       buildStatusJudgmentInstruction(step, { language: 'en' }),
@@ -341,7 +340,7 @@ describe('Instruction Builder IT: buildStatusJudgmentInstruction', () => {
 
 describe('Instruction Builder IT: template injection prevention', () => {
   it('should escape curly braces in task content', () => {
-    const step = makeStep();
+    const step = makeMovement();
     const ctx = makeContext({ task: 'Use {variable} in code' });
 
     const result = buildInstruction(step, ctx);
@@ -352,7 +351,7 @@ describe('Instruction Builder IT: template injection prevention', () => {
   });
 
   it('should escape curly braces in previous response content', () => {
-    const step = makeStep({
+    const step = makeMovement({
       passPreviousResponse: true,
       instructionTemplate: 'Continue.',
     });

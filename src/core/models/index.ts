@@ -9,6 +9,7 @@ export type {
   AgentResponse,
   SessionState,
   WorkflowRule,
+  WorkflowMovement,
   WorkflowStep,
   LoopDetectionConfig,
   WorkflowConfig,

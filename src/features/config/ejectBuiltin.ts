@@ -8,9 +8,9 @@
 import { existsSync, readdirSync, statSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import {
-  getGlobalWorkflowsDir,
+  getGlobalPiecesDir,
   getGlobalAgentsDir,
-  getBuiltinWorkflowsDir,
+  getBuiltinPiecesDir,
   getBuiltinAgentsDir,
   getLanguage,
 } from '../../infra/config/index.js';
@@ -25,7 +25,7 @@ export async function ejectBuiltin(name?: string): Promise<void> {
   header('Eject Builtin');
 
   const lang = getLanguage();
-  const builtinWorkflowsDir = getBuiltinWorkflowsDir(lang);
+  const builtinWorkflowsDir = getBuiltinPiecesDir(lang);
 
   if (!name) {
     // List available builtins
@@ -40,7 +40,7 @@ export async function ejectBuiltin(name?: string): Promise<void> {
     return;
   }
 
-  const userWorkflowsDir = getGlobalWorkflowsDir();
+  const userWorkflowsDir = getGlobalPiecesDir();
   const userAgentsDir = getGlobalAgentsDir();
   const builtinAgentsDir = getBuiltinAgentsDir(lang);
 

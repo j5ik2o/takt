@@ -1,19 +1,19 @@
 /**
  * Workflow state transition logic
  *
- * Handles determining the next step based on rules-based routing.
+ * Handles determining the next movement based on rules-based routing.
  */
 
 import type {
-  WorkflowStep,
+  WorkflowMovement,
 } from '../../models/types.js';
 
 /**
- * Determine next step using rules-based detection.
- * Returns the next step name from the matched rule, or null if no rule matched.
+ * Determine next movement using rules-based detection.
+ * Returns the next movement name from the matched rule, or null if no rule matched.
  */
-export function determineNextStepByRules(
-  step: WorkflowStep,
+export function determineNextMovementByRules(
+  step: WorkflowMovement,
   ruleIndex: number,
 ): string | null {
   const rule = step.rules?.[ruleIndex];

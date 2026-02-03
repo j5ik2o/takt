@@ -20,7 +20,7 @@ vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => {
 const { listWorkflows } = await import('../infra/config/loaders/workflowLoader.js');
 
 const SAMPLE_WORKFLOW = `name: test-workflow
-steps:
+movements:
   - name: step1
     agent: coder
     instruction: "{task}"

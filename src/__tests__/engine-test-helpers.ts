@@ -10,7 +10,7 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import type { WorkflowConfig, WorkflowStep, AgentResponse, WorkflowRule } from '../core/models/index.js';
+import type { WorkflowConfig, WorkflowMovement, AgentResponse, WorkflowRule } from '../core/models/index.js';
 
 // --- Mock imports (consumers must call vi.mock before importing this) ---
 
@@ -37,7 +37,7 @@ export function makeRule(condition: string, next: string, extra: Partial<Workflo
   return { condition, next, ...extra };
 }
 
-export function makeStep(name: string, overrides: Partial<WorkflowStep> = {}): WorkflowStep {
+export function makeMovement(name: string, overrides: Partial<WorkflowMovement> = {}): WorkflowMovement {
   return {
     name,
     agent: `../agents/${name}.md`,
@@ -53,14 +53,14 @@ export function makeStep(name: string, overrides: Partial<WorkflowStep> = {}): W
  * plan → implement → ai_review → (ai_fix↔) → reviewers(parallel) → (fix↔) → supervise
  */
 export function buildDefaultWorkflowConfig(overrides: Partial<WorkflowConfig> = {}): WorkflowConfig {
-  const archReviewSubStep = makeStep('arch-review', {
+  const archReviewSubMovement = makeMovement('arch-review', {
     rules: [
       makeRule('approved', 'COMPLETE'),
       makeRule('needs_fix', 'fix'),
     ],
   });
 
-  const securityReviewSubStep = makeStep('security-review', {
+  const securityReviewSubMovement = makeMovement('security-review', {
     rules: [
       makeRule('approved', 'COMPLETE'),
       makeRule('needs_fix', 'fix'),
@@ -71,34 +71,34 @@ export function buildDefaultWorkflowConfig(overrides: Partial<WorkflowConfig> = 
     name: 'test-default',
     description: 'Test workflow',
     maxIterations: 30,
-    initialStep: 'plan',
-    steps: [
-      makeStep('plan', {
+    initialMovement: 'plan',
+    movements: [
+      makeMovement('plan', {
         rules: [
           makeRule('Requirements are clear', 'implement'),
           makeRule('Requirements unclear', 'ABORT'),
         ],
       }),
-      makeStep('implement', {
+      makeMovement('implement', {
         rules: [
           makeRule('Implementation complete', 'ai_review'),
           makeRule('Cannot proceed', 'plan'),
         ],
       }),
-      makeStep('ai_review', {
+      makeMovement('ai_review', {
         rules: [
           makeRule('No AI-specific issues', 'reviewers'),
           makeRule('AI-specific issues found', 'ai_fix'),
         ],
       }),
-      makeStep('ai_fix', {
+      makeMovement('ai_fix', {
         rules: [
           makeRule('AI issues fixed', 'reviewers'),
           makeRule('Cannot proceed', 'plan'),
         ],
       }),
-      makeStep('reviewers', {
-        parallel: [archReviewSubStep, securityReviewSubStep],
+      makeMovement('reviewers', {
+        parallel: [archReviewSubMovement, securityReviewSubMovement],
         rules: [
           makeRule('all("approved")', 'supervise', {
             isAggregateCondition: true,
@@ -112,13 +112,13 @@ export function buildDefaultWorkflowConfig(overrides: Partial<WorkflowConfig> = 
           }),
         ],
       }),
-      makeStep('fix', {
+      makeMovement('fix', {
         rules: [
           makeRule('Fix complete', 'reviewers'),
           makeRule('Cannot proceed', 'plan'),
         ],
       }),
-      makeStep('supervise', {
+      makeMovement('supervise', {
         rules: [
           makeRule('All checks passed', 'COMPLETE'),
           makeRule('Requirements unmet', 'plan'),

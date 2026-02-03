@@ -4,7 +4,7 @@
  * Covers:
  * - Workflow YAML files (EN/JA) load and pass schema validation
  * - Workflow structure: plan -> reviewers (parallel) -> supervise -> pr-comment
- * - All steps have edit: false
+ * - All movements have edit: false
  * - pr-commenter agent has Bash in allowed_tools
  * - Routing rules for local vs PR comment flows
  */
@@ -18,7 +18,7 @@ import { WorkflowConfigRawSchema } from '../core/models/index.js';
 const RESOURCES_DIR = join(import.meta.dirname, '../../resources/global');
 
 function loadReviewOnlyYaml(lang: 'en' | 'ja') {
-  const filePath = join(RESOURCES_DIR, lang, 'workflows', 'review-only.yaml');
+  const filePath = join(RESOURCES_DIR, lang, 'pieces', 'review-only.yaml');
   const content = readFileSync(filePath, 'utf-8');
   return parseYaml(content);
 }
@@ -31,27 +31,27 @@ describe('review-only workflow (EN)', () => {
     expect(result.success).toBe(true);
   });
 
-  it('should have correct name and initial_step', () => {
+  it('should have correct name and initial_movement', () => {
     expect(raw.name).toBe('review-only');
-    expect(raw.initial_step).toBe('plan');
+    expect(raw.initial_movement).toBe('plan');
   });
 
   it('should have max_iterations of 10', () => {
     expect(raw.max_iterations).toBe(10);
   });
 
-  it('should have 4 steps: plan, reviewers, supervise, pr-comment', () => {
-    const stepNames = raw.steps.map((s: { name: string }) => s.name);
-    expect(stepNames).toEqual(['plan', 'reviewers', 'supervise', 'pr-comment']);
+  it('should have 4 movements: plan, reviewers, supervise, pr-comment', () => {
+    const movementNames = raw.movements.map((s: { name: string }) => s.name);
+    expect(movementNames).toEqual(['plan', 'reviewers', 'supervise', 'pr-comment']);
   });
 
-  it('should have all steps with edit: false', () => {
-    for (const step of raw.steps) {
-      if (step.edit !== undefined) {
-        expect(step.edit).toBe(false);
+  it('should have all movements with edit: false', () => {
+    for (const movement of raw.movements) {
+      if (movement.edit !== undefined) {
+        expect(movement.edit).toBe(false);
       }
-      if (step.parallel) {
-        for (const sub of step.parallel) {
+      if (movement.parallel) {
+        for (const sub of movement.parallel) {
           if (sub.edit !== undefined) {
             expect(sub.edit).toBe(false);
           }
@@ -60,8 +60,8 @@ describe('review-only workflow (EN)', () => {
     }
   });
 
-  it('should have reviewers step with 3 parallel sub-steps', () => {
-    const reviewers = raw.steps.find((s: { name: string }) => s.name === 'reviewers');
+  it('should have reviewers movement with 3 parallel sub-movements', () => {
+    const reviewers = raw.movements.find((s: { name: string }) => s.name === 'reviewers');
     expect(reviewers).toBeDefined();
     expect(reviewers.parallel).toHaveLength(3);
 
@@ -69,8 +69,8 @@ describe('review-only workflow (EN)', () => {
     expect(subNames).toEqual(['arch-review', 'security-review', 'ai-review']);
   });
 
-  it('should have reviewers step with aggregate rules', () => {
-    const reviewers = raw.steps.find((s: { name: string }) => s.name === 'reviewers');
+  it('should have reviewers movement with aggregate rules', () => {
+    const reviewers = raw.movements.find((s: { name: string }) => s.name === 'reviewers');
     expect(reviewers.rules).toHaveLength(2);
     expect(reviewers.rules[0].condition).toBe('all("approved")');
     expect(reviewers.rules[0].next).toBe('supervise');
@@ -78,8 +78,8 @@ describe('review-only workflow (EN)', () => {
     expect(reviewers.rules[1].next).toBe('supervise');
   });
 
-  it('should have supervise step with routing rules for local and PR flows', () => {
-    const supervise = raw.steps.find((s: { name: string }) => s.name === 'supervise');
+  it('should have supervise movement with routing rules for local and PR flows', () => {
+    const supervise = raw.movements.find((s: { name: string }) => s.name === 'supervise');
     expect(supervise.rules).toHaveLength(3);
 
     const conditions = supervise.rules.map((r: { condition: string }) => r.condition);
@@ -97,40 +97,40 @@ describe('review-only workflow (EN)', () => {
     expect(rejectRule.next).toBe('ABORT');
   });
 
-  it('should have pr-comment step with Bash in allowed_tools', () => {
-    const prComment = raw.steps.find((s: { name: string }) => s.name === 'pr-comment');
+  it('should have pr-comment movement with Bash in allowed_tools', () => {
+    const prComment = raw.movements.find((s: { name: string }) => s.name === 'pr-comment');
     expect(prComment).toBeDefined();
     expect(prComment.allowed_tools).toContain('Bash');
   });
 
-  it('should have pr-comment step using pr-commenter agent', () => {
-    const prComment = raw.steps.find((s: { name: string }) => s.name === 'pr-comment');
+  it('should have pr-comment movement using pr-commenter agent', () => {
+    const prComment = raw.movements.find((s: { name: string }) => s.name === 'pr-comment');
     expect(prComment.agent).toContain('review/pr-commenter.md');
   });
 
-  it('should have plan step reusing default planner agent', () => {
-    const plan = raw.steps.find((s: { name: string }) => s.name === 'plan');
+  it('should have plan movement reusing default planner agent', () => {
+    const plan = raw.movements.find((s: { name: string }) => s.name === 'plan');
     expect(plan.agent).toContain('default/planner.md');
   });
 
-  it('should have supervise step reusing default supervisor agent', () => {
-    const supervise = raw.steps.find((s: { name: string }) => s.name === 'supervise');
+  it('should have supervise movement reusing default supervisor agent', () => {
+    const supervise = raw.movements.find((s: { name: string }) => s.name === 'supervise');
     expect(supervise.agent).toContain('default/supervisor.md');
   });
 
-  it('should not have any step with edit: true', () => {
-    for (const step of raw.steps) {
-      expect(step.edit).not.toBe(true);
-      if (step.parallel) {
-        for (const sub of step.parallel) {
+  it('should not have any movement with edit: true', () => {
+    for (const movement of raw.movements) {
+      expect(movement.edit).not.toBe(true);
+      if (movement.parallel) {
+        for (const sub of movement.parallel) {
           expect(sub.edit).not.toBe(true);
         }
       }
     }
   });
 
-  it('reviewer sub-steps should not have Bash in allowed_tools', () => {
-    const reviewers = raw.steps.find((s: { name: string }) => s.name === 'reviewers');
+  it('reviewer sub-movements should not have Bash in allowed_tools', () => {
+    const reviewers = raw.movements.find((s: { name: string }) => s.name === 'reviewers');
     for (const sub of reviewers.parallel) {
       expect(sub.allowed_tools).not.toContain('Bash');
     }
@@ -145,42 +145,42 @@ describe('review-only workflow (JA)', () => {
     expect(result.success).toBe(true);
   });
 
-  it('should have correct name and initial_step', () => {
+  it('should have correct name and initial_movement', () => {
     expect(raw.name).toBe('review-only');
-    expect(raw.initial_step).toBe('plan');
+    expect(raw.initial_movement).toBe('plan');
   });
 
-  it('should have same step structure as EN version', () => {
-    const stepNames = raw.steps.map((s: { name: string }) => s.name);
-    expect(stepNames).toEqual(['plan', 'reviewers', 'supervise', 'pr-comment']);
+  it('should have same movement structure as EN version', () => {
+    const movementNames = raw.movements.map((s: { name: string }) => s.name);
+    expect(movementNames).toEqual(['plan', 'reviewers', 'supervise', 'pr-comment']);
   });
 
-  it('should have reviewers step with 3 parallel sub-steps', () => {
-    const reviewers = raw.steps.find((s: { name: string }) => s.name === 'reviewers');
+  it('should have reviewers movement with 3 parallel sub-movements', () => {
+    const reviewers = raw.movements.find((s: { name: string }) => s.name === 'reviewers');
     expect(reviewers.parallel).toHaveLength(3);
 
     const subNames = reviewers.parallel.map((s: { name: string }) => s.name);
     expect(subNames).toEqual(['arch-review', 'security-review', 'ai-review']);
   });
 
-  it('should have all steps with edit: false or undefined', () => {
-    for (const step of raw.steps) {
-      expect(step.edit).not.toBe(true);
-      if (step.parallel) {
-        for (const sub of step.parallel) {
+  it('should have all movements with edit: false or undefined', () => {
+    for (const movement of raw.movements) {
+      expect(movement.edit).not.toBe(true);
+      if (movement.parallel) {
+        for (const sub of movement.parallel) {
           expect(sub.edit).not.toBe(true);
         }
       }
     }
   });
 
-  it('should have pr-comment step with Bash in allowed_tools', () => {
-    const prComment = raw.steps.find((s: { name: string }) => s.name === 'pr-comment');
+  it('should have pr-comment movement with Bash in allowed_tools', () => {
+    const prComment = raw.movements.find((s: { name: string }) => s.name === 'pr-comment');
     expect(prComment.allowed_tools).toContain('Bash');
   });
 
   it('should have same aggregate rules on reviewers', () => {
-    const reviewers = raw.steps.find((s: { name: string }) => s.name === 'reviewers');
+    const reviewers = raw.movements.find((s: { name: string }) => s.name === 'reviewers');
     expect(reviewers.rules[0].condition).toBe('all("approved")');
     expect(reviewers.rules[1].condition).toBe('any("needs_fix")');
   });
@@ -230,7 +230,7 @@ describe('pr-commenter agent files', () => {
 describe('pr-comment instruction_template contains workflow-specific procedures', () => {
   it('EN: should reference specific report files', () => {
     const raw = loadReviewOnlyYaml('en');
-    const prComment = raw.steps.find((s: { name: string }) => s.name === 'pr-comment');
+    const prComment = raw.movements.find((s: { name: string }) => s.name === 'pr-comment');
     const template = prComment.instruction_template;
     expect(template).toContain('01-architect-review.md');
     expect(template).toContain('02-security-review.md');
@@ -240,7 +240,7 @@ describe('pr-comment instruction_template contains workflow-specific procedures'
 
   it('JA: should reference specific report files', () => {
     const raw = loadReviewOnlyYaml('ja');
-    const prComment = raw.steps.find((s: { name: string }) => s.name === 'pr-comment');
+    const prComment = raw.movements.find((s: { name: string }) => s.name === 'pr-comment');
     const template = prComment.instruction_template;
     expect(template).toContain('01-architect-review.md');
     expect(template).toContain('02-security-review.md');

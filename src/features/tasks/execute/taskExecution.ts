@@ -41,7 +41,7 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<boolean>
 
   log.debug('Running workflow', {
     name: workflowConfig.name,
-    steps: workflowConfig.steps.map((s: { name: string }) => s.name),
+    movements: workflowConfig.movements.map((s: { name: string }) => s.name),
   });
 
   const globalConfig = loadGlobalConfig();

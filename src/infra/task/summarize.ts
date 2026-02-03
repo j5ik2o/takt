@@ -8,7 +8,7 @@ import * as wanakana from 'wanakana';
 import { loadGlobalConfig } from '../config/global/globalConfig.js';
 import { getProvider, type ProviderType } from '../providers/index.js';
 import { createLogger } from '../../shared/utils/index.js';
-import { getPrompt } from '../../shared/prompts/index.js';
+import { loadTemplate } from '../../shared/prompts/index.js';
 import type { SummarizeOptions } from './types.js';
 
 export type { SummarizeOptions };
@@ -70,7 +70,7 @@ export class TaskSummarizer {
     const response = await provider.call('summarizer', taskName, {
       cwd: options.cwd,
       model,
-      systemPrompt: getPrompt('summarize.slugGenerator'),
+      systemPrompt: loadTemplate('score_slug_system_prompt', 'en'),
       allowedTools: [],
     });
 

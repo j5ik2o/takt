@@ -53,8 +53,8 @@ describe('Workflow Loader IT: builtin workflow loading', () => {
 
       expect(config).not.toBeNull();
       expect(config!.name).toBe(name);
-      expect(config!.steps.length).toBeGreaterThan(0);
-      expect(config!.initialStep).toBeDefined();
+      expect(config!.movements.length).toBeGreaterThan(0);
+      expect(config!.initialMovement).toBeDefined();
       expect(config!.maxIterations).toBeGreaterThan(0);
     });
   }
@@ -88,9 +88,9 @@ describe('Workflow Loader IT: project-local workflow override', () => {
 name: custom-wf
 description: Custom project workflow
 max_iterations: 5
-initial_step: start
+initial_movement: start
 
-steps:
+movements:
   - name: start
     agent: ./agents/custom.md
     rules:
@@ -103,8 +103,8 @@ steps:
 
     expect(config).not.toBeNull();
     expect(config!.name).toBe('custom-wf');
-    expect(config!.steps.length).toBe(1);
-    expect(config!.steps[0]!.name).toBe('start');
+    expect(config!.movements.length).toBe(1);
+    expect(config!.movements[0]!.name).toBe('start');
   });
 });
 
@@ -123,15 +123,15 @@ describe('Workflow Loader IT: agent path resolution', () => {
     const config = loadWorkflow('minimal', testDir);
     expect(config).not.toBeNull();
 
-    for (const step of config!.steps) {
-      if (step.agentPath) {
+    for (const movement of config!.movements) {
+      if (movement.agentPath) {
         // Agent paths should be resolved to absolute paths
-        expect(step.agentPath).toMatch(/^\//);
+        expect(movement.agentPath).toMatch(/^\//);
         // Agent files should exist
-        expect(existsSync(step.agentPath)).toBe(true);
+        expect(existsSync(movement.agentPath)).toBe(true);
       }
-      if (step.parallel) {
-        for (const sub of step.parallel) {
+      if (movement.parallel) {
+        for (const sub of movement.parallel) {
           if (sub.agentPath) {
             expect(sub.agentPath).toMatch(/^\//);
             expect(existsSync(sub.agentPath)).toBe(true);
@@ -157,8 +157,8 @@ describe('Workflow Loader IT: rule syntax parsing', () => {
     const config = loadWorkflow('default', testDir);
     expect(config).not.toBeNull();
 
-    // Find the parallel reviewers step
-    const reviewersStep = config!.steps.find(
+    // Find the parallel reviewers movement
+    const reviewersStep = config!.movements.find(
       (s) => s.parallel && s.parallel.length > 0,
     );
     expect(reviewersStep).toBeDefined();
@@ -175,7 +175,7 @@ describe('Workflow Loader IT: rule syntax parsing', () => {
     const config = loadWorkflow('default', testDir);
     expect(config).not.toBeNull();
 
-    const reviewersStep = config!.steps.find(
+    const reviewersStep = config!.movements.find(
       (s) => s.parallel && s.parallel.length > 0,
     );
 
@@ -186,11 +186,11 @@ describe('Workflow Loader IT: rule syntax parsing', () => {
     expect(anyRule!.aggregateConditionText).toBe('needs_fix');
   });
 
-  it('should parse standard rules with next step', () => {
+  it('should parse standard rules with next movement', () => {
     const config = loadWorkflow('minimal', testDir);
     expect(config).not.toBeNull();
 
-    const implementStep = config!.steps.find((s) => s.name === 'implement');
+    const implementStep = config!.movements.find((s) => s.name === 'implement');
     expect(implementStep).toBeDefined();
     expect(implementStep!.rules).toBeDefined();
     expect(implementStep!.rules!.length).toBeGreaterThan(0);
@@ -221,34 +221,34 @@ describe('Workflow Loader IT: workflow config validation', () => {
     expect(config!.maxIterations).toBeGreaterThan(0);
   });
 
-  it('should set initial_step from YAML', () => {
+  it('should set initial_movement from YAML', () => {
     const config = loadWorkflow('minimal', testDir);
     expect(config).not.toBeNull();
-    expect(typeof config!.initialStep).toBe('string');
+    expect(typeof config!.initialMovement).toBe('string');
 
-    // initial_step should reference an existing step
-    const stepNames = config!.steps.map((s) => s.name);
-    expect(stepNames).toContain(config!.initialStep);
+    // initial_movement should reference an existing movement
+    const movementNames = config!.movements.map((s) => s.name);
+    expect(movementNames).toContain(config!.initialMovement);
   });
 
-  it('should preserve edit property on steps (review-only has no edit: true)', () => {
+  it('should preserve edit property on movements (review-only has no edit: true)', () => {
     const config = loadWorkflow('review-only', testDir);
     expect(config).not.toBeNull();
 
-    // review-only: no step should have edit: true
-    for (const step of config!.steps) {
-      expect(step.edit).not.toBe(true);
-      if (step.parallel) {
-        for (const sub of step.parallel) {
+    // review-only: no movement should have edit: true
+    for (const movement of config!.movements) {
+      expect(movement.edit).not.toBe(true);
+      if (movement.parallel) {
+        for (const sub of movement.parallel) {
           expect(sub.edit).not.toBe(true);
         }
       }
     }
 
-    // expert: implement step should have edit: true
+    // expert: implement movement should have edit: true
     const expertConfig = loadWorkflow('expert', testDir);
     expect(expertConfig).not.toBeNull();
-    const implementStep = expertConfig!.steps.find((s) => s.name === 'implement');
+    const implementStep = expertConfig!.movements.find((s) => s.name === 'implement');
     expect(implementStep).toBeDefined();
     expect(implementStep!.edit).toBe(true);
   });
@@ -257,13 +257,13 @@ describe('Workflow Loader IT: workflow config validation', () => {
     const config = loadWorkflow('minimal', testDir);
     expect(config).not.toBeNull();
 
-    // At least some steps should have passPreviousResponse set
-    const stepsWithPassPrev = config!.steps.filter((s) => s.passPreviousResponse === true);
-    expect(stepsWithPassPrev.length).toBeGreaterThan(0);
+    // At least some movements should have passPreviousResponse set
+    const movementsWithPassPrev = config!.movements.filter((s) => s.passPreviousResponse === true);
+    expect(movementsWithPassPrev.length).toBeGreaterThan(0);
   });
 });
 
-describe('Workflow Loader IT: parallel step loading', () => {
+describe('Workflow Loader IT: parallel movement loading', () => {
   let testDir: string;
 
   beforeEach(() => {
@@ -274,17 +274,17 @@ describe('Workflow Loader IT: parallel step loading', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should load parallel sub-steps from default workflow', () => {
+  it('should load parallel sub-movements from default workflow', () => {
     const config = loadWorkflow('default', testDir);
     expect(config).not.toBeNull();
 
-    const parallelStep = config!.steps.find(
+    const parallelStep = config!.movements.find(
       (s) => s.parallel && s.parallel.length > 0,
     );
     expect(parallelStep).toBeDefined();
     expect(parallelStep!.parallel!.length).toBeGreaterThanOrEqual(2);
 
-    // Each sub-step should have required fields
+    // Each sub-movement should have required fields
     for (const sub of parallelStep!.parallel!) {
       expect(sub.name).toBeDefined();
       expect(sub.agent).toBeDefined();
@@ -296,7 +296,7 @@ describe('Workflow Loader IT: parallel step loading', () => {
     const config = loadWorkflow('expert', testDir);
     expect(config).not.toBeNull();
 
-    const parallelStep = config!.steps.find(
+    const parallelStep = config!.movements.find(
       (s) => s.parallel && s.parallel.length === 4,
     );
     expect(parallelStep).toBeDefined();
@@ -324,8 +324,8 @@ describe('Workflow Loader IT: report config loading', () => {
     const config = loadWorkflow('default', testDir);
     expect(config).not.toBeNull();
 
-    // default workflow: plan step has a report config
-    const planStep = config!.steps.find((s) => s.name === 'plan');
+    // default workflow: plan movement has a report config
+    const planStep = config!.movements.find((s) => s.name === 'plan');
     expect(planStep).toBeDefined();
     expect(planStep!.report).toBeDefined();
   });
@@ -334,8 +334,8 @@ describe('Workflow Loader IT: report config loading', () => {
     const config = loadWorkflow('expert', testDir);
     expect(config).not.toBeNull();
 
-    // implement step has multi-report: [Scope, Decisions]
-    const implementStep = config!.steps.find((s) => s.name === 'implement');
+    // implement movement has multi-report: [Scope, Decisions]
+    const implementStep = config!.movements.find((s) => s.name === 'implement');
     expect(implementStep).toBeDefined();
     expect(implementStep!.report).toBeDefined();
     expect(Array.isArray(implementStep!.report)).toBe(true);
@@ -373,7 +373,7 @@ this is not: valid yaml: [[[[
 
     writeFileSync(join(workflowsDir, 'incomplete.yaml'), `
 name: incomplete
-description: Missing steps
+description: Missing movements
 `);
 
     expect(() => loadWorkflow('incomplete', testDir)).toThrow();

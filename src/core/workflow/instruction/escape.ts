@@ -4,7 +4,7 @@
  * Used by instruction builders to process instruction_template content.
  */
 
-import type { WorkflowStep } from '../../models/types.js';
+import type { WorkflowMovement } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
 
 /**
@@ -22,7 +22,7 @@ export function escapeTemplateChars(str: string): string {
  */
 export function replaceTemplatePlaceholders(
   template: string,
-  step: WorkflowStep,
+  step: WorkflowMovement,
   context: InstructionContext,
 ): string {
   let result = template;
@@ -30,10 +30,12 @@ export function replaceTemplatePlaceholders(
   // Replace {task}
   result = result.replace(/\{task\}/g, escapeTemplateChars(context.task));
 
-  // Replace {iteration}, {max_iterations}, and {step_iteration}
+  // Replace {iteration}, {max_iterations}, and {movement_iteration}
   result = result.replace(/\{iteration\}/g, String(context.iteration));
   result = result.replace(/\{max_iterations\}/g, String(context.maxIterations));
-  result = result.replace(/\{step_iteration\}/g, String(context.stepIteration));
+  result = result.replace(/\{movement_iteration\}/g, String(context.movementIteration));
+  // @deprecated Use {movement_iteration} instead
+  result = result.replace(/\{step_iteration\}/g, String(context.movementIteration));
 
   // Replace {previous_response}
   if (step.passPreviousResponse) {

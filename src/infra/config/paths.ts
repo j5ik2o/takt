@@ -21,10 +21,13 @@ export function getGlobalAgentsDir(): string {
   return join(getGlobalConfigDir(), 'agents');
 }
 
-/** Get takt global workflows directory (~/.takt/workflows) */
-export function getGlobalWorkflowsDir(): string {
-  return join(getGlobalConfigDir(), 'workflows');
+/** Get takt global pieces directory (~/.takt/pieces) */
+export function getGlobalPiecesDir(): string {
+  return join(getGlobalConfigDir(), 'pieces');
 }
+
+/** @deprecated Use getGlobalPiecesDir() instead */
+export const getGlobalWorkflowsDir = getGlobalPiecesDir;
 
 /** Get takt global logs directory */
 export function getGlobalLogsDir(): string {
@@ -36,10 +39,13 @@ export function getGlobalConfigPath(): string {
   return join(getGlobalConfigDir(), 'config.yaml');
 }
 
-/** Get builtin workflows directory (resources/global/{lang}/workflows) */
-export function getBuiltinWorkflowsDir(lang: Language): string {
-  return join(getLanguageResourcesDir(lang), 'workflows');
+/** Get builtin pieces directory (resources/global/{lang}/pieces) */
+export function getBuiltinPiecesDir(lang: Language): string {
+  return join(getLanguageResourcesDir(lang), 'pieces');
 }
+
+/** @deprecated Use getBuiltinPiecesDir() instead */
+export const getBuiltinWorkflowsDir = getBuiltinPiecesDir;
 
 /** Get builtin agents directory (resources/global/{lang}/agents) */
 export function getBuiltinAgentsDir(lang: Language): string {

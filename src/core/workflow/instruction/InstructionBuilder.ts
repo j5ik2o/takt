@@ -1,20 +1,15 @@
 /**
  * Phase 1 instruction builder
  *
- * Builds the instruction string for main agent execution by:
- * 1. Auto-injecting standard sections (Execution Context, Workflow Context,
- *    User Request, Previous Response, Additional User Inputs, Instructions header,
- *    Status Output Rules)
- * 2. Replacing template placeholders with actual values
+ * Builds the instruction string for main agent execution.
+ * Assembles template variables and renders a single complete template.
  */
 
-import type { WorkflowStep, Language, ReportConfig, ReportObjectConfig } from '../../models/types.js';
-import { hasTagBasedRules } from '../evaluation/rule-utils.js';
+import type { WorkflowMovement, Language, ReportConfig, ReportObjectConfig } from '../../models/types.js';
 import type { InstructionContext } from './instruction-context.js';
-import { buildExecutionMetadata, renderExecutionMetadata } from './instruction-context.js';
-import { generateStatusRulesFromRules } from './status-rules.js';
+import { buildEditRule } from './instruction-context.js';
 import { escapeTemplateChars, replaceTemplatePlaceholders } from './escape.js';
-import { getPromptObject } from '../../../shared/prompts/index.js';
+import { loadTemplate } from '../../../shared/prompts/index.js';
 
 /**
  * Check if a report config is the object form (ReportObjectConfig).
@@ -23,162 +18,142 @@ export function isReportObjectConfig(report: string | ReportConfig[] | ReportObj
   return typeof report === 'object' && !Array.isArray(report) && 'name' in report;
 }
 
-/** Shape of localized section strings */
-interface SectionStrings {
-  workflowContext: string;
-  workflowStructure: string;
-  currentStepMarker: string;
-  iteration: string;
-  iterationWorkflowWide: string;
-  stepIteration: string;
-  stepIterationTimes: string;
-  step: string;
-  reportDirectory: string;
-  reportFile: string;
-  reportFiles: string;
-  phaseNote: string;
-  userRequest: string;
-  previousResponse: string;
-  additionalUserInputs: string;
-  instructions: string;
-}
-
-/** Shape of localized report output strings */
-interface ReportOutputStrings {
-  singleHeading: string;
-  multiHeading: string;
-  createRule: string;
-  appendRule: string;
-}
-
 /**
  * Builds Phase 1 instructions for agent execution.
  *
  * Stateless builder — all data is passed via constructor context.
+ * Renders a single complete template with all variables.
  */
 export class InstructionBuilder {
   constructor(
-    private readonly step: WorkflowStep,
+    private readonly step: WorkflowMovement,
     private readonly context: InstructionContext,
   ) {}
 
   /**
    * Build the complete instruction string.
    *
-   * Generates a complete instruction by auto-injecting standard sections
-   * around the step-specific instruction_template content.
+   * Assembles all template variables and renders the Phase 1 template
+   * in a single loadTemplate() call.
    */
   build(): string {
     const language = this.context.language ?? 'en';
-    const s = getPromptObject<SectionStrings>('instruction.sections', language);
-    const sections: string[] = [];
 
-    // 1. Execution context metadata (working directory + rules + edit permission)
-    const metadata = buildExecutionMetadata(this.context, this.step.edit);
-    sections.push(renderExecutionMetadata(metadata));
+    // Execution context variables
+    const editRule = buildEditRule(this.step.edit, language);
 
-    // 2. Workflow Context (iteration, step, report info)
-    sections.push(this.renderWorkflowContext(language));
+    // Workflow structure (loop expansion done in code)
+    const workflowStructure = this.buildWorkflowStructure(language);
 
-    // Skip auto-injection for sections whose placeholders exist in the template,
-    // to avoid duplicate content.
+    // Report info
+    const hasReport = !!(this.step.report && this.context.reportDir);
+    let reportInfo = '';
+    let phaseNote = '';
+    if (hasReport) {
+      reportInfo = renderReportContext(this.step.report!, this.context.reportDir!);
+      phaseNote = language === 'ja'
+        ? '**注意:** これはPhase 1（本来の作業）です。作業完了後、Phase 2で自動的にレポートを生成します。'
+        : '**Note:** This is Phase 1 (main work). After you complete your work, Phase 2 will automatically generate the report based on your findings.';
+    }
+
+    // Skip auto-injection for sections whose placeholders exist in the template
     const tmpl = this.step.instructionTemplate;
     const hasTaskPlaceholder = tmpl.includes('{task}');
     const hasPreviousResponsePlaceholder = tmpl.includes('{previous_response}');
     const hasUserInputsPlaceholder = tmpl.includes('{user_inputs}');
 
-    // 3. User Request (skip if template embeds {task} directly)
-    if (!hasTaskPlaceholder) {
-      sections.push(`${s.userRequest}\n${escapeTemplateChars(this.context.task)}`);
-    }
+    // User Request
+    const hasTaskSection = !hasTaskPlaceholder;
+    const userRequest = hasTaskSection ? escapeTemplateChars(this.context.task) : '';
 
-    // 4. Previous Response (skip if template embeds {previous_response} directly)
-    if (this.step.passPreviousResponse && this.context.previousOutput && !hasPreviousResponsePlaceholder) {
-      sections.push(
-        `${s.previousResponse}\n${escapeTemplateChars(this.context.previousOutput.content)}`,
-      );
-    }
+    // Previous Response
+    const hasPreviousResponse = !!(
+      this.step.passPreviousResponse &&
+      this.context.previousOutput &&
+      !hasPreviousResponsePlaceholder
+    );
+    const previousResponse = hasPreviousResponse
+      ? escapeTemplateChars(this.context.previousOutput!.content)
+      : '';
 
-    // 5. Additional User Inputs (skip if template embeds {user_inputs} directly)
-    if (!hasUserInputsPlaceholder) {
-      const userInputsStr = this.context.userInputs.join('\n');
-      sections.push(`${s.additionalUserInputs}\n${escapeTemplateChars(userInputsStr)}`);
-    }
+    // User Inputs
+    const hasUserInputs = !hasUserInputsPlaceholder;
+    const userInputs = hasUserInputs
+      ? escapeTemplateChars(this.context.userInputs.join('\n'))
+      : '';
 
-    // 6. Instructions header + instruction_template content
-    const processedTemplate = replaceTemplatePlaceholders(
+    // Instructions (instruction_template processed)
+    const instructions = replaceTemplatePlaceholders(
       this.step.instructionTemplate,
       this.step,
       this.context,
     );
-    sections.push(`${s.instructions}\n${processedTemplate}`);
 
-    // 7. Status Output Rules (for tag-based detection in Phase 1)
-    if (hasTagBasedRules(this.step)) {
-      const statusRulesPrompt = generateStatusRulesFromRules(
-        this.step.name,
-        this.step.rules!,
-        language,
-        { interactive: this.context.interactive },
-      );
-      sections.push(statusRulesPrompt);
-    }
-
-    return sections.join('\n\n');
+    return loadTemplate('perform_phase1_message', language, {
+      workingDirectory: this.context.cwd,
+      editRule,
+      workflowStructure,
+      iteration: `${this.context.iteration}/${this.context.maxIterations}`,
+      movementIteration: String(this.context.movementIteration),
+      movement: this.step.name,
+      hasReport,
+      reportInfo,
+      phaseNote,
+      hasTaskSection,
+      userRequest,
+      hasPreviousResponse,
+      previousResponse,
+      hasUserInputs,
+      userInputs,
+      instructions,
+    });
   }
 
-  private renderWorkflowContext(language: Language): string {
-    const s = getPromptObject<SectionStrings>('instruction.sections', language);
-    const lines: string[] = [s.workflowContext];
-
-    // Workflow structure (if workflow steps info is available)
-    if (this.context.workflowSteps && this.context.workflowSteps.length > 0) {
-      lines.push(s.workflowStructure.replace('{count}', String(this.context.workflowSteps.length)));
-      this.context.workflowSteps.forEach((ws, index) => {
-        const isCurrent = index === this.context.currentStepIndex;
-        const marker = isCurrent ? ` ← ${s.currentStepMarker}` : '';
-        const desc = ws.description ? `（${ws.description}）` : '';
-        lines.push(`- Step ${index + 1}: ${ws.name}${desc}${marker}`);
-      });
-      lines.push('');
+  /**
+   * Build the workflow structure display string.
+   * Returns empty string if no workflow movements are available.
+   */
+  private buildWorkflowStructure(language: Language): string {
+    if (!this.context.workflowMovements || this.context.workflowMovements.length === 0) {
+      return '';
     }
 
-    lines.push(`- ${s.iteration}: ${this.context.iteration}/${this.context.maxIterations}${s.iterationWorkflowWide}`);
-    lines.push(`- ${s.stepIteration}: ${this.context.stepIteration}${s.stepIterationTimes}`);
-    lines.push(`- ${s.step}: ${this.step.name}`);
-
-    // If step has report config, include Report Directory path and phase note
-    if (this.step.report && this.context.reportDir) {
-      const reportContext = renderReportContext(this.step.report, this.context.reportDir, language);
-      lines.push(reportContext);
-      lines.push('');
-      lines.push(s.phaseNote);
-    }
-
-    return lines.join('\n');
+    const currentMovementMarker = language === 'ja' ? '現在' : 'current';
+    const structureHeader = language === 'ja'
+      ? `このワークフローは${this.context.workflowMovements.length}ムーブメントで構成されています:`
+      : `This workflow consists of ${this.context.workflowMovements.length} movements:`;
+    const movementLines = this.context.workflowMovements.map((ws, index) => {
+      const isCurrent = index === this.context.currentMovementIndex;
+      const marker = isCurrent ? ` ← ${currentMovementMarker}` : '';
+      const desc = ws.description ? `（${ws.description}）` : '';
+      return `- Movement ${index + 1}: ${ws.name}${desc}${marker}`;
+    });
+    return [structureHeader, ...movementLines].join('\n');
   }
 }
 
 /**
  * Render report context info for Workflow Context section.
- * Used by ReportInstructionBuilder.
+ * Used by InstructionBuilder and ReportInstructionBuilder.
  */
 export function renderReportContext(
   report: string | ReportConfig[] | ReportObjectConfig,
   reportDir: string,
-  language: Language,
 ): string {
-  const s = getPromptObject<SectionStrings>('instruction.sections', language);
+  const reportDirectory = 'Report Directory';
+  const reportFile = 'Report File';
+  const reportFiles = 'Report Files';
+
   const lines: string[] = [
-    `- ${s.reportDirectory}: ${reportDir}/`,
+    `- ${reportDirectory}: ${reportDir}/`,
   ];
 
   if (typeof report === 'string') {
-    lines.push(`- ${s.reportFile}: ${reportDir}/${report}`);
+    lines.push(`- ${reportFile}: ${reportDir}/${report}`);
   } else if (isReportObjectConfig(report)) {
-    lines.push(`- ${s.reportFile}: ${reportDir}/${report.name}`);
+    lines.push(`- ${reportFile}: ${reportDir}/${report.name}`);
   } else {
-    lines.push(`- ${s.reportFiles}:`);
+    lines.push(`- ${reportFiles}:`);
     for (const file of report) {
       lines.push(`  - ${file.label}: ${reportDir}/${file.path}`);
     }
@@ -188,20 +163,35 @@ export function renderReportContext(
 }
 
 /**
- * Generate report output instructions from step.report config.
- * Returns undefined if step has no report or no reportDir.
+ * Generate report output instructions from movement's report config.
+ * Returns empty string if movement has no report or no reportDir.
  */
 export function renderReportOutputInstruction(
-  step: WorkflowStep,
+  step: WorkflowMovement,
   context: InstructionContext,
   language: Language,
-): string | undefined {
-  if (!step.report || !context.reportDir) return undefined;
+): string {
+  if (!step.report || !context.reportDir) return '';
 
-  const s = getPromptObject<ReportOutputStrings>('instruction.reportOutput', language);
   const isMulti = Array.isArray(step.report);
-  const heading = isMulti ? s.multiHeading : s.singleHeading;
-  const appendRule = s.appendRule.replace('{step_iteration}', String(context.stepIteration));
 
-  return [heading, s.createRule, appendRule].join('\n');
+  let heading: string;
+  let createRule: string;
+  let appendRule: string;
+
+  if (language === 'ja') {
+    heading = isMulti
+      ? '**レポート出力:** Report Files に出力してください。'
+      : '**レポート出力:** `Report File` に出力してください。';
+    createRule = '- ファイルが存在しない場合: 新規作成';
+    appendRule = `- ファイルが存在する場合: \`## Iteration ${context.movementIteration}\` セクションを追記`;
+  } else {
+    heading = isMulti
+      ? '**Report output:** Output to the `Report Files` specified above.'
+      : '**Report output:** Output to the `Report File` specified above.';
+    createRule = '- If file does not exist: Create new file';
+    appendRule = `- If file exists: Append with \`## Iteration ${context.movementIteration}\` section`;
+  }
+
+  return `${heading}\n${createRule}\n${appendRule}`;
 }

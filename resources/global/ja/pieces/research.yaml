@@ -7,11 +7,11 @@
 #                          -> plan (rejected: 計画からやり直し)
 #
 # テンプレート変数:
-#   {iteration}      - ワークフロー全体のターン数（全エージェントで実行されたステップの合計）
+#   {iteration}      - ワークフロー全体のターン数（全エージェントで実行されたムーブメントの合計）
 #   {max_iterations} - ワークフローの最大イテレーション数
-#   {step_iteration} - ステップごとのイテレーション数（このステップが何回実行されたか）
+#   {movement_iteration} - ムーブメントごとのイテレーション数（このムーブメントが何回実行されたか）
 #   {task}           - 元のユーザー要求
-#   {previous_response} - 前のステップの出力
+#   {previous_response} - 前のムーブメントの出力
 #   {user_inputs}    - ワークフロー中に蓄積されたユーザー入力
 #   {report_dir}     - レポートディレクトリ名（例: "20250126-143052-task-summary"）
 
@@ -20,7 +20,7 @@ description: 調査ワークフロー - 質問せずに自律的に調査を実�
 
 max_iterations: 10
 
-steps:
+movements:
   - name: plan
     agent: ../agents/research/planner.md
     allowed_tools:
@@ -32,8 +32,8 @@ steps:
     instruction_template: |
       ## ワークフロー状況
       - イテレーション: {iteration}/{max_iterations}（ワークフロー全体）
-      - ステップ実行回数: {step_iteration}（このステップの実行回数）
-      - ステップ: plan
+      - ムーブメント実行回数: {movement_iteration}（このムーブメントの実行回数）
+      - ムーブメント: plan
 
       ## 調査依頼
       {task}
@@ -69,8 +69,8 @@ steps:
     instruction_template: |
       ## ワークフロー状況
       - イテレーション: {iteration}/{max_iterations}（ワークフロー全体）
-      - ステップ実行回数: {step_iteration}（このステップの実行回数）
-      - ステップ: dig
+      - ムーブメント実行回数: {movement_iteration}（このムーブメントの実行回数）
+      - ムーブメント: dig
 
       ## 元の調査依頼
       {task}
@@ -111,8 +111,8 @@ steps:
     instruction_template: |
       ## ワークフロー状況
       - イテレーション: {iteration}/{max_iterations}（ワークフロー全体）
-      - ステップ実行回数: {step_iteration}（このステップの実行回数）
-      - ステップ: supervise (調査品質評価)
+      - ムーブメント実行回数: {movement_iteration}（このムーブメントの実行回数）
+      - ムーブメント: supervise (調査品質評価)
 
       ## 元の調査依頼
       {task}
@@ -131,4 +131,4 @@ steps:
       - condition: 調査結果が不十分であり、計画からやり直す必要がある
         next: plan
 
-initial_step: plan
+initial_movement: plan

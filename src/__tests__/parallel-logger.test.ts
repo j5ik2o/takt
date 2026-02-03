@@ -18,7 +18,7 @@ describe('ParallelLogger', () => {
   describe('buildPrefix', () => {
     it('should build colored prefix with padding', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['arch-review', 'sec'],
+        subMovementNames: ['arch-review', 'sec'],
         writeFn,
       });
 
@@ -34,7 +34,7 @@ describe('ParallelLogger', () => {
 
     it('should cycle colors for index >= 4', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['a', 'b', 'c', 'd', 'e'],
+        subMovementNames: ['a', 'b', 'c', 'd', 'e'],
         writeFn,
       });
 
@@ -47,7 +47,7 @@ describe('ParallelLogger', () => {
 
     it('should assign correct colors in order', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['a', 'b', 'c', 'd'],
+        subMovementNames: ['a', 'b', 'c', 'd'],
         writeFn,
       });
 
@@ -59,7 +59,7 @@ describe('ParallelLogger', () => {
 
     it('should have no extra padding for longest name', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['long-name', 'short'],
+        subMovementNames: ['long-name', 'short'],
         writeFn,
       });
 
@@ -72,7 +72,7 @@ describe('ParallelLogger', () => {
   describe('text event line buffering', () => {
     it('should buffer partial line and output on newline', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['step-a'],
+        subMovementNames: ['step-a'],
         writeFn,
       });
       const handler = logger.createStreamHandler('step-a', 0);
@@ -91,7 +91,7 @@ describe('ParallelLogger', () => {
 
     it('should handle multiple lines in single text event', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['step-a'],
+        subMovementNames: ['step-a'],
         writeFn,
       });
       const handler = logger.createStreamHandler('step-a', 0);
@@ -104,7 +104,7 @@ describe('ParallelLogger', () => {
 
     it('should output empty line without prefix', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['step-a'],
+        subMovementNames: ['step-a'],
         writeFn,
       });
       const handler = logger.createStreamHandler('step-a', 0);
@@ -118,7 +118,7 @@ describe('ParallelLogger', () => {
 
     it('should keep trailing partial in buffer', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['step-a'],
+        subMovementNames: ['step-a'],
         writeFn,
       });
       const handler = logger.createStreamHandler('step-a', 0);
@@ -137,7 +137,7 @@ describe('ParallelLogger', () => {
   describe('block events (tool_use, tool_result, tool_output, thinking)', () => {
     it('should prefix tool_use events', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['sub-a'],
+        subMovementNames: ['sub-a'],
         writeFn,
       });
       const handler = logger.createStreamHandler('sub-a', 0);
@@ -154,7 +154,7 @@ describe('ParallelLogger', () => {
 
     it('should prefix tool_result events', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['sub-a'],
+        subMovementNames: ['sub-a'],
         writeFn,
       });
       const handler = logger.createStreamHandler('sub-a', 0);
@@ -170,7 +170,7 @@ describe('ParallelLogger', () => {
 
     it('should prefix multi-line tool output', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['sub-a'],
+        subMovementNames: ['sub-a'],
         writeFn,
       });
       const handler = logger.createStreamHandler('sub-a', 0);
@@ -187,7 +187,7 @@ describe('ParallelLogger', () => {
 
     it('should prefix thinking events', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['sub-a'],
+        subMovementNames: ['sub-a'],
         writeFn,
       });
       const handler = logger.createStreamHandler('sub-a', 0);
@@ -206,7 +206,7 @@ describe('ParallelLogger', () => {
     it('should delegate init event to parent callback', () => {
       const parentEvents: StreamEvent[] = [];
       const logger = new ParallelLogger({
-        subStepNames: ['sub-a'],
+        subMovementNames: ['sub-a'],
         parentOnStream: (event) => parentEvents.push(event),
         writeFn,
       });
@@ -226,7 +226,7 @@ describe('ParallelLogger', () => {
     it('should delegate result event to parent callback', () => {
       const parentEvents: StreamEvent[] = [];
       const logger = new ParallelLogger({
-        subStepNames: ['sub-a'],
+        subMovementNames: ['sub-a'],
         parentOnStream: (event) => parentEvents.push(event),
         writeFn,
       });
@@ -245,7 +245,7 @@ describe('ParallelLogger', () => {
     it('should delegate error event to parent callback', () => {
       const parentEvents: StreamEvent[] = [];
       const logger = new ParallelLogger({
-        subStepNames: ['sub-a'],
+        subMovementNames: ['sub-a'],
         parentOnStream: (event) => parentEvents.push(event),
         writeFn,
       });
@@ -263,7 +263,7 @@ describe('ParallelLogger', () => {
 
     it('should not crash when no parent callback for delegated events', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['sub-a'],
+        subMovementNames: ['sub-a'],
         writeFn,
       });
       const handler = logger.createStreamHandler('sub-a', 0);
@@ -280,7 +280,7 @@ describe('ParallelLogger', () => {
   describe('flush', () => {
     it('should output remaining buffered content', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['step-a', 'step-b'],
+        subMovementNames: ['step-a', 'step-b'],
         writeFn,
       });
       const handlerA = logger.createStreamHandler('step-a', 0);
@@ -300,7 +300,7 @@ describe('ParallelLogger', () => {
 
     it('should not output empty buffers', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['step-a', 'step-b'],
+        subMovementNames: ['step-a', 'step-b'],
         writeFn,
       });
       const handlerA = logger.createStreamHandler('step-a', 0);
@@ -316,7 +316,7 @@ describe('ParallelLogger', () => {
   describe('printSummary', () => {
     it('should print completion summary', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['arch-review', 'security-review'],
+        subMovementNames: ['arch-review', 'security-review'],
         writeFn,
       });
 
@@ -337,7 +337,7 @@ describe('ParallelLogger', () => {
 
     it('should show (no result) for undefined condition', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['step-a'],
+        subMovementNames: ['step-a'],
         writeFn,
       });
 
@@ -349,9 +349,9 @@ describe('ParallelLogger', () => {
       expect(fullOutput).toContain('(no result)');
     });
 
-    it('should right-pad sub-step names to align results', () => {
+    it('should right-pad sub-movement names to align results', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['short', 'very-long-name'],
+        subMovementNames: ['short', 'very-long-name'],
         writeFn,
       });
 
@@ -372,7 +372,7 @@ describe('ParallelLogger', () => {
 
     it('should flush remaining buffers before printing summary', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['step-a'],
+        subMovementNames: ['step-a'],
         writeFn,
       });
       const handler = logger.createStreamHandler('step-a', 0);
@@ -392,10 +392,10 @@ describe('ParallelLogger', () => {
     });
   });
 
-  describe('interleaved output from multiple sub-steps', () => {
+  describe('interleaved output from multiple sub-movements', () => {
     it('should correctly interleave prefixed output', () => {
       const logger = new ParallelLogger({
-        subStepNames: ['step-a', 'step-b'],
+        subMovementNames: ['step-a', 'step-b'],
         writeFn,
       });
       const handlerA = logger.createStreamHandler('step-a', 0);

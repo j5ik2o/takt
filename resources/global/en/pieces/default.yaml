@@ -3,17 +3,17 @@
 #
 # Boilerplate sections (Workflow Context, User Request, Previous Response,
 # Additional User Inputs, Instructions heading) are auto-injected by buildInstruction().
-# Only step-specific content belongs in instruction_template.
+# Only movement-specific content belongs in instruction_template.
 #
 # Template Variables (available in instruction_template):
-#   {iteration}         - Workflow-wide turn count (total steps executed across all agents)
+#   {iteration}         - Workflow-wide turn count (total movements executed across all agents)
 #   {max_iterations}    - Maximum iterations allowed for the workflow
-#   {step_iteration}    - Per-step iteration count (how many times THIS step has been executed)
-#   {previous_response} - Output from the previous step (only when pass_previous_response: true)
+#   {movement_iteration}    - Per-movement iteration count (how many times THIS movement has been executed)
+#   {previous_response} - Output from the previous movement (only when pass_previous_response: true)
 #   {report_dir}        - Report directory name (e.g., "20250126-143052-task-summary")
 #
-# Step-level Fields:
-#   report:  - Report file(s) for the step (auto-injected as Report File/Files in Workflow Context)
+# Movement-level Fields:
+#   report:  - Report file(s) for the movement (auto-injected as Report File/Files in Workflow Context)
 #              Single: report: 00-plan.md
 #              Multiple: report:
 #                          - Scope: 01-coder-scope.md
@@ -24,9 +24,9 @@ description: Standard development workflow with planning and specialized reviews
 
 max_iterations: 30
 
-initial_step: plan
+initial_movement: plan
 
-steps:
+movements:
   - name: plan
     edit: false
     agent: ../agents/default/planner.md
@@ -75,7 +75,7 @@ steps:
     instruction_template: |
       Analyze the task and create an implementation plan.
 
-      **Note:** If returned from implement step (Previous Response exists),
+      **Note:** If returned from implement movement (Previous Response exists),
       review and revise the plan based on that feedback (replan).
 
       **Tasks (for implementation tasks):**
@@ -177,7 +177,7 @@ steps:
         requires_user_input: true
         interactive_only: true
     instruction_template: |
-      Follow the plan from the plan step and the design from the architect step.
+      Follow the plan from the plan movement and the design from the architect movement.
 
       **Reports to reference:**
       - Plan: {report:00-plan.md}
@@ -185,7 +185,7 @@ steps:
 
       Use only the Report Directory files shown in Workflow Context. Do not search or open reports outside that directory.
 
-      **Important:** Do not make design decisions; follow the design determined in the architect step.
+      **Important:** Do not make design decisions; follow the design determined in the architect movement.
       Report if you encounter unclear points or need design changes.
 
       **Scope report format (create at implementation start):**
@@ -300,7 +300,7 @@ steps:
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction_template: |
-      **This is AI Review iteration {step_iteration}.**
+      **This is AI Review iteration {movement_iteration}.**
 
       If this is iteration 2 or later, it means your previous fixes were not actually applied.
       **Your belief that you "already fixed it" is wrong.**
@@ -387,8 +387,8 @@ steps:
           - condition: approved
           - condition: needs_fix
         instruction_template: |
-          **Verify that the implementation follows the design from the architect step.**
-          Do NOT review AI-specific issues (that's the ai_review step).
+          **Verify that the implementation follows the design from the architect movement.**
+          Do NOT review AI-specific issues (that's the ai_review movement).
 
           **Reports to reference:**
           - Design: {report:01-architecture.md} (if exists)
@@ -402,7 +402,7 @@ steps:
           - Dead code
           - Call chain verification
 
-          **Note:** For small tasks that skipped the architect step, review design validity as usual.
+          **Note:** For small tasks that skipped the architect movement, review design validity as usual.
 
       - name: security-review
         edit: false
@@ -517,7 +517,7 @@ steps:
 
       **Workflow Overall Review:**
       1. Does the implementation match the plan ({report:00-plan.md}) and design ({report:01-architecture.md}, if exists)?
-      2. Were all review step issues addressed?
+      2. Were all review movement issues addressed?
       3. Was the original task objective achieved?
 
       **Review Reports:** Read all reports in Report Directory and

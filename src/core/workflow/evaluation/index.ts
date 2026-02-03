@@ -2,7 +2,7 @@
  * Rule evaluation - barrel exports
  */
 
-import type { WorkflowStep, WorkflowState } from '../../models/types.js';
+import type { WorkflowMovement, WorkflowState } from '../../models/types.js';
 import { RuleEvaluator } from './RuleEvaluator.js';
 import { AggregateEvaluator } from './AggregateEvaluator.js';
 
@@ -14,11 +14,11 @@ export { AggregateEvaluator } from './AggregateEvaluator.js';
 import type { RuleMatch, RuleEvaluatorContext } from './RuleEvaluator.js';
 
 /**
- * Detect matched rule for a step's response.
+ * Detect matched rule for a movement's response.
  * Function facade over RuleEvaluator class.
  */
 export async function detectMatchedRule(
-  step: WorkflowStep,
+  step: WorkflowMovement,
   agentContent: string,
   tagContent: string,
   ctx: RuleEvaluatorContext,
@@ -30,6 +30,6 @@ export async function detectMatchedRule(
  * Evaluate aggregate conditions.
  * Function facade over AggregateEvaluator class.
  */
-export function evaluateAggregateConditions(step: WorkflowStep, state: WorkflowState): number {
+export function evaluateAggregateConditions(step: WorkflowMovement, state: WorkflowState): number {
   return new AggregateEvaluator(step, state).evaluate();
 }

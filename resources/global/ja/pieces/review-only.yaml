@@ -8,14 +8,14 @@
 #   -> COMPLETE (ローカル: コンソール出力のみ)
 #   -> ABORT (rejected)
 #
-# 全ステップ edit: false（ファイル変更なし）
+# 全ムーブメント edit: false（ファイル変更なし）
 #
 # テンプレート変数:
 #   {iteration}         - ワークフロー全体のターン数
 #   {max_iterations}    - 最大イテレーション数
-#   {step_iteration}    - ステップごとのイテレーション数
+#   {movement_iteration}    - ムーブメントごとのイテレーション数
 #   {task}              - 元のユーザー要求
-#   {previous_response} - 前のステップの出力
+#   {previous_response} - 前のムーブメントの出力
 #   {user_inputs}       - 蓄積されたユーザー入力
 #   {report_dir}        - レポートディレクトリ名
 
@@ -24,9 +24,9 @@ description: レビュー専用ワークフロー - コードをレビューす�
 
 max_iterations: 10
 
-initial_step: plan
+initial_movement: plan
 
-steps:
+movements:
   - name: plan
     edit: false
     agent: ../agents/default/planner.md
@@ -108,7 +108,7 @@ steps:
           - condition: approved
           - condition: needs_fix
         instruction_template: |
-          **アーキテクチャと設計**のレビューに集中してください。AI特有の問題はレビューしないでください（ai_reviewステップで行います）。
+          **アーキテクチャと設計**のレビューに集中してください。AI特有の問題はレビューしないでください（ai_reviewムーブメントで行います）。
 
           コードをレビューしてフィードバックを提供してください。
 
@@ -249,7 +249,7 @@ steps:
       4. ルーティング判断:
          - タスクにPRへのコメント投稿が含まれている場合
            （例: "PRにコメントして"、"PRにレビュー結果を投稿"）
-           → `pr-comment` ステップへ（condition: "approved, PR comment requested"）
+           → `pr-comment` ムーブメントへ（condition: "approved, PR comment requested"）
          - ローカルレビューのみ → COMPLETE（condition: "approved"）
          - 重大な問題が見つかった場合 → ABORT（condition: "rejected"）
 

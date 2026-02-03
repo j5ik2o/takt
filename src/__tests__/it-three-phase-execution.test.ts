@@ -2,7 +2,7 @@
  * Three-phase execution integration tests.
  *
  * Tests Phase 1 (main) → Phase 2 (report) → Phase 3 (status judgment) lifecycle.
- * Verifies that the correct combination of phases fires based on step config.
+ * Verifies that the correct combination of phases fires based on movement config.
  *
  * Mocked: UI, session, config, callAiJudge
  * Selectively mocked: phase-runner (to inspect call patterns)
@@ -84,7 +84,7 @@ function buildEngineOptions(projectCwd: string) {
   };
 }
 
-function makeStep(
+function makeMovement(
   name: string,
   agentPath: string,
   rules: WorkflowRule[],
@@ -124,7 +124,7 @@ describe('Three-Phase Execution IT: phase1 only (no report, no tag rules)', () =
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should only run Phase 1 when step has no report and no tag rules', async () => {
+  it('should only run Phase 1 when movement has no report and no tag rules', async () => {
     setMockScenario([
       { status: 'done', content: '[STEP:1]\n\nDone.' },
     ]);
@@ -133,9 +133,9 @@ describe('Three-Phase Execution IT: phase1 only (no report, no tag rules)', () =
       name: 'it-phase1-only',
       description: 'Test',
       maxIterations: 5,
-      initialStep: 'step',
-      steps: [
-        makeStep('step', agentPath, [
+      initialMovement: 'step',
+      movements: [
+        makeMovement('step', agentPath, [
           makeRule('Done', 'COMPLETE'),
           makeRule('Not done', 'ABORT'),
         ]),
@@ -176,7 +176,7 @@ describe('Three-Phase Execution IT: phase1 + phase2 (report defined)', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should run Phase 1 + Phase 2 when step has report', async () => {
+  it('should run Phase 1 + Phase 2 when movement has report', async () => {
     setMockScenario([
       { status: 'done', content: '[STEP:1]\n\nDone.' },
     ]);
@@ -185,9 +185,9 @@ describe('Three-Phase Execution IT: phase1 + phase2 (report defined)', () => {
       name: 'it-phase1-2',
       description: 'Test',
       maxIterations: 5,
-      initialStep: 'step',
-      steps: [
-        makeStep('step', agentPath, [
+      initialMovement: 'step',
+      movements: [
+        makeMovement('step', agentPath, [
           makeRule('Done', 'COMPLETE'),
           makeRule('Not done', 'ABORT'),
         ], { report: 'test-report.md' }),
@@ -206,7 +206,7 @@ describe('Three-Phase Execution IT: phase1 + phase2 (report defined)', () => {
     expect(mockRunStatusJudgmentPhase).not.toHaveBeenCalled();
   });
 
-  it('should run Phase 2 for multi-report step', async () => {
+  it('should run Phase 2 for multi-report movement', async () => {
     setMockScenario([
       { status: 'done', content: '[STEP:1]\n\nDone.' },
     ]);
@@ -215,9 +215,9 @@ describe('Three-Phase Execution IT: phase1 + phase2 (report defined)', () => {
       name: 'it-phase1-2-multi',
       description: 'Test',
       maxIterations: 5,
-      initialStep: 'step',
-      steps: [
-        makeStep('step', agentPath, [
+      initialMovement: 'step',
+      movements: [
+        makeMovement('step', agentPath, [
           makeRule('Done', 'COMPLETE'),
         ], { report: [{ label: 'Scope', path: 'scope.md' }, { label: 'Decisions', path: 'decisions.md' }] }),
       ],
@@ -256,7 +256,7 @@ describe('Three-Phase Execution IT: phase1 + phase3 (tag rules defined)', () => 
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should run Phase 1 + Phase 3 when step has tag-based rules but no report', async () => {
+  it('should run Phase 1 + Phase 3 when movement has tag-based rules but no report', async () => {
     setMockScenario([
       // Phase 1: main content (no tag — Phase 3 will provide it)
       { status: 'done', content: 'Agent completed the work.' },
@@ -266,9 +266,9 @@ describe('Three-Phase Execution IT: phase1 + phase3 (tag rules defined)', () => 
       name: 'it-phase1-3',
       description: 'Test',
       maxIterations: 5,
-      initialStep: 'step',
-      steps: [
-        makeStep('step', agentPath, [
+      initialMovement: 'step',
+      movements: [
+        makeMovement('step', agentPath, [
           makeRule('Done', 'COMPLETE'),
           makeRule('Not done', 'ABORT'),
         ]),
@@ -308,7 +308,7 @@ describe('Three-Phase Execution IT: all three phases', () => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should run Phase 1 → Phase 2 → Phase 3 when step has report and tag rules', async () => {
+  it('should run Phase 1 → Phase 2 → Phase 3 when movement has report and tag rules', async () => {
     setMockScenario([
       { status: 'done', content: 'Agent completed the work.' },
     ]);
@@ -317,9 +317,9 @@ describe('Three-Phase Execution IT: all three phases', () => {
       name: 'it-all-phases',
       description: 'Test',
       maxIterations: 5,
-      initialStep: 'step',
-      steps: [
-        makeStep('step', agentPath, [
+      initialMovement: 'step',
+      movements: [
+        makeMovement('step', agentPath, [
           makeRule('Done', 'COMPLETE'),
           makeRule('Not done', 'ABORT'),
         ], { report: 'test-report.md' }),
@@ -377,13 +377,13 @@ describe('Three-Phase Execution IT: phase3 tag → rule match', () => {
       name: 'it-phase3-tag',
       description: 'Test',
       maxIterations: 5,
-      initialStep: 'step1',
-      steps: [
-        makeStep('step1', agentPath, [
+      initialMovement: 'step1',
+      movements: [
+        makeMovement('step1', agentPath, [
           makeRule('Done', 'step2'),
           makeRule('Not done', 'ABORT'),
         ]),
-        makeStep('step2', agentPath, [
+        makeMovement('step2', agentPath, [
           makeRule('Checked', 'COMPLETE'),
         ]),
       ],
