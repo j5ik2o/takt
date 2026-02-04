@@ -4,10 +4,7 @@
 # 言語設定 (en または ja)
 language: ja
 
-# 信頼済みディレクトリ - これらのディレクトリ内のプロジェクトは確認プロンプトをスキップします
-trusted_directories: []
-
-# デフォルトピース - ピースが指定されていない場合に使用します
+# デフォルトのピース - 指定がない場合に使用します
 default_piece: default
 
 # ログレベル: debug, info, warn, error
