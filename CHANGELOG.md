@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.1] - 2026-02-04
+
+### Fixed
+
+- Windows environment file path handling and encoding issues (#90, #91)
+  - Improved .git detection for Windows
+  - Added mandatory .git check for Codex (error if not found)
+  - Fixed character encoding issues
+- Codex branch name summary processing bug
+
+### Internal
+
+- Test memory leak and hanging issues resolved
+  - Added cleanup handlers for PieceEngine and TaskWatcher
+  - Changed vitest to single-threaded execution for improved test stability
+
 ## [0.5.0] - 2026-02-04
 
 ### Changed
