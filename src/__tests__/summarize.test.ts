@@ -43,7 +43,7 @@ beforeEach(() => {
     defaultPiece: 'default',
     logLevel: 'info',
     provider: 'claude',
-    model: 'haiku',
+    model: undefined,
   });
 });
 
@@ -68,7 +68,6 @@ describe('summarizeTaskName', () => {
       'long task name for testing',
       expect.objectContaining({
         cwd: '/project',
-        model: 'haiku',
         allowedTools: [],
       })
     );

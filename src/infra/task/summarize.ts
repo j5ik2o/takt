@@ -64,15 +64,18 @@ export class TaskSummarizer {
 
     const globalConfig = loadGlobalConfig();
     const providerType = (globalConfig.provider as ProviderType) ?? 'claude';
-    const model = options.model ?? globalConfig.model ?? 'haiku';
+    const model = options.model ?? globalConfig.model;
 
     const provider = getProvider(providerType);
-    const response = await provider.call('summarizer', taskName, {
+    const callOptions: SummarizeOptions & { systemPrompt: string; allowedTools: [] } = {
       cwd: options.cwd,
-      model,
       systemPrompt: loadTemplate('score_slug_system_prompt', 'en'),
       allowedTools: [],
-    });
+    };
+    if (model) {
+      callOptions.model = model;
+    }
+    const response = await provider.call('summarizer', taskName, callOptions);
 
     const slug = sanitizeSlug(response.content);
     log.info('Task name summarized', { original: taskName, slug });
