@@ -2,9 +2,9 @@
 
 🇯🇵 [日本語ドキュメント](./docs/README.ja.md)
 
-**T**ask **A**gent **K**oordination **T**ool - A governance-first orchestrator for running coding agents safely and responsibly
+**T**ask **A**gent **K**oordination **T**ool - Define how AI agents coordinate, where humans intervene, and what gets recorded — in YAML
 
-TAKT coordinates AI agents like Claude Code and Codex according to your organization's rules and pieces. It clarifies who is responsible, what is permitted, and how to recover from failures, while automating complex development tasks.
+TAKT runs multiple AI agents (Claude Code, Codex) through YAML-defined workflows. Each step — who runs, what's allowed, what happens on failure — is declared in a piece file, not left to the agent.
 
 TAKT is built with TAKT itself (dogfooding).
 
@@ -18,18 +18,17 @@ TAKT uses a music metaphor to describe orchestration:
 
 You can read every term as standard workflow language (piece = workflow, movement = step), but the metaphor is used to keep the system conceptually consistent.
 
-## TAKT is For Teams That Need
+## Why TAKT
 
-- **Want to integrate AI into CI/CD but fear runaway execution** — Clarify control scope with piece definitions
-- **Want automated PR generation but need audit logs** — Record and track all execution history
-- **Want to use multiple AI models but manage them uniformly** — Control Claude/Codex/Mock with the same piece
-- **Want to reproduce and debug agent failures** — Maintain complete history with session logs and reports
+- AI agents are powerful but non-deterministic — TAKT makes their decisions visible and replayable
+- Multi-agent coordination needs structure — pieces define who does what, in what order, with what permissions
+- CI/CD integration needs guardrails — pipeline mode runs agents non-interactively with full audit logs
 
 ## What TAKT is NOT
 
-- **Not an autonomous engineer** — TAKT doesn't complete implementations itself; it governs and coordinates multiple agents
-- **Not competing with Claude Code Swarm** — While leveraging Swarm's execution power, TAKT provides "operational guardrails" such as piece definitions, permission controls, and audit logs
-- **Not just a piece engine** — TAKT is designed to address AI-specific challenges (non-determinism, accountability, audit requirements, and reproducibility)
+- **Not an autonomous engineer** — TAKT coordinates agents but doesn't decide what to build. You provide the task, TAKT governs the execution.
+- **Not a Skill or Swarm replacement** — Skills extend a single agent's knowledge. Swarm parallelizes agents. TAKT defines the workflow structure across agents — which agent runs, in what order, with what rules.
+- **Not fully automatic by default** — Every step can require human approval. Automation is opt-in (pipeline mode), not the default.
 
 ## Requirements
 
