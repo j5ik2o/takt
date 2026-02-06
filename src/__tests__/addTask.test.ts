@@ -275,6 +275,7 @@ describe('addTask', () => {
     // Given: issue reference "#99"
     const issueText = 'Issue #99: Fix login timeout\n\nThe login page times out after 30 seconds.';
     mockResolveIssueTask.mockReturnValue(issueText);
+    mockDeterminePiece.mockResolvedValue('default');
 
     mockSummarizeTaskName.mockResolvedValue('fix-login-timeout');
     mockConfirm.mockResolvedValue(false);
@@ -288,6 +289,9 @@ describe('addTask', () => {
     // Then: resolveIssueTask was called
     expect(mockResolveIssueTask).toHaveBeenCalledWith('#99');
 
+    // Then: determinePiece was called for piece selection
+    expect(mockDeterminePiece).toHaveBeenCalledWith(testDir);
+
     // Then: task file created with issue text directly (no AI summarization)
     const taskFile = path.join(testDir, '.takt', 'tasks', 'fix-login-timeout.yaml');
     expect(fs.existsSync(taskFile)).toBe(true);
@@ -298,6 +302,7 @@ describe('addTask', () => {
   it('should proceed to worktree settings after issue fetch', async () => {
     // Given: issue with worktree enabled
     mockResolveIssueTask.mockReturnValue('Issue text');
+    mockDeterminePiece.mockResolvedValue('default');
     mockSummarizeTaskName.mockResolvedValue('issue-task');
     mockConfirm.mockResolvedValue(true);
     mockPromptInput
@@ -331,6 +336,7 @@ describe('addTask', () => {
     // Given: issue reference "#99"
     const issueText = 'Issue #99: Fix login timeout';
     mockResolveIssueTask.mockReturnValue(issueText);
+    mockDeterminePiece.mockResolvedValue('default');
     mockSummarizeTaskName.mockResolvedValue('fix-login-timeout');
     mockConfirm.mockResolvedValue(false);
 
@@ -342,6 +348,42 @@ describe('addTask', () => {
     expect(fs.existsSync(taskFile)).toBe(true);
     const content = fs.readFileSync(taskFile, 'utf-8');
     expect(content).toContain('issue: 99');
+  });
+
+  it('should include piece selection in task file when issue reference is used', async () => {
+    // Given: issue reference "#99" with non-default piece selection
+    const issueText = 'Issue #99: Fix login timeout';
+    mockResolveIssueTask.mockReturnValue(issueText);
+    mockDeterminePiece.mockResolvedValue('review');
+    mockSummarizeTaskName.mockResolvedValue('fix-login-timeout');
+    mockConfirm.mockResolvedValue(false);
+
+    // When
+    await addTask(testDir, '#99');
+
+    // Then: task file contains piece field
+    const taskFile = path.join(testDir, '.takt', 'tasks', 'fix-login-timeout.yaml');
+    expect(fs.existsSync(taskFile)).toBe(true);
+    const content = fs.readFileSync(taskFile, 'utf-8');
+    expect(content).toContain('piece: review');
+  });
+
+  it('should cancel when piece selection returns null for issue reference', async () => {
+    // Given: issue fetched successfully but user cancels piece selection
+    const issueText = 'Issue #99: Fix login timeout';
+    mockResolveIssueTask.mockReturnValue(issueText);
+    mockDeterminePiece.mockResolvedValue(null);
+
+    // When
+    await addTask(testDir, '#99');
+
+    // Then: no task file created (cancelled at piece selection)
+    const tasksDir = path.join(testDir, '.takt', 'tasks');
+    const files = fs.readdirSync(tasksDir);
+    expect(files.length).toBe(0);
+
+    // Then: issue was fetched before cancellation
+    expect(mockResolveIssueTask).toHaveBeenCalledWith('#99');
   });
 
   describe('create_issue action', () => {
