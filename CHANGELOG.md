@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.0-alpha.2] - 2026-02-06
+
+### Fixed
+
+- GitHub Actions で `listTasks` テストが git user 未設定により失敗する問題を修正
+
 ## [0.7.0-alpha.1] - 2026-02-06
 
 ### Added
