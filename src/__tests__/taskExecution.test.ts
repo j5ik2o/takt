@@ -11,9 +11,6 @@ vi.mock('../infra/config/index.js', () => ({
   loadGlobalConfig: vi.fn(() => ({})),
 }));
 
-import { loadGlobalConfig } from '../infra/config/index.js';
-const mockLoadGlobalConfig = vi.mocked(loadGlobalConfig);
-
 vi.mock('../infra/task/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   TaskRunner: vi.fn(),
@@ -282,118 +279,5 @@ describe('resolveTaskExecution', () => {
     expect(mockInfo).toHaveBeenCalledWith(
       'Clone created: /project/../20260128-info-task (branch: takt/20260128-info-task)'
     );
-  });
-
-  it('should return autoPr from task YAML when specified', async () => {
-    // Given: Task with auto_pr option
-    const task: TaskInfo = {
-      name: 'task-with-auto-pr',
-      content: 'Task content',
-      filePath: '/tasks/task.yaml',
-      data: {
-        task: 'Task content',
-        auto_pr: true,
-      },
-    };
-
-    // When
-    const result = await resolveTaskExecution(task, '/project', 'default');
-
-    // Then
-    expect(result.autoPr).toBe(true);
-  });
-
-  it('should return autoPr: false from task YAML when specified as false', async () => {
-    // Given: Task with auto_pr: false
-    const task: TaskInfo = {
-      name: 'task-no-auto-pr',
-      content: 'Task content',
-      filePath: '/tasks/task.yaml',
-      data: {
-        task: 'Task content',
-        auto_pr: false,
-      },
-    };
-
-    // When
-    const result = await resolveTaskExecution(task, '/project', 'default');
-
-    // Then
-    expect(result.autoPr).toBe(false);
-  });
-
-  it('should fall back to global config autoPr when task YAML does not specify', async () => {
-    // Given: Task without auto_pr, global config has autoPr
-    mockLoadGlobalConfig.mockReturnValue({
-      language: 'en',
-      defaultPiece: 'default',
-      logLevel: 'info',
-      autoPr: true,
-    });
-
-    const task: TaskInfo = {
-      name: 'task-no-auto-pr-setting',
-      content: 'Task content',
-      filePath: '/tasks/task.yaml',
-      data: {
-        task: 'Task content',
-      },
-    };
-
-    // When
-    const result = await resolveTaskExecution(task, '/project', 'default');
-
-    // Then
-    expect(result.autoPr).toBe(true);
-  });
-
-  it('should return undefined autoPr when neither task nor config specifies', async () => {
-    // Given: Neither task nor config has autoPr
-    mockLoadGlobalConfig.mockReturnValue({
-      language: 'en',
-      defaultPiece: 'default',
-      logLevel: 'info',
-    });
-
-    const task: TaskInfo = {
-      name: 'task-default',
-      content: 'Task content',
-      filePath: '/tasks/task.yaml',
-      data: {
-        task: 'Task content',
-      },
-    };
-
-    // When
-    const result = await resolveTaskExecution(task, '/project', 'default');
-
-    // Then
-    expect(result.autoPr).toBeUndefined();
-  });
-
-  it('should prioritize task YAML auto_pr over global config', async () => {
-    // Given: Task has auto_pr: false, global config has autoPr: true
-    mockLoadGlobalConfig.mockReturnValue({
-      language: 'en',
-      defaultPiece: 'default',
-      logLevel: 'info',
-      autoPr: true,
-    });
-
-    const task: TaskInfo = {
-      name: 'task-override',
-      content: 'Task content',
-      filePath: '/tasks/task.yaml',
-      data: {
-        task: 'Task content',
-        auto_pr: false,
-      },
-    };
-
-    // When
-    const result = await resolveTaskExecution(task, '/project', 'default');
-
-    // Then
-    expect(result.autoPr).toBe(false);
   });
 });

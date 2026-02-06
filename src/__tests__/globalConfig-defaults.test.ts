@@ -121,49 +121,6 @@ describe('loadGlobalConfig', () => {
     expect(reloaded.pipeline!.commitMessageTemplate).toBe('feat: {title} (#{issue})');
   });
 
-  it('should load auto_pr config from config.yaml', () => {
-    const taktDir = join(testHomeDir, '.takt');
-    mkdirSync(taktDir, { recursive: true });
-    writeFileSync(
-      getGlobalConfigPath(),
-      'language: en\nauto_pr: true\n',
-      'utf-8',
-    );
-
-    const config = loadGlobalConfig();
-
-    expect(config.autoPr).toBe(true);
-  });
-
-  it('should save and reload auto_pr config', () => {
-    const taktDir = join(testHomeDir, '.takt');
-    mkdirSync(taktDir, { recursive: true });
-    // Create minimal config first
-    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
-
-    const config = loadGlobalConfig();
-    config.autoPr = true;
-    saveGlobalConfig(config);
-    invalidateGlobalConfigCache();
-
-    const reloaded = loadGlobalConfig();
-    expect(reloaded.autoPr).toBe(true);
-  });
-
-  it('should save auto_pr: false when explicitly set', () => {
-    const taktDir = join(testHomeDir, '.takt');
-    mkdirSync(taktDir, { recursive: true });
-    writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
-
-    const config = loadGlobalConfig();
-    config.autoPr = false;
-    saveGlobalConfig(config);
-    invalidateGlobalConfigCache();
-
-    const reloaded = loadGlobalConfig();
-    expect(reloaded.autoPr).toBe(false);
-  });
-
   it('should read from cache without hitting disk on second call', () => {
     const taktDir = join(testHomeDir, '.takt');
     mkdirSync(taktDir, { recursive: true });

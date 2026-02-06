@@ -414,4 +414,72 @@ describe('ParallelLogger', () => {
       expect(output[2]).toContain('A second');
     });
   });
+
+  describe('progress info display', () => {
+    it('should include progress info in prefix when provided', () => {
+      const logger = new ParallelLogger({
+        subMovementNames: ['step-a', 'step-b'],
+        writeFn,
+        progressInfo: {
+          iteration: 3,
+          maxIterations: 10,
+        },
+      });
+
+      const prefix = logger.buildPrefix('step-a', 0);
+      expect(prefix).toContain('[step-a]');
+      expect(prefix).toContain('(3/10)');
+      expect(prefix).toContain('step 1/2'); // 0-indexed -> 1-indexed, 2 total sub-movements
+    });
+
+    it('should show correct step number for each sub-movement', () => {
+      const logger = new ParallelLogger({
+        subMovementNames: ['step-a', 'step-b', 'step-c'],
+        writeFn,
+        progressInfo: {
+          iteration: 5,
+          maxIterations: 20,
+        },
+      });
+
+      const prefixA = logger.buildPrefix('step-a', 0);
+      const prefixB = logger.buildPrefix('step-b', 1);
+      const prefixC = logger.buildPrefix('step-c', 2);
+
+      expect(prefixA).toContain('step 1/3');
+      expect(prefixB).toContain('step 2/3');
+      expect(prefixC).toContain('step 3/3');
+    });
+
+    it('should not include progress info when not provided', () => {
+      const logger = new ParallelLogger({
+        subMovementNames: ['step-a'],
+        writeFn,
+      });
+
+      const prefix = logger.buildPrefix('step-a', 0);
+      expect(prefix).toContain('[step-a]');
+      expect(prefix).not.toMatch(/\(\d+\/\d+\)/);
+      expect(prefix).not.toMatch(/step \d+\/\d+/);
+    });
+
+    it('should include progress info in streamed output', () => {
+      const logger = new ParallelLogger({
+        subMovementNames: ['step-a'],
+        writeFn,
+        progressInfo: {
+          iteration: 2,
+          maxIterations: 5,
+        },
+      });
+      const handler = logger.createStreamHandler('step-a', 0);
+
+      handler({ type: 'text', data: { text: 'Hello world\n' } } as StreamEvent);
+
+      expect(output).toHaveLength(1);
+      expect(output[0]).toContain('[step-a]');
+      expect(output[0]).toContain('(2/5) step 1/1');
+      expect(output[0]).toContain('Hello world');
+    });
+  });
 });

@@ -12,6 +12,14 @@ import type { StreamCallback, StreamEvent } from '../types.js';
 const COLORS = ['\x1b[36m', '\x1b[33m', '\x1b[35m', '\x1b[32m'] as const; // cyan, yellow, magenta, green
 const RESET = '\x1b[0m';
 
+/** Progress information for parallel logger */
+export interface ParallelProgressInfo {
+  /** Current iteration (1-indexed) */
+  iteration: number;
+  /** Maximum iterations allowed */
+  maxIterations: number;
+}
+
 export interface ParallelLoggerOptions {
   /** Sub-movement names (used to calculate prefix width) */
   subMovementNames: string[];
@@ -19,6 +27,8 @@ export interface ParallelLoggerOptions {
   parentOnStream?: StreamCallback;
   /** Override process.stdout.write for testing */
   writeFn?: (text: string) => void;
+  /** Progress information for display */
+  progressInfo?: ParallelProgressInfo;
 }
 
 /**
@@ -34,11 +44,15 @@ export class ParallelLogger {
   private readonly lineBuffers: Map<string, string> = new Map();
   private readonly parentOnStream?: StreamCallback;
   private readonly writeFn: (text: string) => void;
+  private readonly progressInfo?: ParallelProgressInfo;
+  private readonly totalSubMovements: number;
 
   constructor(options: ParallelLoggerOptions) {
     this.maxNameLength = Math.max(...options.subMovementNames.map((n) => n.length));
     this.parentOnStream = options.parentOnStream;
     this.writeFn = options.writeFn ?? ((text: string) => process.stdout.write(text));
+    this.progressInfo = options.progressInfo;
+    this.totalSubMovements = options.subMovementNames.length;
 
     for (const name of options.subMovementNames) {
       this.lineBuffers.set(name, '');
@@ -47,12 +61,20 @@ export class ParallelLogger {
 
   /**
    * Build the colored prefix string for a sub-movement.
-   * Format: `\x1b[COLORm[name]\x1b[0m` + padding spaces
+   * Format: `\x1b[COLORm[name](iteration/max) step index/total\x1b[0m` + padding spaces
    */
   buildPrefix(name: string, index: number): string {
     const color = COLORS[index % COLORS.length];
     const padding = ' '.repeat(this.maxNameLength - name.length);
-    return `${color}[${name}]${RESET}${padding} `;
+
+    let progressPart = '';
+    if (this.progressInfo) {
+      const { iteration, maxIterations } = this.progressInfo;
+      // index is 0-indexed, display as 1-indexed for step number
+      progressPart = `(${iteration}/${maxIterations}) step ${index + 1}/${this.totalSubMovements} `;
+    }
+
+    return `${color}[${name}]${RESET}${padding} ${progressPart}`;
   }
 
   /**

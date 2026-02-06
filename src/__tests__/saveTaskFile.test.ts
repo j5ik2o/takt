@@ -121,25 +121,6 @@ describe('saveTaskFile', () => {
     expect(content).not.toContain('issue:');
     expect(content).not.toContain('worktree:');
     expect(content).not.toContain('branch:');
-    expect(content).not.toContain('auto_pr:');
-  });
-
-  it('should include auto_pr in YAML when specified', async () => {
-    // When
-    const filePath = await saveTaskFile(testDir, 'Task', { autoPr: true });
-
-    // Then
-    const content = fs.readFileSync(filePath, 'utf-8');
-    expect(content).toContain('auto_pr: true');
-  });
-
-  it('should include auto_pr: false in YAML when specified as false', async () => {
-    // When
-    const filePath = await saveTaskFile(testDir, 'Task', { autoPr: false });
-
-    // Then
-    const content = fs.readFileSync(filePath, 'utf-8');
-    expect(content).toContain('auto_pr: false');
   });
 
   it('should use first line for filename generation', async () => {

@@ -13,6 +13,18 @@ import chalk from 'chalk';
 import type { StreamEvent, StreamCallback } from '../../core/piece/index.js';
 import { truncate } from './LogManager.js';
 
+/** Progress information for stream display */
+export interface ProgressInfo {
+  /** Current iteration (1-indexed) */
+  iteration: number;
+  /** Maximum iterations allowed */
+  maxIterations: number;
+  /** Current movement index within piece (0-indexed) */
+  movementIndex: number;
+  /** Total number of movements in piece */
+  totalMovements: number;
+}
+
 /** Stream display manager for real-time Claude output */
 export class StreamDisplay {
   private lastToolUse: string | null = null;
@@ -32,13 +44,30 @@ export class StreamDisplay {
   private spinnerFrame = 0;
 
   constructor(
-    private agentName = 'Claude',
-    private quiet = false,
+    private agentName: string,
+    private quiet: boolean,
+    private progressInfo?: ProgressInfo,
   ) {}
+
+  /**
+   * Build progress prefix string for display.
+   * Format: `(iteration/maxIterations) step movementIndex/totalMovements`
+   * Example: `(3/10) step 2/4`
+   */
+  private buildProgressPrefix(): string {
+    if (!this.progressInfo) {
+      return '';
+    }
+    const { iteration, maxIterations, movementIndex, totalMovements } = this.progressInfo;
+    // movementIndex is 0-indexed, display as 1-indexed
+    return `(${iteration}/${maxIterations}) step ${movementIndex + 1}/${totalMovements}`;
+  }
 
   showInit(model: string): void {
     if (this.quiet) return;
-    console.log(chalk.gray(`[${this.agentName}] Model: ${model}`));
+    const progress = this.buildProgressPrefix();
+    const progressPart = progress ? ` ${progress}` : '';
+    console.log(chalk.gray(`[${this.agentName}]${progressPart} Model: ${model}`));
   }
 
   private startToolSpinner(tool: string, inputPreview: string): void {
@@ -140,7 +169,9 @@ export class StreamDisplay {
 
     if (this.isFirstThinking) {
       console.log();
-      console.log(chalk.magenta(`💭 [${this.agentName} thinking]:`));
+      const progress = this.buildProgressPrefix();
+      const progressPart = progress ? ` ${progress}` : '';
+      console.log(chalk.magenta(`💭 [${this.agentName}]${progressPart} thinking:`));
       this.isFirstThinking = false;
     }
     process.stdout.write(chalk.gray.italic(thinking));
@@ -164,7 +195,9 @@ export class StreamDisplay {
 
     if (this.isFirstText) {
       console.log();
-      console.log(chalk.cyan(`[${this.agentName}]:`));
+      const progress = this.buildProgressPrefix();
+      const progressPart = progress ? ` ${progress}` : '';
+      console.log(chalk.cyan(`[${this.agentName}]${progressPart}:`));
       this.isFirstText = false;
     }
     process.stdout.write(text);

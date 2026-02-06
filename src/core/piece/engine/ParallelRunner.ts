@@ -71,6 +71,10 @@ export class ParallelRunner {
       ? new ParallelLogger({
           subMovementNames: subMovements.map((s) => s.name),
           parentOnStream: this.deps.engineOptions.onStream,
+          progressInfo: {
+            iteration: state.iteration,
+            maxIterations,
+          },
         })
       : undefined;
 

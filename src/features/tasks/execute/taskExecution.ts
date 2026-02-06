@@ -16,7 +16,6 @@ import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { executePiece } from './pieceExecution.js';
 import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
 import type { TaskExecutionOptions, ExecuteTaskOptions } from './types.js';
-import { createPullRequest, buildPrBody, pushBranch, type GitHubIssue } from '../../../infra/github/index.js';
 
 export type { TaskExecutionOptions, ExecuteTaskOptions };
 
@@ -60,39 +59,6 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<boolean>
 }
 
 /**
- * Push branch to origin and create a PR.
- * clone の origin は shared clone 作成時に削除されるため、project cwd 経由で push する。
- */
-export function pushAndCreatePr(
-  cwd: string,
-  branch: string,
-  title: string,
-  description: string,
-  options?: { issues?: GitHubIssue[]; repo?: string },
-): void {
-  info('Creating pull request...');
-  try {
-    pushBranch(cwd, branch);
-  } catch (e) {
-    error(`Failed to push branch to origin: ${getErrorMessage(e)}`);
-    return;
-  }
-  const prBody = buildPrBody(options?.issues, description);
-  const truncatedTitle = title.length > 100 ? `${title.slice(0, 97)}...` : title;
-  const prResult = createPullRequest(cwd, {
-    branch,
-    title: truncatedTitle,
-    body: prBody,
-    repo: options?.repo,
-  });
-  if (prResult.success) {
-    success(`PR created: ${prResult.url}`);
-  } else {
-    error(`PR creation failed: ${prResult.error}`);
-  }
-}
-
-/**
  * Execute a task: resolve clone → run piece → auto-commit+push → remove clone → record completion.
  *
  * Shared by runAllTasks() and watchTasks() to avoid duplicated
@@ -111,7 +77,7 @@ export async function executeAndCompleteTask(
   const executionLog: string[] = [];
 
   try {
-    const { execCwd, execPiece, isWorktree, branch, startMovement, retryNote, autoPr } = await resolveTaskExecution(task, cwd, pieceName);
+    const { execCwd, execPiece, isWorktree, startMovement, retryNote } = await resolveTaskExecution(task, cwd, pieceName);
 
     // cwd is always the project root; pass it as projectCwd so reports/sessions go there
     const taskSuccess = await executeTask({
@@ -131,10 +97,6 @@ export async function executeAndCompleteTask(
         info(`Auto-committed & pushed: ${commitResult.commitHash}`);
       } else if (!commitResult.success) {
         error(`Auto-commit failed: ${commitResult.message}`);
-      }
-
-      if (commitResult.success && commitResult.commitHash && branch && autoPr) {
-        pushAndCreatePr(cwd, branch, task.name, `Task "${task.name}" completed successfully.`);
       }
     }
 
@@ -236,7 +198,7 @@ export async function resolveTaskExecution(
   task: TaskInfo,
   defaultCwd: string,
   defaultPiece: string
-): Promise<{ execCwd: string; execPiece: string; isWorktree: boolean; branch?: string; startMovement?: string; retryNote?: string; autoPr?: boolean }> {
+): Promise<{ execCwd: string; execPiece: string; isWorktree: boolean; branch?: string; startMovement?: string; retryNote?: string }> {
   const data = task.data;
 
   // No structured data: use defaults
@@ -275,14 +237,5 @@ export async function resolveTaskExecution(
   // Handle retry_note
   const retryNote = data.retry_note;
 
-  // Handle auto_pr (task YAML > global config)
-  let autoPr: boolean | undefined;
-  if (data.auto_pr !== undefined) {
-    autoPr = data.auto_pr;
-  } else {
-    const globalConfig = loadGlobalConfig();
-    autoPr = globalConfig.autoPr;
-  }
-
-  return { execCwd, execPiece, isWorktree, branch, startMovement, retryNote, autoPr };
+  return { execCwd, execPiece, isWorktree, branch, startMovement, retryNote };
 }

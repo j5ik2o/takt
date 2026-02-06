@@ -28,4 +28,4 @@ export {
 
 export { Spinner } from './Spinner.js';
 
-export { StreamDisplay } from './StreamDisplay.js';
+export { StreamDisplay, type ProgressInfo } from './StreamDisplay.js';

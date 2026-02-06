@@ -43,8 +43,6 @@ export interface GlobalConfig {
   debug?: DebugConfig;
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
   worktreeDir?: string;
-  /** Auto-create PR after worktree execution (default: prompt in interactive mode) */
-  autoPr?: boolean;
   /** List of builtin piece/agent names to exclude from fallback loading */
   disabledBuiltins?: string[];
   /** Enable builtin pieces from resources/global/{lang}/pieces */

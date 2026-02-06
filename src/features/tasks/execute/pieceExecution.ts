@@ -273,8 +273,17 @@ export async function executePiece(
       log.debug('Step instruction', instruction);
     }
 
+    // Find movement index for progress display
+    const movementIndex = pieceConfig.movements.findIndex((m) => m.name === step.name);
+    const totalMovements = pieceConfig.movements.length;
+
     // Use quiet mode from CLI (already resolved CLI flag + config in preAction)
-    displayRef.current = new StreamDisplay(step.agentDisplayName, isQuietMode());
+    displayRef.current = new StreamDisplay(step.agentDisplayName, isQuietMode(), {
+      iteration,
+      maxIterations: pieceConfig.maxIterations,
+      movementIndex: movementIndex >= 0 ? movementIndex : 0,
+      totalMovements,
+    });
 
     // Write step_start record to NDJSON log
     const record: NdjsonStepStart = {
