@@ -81,7 +81,15 @@ You are the **human proxy** in the automated piece. Before approval, verify the 
 | Production ready | No mock/stub/TODO remaining? |
 | Operation | Actually works as expected? |
 
-### 6. Spec Compliance Final Check
+### 6. Backward Compatibility Code Detection
+
+**Backward compatibility code is unnecessary unless explicitly instructed.** REJECT if found:
+
+- Unused re-exports, `_var` renames, `// removed` comments
+- Fallbacks, old API maintenance, migration code
+- Legacy support kept "just in case"
+
+### 7. Spec Compliance Final Check
 
 **Final verification that changes comply with the project's documented specifications.**
 
@@ -92,7 +100,7 @@ Check:
 
 **REJECT if spec violations are found.** Don't assume "probably correct"—actually read and cross-reference the specs.
 
-### 7. Piece Overall Review
+### 8. Piece Overall Review
 
 **Check all reports in the report directory and verify overall piece consistency.**
 
@@ -109,7 +117,7 @@ Check:
 | Deviation from original purpose | REJECT - Request return to objective |
 | Scope creep | Record only - Address in next task |
 
-### 8. Improvement Suggestion Check
+### 9. Improvement Suggestion Check
 
 **Check review reports for unaddressed improvement suggestions.**
 

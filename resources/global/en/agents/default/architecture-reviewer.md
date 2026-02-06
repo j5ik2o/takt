@@ -364,7 +364,6 @@ function createUser(data: UserData) {
 | CLAUDE.md / README.md | Conforms to schema definitions, design principles, constraints |
 | Type definitions / Zod schemas | New fields reflected in schemas |
 | YAML/JSON config files | Follows documented format |
-| Existing patterns | Consistent with similar files |
 
 **Specific checks:**
 
@@ -409,7 +408,29 @@ Verify:
 - Does it align with business requirements
 - Is naming consistent with the domain
 
-### 11. Change Scope Assessment
+### 11. Boy Scout Rule
+
+**Leave the code better than you found it.** If changed files have structural issues, flag them for refactoring within the task scope.
+
+**In scope:**
+- Existing issues within changed files (dead code, poor naming, broken abstractions)
+- Structural issues within changed modules (mixed responsibilities, unnecessary dependencies)
+
+**Out of scope:**
+- Issues in unchanged files (record as existing issues only)
+- Refactoring that significantly exceeds the task scope (suggest as non-blocking)
+
+**Judgment:**
+
+| Situation | Judgment |
+|-----------|----------|
+| Clear issues within changed files | **REJECT** — require fix together |
+| Structural issues within changed modules | **REJECT** — fix if within scope |
+| Issues in unchanged files | Record only (non-blocking) |
+
+**Following poor existing code as justification for leaving problems is not acceptable.** If existing code is bad, improve it rather than match it.
+
+### 12. Change Scope Assessment
 
 **Check change scope and include in report (non-blocking).**
 
@@ -428,7 +449,7 @@ Verify:
 **Include as suggestions (non-blocking):**
 - If splittable, present splitting proposal
 
-### 12. Circular Review Detection
+### 13. Circular Review Detection
 
 When review count is provided (e.g., "Review count: 3rd"), adjust judgment accordingly.
 

@@ -51,9 +51,8 @@ function printNonInteractiveList(
   }
 
   for (const item of items) {
-    const worktreeLabel = item.info.worktreePath ? ' (worktree)' : '';
     const instruction = item.originalInstruction ? ` - ${item.originalInstruction}` : '';
-    info(`${item.info.branch}${worktreeLabel} (${item.filesChanged} files)${instruction}`);
+    info(`${item.info.branch} (${item.filesChanged} files)${instruction}`);
   }
 
   for (const task of pendingTasks) {

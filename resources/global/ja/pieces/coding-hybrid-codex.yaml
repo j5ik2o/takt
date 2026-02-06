@@ -1,11 +1,12 @@
 # Coding TAKT Piece
-# Architect -> Implement -> Parallel Review (AI + Architecture) -> Fix if needed
+# Plan -> Implement -> Parallel Review (AI + Architecture) -> Fix if needed
 #
-# 設計を重視しながらも、planとsuperviseを省略した軽量な開発ピース。
+# 計画と並列レビューを備えた軽量な開発ピース。
+# architect-plannerが要件を調査・整理し、不明点はコードを読んで自力で解決する。
 # 並列レビュー後、問題がなければ直接完了し、高速なフィードバックループを実現。
 #
 # フロー:
-# architect (設計)
+# plan (要件調査・計画)
 #   ↓
 # implement (実装)
 #   ↓
@@ -27,83 +28,75 @@
 #   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
 
 name: coding-hybrid-codex
-description: Architecture-focused development piece with parallel reviews (architect -> implement -> parallel review -> complete)
+description: Lightweight development piece with planning and parallel reviews (plan -> implement -> parallel review -> complete)
 
 max_iterations: 20
 
-initial_movement: architect-plan
+initial_movement: plan
 
 movements:
-  - name: architect-plan
+  - name: plan
     edit: false
-    agent: ../agents/default/architecture-reviewer.md
+    agent: ../agents/default/architect-planner.md
     report:
-      name: architecture-reviewer
+      name: 00-plan.md
       format: |
         ```markdown
-        # アーキテクチャ設計
+        # タスク計画
 
-        ## タスク規模
-        Small / Medium / Large
+        ## 元の要求
+        {ユーザーの要求をそのまま記載}
 
-        ## 設計判断
+        ## 分析結果
 
-        ### ファイル構成
-        | ファイル | 役割 |
+        ### 目的
+        {達成すべきこと}
+
+        ### スコープ
+
+        **変更対象ファイル:**
+        | ファイル | 変更内容 |
+        |---------|---------|
+
+        **テストへの影響:**
+        | ファイル | 影響 |
         |---------|------|
-        | `src/example.ts` | 概要 |
 
-        ### 技術選定
-        - {選定した技術・ライブラリとその理由}
+        ### 設計判断（必要な場合）
+        - ファイル構成: {新規ファイルの配置、根拠}
+        - 設計パターン: {採用するパターンとその理由}
 
-        ### 設計パターン
-        - {採用するパターンと適用箇所}
-
-        ## 実装ガイドライン
-        - {Coderが実装時に従うべき指針}
+        ### 実装アプローチ
+        {どう進めるか}
         ```
     allowed_tools:
       - Read
       - Glob
       - Grep
+      - Bash
       - WebSearch
       - WebFetch
     rules:
-      - condition: 小規模タスク（設計不要）
+      - condition: 要件が明確で実装可能
         next: implement
-      - condition: 設計完了
-        next: implement
-      - condition: 情報不足、判断できない
+      - condition: ユーザーが質問をしている（実装タスクではない）
+        next: COMPLETE
+      - condition: 要件が不明確、情報不足
         next: ABORT
     instruction_template: |
-      タスクのアーキテクチャ設計を行ってください。
+      タスクを分析し、実装方針を立ててください。
 
-      **タスク**: {task}
-      **進行状況**: {iteration}/{max_iterations} ターン
-
-      **小規模タスクの判断基準:**
-      - 1-2ファイルの変更のみ
-      - 既存パターンの踏襲で済む
-      - 技術選定が不要
-
-      小規模タスクの場合は設計レポートを作成せず、「小規模タスク（設計不要）」のルールに対応してください。
-
-      **設計が必要なタスク:**
-      - 3ファイル以上の変更
-      - 新しいモジュール・機能の追加
-      - 技術選定が必要
-      - アーキテクチャパターンの決定が必要
+      **不明点の扱い（重要）:**
+      タスクに Open Questions や不明点がある場合は、コードを読んで調査し自力で解決してください。
+      調査しても解決できない外部要因（ユーザーの意図が判断できない等）のみ「要件が不明確」と判断してください。
+      コードを読めば分かることは「不明確」ではありません。
 
       **やること:**
-      1. タスクの規模を評価（Small/Medium/Large）
-      2. 影響を受けるファイル構成を特定
-      3. 必要に応じて技術選定を行う
-      4. 設計パターンの選択
-      5. Coderへの実装ガイドライン作成
-
-      **やらないこと:**
-      - コードの実装（Coderの仕事）
-      - コードレビュー
+      1. タスクの要件を理解する
+      2. 関連するコードを読んで現状を把握する
+      3. 不明点があればコード調査で解決する
+      4. 影響範囲を特定する
+      5. 実装アプローチを決める
 
   - name: implement
     edit: true
@@ -135,15 +128,15 @@ movements:
         requires_user_input: true
         interactive_only: true
     instruction_template: |
-      architect-planムーブメントで決定した設計に従って実装してください。
+      planムーブメントで立てた計画に従って実装してください。
 
       **参照するレポート:**
-      - 設計: {report:01-architecture.md}（存在する場合）
+      - 計画: {report:00-plan.md}
 
       Piece Contextに示されたReport Directory内のファイルのみ参照してください。他のレポートディレクトリは検索/参照しないでください。
 
-      **重要:** 設計判断はせず、architect-planムーブメントで決定された設計に従ってください。
-      不明点や設計の変更が必要な場合は報告してください。
+      **重要:** 計画で決定されたアプローチに従ってください。
+      不明点や方針の変更が必要な場合は報告してください。
 
       **重要**: 実装と同時に単体テストを追加してください。
       - 新規作成したクラス・関数には単体テストを追加
@@ -288,22 +281,20 @@ movements:
           - condition: approved
           - condition: needs_fix
         instruction_template: |
-          **実装がarchitectムーブメントの設計に従っているか**を確認してください。
+          **実装が計画に従っているか**を確認してください。
           AI特有の問題はレビューしないでください（ai_reviewムーブメントで行います）。
 
           **参照するレポート:**
-          - 設計: {report:01-architecture.md}（存在する場合）
+          - 計画: {report:00-plan.md}
           - 実装スコープ: {report:02-coder-scope.md}
 
           **レビュー観点:**
-          - 設計との整合性（architectが定めたファイル構成・パターンに従っているか）
+          - 計画との整合性（計画で定めたスコープ・アプローチに従っているか）
           - コード品質（DRY、YAGNI、Fail Fast、イディオマティック）
           - 変更スコープの適切性
           - テストカバレッジ
           - デッドコード
           - 呼び出しチェーン検証
-
-          **注意:** architectムーブメントをスキップした小規模タスクの場合は、従来通り設計の妥当性も確認してください。
 
     rules:
       - condition: all("AI特有の問題なし", "approved")

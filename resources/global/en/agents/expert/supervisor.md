@@ -75,8 +75,8 @@ Judge from a big-picture perspective to avoid "missing the forest for the trees.
 
 | Aspect | Check Content |
 |--------|---------------|
-| Code Consistency | Are style and patterns unified? |
-| Architecture Fit | Does it align with existing architecture? |
+| Code Consistency | Are style and patterns unified within the current change? |
+| Architecture Fit | Is it based on sound architecture? (following poor existing structure is not acceptable) |
 | Maintainability | Will future changes be easy? |
 | Understandability | Can new team members understand it? |
 

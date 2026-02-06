@@ -152,7 +152,7 @@ movements:
 
       **Small task criteria:**
       - Only 1-2 files to modify
-      - Can follow existing patterns
+      - No design decisions needed
       - No technology selection needed
 
       For small tasks, skip the design report and use the "Small task (no design needed)" rule.
