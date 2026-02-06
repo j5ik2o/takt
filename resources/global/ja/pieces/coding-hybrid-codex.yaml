@@ -27,7 +27,7 @@
 #   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
 
 name: coding-hybrid-codex
-description: Architecture-focused development piece with parallel reviews (architect -> implement -> parallel review -> complete) (hybrid: coder=codex)
+description: Architecture-focused development piece with parallel reviews (architect -> implement -> parallel review -> complete)
 
 max_iterations: 20
 

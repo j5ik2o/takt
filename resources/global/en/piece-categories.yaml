@@ -22,6 +22,20 @@ piece_categories:
         - expert
         - expert-cqrs
 
+  "🔀 Hybrid (Codex Coding)":
+    "🚀 Quick Start":
+      pieces:
+        - default-hybrid-codex
+        - passthrough-hybrid-codex
+        - minimal-hybrid-codex
+    "🔍 Review & Fix":
+      pieces:
+        - review-fix-minimal-hybrid-codex
+    "🔧 Expert":
+      pieces:
+        - expert-hybrid-codex
+        - expert-cqrs-hybrid-codex
+
   "Others":
     pieces:
       - research

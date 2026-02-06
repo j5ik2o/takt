@@ -12,7 +12,7 @@
 #   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
 
 name: review-fix-minimal-hybrid-codex
-description: Review and fix piece for existing code (starts with review, no implementation) (hybrid: coder=codex)
+description: Review and fix piece for existing code (starts with review, no implementation)
 
 max_iterations: 20
 

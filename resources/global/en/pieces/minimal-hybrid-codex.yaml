@@ -12,7 +12,7 @@
 #   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
 
 name: minimal-hybrid-codex
-description: Minimal development piece (implement -> parallel review -> fix if needed -> complete) (hybrid: coder=codex)
+description: Minimal development piece (implement -> parallel review -> fix if needed -> complete)
 
 max_iterations: 20
 

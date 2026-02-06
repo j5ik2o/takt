@@ -28,7 +28,7 @@
 #                      - Decisions: 02-coder-decisions.md
 
 name: expert-cqrs-hybrid-codex
-description: CQRS+ES・フロントエンド・セキュリティ・QA専門家レビュー (hybrid: coder=codex)
+description: CQRS+ES・フロントエンド・セキュリティ・QA専門家レビュー
 
 max_iterations: 30
 

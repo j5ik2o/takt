@@ -162,4 +162,72 @@ describe('selectPieceFromCategorizedPieces', () => {
     const selected = await selectPieceFromCategorizedPieces(categorized, '');
     expect(selected).toBe('my-piece');
   });
+
+  it('should navigate into subcategories recursively', async () => {
+    const categorized: CategorizedPieces = {
+      categories: [
+        {
+          name: 'Hybrid',
+          pieces: [],
+          children: [
+            { name: 'Quick Start', pieces: ['hybrid-default'], children: [] },
+            { name: 'Full Stack', pieces: ['hybrid-expert'], children: [] },
+          ],
+        },
+      ],
+      allPieces: createPieceMap([
+        { name: 'hybrid-default', source: 'builtin' },
+        { name: 'hybrid-expert', source: 'builtin' },
+      ]),
+      missingPieces: [],
+    };
+
+    // Select Hybrid category → Quick Start subcategory → piece
+    selectOptionMock
+      .mockResolvedValueOnce('__custom_category__:Hybrid')
+      .mockResolvedValueOnce('__category__:Quick Start')
+      .mockResolvedValueOnce('hybrid-default');
+
+    const selected = await selectPieceFromCategorizedPieces(categorized, '');
+    expect(selected).toBe('hybrid-default');
+    expect(selectOptionMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('should show subcategories and pieces at the same level within a category', async () => {
+    const categorized: CategorizedPieces = {
+      categories: [
+        {
+          name: 'Dev',
+          pieces: ['base-piece'],
+          children: [
+            { name: 'Advanced', pieces: ['adv-piece'], children: [] },
+          ],
+        },
+      ],
+      allPieces: createPieceMap([
+        { name: 'base-piece', source: 'user' },
+        { name: 'adv-piece', source: 'user' },
+      ]),
+      missingPieces: [],
+    };
+
+    // Select Dev category, then directly select the root-level piece
+    selectOptionMock
+      .mockResolvedValueOnce('__custom_category__:Dev')
+      .mockResolvedValueOnce('base-piece');
+
+    const selected = await selectPieceFromCategorizedPieces(categorized, '');
+    expect(selected).toBe('base-piece');
+
+    // Second call should show Advanced subcategory AND base-piece at same level
+    const secondCallOptions = selectOptionMock.mock.calls[1]![1] as { label: string; value: string }[];
+    const labels = secondCallOptions.map((o) => o.label);
+
+    // Should contain the subcategory folder
+    expect(labels.some((l) => l.includes('Advanced'))).toBe(true);
+    // Should contain the piece
+    expect(labels.some((l) => l.includes('base-piece'))).toBe(true);
+    // Should NOT contain the parent category again
+    expect(labels.some((l) => l.includes('Dev'))).toBe(false);
+  });
 });

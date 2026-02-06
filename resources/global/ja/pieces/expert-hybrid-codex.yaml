@@ -19,7 +19,7 @@
 #   {report_dir}     - レポートディレクトリ名（例: "20250126-143052-task-summary"）
 
 name: expert-hybrid-codex
-description: アーキテクチャ・フロントエンド・セキュリティ・QA専門家レビュー (hybrid: coder=codex)
+description: アーキテクチャ・フロントエンド・セキュリティ・QA専門家レビュー
 
 max_iterations: 30
 

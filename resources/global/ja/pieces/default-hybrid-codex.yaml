@@ -11,7 +11,7 @@
 #   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
 
 name: default-hybrid-codex
-description: Standard development piece with planning and specialized reviews (hybrid: coder=codex)
+description: Standard development piece with planning and specialized reviews
 
 max_iterations: 30
 

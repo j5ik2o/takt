@@ -20,7 +20,7 @@
 #                          - Decisions: 02-coder-decisions.md
 
 name: default-hybrid-codex
-description: Standard development piece with planning and specialized reviews (hybrid: coder=codex)
+description: Standard development piece with planning and specialized reviews
 
 max_iterations: 30
 

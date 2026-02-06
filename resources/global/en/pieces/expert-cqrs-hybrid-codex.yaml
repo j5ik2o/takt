@@ -19,7 +19,7 @@
 #   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
 
 name: expert-cqrs-hybrid-codex
-description: CQRS+ES, Frontend, Security, QA Expert Review (hybrid: coder=codex)
+description: CQRS+ES, Frontend, Security, QA Expert Review
 
 max_iterations: 30
 

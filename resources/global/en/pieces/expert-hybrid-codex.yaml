@@ -31,7 +31,7 @@
 #                          - Decisions: 02-coder-decisions.md
 
 name: expert-hybrid-codex
-description: Architecture, Frontend, Security, QA Expert Review (hybrid: coder=codex)
+description: Architecture, Frontend, Security, QA Expert Review
 
 max_iterations: 30
 

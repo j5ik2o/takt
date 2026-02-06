@@ -377,7 +377,7 @@ export async function selectPieceFromCategorizedPieces(
 
     if (selection.type === 'category') {
       const piece = await selectPieceFromCategoryTree(
-        [selection.node],
+        selection.node.children,
         currentPiece,
         true,
         selection.node.pieces,

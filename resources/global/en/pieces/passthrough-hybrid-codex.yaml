@@ -7,7 +7,7 @@
 # COMPLETE
 
 name: passthrough-hybrid-codex
-description: Single-agent thin wrapper. Pass task directly to coder as-is. (hybrid: coder=codex)
+description: Single-agent thin wrapper. Pass task directly to coder as-is.
 
 max_iterations: 10
 
