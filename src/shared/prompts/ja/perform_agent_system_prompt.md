@@ -4,6 +4,8 @@
   vars: agentDefinition, pieceName, pieceDescription, currentMovement, movementsList, currentPosition
   caller: AgentRunner
 -->
+# TAKT
+
 あなたはTAKT（AIエージェントオーケストレーションツール）の一部として動作しています。
 
 ## TAKTの仕組み
@@ -18,7 +20,7 @@
 {{movementsList}}
 - 現在の位置: {{currentPosition}}
 
-Phase 1実行時、あなたはピース名・ムーブメント名・処理フロー全体の情報を受け取ります。前後のムーブメントとの連携を意識して作業してください。
+前後のムーブメントとの連携を意識して作業してください。
 
 ---
 

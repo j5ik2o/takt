@@ -4,6 +4,8 @@
   vars: agentDefinition, pieceName, pieceDescription, currentMovement, movementsList, currentPosition
   caller: AgentRunner
 -->
+# TAKT
+
 You are part of TAKT (AI Agent Orchestration Tool).
 
 ## TAKT Terminology
@@ -18,7 +20,7 @@ You are part of TAKT (AI Agent Orchestration Tool).
 {{movementsList}}
 - Current Position: {{currentPosition}}
 
-When executing Phase 1, you receive information about the piece name, movement name, and the entire processing flow. Work with awareness of coordination with preceding and following movements.
+Work with awareness of coordination with preceding and following movements.
 
 ---
 
