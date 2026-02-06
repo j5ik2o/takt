@@ -94,6 +94,10 @@ export class InstructionBuilder {
     const pieceDescription = this.context.pieceDescription ?? '';
     const hasPieceDescription = !!pieceDescription;
 
+    // Retry note
+    const hasRetryNote = !!this.context.retryNote;
+    const retryNote = hasRetryNote ? escapeTemplateChars(this.context.retryNote!) : '';
+
     return loadTemplate('perform_phase1_message', language, {
       workingDirectory: this.context.cwd,
       editRule,
@@ -113,6 +117,8 @@ export class InstructionBuilder {
       previousResponse,
       hasUserInputs,
       userInputs,
+      hasRetryNote,
+      retryNote,
       instructions,
     });
   }

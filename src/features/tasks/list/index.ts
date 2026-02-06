@@ -28,6 +28,7 @@ import {
   instructBranch,
 } from './taskActions.js';
 import { deletePendingTask, deleteFailedTask } from './taskDeleteActions.js';
+import { retryFailedTask } from './taskRetryActions.js';
 import { listTasksNonInteractive, type ListNonInteractiveOptions } from './listNonInteractive.js';
 
 export type { ListNonInteractiveOptions } from './listNonInteractive.js';
@@ -42,14 +43,17 @@ export {
   instructBranch,
 } from './taskActions.js';
 
-/** Task action type for the task action selection menu */
-type TaskAction = 'delete';
+/** Task action type for pending task action selection menu */
+type PendingTaskAction = 'delete';
+
+/** Task action type for failed task action selection menu */
+type FailedTaskAction = 'retry' | 'delete';
 
 /**
- * Show task details and prompt for an action.
+ * Show pending task details and prompt for an action.
  * Returns the selected action, or null if cancelled.
  */
-async function showTaskAndPromptAction(task: TaskListItem): Promise<TaskAction | null> {
+async function showPendingTaskAndPromptAction(task: TaskListItem): Promise<PendingTaskAction | null> {
   header(`[${task.kind}] ${task.name}`);
   info(`  Created: ${task.createdAt}`);
   if (task.content) {
@@ -57,9 +61,30 @@ async function showTaskAndPromptAction(task: TaskListItem): Promise<TaskAction |
   }
   blankLine();
 
-  return await selectOption<TaskAction>(
+  return await selectOption<PendingTaskAction>(
     `Action for ${task.name}:`,
     [{ label: 'Delete', value: 'delete', description: 'Remove this task permanently' }],
+  );
+}
+
+/**
+ * Show failed task details and prompt for an action.
+ * Returns the selected action, or null if cancelled.
+ */
+async function showFailedTaskAndPromptAction(task: TaskListItem): Promise<FailedTaskAction | null> {
+  header(`[${task.kind}] ${task.name}`);
+  info(`  Failed at: ${task.createdAt}`);
+  if (task.content) {
+    info(`  ${task.content}`);
+  }
+  blankLine();
+
+  return await selectOption<FailedTaskAction>(
+    `Action for ${task.name}:`,
+    [
+      { label: 'Retry', value: 'retry', description: 'Requeue task and select start movement' },
+      { label: 'Delete', value: 'delete', description: 'Remove this task permanently' },
+    ],
   );
 }
 
@@ -170,15 +195,17 @@ export async function listTasks(
     } else if (type === 'pending') {
       const task = pendingTasks[idx];
       if (!task) continue;
-      const taskAction = await showTaskAndPromptAction(task);
+      const taskAction = await showPendingTaskAndPromptAction(task);
       if (taskAction === 'delete') {
         await deletePendingTask(task);
       }
     } else if (type === 'failed') {
       const task = failedTasks[idx];
       if (!task) continue;
-      const taskAction = await showTaskAndPromptAction(task);
-      if (taskAction === 'delete') {
+      const taskAction = await showFailedTaskAndPromptAction(task);
+      if (taskAction === 'retry') {
+        await retryFailedTask(task, cwd);
+      } else if (taskAction === 'delete') {
         await deleteFailedTask(task);
       }
     }

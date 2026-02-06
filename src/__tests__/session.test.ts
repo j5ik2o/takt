@@ -13,6 +13,7 @@ import {
   appendNdjsonLine,
   loadNdjsonLog,
   loadSessionLog,
+  extractFailureInfo,
   type LatestLogPointer,
   type SessionLog,
   type NdjsonRecord,
@@ -636,6 +637,133 @@ describe('NDJSON log', () => {
       const log = loadNdjsonLog(filepath);
       expect(log).not.toBeNull();
       expect(log!.history).toHaveLength(0);
+    });
+  });
+
+  describe('extractFailureInfo', () => {
+    it('should return null for non-existent file', () => {
+      const result = extractFailureInfo('/nonexistent/path.jsonl');
+      expect(result).toBeNull();
+    });
+
+    it('should extract failure info from aborted piece log', () => {
+      const filepath = initNdjsonLog('20260205-120000-abc123', 'failing task', 'wf', projectDir);
+
+      // Add step_start for plan
+      appendNdjsonLine(filepath, {
+        type: 'step_start',
+        step: 'plan',
+        agent: 'planner',
+        iteration: 1,
+        timestamp: '2025-01-01T00:00:01.000Z',
+      });
+
+      // Add step_complete for plan
+      appendNdjsonLine(filepath, {
+        type: 'step_complete',
+        step: 'plan',
+        agent: 'planner',
+        status: 'done',
+        content: 'Plan done',
+        instruction: 'Plan it',
+        timestamp: '2025-01-01T00:00:02.000Z',
+      } satisfies NdjsonStepComplete);
+
+      // Add step_start for implement (fails before completing)
+      appendNdjsonLine(filepath, {
+        type: 'step_start',
+        step: 'implement',
+        agent: 'coder',
+        iteration: 2,
+        timestamp: '2025-01-01T00:00:03.000Z',
+      });
+
+      // Add piece_abort
+      appendNdjsonLine(filepath, {
+        type: 'piece_abort',
+        iterations: 1,
+        reason: 'spawn node ENOENT',
+        endTime: '2025-01-01T00:00:04.000Z',
+      } satisfies NdjsonPieceAbort);
+
+      const result = extractFailureInfo(filepath);
+      expect(result).not.toBeNull();
+      expect(result!.lastCompletedMovement).toBe('plan');
+      expect(result!.failedMovement).toBe('implement');
+      expect(result!.iterations).toBe(1);
+      expect(result!.errorMessage).toBe('spawn node ENOENT');
+      expect(result!.sessionId).toBe('20260205-120000-abc123');
+    });
+
+    it('should handle log with only completed movements (no abort)', () => {
+      const filepath = initNdjsonLog('sess-success-001', 'task', 'wf', projectDir);
+
+      appendNdjsonLine(filepath, {
+        type: 'step_start',
+        step: 'plan',
+        agent: 'planner',
+        iteration: 1,
+        timestamp: '2025-01-01T00:00:01.000Z',
+      });
+
+      appendNdjsonLine(filepath, {
+        type: 'step_complete',
+        step: 'plan',
+        agent: 'planner',
+        status: 'done',
+        content: 'Plan done',
+        instruction: 'Plan it',
+        timestamp: '2025-01-01T00:00:02.000Z',
+      } satisfies NdjsonStepComplete);
+
+      appendNdjsonLine(filepath, {
+        type: 'piece_complete',
+        iterations: 1,
+        endTime: '2025-01-01T00:00:03.000Z',
+      });
+
+      const result = extractFailureInfo(filepath);
+      expect(result).not.toBeNull();
+      expect(result!.lastCompletedMovement).toBe('plan');
+      expect(result!.failedMovement).toBeNull();
+      expect(result!.iterations).toBe(1);
+      expect(result!.errorMessage).toBeNull();
+    });
+
+    it('should handle log with no step_complete records', () => {
+      const filepath = initNdjsonLog('sess-fail-early-001', 'task', 'wf', projectDir);
+
+      appendNdjsonLine(filepath, {
+        type: 'step_start',
+        step: 'plan',
+        agent: 'planner',
+        iteration: 1,
+        timestamp: '2025-01-01T00:00:01.000Z',
+      });
+
+      appendNdjsonLine(filepath, {
+        type: 'piece_abort',
+        iterations: 0,
+        reason: 'API error',
+        endTime: '2025-01-01T00:00:02.000Z',
+      } satisfies NdjsonPieceAbort);
+
+      const result = extractFailureInfo(filepath);
+      expect(result).not.toBeNull();
+      expect(result!.lastCompletedMovement).toBeNull();
+      expect(result!.failedMovement).toBe('plan');
+      expect(result!.iterations).toBe(0);
+      expect(result!.errorMessage).toBe('API error');
+    });
+
+    it('should return null for empty file', () => {
+      const logsDir = join(projectDir, '.takt', 'logs');
+      mkdirSync(logsDir, { recursive: true });
+      const filepath = join(logsDir, 'empty.jsonl');
+      writeFileSync(filepath, '', 'utf-8');
+
+      const result = extractFailureInfo(filepath);
+      expect(result).toBeNull();
     });
   });
 });

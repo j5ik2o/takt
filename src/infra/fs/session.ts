@@ -28,6 +28,20 @@ export type {
   LatestLogPointer,
 } from '../../shared/utils/index.js';
 
+/** Failure information extracted from session log */
+export interface FailureInfo {
+  /** Last movement that completed successfully */
+  lastCompletedMovement: string | null;
+  /** Movement that was in progress when failure occurred */
+  failedMovement: string | null;
+  /** Total iterations consumed */
+  iterations: number;
+  /** Error message from piece_abort record */
+  errorMessage: string | null;
+  /** Session ID extracted from log file name */
+  sessionId: string | null;
+}
+
 /**
  * Manages session lifecycle: ID generation, NDJSON logging,
  * session log creation/loading, and latest pointer maintenance.
@@ -297,4 +311,68 @@ export function updateLatestPointer(
   options?: { copyToPrevious?: boolean },
 ): void {
   defaultManager.updateLatestPointer(log, sessionId, projectDir, options);
+}
+
+/**
+ * Extract failure information from an NDJSON session log file.
+ *
+ * @param filepath - Path to the .jsonl session log file
+ * @returns FailureInfo or null if file doesn't exist or is invalid
+ */
+export function extractFailureInfo(filepath: string): FailureInfo | null {
+  if (!existsSync(filepath)) {
+    return null;
+  }
+
+  const content = readFileSync(filepath, 'utf-8');
+  const lines = content.trim().split('\n').filter((line) => line.length > 0);
+  if (lines.length === 0) return null;
+
+  let lastCompletedMovement: string | null = null;
+  let failedMovement: string | null = null;
+  let iterations = 0;
+  let errorMessage: string | null = null;
+  let lastStepStartMovement: string | null = null;
+
+  // Extract sessionId from filename (e.g., "20260205-120000-abc123.jsonl" -> "20260205-120000-abc123")
+  const filename = filepath.split('/').pop();
+  const sessionId = filename?.replace(/\.jsonl$/, '') ?? null;
+
+  for (const line of lines) {
+    try {
+      const record = JSON.parse(line) as NdjsonRecord;
+
+      switch (record.type) {
+        case 'step_start':
+          // Track the movement that started (may fail before completing)
+          lastStepStartMovement = record.step;
+          break;
+
+        case 'step_complete':
+          // Track the last successfully completed movement
+          lastCompletedMovement = record.step;
+          iterations++;
+          // Reset lastStepStartMovement since this movement completed
+          lastStepStartMovement = null;
+          break;
+
+        case 'piece_abort':
+          // If there was a step_start without a step_complete, that's the failed movement
+          failedMovement = lastStepStartMovement;
+          errorMessage = record.reason;
+          break;
+      }
+    } catch {
+      // Skip malformed JSON lines
+      continue;
+    }
+  }
+
+  return {
+    lastCompletedMovement,
+    failedMovement,
+    iterations,
+    errorMessage,
+    sessionId,
+  };
 }

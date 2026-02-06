@@ -183,6 +183,10 @@ export interface PieceEngineOptions {
   detectRuleIndex?: RuleIndexDetector;
   /** AI judge caller (required for rules evaluation) */
   callAiJudge?: AiJudgeCaller;
+  /** Override initial movement (default: piece config's initialMovement) */
+  startMovement?: string;
+  /** Retry note explaining why task is being retried */
+  retryNote?: string;
 }
 
 /** Loop detection result */

@@ -40,6 +40,8 @@ export interface InstructionContext {
   pieceName?: string;
   /** Piece description (optional) */
   pieceDescription?: string;
+  /** Retry note explaining why task is being retried */
+  retryNote?: string;
 }
 
 /**

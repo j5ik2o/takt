@@ -25,7 +25,7 @@ const log = createLogger('task');
  * Execute a single task with piece.
  */
 export async function executeTask(options: ExecuteTaskOptions): Promise<boolean> {
-  const { task, cwd, pieceIdentifier, projectCwd, agentOverrides, interactiveUserInput, interactiveMetadata } = options;
+  const { task, cwd, pieceIdentifier, projectCwd, agentOverrides, interactiveUserInput, interactiveMetadata, startMovement, retryNote } = options;
   const pieceConfig = loadPieceByIdentifier(pieceIdentifier, projectCwd);
 
   if (!pieceConfig) {
@@ -52,6 +52,8 @@ export async function executeTask(options: ExecuteTaskOptions): Promise<boolean>
     model: agentOverrides?.model,
     interactiveUserInput,
     interactiveMetadata,
+    startMovement,
+    retryNote,
   });
   return result.success;
 }
@@ -75,7 +77,7 @@ export async function executeAndCompleteTask(
   const executionLog: string[] = [];
 
   try {
-    const { execCwd, execPiece, isWorktree } = await resolveTaskExecution(task, cwd, pieceName);
+    const { execCwd, execPiece, isWorktree, startMovement, retryNote } = await resolveTaskExecution(task, cwd, pieceName);
 
     // cwd is always the project root; pass it as projectCwd so reports/sessions go there
     const taskSuccess = await executeTask({
@@ -84,6 +86,8 @@ export async function executeAndCompleteTask(
       pieceIdentifier: execPiece,
       projectCwd: cwd,
       agentOverrides: options,
+      startMovement,
+      retryNote,
     });
     const completedAt = new Date().toISOString();
 
@@ -194,7 +198,7 @@ export async function resolveTaskExecution(
   task: TaskInfo,
   defaultCwd: string,
   defaultPiece: string
-): Promise<{ execCwd: string; execPiece: string; isWorktree: boolean; branch?: string }> {
+): Promise<{ execCwd: string; execPiece: string; isWorktree: boolean; branch?: string; startMovement?: string; retryNote?: string }> {
   const data = task.data;
 
   // No structured data: use defaults
@@ -227,5 +231,11 @@ export async function resolveTaskExecution(
   // Handle piece override
   const execPiece = data.piece || defaultPiece;
 
-  return { execCwd, execPiece, isWorktree, branch };
+  // Handle start_movement override
+  const startMovement = data.start_movement;
+
+  // Handle retry_note
+  const retryNote = data.retry_note;
+
+  return { execCwd, execPiece, isWorktree, branch, startMovement, retryNote };
 }

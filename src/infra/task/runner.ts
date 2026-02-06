@@ -205,6 +205,91 @@ export class TaskRunner {
   }
 
   /**
+   * Requeue a failed task back to .takt/tasks/
+   *
+   * Copies the task file from failed directory to tasks directory.
+   * If startMovement is specified and the task is YAML, adds start_movement field.
+   * If retryNote is specified and the task is YAML, adds retry_note field.
+   * Original failed directory is preserved for history.
+   *
+   * @param failedTaskDir - Path to failed task directory (e.g., .takt/failed/2026-01-31T12-00-00_my-task/)
+   * @param startMovement - Optional movement to start from (written to task file)
+   * @param retryNote - Optional note about why task is being retried (written to task file)
+   * @returns The path to the requeued task file
+   * @throws Error if task file not found or copy fails
+   */
+  requeueFailedTask(failedTaskDir: string, startMovement?: string, retryNote?: string): string {
+    this.ensureDirs();
+
+    // Find task file in failed directory
+    const taskExtensions = ['.yaml', '.yml', '.md'];
+    let files: string[];
+    try {
+      files = fs.readdirSync(failedTaskDir);
+    } catch (err) {
+      throw new Error(`Failed to read failed task directory: ${failedTaskDir} - ${err}`);
+    }
+
+    let taskFile: string | null = null;
+    let taskExt: string | null = null;
+
+    for (const file of files) {
+      const ext = path.extname(file);
+      if (file === 'report.md' || file === 'log.json') continue;
+      if (!taskExtensions.includes(ext)) continue;
+      taskFile = path.join(failedTaskDir, file);
+      taskExt = ext;
+      break;
+    }
+
+    if (!taskFile || !taskExt) {
+      throw new Error(`No task file found in failed directory: ${failedTaskDir}`);
+    }
+
+    // Read task content
+    const taskContent = fs.readFileSync(taskFile, 'utf-8');
+    const taskName = path.basename(taskFile, taskExt);
+
+    // Destination path
+    const destFile = path.join(this.tasksDir, `${taskName}${taskExt}`);
+
+    // For YAML files, add start_movement and retry_note if specified
+    let finalContent = taskContent;
+    if (taskExt === '.yaml' || taskExt === '.yml') {
+      if (startMovement) {
+        // Check if start_movement already exists
+        if (!/^start_movement:/m.test(finalContent)) {
+          // Add start_movement field at the end
+          finalContent = finalContent.trimEnd() + `\nstart_movement: ${startMovement}\n`;
+        } else {
+          // Replace existing start_movement
+          finalContent = finalContent.replace(/^start_movement:.*$/m, `start_movement: ${startMovement}`);
+        }
+      }
+
+      if (retryNote) {
+        // Escape double quotes in retry note for YAML string
+        const escapedNote = retryNote.replace(/"/g, '\\"');
+        // Check if retry_note already exists
+        if (!/^retry_note:/m.test(finalContent)) {
+          // Add retry_note field at the end
+          finalContent = finalContent.trimEnd() + `\nretry_note: "${escapedNote}"\n`;
+        } else {
+          // Replace existing retry_note
+          finalContent = finalContent.replace(/^retry_note:.*$/m, `retry_note: "${escapedNote}"`);
+        }
+      }
+    }
+
+    // Write to tasks directory
+    fs.writeFileSync(destFile, finalContent, 'utf-8');
+
+    log.info('Requeued failed task', { from: failedTaskDir, to: destFile, startMovement });
+
+    return destFile;
+  }
+
+  /**
    * タスクファイルを指定ディレクトリに移動し、レポート・ログを生成する
    */
   private moveTask(result: TaskResult, targetDir: string): string {

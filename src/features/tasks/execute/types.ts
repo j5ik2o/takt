@@ -34,6 +34,10 @@ export interface PieceExecutionOptions {
   interactiveUserInput?: boolean;
   /** Interactive mode result metadata for NDJSON logging */
   interactiveMetadata?: InteractiveMetadata;
+  /** Override initial movement (default: piece config's initialMovement) */
+  startMovement?: string;
+  /** Retry note explaining why task is being retried */
+  retryNote?: string;
 }
 
 export interface TaskExecutionOptions {
@@ -56,6 +60,10 @@ export interface ExecuteTaskOptions {
   interactiveUserInput?: boolean;
   /** Interactive mode result metadata for NDJSON logging */
   interactiveMetadata?: InteractiveMetadata;
+  /** Override initial movement (default: piece config's initialMovement) */
+  startMovement?: string;
+  /** Retry note explaining why task is being retried */
+  retryNote?: string;
 }
 
 export interface PipelineExecutionOptions {

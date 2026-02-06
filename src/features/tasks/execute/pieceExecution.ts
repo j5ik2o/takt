@@ -228,6 +228,8 @@ export async function executePiece(
     interactive: interactiveUserInput,
     detectRuleIndex,
     callAiJudge,
+    startMovement: options.startMovement,
+    retryNote: options.retryNote,
   });
 
   let abortReason: string | undefined;

@@ -36,7 +36,7 @@ export class StateManager {
 
     this.state = {
       pieceName: config.name,
-      currentMovement: config.initialMovement,
+      currentMovement: options.startMovement ?? config.initialMovement,
       iteration: 0,
       movementOutputs: new Map(),
       lastOutput: undefined,

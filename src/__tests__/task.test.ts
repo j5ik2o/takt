@@ -273,4 +273,149 @@ describe('TaskRunner', () => {
       expect(runner.getTasksDir()).toBe(join(testDir, '.takt', 'tasks'));
     });
   });
+
+  describe('requeueFailedTask', () => {
+    it('should copy task file from failed to tasks directory', () => {
+      runner.ensureDirs();
+
+      // Create a failed task directory
+      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_my-task');
+      mkdirSync(failedDir, { recursive: true });
+      writeFileSync(join(failedDir, 'my-task.yaml'), 'task: Do something\n');
+      writeFileSync(join(failedDir, 'report.md'), '# Report');
+      writeFileSync(join(failedDir, 'log.json'), '{}');
+
+      const result = runner.requeueFailedTask(failedDir);
+
+      // Task file should be copied to tasks dir
+      expect(existsSync(result)).toBe(true);
+      expect(result).toBe(join(testDir, '.takt', 'tasks', 'my-task.yaml'));
+
+      // Original failed directory should still exist
+      expect(existsSync(failedDir)).toBe(true);
+
+      // Task content should be preserved
+      const content = readFileSync(result, 'utf-8');
+      expect(content).toBe('task: Do something\n');
+    });
+
+    it('should add start_movement to YAML task file when specified', () => {
+      runner.ensureDirs();
+
+      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_retry-task');
+      mkdirSync(failedDir, { recursive: true });
+      writeFileSync(join(failedDir, 'retry-task.yaml'), 'task: Retry me\npiece: default\n');
+
+      const result = runner.requeueFailedTask(failedDir, 'implement');
+
+      const content = readFileSync(result, 'utf-8');
+      expect(content).toContain('start_movement: implement');
+      expect(content).toContain('task: Retry me');
+      expect(content).toContain('piece: default');
+    });
+
+    it('should replace existing start_movement in YAML task file', () => {
+      runner.ensureDirs();
+
+      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_replace-task');
+      mkdirSync(failedDir, { recursive: true });
+      writeFileSync(join(failedDir, 'replace-task.yaml'), 'task: Replace me\nstart_movement: plan\n');
+
+      const result = runner.requeueFailedTask(failedDir, 'ai_review');
+
+      const content = readFileSync(result, 'utf-8');
+      expect(content).toContain('start_movement: ai_review');
+      expect(content).not.toContain('start_movement: plan');
+    });
+
+    it('should not modify markdown task files even with startMovement', () => {
+      runner.ensureDirs();
+
+      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_md-task');
+      mkdirSync(failedDir, { recursive: true });
+      writeFileSync(join(failedDir, 'md-task.md'), '# Task\nDo something');
+
+      const result = runner.requeueFailedTask(failedDir, 'implement');
+
+      const content = readFileSync(result, 'utf-8');
+      // Markdown files should not have start_movement added
+      expect(content).toBe('# Task\nDo something');
+      expect(content).not.toContain('start_movement');
+    });
+
+    it('should throw error when no task file found', () => {
+      runner.ensureDirs();
+
+      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_no-task');
+      mkdirSync(failedDir, { recursive: true });
+      writeFileSync(join(failedDir, 'report.md'), '# Report');
+
+      expect(() => runner.requeueFailedTask(failedDir)).toThrow(
+        /No task file found in failed directory/
+      );
+    });
+
+    it('should throw error when failed directory does not exist', () => {
+      runner.ensureDirs();
+
+      expect(() => runner.requeueFailedTask('/nonexistent/path')).toThrow(
+        /Failed to read failed task directory/
+      );
+    });
+
+    it('should add retry_note to YAML task file when specified', () => {
+      runner.ensureDirs();
+
+      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_note-task');
+      mkdirSync(failedDir, { recursive: true });
+      writeFileSync(join(failedDir, 'note-task.yaml'), 'task: Task with note\n');
+
+      const result = runner.requeueFailedTask(failedDir, undefined, 'Fixed the ENOENT error');
+
+      const content = readFileSync(result, 'utf-8');
+      expect(content).toContain('retry_note: "Fixed the ENOENT error"');
+      expect(content).toContain('task: Task with note');
+    });
+
+    it('should escape double quotes in retry_note', () => {
+      runner.ensureDirs();
+
+      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_quote-task');
+      mkdirSync(failedDir, { recursive: true });
+      writeFileSync(join(failedDir, 'quote-task.yaml'), 'task: Task with quotes\n');
+
+      const result = runner.requeueFailedTask(failedDir, undefined, 'Fixed "spawn node ENOENT" error');
+
+      const content = readFileSync(result, 'utf-8');
+      expect(content).toContain('retry_note: "Fixed \\"spawn node ENOENT\\" error"');
+    });
+
+    it('should add both start_movement and retry_note when both specified', () => {
+      runner.ensureDirs();
+
+      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_both-task');
+      mkdirSync(failedDir, { recursive: true });
+      writeFileSync(join(failedDir, 'both-task.yaml'), 'task: Task with both\n');
+
+      const result = runner.requeueFailedTask(failedDir, 'implement', 'Retrying from implement');
+
+      const content = readFileSync(result, 'utf-8');
+      expect(content).toContain('start_movement: implement');
+      expect(content).toContain('retry_note: "Retrying from implement"');
+    });
+
+    it('should not add retry_note to markdown task files', () => {
+      runner.ensureDirs();
+
+      const failedDir = join(testDir, '.takt', 'failed', '2026-01-31T12-00-00_md-note-task');
+      mkdirSync(failedDir, { recursive: true });
+      writeFileSync(join(failedDir, 'md-note-task.md'), '# Task\nDo something');
+
+      const result = runner.requeueFailedTask(failedDir, undefined, 'Should be ignored');
+
+      const content = readFileSync(result, 'utf-8');
+      expect(content).toBe('# Task\nDo something');
+      expect(content).not.toContain('retry_note');
+    });
+  });
 });

@@ -110,6 +110,7 @@ export class PieceEngine extends EventEmitter {
       getPieceMovements: () => this.config.movements.map(s => ({ name: s.name, description: s.description })),
       getPieceName: () => this.getPieceName(),
       getPieceDescription: () => this.getPieceDescription(),
+      getRetryNote: () => this.options.retryNote,
       detectRuleIndex: this.detectRuleIndex,
       callAiJudge: this.callAiJudge,
       onPhaseStart: (step, phase, phaseName, instruction) => {
@@ -158,6 +159,14 @@ export class PieceEngine extends EventEmitter {
     const initialMovement = this.config.movements.find((s) => s.name === this.config.initialMovement);
     if (!initialMovement) {
       throw new Error(ERROR_MESSAGES.UNKNOWN_MOVEMENT(this.config.initialMovement));
+    }
+
+    // Validate startMovement option if specified
+    if (this.options.startMovement) {
+      const startMovement = this.config.movements.find((s) => s.name === this.options.startMovement);
+      if (!startMovement) {
+        throw new Error(ERROR_MESSAGES.UNKNOWN_MOVEMENT(this.options.startMovement));
+      }
     }
 
     const movementNames = new Set(this.config.movements.map((s) => s.name));

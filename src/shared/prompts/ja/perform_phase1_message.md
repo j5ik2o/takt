@@ -4,7 +4,7 @@
   vars: workingDirectory, editRule, pieceName, pieceDescription, hasPieceDescription,
         pieceStructure, iteration, movementIteration, movement, hasReport, reportInfo,
         phaseNote, hasTaskSection, userRequest, hasPreviousResponse, previousResponse,
-        hasUserInputs, userInputs, instructions
+        hasUserInputs, userInputs, hasRetryNote, retryNote, instructions
   builder: InstructionBuilder
 -->
 ## 実行コンテキスト
@@ -28,6 +28,11 @@
 {{#if hasReport}}{{reportInfo}}
 
 {{phaseNote}}{{/if}}
+{{#if hasRetryNote}}
+
+## 再投入メモ
+{{retryNote}}
+{{/if}}
 {{#if hasTaskSection}}
 
 ## User Request

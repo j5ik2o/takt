@@ -30,6 +30,8 @@ export const TaskFileSchema = z.object({
   branch: z.string().optional(),
   piece: z.string().optional(),
   issue: z.number().int().positive().optional(),
+  start_movement: z.string().optional(),
+  retry_note: z.string().optional(),
 });
 
 export type TaskFileData = z.infer<typeof TaskFileSchema>;

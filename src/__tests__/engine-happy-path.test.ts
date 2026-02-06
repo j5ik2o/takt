@@ -622,5 +622,93 @@ describe('PieceEngine Integration: Happy Path', () => {
         new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
       }).toThrow('nonexistent_step');
     });
+
+    it('should throw when startMovement option references nonexistent movement', () => {
+      const config = buildDefaultPieceConfig();
+
+      expect(() => {
+        new PieceEngine(config, tmpDir, 'test task', {
+          projectCwd: tmpDir,
+          startMovement: 'nonexistent',
+        });
+      }).toThrow('Unknown movement: nonexistent');
+    });
+  });
+
+  // =====================================================
+  // 9. startMovement option
+  // =====================================================
+  describe('startMovement option', () => {
+    it('should start from specified movement instead of initialMovement', async () => {
+      const config = buildDefaultPieceConfig();
+      // Start from ai_review, skipping plan and implement
+      engine = new PieceEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        startMovement: 'ai_review',
+      });
+
+      mockRunAgentSequence([
+        makeResponse({ agent: 'ai_review', content: 'No issues' }),
+        makeResponse({ agent: 'arch-review', content: 'Architecture OK' }),
+        makeResponse({ agent: 'security-review', content: 'Security OK' }),
+        makeResponse({ agent: 'supervise', content: 'All passed' }),
+      ]);
+
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },  // ai_review → reviewers
+        { index: 0, method: 'phase1_tag' },  // arch-review → approved
+        { index: 0, method: 'phase1_tag' },  // security-review → approved
+        { index: 0, method: 'aggregate' },   // reviewers(all approved) → supervise
+        { index: 0, method: 'phase1_tag' },  // supervise → COMPLETE
+      ]);
+
+      const startFn = vi.fn();
+      engine.on('movement:start', startFn);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('completed');
+      // Should only run 3 movements: ai_review, reviewers, supervise
+      expect(state.iteration).toBe(3);
+
+      // First movement should be ai_review, not plan
+      const startedMovements = startFn.mock.calls.map(call => (call[0] as PieceMovement).name);
+      expect(startedMovements[0]).toBe('ai_review');
+      expect(startedMovements).not.toContain('plan');
+      expect(startedMovements).not.toContain('implement');
+    });
+
+    it('should use initialMovement when startMovement is not specified', async () => {
+      const config = buildDefaultPieceConfig();
+      engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      mockRunAgentSequence([
+        makeResponse({ agent: 'plan', content: 'Plan complete' }),
+        makeResponse({ agent: 'implement', content: 'Implementation done' }),
+        makeResponse({ agent: 'ai_review', content: 'No issues' }),
+        makeResponse({ agent: 'arch-review', content: 'Architecture OK' }),
+        makeResponse({ agent: 'security-review', content: 'Security OK' }),
+        makeResponse({ agent: 'supervise', content: 'All passed' }),
+      ]);
+
+      mockDetectMatchedRuleSequence([
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'phase1_tag' },
+        { index: 0, method: 'aggregate' },
+        { index: 0, method: 'phase1_tag' },
+      ]);
+
+      const startFn = vi.fn();
+      engine.on('movement:start', startFn);
+
+      await engine.run();
+
+      // First movement should be plan (the initialMovement)
+      const startedMovements = startFn.mock.calls.map(call => (call[0] as PieceMovement).name);
+      expect(startedMovements[0]).toBe('plan');
+    });
   });
 });

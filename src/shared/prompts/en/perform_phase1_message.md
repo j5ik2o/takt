@@ -4,7 +4,7 @@
   vars: workingDirectory, editRule, pieceName, pieceDescription, hasPieceDescription,
         pieceStructure, iteration, movementIteration, movement, hasReport, reportInfo,
         phaseNote, hasTaskSection, userRequest, hasPreviousResponse, previousResponse,
-        hasUserInputs, userInputs, instructions
+        hasUserInputs, userInputs, hasRetryNote, retryNote, instructions
   builder: InstructionBuilder
 -->
 ## Execution Context
@@ -29,6 +29,11 @@ Note: This section is metadata. Follow the language used in the rest of the prom
 {{#if hasReport}}{{reportInfo}}
 
 {{phaseNote}}{{/if}}
+{{#if hasRetryNote}}
+
+## Retry Note
+{{retryNote}}
+{{/if}}
 {{#if hasTaskSection}}
 
 ## User Request
