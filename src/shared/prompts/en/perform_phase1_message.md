@@ -4,7 +4,8 @@
   vars: workingDirectory, editRule, pieceName, pieceDescription, hasPieceDescription,
         pieceStructure, iteration, movementIteration, movement, hasReport, reportInfo,
         phaseNote, hasTaskSection, userRequest, hasPreviousResponse, previousResponse,
-        hasUserInputs, userInputs, hasRetryNote, retryNote, instructions
+        hasUserInputs, userInputs, hasRetryNote, retryNote, hasStance, stanceContent,
+        stanceReminder, instructions
   builder: InstructionBuilder
 -->
 ## Execution Context
@@ -16,6 +17,13 @@
 {{#if editRule}}- {{editRule}}
 {{/if}}
 Note: This section is metadata. Follow the language used in the rest of the prompt.
+{{#if hasStance}}
+
+## Stance
+The following stances are behavioral standards applied to this movement. You MUST comply with them.
+
+{{stanceContent}}
+{{/if}}
 
 ## Piece Context
 {{#if pieceName}}- Piece: {{pieceName}}
@@ -52,3 +60,8 @@ Note: This section is metadata. Follow the language used in the rest of the prom
 
 ## Instructions
 {{instructions}}
+{{#if hasStance}}
+
+---
+**Stance Reminder:** Comply with the stance standards defined in the Stance section above.{{stanceReminder}}
+{{/if}}

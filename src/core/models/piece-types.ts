@@ -81,6 +81,8 @@ export interface PieceMovement {
   passPreviousResponse: boolean;
   /** Sub-movements to execute in parallel. When set, this movement runs all sub-movements concurrently. */
   parallel?: PieceMovement[];
+  /** Resolved stance content strings (from piece-level stances map, resolved at parse time) */
+  stanceContents?: string[];
 }
 
 /** Loop detection configuration */
@@ -125,6 +127,14 @@ export interface LoopMonitorConfig {
 export interface PieceConfig {
   name: string;
   description?: string;
+  /** Persona definitions — map of name to file path or inline content (raw, not content-resolved) */
+  personas?: Record<string, string>;
+  /** Resolved stance definitions — map of name to file content (resolved at parse time) */
+  stances?: Record<string, string>;
+  /** Resolved instruction definitions — map of name to file content (resolved at parse time) */
+  instructions?: Record<string, string>;
+  /** Resolved report format definitions — map of name to file content (resolved at parse time) */
+  reportFormats?: Record<string, string>;
   movements: PieceMovement[];
   initialMovement: string;
   maxIterations: number;

@@ -143,7 +143,7 @@ describe('default piece parallel reviewers movement', () => {
     expect(archReview.agent).toContain('architecture-reviewer');
 
     const qaReview = reviewersMovement.parallel!.find((s) => s.name === 'qa-review')!;
-    expect(qaReview.agent).toContain('default/qa-reviewer');
+    expect(qaReview.agent).toContain('qa-reviewer');
   });
 
   it('should have reports configured on sub-movements', () => {

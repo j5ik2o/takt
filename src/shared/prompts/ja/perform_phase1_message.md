@@ -4,7 +4,8 @@
   vars: workingDirectory, editRule, pieceName, pieceDescription, hasPieceDescription,
         pieceStructure, iteration, movementIteration, movement, hasReport, reportInfo,
         phaseNote, hasTaskSection, userRequest, hasPreviousResponse, previousResponse,
-        hasUserInputs, userInputs, hasRetryNote, retryNote, instructions
+        hasUserInputs, userInputs, hasRetryNote, retryNote, hasStance, stanceContent,
+        stanceReminder, instructions
   builder: InstructionBuilder
 -->
 ## 実行コンテキスト
@@ -14,6 +15,13 @@
 - **git commit を実行しないでください。** コミットはピース完了後にシステムが自動で行います。
 - **Bashコマンドで `cd` を使用しないでください。** 作業ディレクトリは既に正しく設定されています。ディレクトリを変更せずにコマンドを実行してください。
 {{#if editRule}}- {{editRule}}
+{{/if}}
+{{#if hasStance}}
+
+## Stance
+以下のスタンスはこのムーブメントに適用される行動規範です。必ず遵守してください。
+
+{{stanceContent}}
 {{/if}}
 
 ## Piece Context
@@ -51,3 +59,8 @@
 
 ## Instructions
 {{instructions}}
+{{#if hasStance}}
+
+---
+**Stance Reminder:** 上記の Stance セクションで定義されたスタンス規範を遵守してください。{{stanceReminder}}
+{{/if}}

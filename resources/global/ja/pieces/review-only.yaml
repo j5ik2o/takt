@@ -24,12 +24,34 @@ description: レビュー専用ピース - コードをレビューするだけ�
 
 max_iterations: 10
 
+stances:
+  review: ../stances/review.md
+
+personas:
+  planner: ../personas/planner.md
+  architecture-reviewer: ../personas/architecture-reviewer.md
+  security-reviewer: ../personas/security-reviewer.md
+  ai-antipattern-reviewer: ../personas/ai-antipattern-reviewer.md
+  supervisor: ../personas/supervisor.md
+  pr-commenter: ../personas/pr-commenter.md
+
+instructions:
+  review-arch: ../instructions/review-arch.md
+  review-security: ../instructions/review-security.md
+  review-ai: ../instructions/review-ai.md
+
+report_formats:
+  architecture-review: ../report-formats/architecture-review.md
+  security-review: ../report-formats/security-review.md
+  ai-review: ../report-formats/ai-review.md
+  review-summary: ../report-formats/review-summary.md
+
 initial_movement: plan
 
 movements:
   - name: plan
     edit: false
-    agent: ../agents/default/planner.md
+    persona: planner
     allowed_tools:
       - Read
       - Glob
@@ -66,36 +88,11 @@ movements:
     parallel:
       - name: arch-review
         edit: false
-        agent: ../agents/default/architecture-reviewer.md
+        persona: architecture-reviewer
+        stance: review
         report:
           name: 01-architect-review.md
-          format: |
-            ```markdown
-            # アーキテクチャレビュー
-
-            ## 結果: APPROVE / IMPROVE / REJECT
-
-            ## サマリー
-            {1-2文で結果を要約}
-
-            ## 確認した観点
-            - [x] 構造・設計
-            - [x] コード品質
-            - [x] 変更スコープ
-
-            ## 問題点（REJECTの場合）
-            | # | 場所 | 問題 | 修正案 |
-            |---|------|------|--------|
-            | 1 | `src/file.ts:42` | 問題の説明 | 修正方法 |
-
-            ## 改善提案（任意・ブロッキングではない）
-            - {将来的な改善提案}
-            ```
-
-            **認知負荷軽減ルール:**
-            - APPROVE + 問題なし → サマリーのみ（5行以内）
-            - APPROVE + 軽微な提案 → サマリー + 改善提案（15行以内）
-            - REJECT → 問題点を表形式で（30行以内）
+          format: architecture-review
         allowed_tools:
           - Read
           - Glob
@@ -106,45 +103,15 @@ movements:
         rules:
           - condition: approved
           - condition: needs_fix
-        instruction_template: |
-          **アーキテクチャと設計**のレビューに集中してください。AI特有の問題はレビューしないでください（ai_reviewムーブメントで行います）。
-
-          コードをレビューしてフィードバックを提供してください。
+        instruction: review-arch
 
       - name: security-review
         edit: false
-        agent: ../agents/default/security-reviewer.md
+        persona: security-reviewer
+        stance: review
         report:
           name: 02-security-review.md
-          format: |
-            ```markdown
-            # セキュリティレビュー
-
-            ## 結果: APPROVE / REJECT
-
-            ## 重大度: None / Low / Medium / High / Critical
-
-            ## チェック結果
-            | カテゴリ | 結果 | 備考 |
-            |---------|------|------|
-            | インジェクション | - | - |
-            | 認証・認可 | - | - |
-            | データ保護 | - | - |
-            | 依存関係 | - | - |
-
-            ## 脆弱性（REJECTの場合）
-            | # | 重大度 | 種類 | 場所 | 修正案 |
-            |---|--------|------|------|--------|
-            | 1 | High | SQLi | `src/db.ts:42` | パラメータ化クエリを使用 |
-
-            ## 警告（ブロッキングではない）
-            - {セキュリティに関する推奨事項}
-            ```
-
-            **認知負荷軽減ルール:**
-            - 問題なし → チェック表のみ（10行以内）
-            - 警告あり → + 警告を1-2行（15行以内）
-            - 脆弱性あり → + 表形式で（30行以内）
+          format: security-review
         allowed_tools:
           - Read
           - Glob
@@ -155,44 +122,15 @@ movements:
         rules:
           - condition: approved
           - condition: needs_fix
-        instruction_template: |
-          コードに対してセキュリティレビューを行ってください。以下の脆弱性を確認してください:
-          - インジェクション攻撃（SQL, コマンド, XSS）
-          - 認証・認可の問題
-          - データ露出リスク
-          - 暗号化の弱点
+        instruction: review-security
 
       - name: ai-review
         edit: false
-        agent: ../agents/default/ai-antipattern-reviewer.md
+        persona: ai-antipattern-reviewer
+        stance: review
         report:
           name: 03-ai-review.md
-          format: |
-            ```markdown
-            # AI生成コードレビュー
-
-            ## 結果: APPROVE / REJECT
-
-            ## サマリー
-            {1文で結果を要約}
-
-            ## 検証した項目
-            | 観点 | 結果 | 備考 |
-            |------|------|------|
-            | 仮定の妥当性 | - | - |
-            | API/ライブラリの実在 | - | - |
-            | コンテキスト適合 | - | - |
-            | スコープ | - | - |
-
-            ## 問題点（REJECTの場合）
-            | # | カテゴリ | 場所 | 問題 |
-            |---|---------|------|------|
-            | 1 | 幻覚API | `src/file.ts:23` | 存在しないメソッド |
-            ```
-
-            **認知負荷軽減ルール:**
-            - 問題なし → サマリー1文 + チェック表のみ（10行以内）
-            - 問題あり → + 問題を表形式で（25行以内）
+          format: ai-review
         allowed_tools:
           - Read
           - Glob
@@ -203,12 +141,7 @@ movements:
         rules:
           - condition: approved
           - condition: needs_fix
-        instruction_template: |
-          AI特有の問題についてコードをレビューしてください:
-          - 仮定の検証
-          - もっともらしいが間違っているパターン
-          - 既存コードベースとの適合性
-          - スコープクリープの検出
+        instruction: review-ai
     rules:
       - condition: all("approved")
         next: supervise
@@ -217,7 +150,8 @@ movements:
 
   - name: supervise
     edit: false
-    agent: ../agents/default/supervisor.md
+    persona: supervisor
+    stance: review
     report:
       - Review Summary: 04-review-summary.md
     allowed_tools:
@@ -278,7 +212,7 @@ movements:
 
   - name: pr-comment
     edit: false
-    agent: ../agents/review/pr-commenter.md
+    persona: pr-commenter
     allowed_tools:
       - Read
       - Glob

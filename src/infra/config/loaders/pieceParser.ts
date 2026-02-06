@@ -66,6 +66,29 @@ function resolveContentPath(value: string | undefined, pieceDir: string): string
   return value;
 }
 
+/**
+ * Resolve a value from a section map by key lookup.
+ * If the value matches a key in sectionMap, return the mapped value.
+ * Otherwise return the value as-is (treated as file path or inline content).
+ */
+function resolveSectionReference(
+  value: string,
+  sectionMap: Record<string, string> | undefined,
+): string {
+  const resolved = sectionMap?.[value];
+  return resolved ?? value;
+}
+
+/** Section maps parsed from piece YAML for section reference expansion */
+interface PieceSections {
+  personas?: Record<string, string>;
+  stances?: Record<string, string>;
+  /** Stances resolved to file content (for backward-compat plain name lookup) */
+  resolvedStances?: Record<string, string>;
+  instructions?: Record<string, string>;
+  reportFormats?: Record<string, string>;
+}
+
 /** Check if a raw report value is the object form (has 'name' property). */
 function isReportObject(raw: unknown): raw is { name: string; order?: string; format?: string } {
   return typeof raw === 'object' && raw !== null && !Array.isArray(raw) && 'name' in raw;
@@ -73,18 +96,22 @@ function isReportObject(raw: unknown): raw is { name: string; order?: string; fo
 
 /**
  * Normalize the raw report field from YAML into internal format.
+ * Supports section references for format/order fields via rawReportFormats section.
  */
 function normalizeReport(
   raw: string | Record<string, string>[] | { name: string; order?: string; format?: string } | undefined,
   pieceDir: string,
+  rawReportFormats?: Record<string, string>,
 ): string | ReportConfig[] | ReportObjectConfig | undefined {
   if (raw == null) return undefined;
   if (typeof raw === 'string') return raw;
   if (isReportObject(raw)) {
+    const expandedFormat = raw.format ? resolveSectionReference(raw.format, rawReportFormats) : undefined;
+    const expandedOrder = raw.order ? resolveSectionReference(raw.order, rawReportFormats) : undefined;
     return {
       name: raw.name,
-      order: resolveContentPath(raw.order, pieceDir),
-      format: resolveContentPath(raw.format, pieceDir),
+      order: resolveContentPath(expandedOrder, pieceDir),
+      format: resolveContentPath(expandedFormat, pieceDir),
     };
   }
   return (raw as Record<string, string>[]).flatMap((entry) =>
@@ -170,10 +197,46 @@ function normalizeRule(r: {
   };
 }
 
+/**
+ * Resolve stance references for a movement.
+ *
+ * Resolution priority:
+ * 1. Section key → look up in resolvedStances (pre-resolved content)
+ * 2. File path (`./path`, `../path`, `*.md`) → resolve file directly
+ * 3. Unknown names are silently ignored
+ */
+function resolveStanceContents(
+  stanceRef: string | string[] | undefined,
+  sections: PieceSections,
+  pieceDir: string,
+): string[] | undefined {
+  if (stanceRef == null) return undefined;
+  const refs = Array.isArray(stanceRef) ? stanceRef : [stanceRef];
+  const contents: string[] = [];
+  for (const ref of refs) {
+    const sectionContent = sections.resolvedStances?.[ref];
+    if (sectionContent) {
+      contents.push(sectionContent);
+    } else if (ref.endsWith('.md') || ref.startsWith('./') || ref.startsWith('../')) {
+      const content = resolveContentPath(ref, pieceDir);
+      if (content) contents.push(content);
+    }
+  }
+  return contents.length > 0 ? contents : undefined;
+}
+
 /** Normalize a raw step into internal PieceMovement format. */
-function normalizeStepFromRaw(step: RawStep, pieceDir: string): PieceMovement {
+function normalizeStepFromRaw(
+  step: RawStep,
+  pieceDir: string,
+  sections: PieceSections,
+): PieceMovement {
   const rules: PieceRule[] | undefined = step.rules?.map(normalizeRule);
-  const agentSpec: string | undefined = step.agent || undefined;
+
+  // persona is an alias for agent (persona takes priority), with section reference expansion
+  const rawPersona = (step as Record<string, unknown>).persona as string | undefined;
+  const expandedPersona = rawPersona ? resolveSectionReference(rawPersona, sections.personas) : undefined;
+  const agentSpec: string | undefined = expandedPersona || step.agent || undefined;
 
   // Resolve agent path: if the resolved path exists on disk, use it; otherwise leave agentPath undefined
   // so that the runner treats agentSpec as an inline system prompt string.
@@ -185,26 +248,41 @@ function normalizeStepFromRaw(step: RawStep, pieceDir: string): PieceMovement {
     }
   }
 
+  // persona_name is an alias for agent_name (persona_name takes priority)
+  const displayName: string | undefined = (step as Record<string, unknown>).persona_name as string
+    || step.agent_name
+    || undefined;
+
+  // Resolve stance references (supports section key, file paths)
+  const stanceRef = (step as Record<string, unknown>).stance as string | string[] | undefined;
+  const stanceContents = resolveStanceContents(stanceRef, sections, pieceDir);
+
+  // Resolve instruction: instruction_template > instruction (with section reference expansion) > default
+  const expandedInstruction = step.instruction
+    ? resolveContentPath(resolveSectionReference(step.instruction, sections.instructions), pieceDir)
+    : undefined;
+
   const result: PieceMovement = {
     name: step.name,
     description: step.description,
     agent: agentSpec,
     session: step.session,
-    agentDisplayName: step.agent_name || (agentSpec ? extractAgentDisplayName(agentSpec) : step.name),
+    agentDisplayName: displayName || (agentSpec ? extractAgentDisplayName(agentSpec) : step.name),
     agentPath,
     allowedTools: step.allowed_tools,
     provider: step.provider,
     model: step.model,
     permissionMode: step.permission_mode,
     edit: step.edit,
-    instructionTemplate: resolveContentPath(step.instruction_template, pieceDir) || step.instruction || '{task}',
+    instructionTemplate: resolveContentPath(step.instruction_template, pieceDir) || expandedInstruction || '{task}',
     rules,
-    report: normalizeReport(step.report, pieceDir),
+    report: normalizeReport(step.report, pieceDir, sections.reportFormats),
     passPreviousResponse: step.pass_previous_response ?? true,
+    stanceContents,
   };
 
   if (step.parallel && step.parallel.length > 0) {
-    result.parallel = step.parallel.map((sub: RawStep) => normalizeStepFromRaw(sub, pieceDir));
+    result.parallel = step.parallel.map((sub: RawStep) => normalizeStepFromRaw(sub, pieceDir, sections));
   }
 
   return result;
@@ -252,14 +330,48 @@ function normalizeLoopMonitors(
 }
 
 /**
+ * Resolve a piece-level section map.
+ * Each value is resolved via resolveContentPath (supports .md file references).
+ * Used for stances, instructions, and report_formats.
+ */
+function resolveSectionMap(
+  raw: Record<string, string> | undefined,
+  pieceDir: string,
+): Record<string, string> | undefined {
+  if (!raw) return undefined;
+  const resolved: Record<string, string> = {};
+  for (const [name, value] of Object.entries(raw)) {
+    const content = resolveContentPath(value, pieceDir);
+    if (content) {
+      resolved[name] = content;
+    }
+  }
+  return Object.keys(resolved).length > 0 ? resolved : undefined;
+}
+
+/**
  * Convert raw YAML piece config to internal format.
  * Agent paths are resolved relative to the piece directory.
  */
 export function normalizePieceConfig(raw: unknown, pieceDir: string): PieceConfig {
   const parsed = PieceConfigRawSchema.parse(raw);
 
+  // Resolve piece-level section maps
+  const resolvedStances = resolveSectionMap(parsed.stances, pieceDir);
+  const resolvedInstructions = resolveSectionMap(parsed.instructions, pieceDir);
+  const resolvedReportFormats = resolveSectionMap(parsed.report_formats, pieceDir);
+
+  // Build sections for section reference expansion in movements
+  const sections: PieceSections = {
+    personas: parsed.personas,
+    stances: parsed.stances,
+    resolvedStances,
+    instructions: parsed.instructions,
+    reportFormats: parsed.report_formats,
+  };
+
   const movements: PieceMovement[] = parsed.movements.map((step) =>
-    normalizeStepFromRaw(step, pieceDir),
+    normalizeStepFromRaw(step, pieceDir, sections),
   );
 
   const initialMovement = parsed.initial_movement ?? movements[0]?.name ?? '';
@@ -267,6 +379,10 @@ export function normalizePieceConfig(raw: unknown, pieceDir: string): PieceConfi
   return {
     name: parsed.name,
     description: parsed.description,
+    personas: parsed.personas,
+    stances: resolvedStances,
+    instructions: resolvedInstructions,
+    reportFormats: resolvedReportFormats,
     movements,
     initialMovement,
     maxIterations: parsed.max_iterations,

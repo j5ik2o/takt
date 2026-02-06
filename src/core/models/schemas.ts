@@ -118,6 +118,12 @@ export const ParallelSubMovementRawSchema = z.object({
   name: z.string().min(1),
   agent: z.string().optional(),
   agent_name: z.string().optional(),
+  /** Alias for agent (persona-first naming) */
+  persona: z.string().optional(),
+  /** Alias for agent_name (persona-first naming) */
+  persona_name: z.string().optional(),
+  /** Stance reference(s) — key name(s) from piece-level stances map */
+  stance: z.union([z.string(), z.array(z.string())]).optional(),
   allowed_tools: z.array(z.string()).optional(),
   provider: z.enum(['claude', 'codex', 'mock']).optional(),
   model: z.string().optional(),
@@ -140,6 +146,12 @@ export const PieceMovementRawSchema = z.object({
   session: z.enum(['continue', 'refresh']).optional(),
   /** Display name for the agent (shown in output). Falls back to agent basename if not specified */
   agent_name: z.string().optional(),
+  /** Alias for agent (persona-first naming) */
+  persona: z.string().optional(),
+  /** Alias for agent_name (persona-first naming) */
+  persona_name: z.string().optional(),
+  /** Stance reference(s) — key name(s) from piece-level stances map */
+  stance: z.union([z.string(), z.array(z.string())]).optional(),
   allowed_tools: z.array(z.string()).optional(),
   provider: z.enum(['claude', 'codex', 'mock']).optional(),
   model: z.string().optional(),
@@ -190,6 +202,14 @@ export const LoopMonitorSchema = z.object({
 export const PieceConfigRawSchema = z.object({
   name: z.string().min(1),
   description: z.string().optional(),
+  /** Piece-level persona definitions — map of name to .md file path or inline content */
+  personas: z.record(z.string(), z.string()).optional(),
+  /** Piece-level stance definitions — map of name to .md file path or inline content */
+  stances: z.record(z.string(), z.string()).optional(),
+  /** Piece-level instruction definitions — map of name to .md file path or inline content */
+  instructions: z.record(z.string(), z.string()).optional(),
+  /** Piece-level report format definitions — map of name to .md file path or inline content */
+  report_formats: z.record(z.string(), z.string()).optional(),
   movements: z.array(PieceMovementRawSchema).min(1),
   initial_movement: z.string().optional(),
   max_iterations: z.number().int().positive().optional().default(10),

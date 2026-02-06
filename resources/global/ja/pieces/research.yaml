@@ -20,9 +20,16 @@ description: 調査ピース - 質問せずに自律的に調査を実行
 
 max_iterations: 10
 
+personas:
+  research-planner: ../personas/research-planner.md
+  research-digger: ../personas/research-digger.md
+  research-supervisor: ../personas/research-supervisor.md
+
+initial_movement: plan
+
 movements:
   - name: plan
-    agent: ../agents/research/planner.md
+    persona: research-planner
     allowed_tools:
       - Read
       - Glob
@@ -58,7 +65,7 @@ movements:
         next: ABORT
 
   - name: dig
-    agent: ../agents/research/digger.md
+    persona: research-digger
     allowed_tools:
       - Read
       - Glob
@@ -99,7 +106,7 @@ movements:
         next: ABORT
 
   - name: supervise
-    agent: ../agents/research/supervisor.md
+    persona: research-supervisor
     allowed_tools:
       - Read
       - Glob
@@ -127,5 +134,3 @@ movements:
         next: COMPLETE
       - condition: 調査結果が不十分であり、計画からやり直す必要がある
         next: plan
-
-initial_movement: plan

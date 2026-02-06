@@ -16,9 +16,9 @@ import {
   getProjectPiecesDir,
   getProjectAgentsDir,
   getBuiltinPiecesDir,
-  getBuiltinAgentsDir,
   getLanguage,
 } from '../../infra/config/index.js';
+import { getLanguageResourcesDir } from '../../infra/resources/index.js';
 import { header, success, info, warn, error, blankLine } from '../../shared/ui/index.js';
 
 export interface EjectOptions {
@@ -52,8 +52,8 @@ export async function ejectBuiltin(name?: string, options: EjectOptions = {}): P
 
   const projectDir = options.projectDir || process.cwd();
   const targetPiecesDir = options.global ? getGlobalPiecesDir() : getProjectPiecesDir(projectDir);
-  const targetAgentsDir = options.global ? getGlobalAgentsDir() : getProjectAgentsDir(projectDir);
-  const builtinAgentsDir = getBuiltinAgentsDir(lang);
+  const targetBaseDir = options.global ? dirname(getGlobalAgentsDir()) : dirname(getProjectAgentsDir(projectDir));
+  const builtinBaseDir = getLanguageResourcesDir(lang);
   const targetLabel = options.global ? 'global (~/.takt/)' : 'project (.takt/)';
 
   info(`Ejecting to ${targetLabel}`);
@@ -71,29 +71,29 @@ export async function ejectBuiltin(name?: string, options: EjectOptions = {}): P
     success(`Ejected piece: ${pieceDest}`);
   }
 
-  // Copy related agent files
-  const agentPaths = extractAgentRelativePaths(builtinPath);
-  let copiedAgents = 0;
+  // Copy related resource files (agents, personas, stances, instructions, report-formats)
+  const resourceRefs = extractResourceRelativePaths(builtinPath);
+  let copiedCount = 0;
 
-  for (const relPath of agentPaths) {
-    const srcPath = join(builtinAgentsDir, relPath);
-    const destPath = join(targetAgentsDir, relPath);
+  for (const ref of resourceRefs) {
+    const srcPath = join(builtinBaseDir, ref.type, ref.path);
+    const destPath = join(targetBaseDir, ref.type, ref.path);
 
     if (!existsSync(srcPath)) continue;
 
     if (existsSync(destPath)) {
-      info(`  Agent already exists: ${destPath}`);
+      info(`  Already exists: ${destPath}`);
       continue;
     }
 
     mkdirSync(dirname(destPath), { recursive: true });
     writeFileSync(destPath, readFileSync(srcPath));
-    info(`  ✓ ${destPath}`);
-    copiedAgents++;
+    info(`  ${destPath}`);
+    copiedCount++;
   }
 
-  if (copiedAgents > 0) {
-    success(`${copiedAgents} agent file(s) ejected.`);
+  if (copiedCount > 0) {
+    success(`${copiedCount} resource file(s) ejected.`);
   }
 }
 
@@ -123,21 +123,43 @@ function listAvailableBuiltins(builtinPiecesDir: string, isGlobal?: boolean): vo
   }
 }
 
+/** Resource reference extracted from piece YAML */
+interface ResourceRef {
+  /** Resource type directory (agents, personas, stances, instructions, report-formats) */
+  type: string;
+  /** Relative path within the resource type directory */
+  path: string;
+}
+
+/** Known resource type directories that can be referenced from piece YAML */
+const RESOURCE_TYPES = ['agents', 'personas', 'stances', 'instructions', 'report-formats'];
+
 /**
- * Extract agent relative paths from a builtin piece YAML.
- * Matches `agent: ../agents/{path}` and returns the {path} portions.
+ * Extract resource relative paths from a builtin piece YAML.
+ * Matches `../{type}/{path}` patterns for all known resource types.
  */
-function extractAgentRelativePaths(piecePath: string): string[] {
+function extractResourceRelativePaths(piecePath: string): ResourceRef[] {
   const content = readFileSync(piecePath, 'utf-8');
-  const paths = new Set<string>();
-  const regex = /agent:\s*\.\.\/agents\/(.+)/g;
+  const seen = new Set<string>();
+  const refs: ResourceRef[] = [];
+  const typePattern = RESOURCE_TYPES.join('|');
+  const regex = new RegExp(`\\.\\.\\/(?:${typePattern})\\/(.+)`, 'g');
 
   let match: RegExpExecArray | null;
   while ((match = regex.exec(content)) !== null) {
-    if (match[1]) {
-      paths.add(match[1].trim());
+    // Re-parse to extract type and path separately
+    const fullMatch = match[0];
+    const typeMatch = fullMatch.match(/\.\.\/([^/]+)\/(.+)/);
+    if (typeMatch?.[1] && typeMatch[2]) {
+      const type = typeMatch[1];
+      const path = typeMatch[2].trim();
+      const key = `${type}/${path}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        refs.push({ type, path });
+      }
     }
   }
 
-  return Array.from(paths);
+  return refs;
 }

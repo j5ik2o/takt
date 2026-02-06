@@ -11,12 +11,22 @@ description: Single-agent thin wrapper. Pass task directly to coder as-is.
 
 max_iterations: 10
 
+stances:
+  coding: ../stances/coding.md
+  testing: ../stances/testing.md
+
+personas:
+  coder: ../personas/coder.md
+
 initial_movement: execute
 
 movements:
   - name: execute
     edit: true
-    agent: ../agents/default/coder.md
+    persona: coder
+    stance:
+      - coding
+      - testing
     provider: codex
     report:
       - Summary: summary.md
