@@ -92,9 +92,11 @@ function resolveLanguage(lang?: Language): 'en' | 'ja' {
 
 function getInteractivePrompts(lang: 'en' | 'ja', pieceContext?: PieceContext) {
   const systemPrompt = loadTemplate('score_interactive_system_prompt', lang, {});
+  const stanceContent = loadTemplate('score_interactive_stance', lang, {});
 
   return {
     systemPrompt,
+    stanceContent,
     lang,
     pieceContext,
     conversationLabel: getLabel('interactive.conversationLabel', lang),
@@ -344,12 +346,27 @@ export async function interactiveMode(
     }
   }
 
+  /**
+   * Inject stance into user message for AI call.
+   * Follows the same pattern as piece execution (perform_phase1_message.md).
+   */
+  function injectStance(userMessage: string): string {
+    const stanceIntro = lang === 'ja'
+      ? '以下のスタンスは行動規範です。必ず遵守してください。'
+      : 'The following stance defines behavioral guidelines. Please follow them.';
+    const reminderLabel = lang === 'ja'
+      ? '上記の Stance セクションで定義されたスタンス規範を遵守してください。'
+      : 'Please follow the stance guidelines defined in the Stance section above.';
+    return `## Stance\n${stanceIntro}\n\n${prompts.stanceContent}\n\n---\n\n${userMessage}\n\n---\n**Stance Reminder:** ${reminderLabel}`;
+  }
+
   // Process initial input if provided (e.g. from `takt a`)
   if (initialInput) {
     history.push({ role: 'user', content: initialInput });
     log.debug('Processing initial input', { initialInput, sessionId });
 
-    const result = await callAIWithRetry(initialInput, prompts.systemPrompt);
+    const promptWithStance = injectStance(initialInput);
+    const result = await callAIWithRetry(promptWithStance, prompts.systemPrompt);
     if (result) {
       if (!result.success) {
         error(result.content);
@@ -440,7 +457,8 @@ export async function interactiveMode(
     log.debug('Sending to AI', { messageCount: history.length, sessionId });
     process.stdin.pause();
 
-    const result = await callAIWithRetry(trimmed, prompts.systemPrompt);
+    const promptWithStance = injectStance(trimmed);
+    const result = await callAIWithRetry(promptWithStance, prompts.systemPrompt);
     if (result) {
       if (!result.success) {
         error(result.content);

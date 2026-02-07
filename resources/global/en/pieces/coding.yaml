@@ -43,6 +43,18 @@ personas:
   ai-antipattern-reviewer: ../personas/ai-antipattern-reviewer.md
   architecture-reviewer: ../personas/architecture-reviewer.md
 
+instructions:
+  plan: ../instructions/plan.md
+  implement: ../instructions/implement.md
+  ai-review: ../instructions/ai-review.md
+  review-arch: ../instructions/review-arch.md
+  fix: ../instructions/fix.md
+
+report_formats:
+  plan: ../report-formats/plan.md
+  ai-review: ../report-formats/ai-review.md
+  architecture-review: ../report-formats/architecture-review.md
+
 initial_movement: plan
 
 movements:
@@ -51,35 +63,7 @@ movements:
     persona: architect-planner
     report:
       name: 00-plan.md
-      format: |
-        ```markdown
-        # Task Plan
-
-        ## Original Request
-        {State the user's request as-is}
-
-        ## Analysis
-
-        ### Purpose
-        {What needs to be achieved}
-
-        ### Scope
-
-        **Files to Change:**
-        | File | Change Description |
-        |------|-------------------|
-
-        **Test Impact:**
-        | File | Impact |
-        |------|--------|
-
-        ### Design Decisions (if needed)
-        - File organization: {new file placement, rationale}
-        - Design pattern: {chosen pattern and reason}
-
-        ### Implementation Approach
-        {How to proceed}
-        ```
+      format: plan
     allowed_tools:
       - Read
       - Glob
@@ -94,20 +78,7 @@ movements:
         next: COMPLETE
       - condition: Requirements are unclear, insufficient information
         next: ABORT
-    instruction_template: |
-      Analyze the task and create an implementation plan.
-
-      **Handling unknowns (important):**
-      If the task has Open Questions or unknowns, investigate by reading code and resolve them yourself.
-      Only judge "requirements are unclear" for external factors that cannot be resolved through investigation (e.g., user intent is ambiguous).
-      Something that can be answered by reading code is NOT "unclear."
-
-      **What to do:**
-      1. Understand the task requirements
-      2. Read related code to understand the current state
-      3. If there are unknowns, resolve them through code investigation
-      4. Identify the impact scope
-      5. Determine the implementation approach
+    instruction: plan
 
   - name: implement
     edit: true
@@ -140,60 +111,7 @@ movements:
         next: implement
         requires_user_input: true
         interactive_only: true
-    instruction_template: |
-      Implement according to the plan created in the plan movement.
-
-      **Reference reports:**
-      - Plan: {report:00-plan.md}
-
-      Only reference files within the Report Directory shown in Piece Context. Do not search/reference other report directories.
-
-      **Important:** Follow the approach decided in the plan.
-      Report if there are unknowns or if the approach needs to change.
-
-      **Important**: Add unit tests alongside implementation.
-      - Add unit tests for newly created classes/functions
-      - Update relevant tests when modifying existing code
-      - Test file placement: Follow project conventions (e.g., `__tests__/`, `*.test.ts`)
-      - **Running tests is mandatory.** After implementation, always run tests and verify results.
-
-      **Scope report format (create at implementation start):**
-      ```markdown
-      # Change Scope Declaration
-
-      ## Task
-      {One-line task summary}
-
-      ## Planned Changes
-      | Type | File |
-      |------|------|
-      | Create | `src/example.ts` |
-      | Modify | `src/routes.ts` |
-
-      ## Estimated Size
-      Small / Medium / Large
-
-      ## Impact Scope
-      - {Affected modules or features}
-      ```
-
-      **Decisions report format (at implementation end, only if decisions were made):**
-      ```markdown
-      # Decision Log
-
-      ## 1. {Decision}
-      - **Context**: {Why the decision was needed}
-      - **Options considered**: {List of options}
-      - **Reason**: {Why this was chosen}
-      ```
-
-      **Required output (include headings)**
-      ## Work Results
-      - {Summary of what was done}
-      ## Changes Made
-      - {Summary of changes}
-      ## Test Results
-      - {Commands run and results}
+    instruction: implement
 
   - name: reviewers
     parallel:
@@ -203,32 +121,7 @@ movements:
         stance: review
         report:
           name: 04-ai-review.md
-          format: |
-            ```markdown
-            # AI-Generated Code Review
-
-            ## Result: APPROVE / REJECT
-
-            ## Summary
-            {Summarize result in 1 sentence}
-
-            ## Verified Items
-            | Aspect | Result | Notes |
-            |--------|--------|-------|
-            | Assumption validity | ✅ | - |
-            | API/library existence | ✅ | - |
-            | Context fit | ✅ | - |
-            | Scope | ✅ | - |
-
-            ## Issues (if REJECT)
-            | # | Category | Location | Issue |
-            |---|----------|----------|-------|
-            | 1 | Hallucinated API | `src/file.ts:23` | Non-existent method |
-            ```
-
-            **Cognitive load reduction rules:**
-            - No issues → Summary 1 sentence + check table only (10 lines max)
-            - Issues found → + issues in table format (25 lines max)
+          format: ai-review
         allowed_tools:
           - Read
           - Glob
@@ -238,16 +131,7 @@ movements:
         rules:
           - condition: No AI-specific issues
           - condition: AI-specific issues found
-        instruction_template: |
-          Review code for AI-specific issues:
-          - Assumption verification
-          - Plausible but incorrect patterns
-          - Context fit with codebase
-          - Scope creep detection
-
-          **Reference reports:**
-          - Implementation scope: {report:02-coder-scope.md}
-          - Decision log: {report:03-coder-decisions.md} (if exists)
+        instruction: ai-review
 
       - name: arch-review
         edit: false
@@ -255,37 +139,7 @@ movements:
         stance: review
         report:
           name: 05-architect-review.md
-          format: |
-            ```markdown
-            # Architecture Review
-
-            ## Result: APPROVE / REJECT
-
-            ## Summary
-            {Summarize result in 1-2 sentences}
-
-            ## Checked Aspects
-            - [x] Structure & Design
-            - [x] Code Quality
-            - [x] Change Scope
-            - [x] Test Coverage
-            - [x] Dead Code
-            - [x] Call Chain Verification
-
-            ## Issues (if REJECT)
-            | # | Scope | Location | Issue | Fix Suggestion |
-            |---|-------|----------|-------|----------------|
-            | 1 | In-scope | `src/file.ts:42` | Issue description | How to fix |
-
-            Scope: "In-scope" (fixable now) / "Out-of-scope" (existing issue, non-blocking)
-
-            ## Existing Issues (informational, non-blocking)
-            - {Record of existing issues unrelated to current change}
-            ```
-
-            **Cognitive load reduction rules:**
-            - APPROVE → Summary only (5 lines max)
-            - REJECT → Issues in table format (30 lines max)
+          format: architecture-review
         allowed_tools:
           - Read
           - Glob
@@ -295,21 +149,7 @@ movements:
         rules:
           - condition: approved
           - condition: needs_fix
-        instruction_template: |
-          **Verify that implementation follows the plan.**
-          Do not review AI-specific issues (handled in the ai_review movement).
-
-          **Reference reports:**
-          - Plan: {report:00-plan.md}
-          - Implementation scope: {report:02-coder-scope.md}
-
-          **Review aspects:**
-          - Alignment with plan (follows scope and approach defined in plan)
-          - Code quality (DRY, YAGNI, Fail Fast, idiomatic)
-          - Change scope appropriateness
-          - Test coverage
-          - Dead code
-          - Call chain verification
+        instruction: review-arch
 
     rules:
       - condition: all("No AI-specific issues", "approved")
@@ -338,30 +178,4 @@ movements:
         next: reviewers
       - condition: Cannot determine, insufficient information
         next: ABORT
-    instruction_template: |
-      Address reviewer feedback.
-
-      **Check both review results:**
-      - AI Review: {report:04-ai-review.md}
-      - Architecture Review: {report:05-architect-review.md}
-
-      **Important:** Fix all issues flagged by both reviews.
-      - AI Review issues: hallucinated APIs, assumption validity, scope creep, etc.
-      - Architecture Review issues: design alignment, code quality, test coverage, etc.
-
-      **Required actions:**
-      1. Open all flagged files with Read tool
-      2. Verify the issue locations
-      3. Fix with Edit tool
-      4. **Run tests to verify (mandatory)**
-      5. Report specific fix details
-
-      **Required output (include headings)**
-      ## Work Results
-      - {Summary of what was done}
-      ## Changes Made
-      - {Summary of changes}
-      ## Test Results
-      - {Commands run and results}
-      ## Evidence
-      - {List of checked files/searches/diffs/logs}
+    instruction: fix
