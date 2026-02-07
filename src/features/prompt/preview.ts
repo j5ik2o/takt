@@ -55,7 +55,7 @@ export async function previewPrompts(cwd: string, pieceIdentifier?: string): Pro
       userInputs: [],
       pieceMovements: config.movements,
       currentMovementIndex: i,
-      reportDir: movement.report ? '.takt/reports/preview' : undefined,
+      reportDir: movement.outputContracts && movement.outputContracts.length > 0 ? '.takt/reports/preview' : undefined,
       language,
     };
 
@@ -63,8 +63,8 @@ export async function previewPrompts(cwd: string, pieceIdentifier?: string): Pro
     console.log('\n--- Phase 1 (Main Execution) ---\n');
     console.log(phase1Builder.build());
 
-    // Phase 2: Report output (only if movement has report config)
-    if (movement.report) {
+    // Phase 2: Report output (only if movement has output contracts)
+    if (movement.outputContracts && movement.outputContracts.length > 0) {
       const reportBuilder = new ReportInstructionBuilder(movement, {
         cwd,
         reportDir: '.takt/reports/preview',

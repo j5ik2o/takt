@@ -5,7 +5,7 @@
         pieceStructure, iteration, movementIteration, movement, hasReport, reportInfo,
         phaseNote, hasTaskSection, userRequest, hasPreviousResponse, previousResponse,
         hasUserInputs, userInputs, hasRetryNote, retryNote, hasPolicy, policyContent,
-        hasKnowledge, knowledgeContent, instructions
+        hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent, instructions
   builder: InstructionBuilder
 -->
 ## Execution Context
@@ -61,6 +61,13 @@ The following knowledge is domain-specific information for this movement. Use it
 
 ## Instructions
 {{instructions}}
+{{#if hasQualityGates}}
+
+## Quality Gates
+Before completing this movement, ensure the following requirements are met:
+
+{{qualityGatesContent}}
+{{/if}}
 {{#if hasPolicy}}
 
 ## Policy

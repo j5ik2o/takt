@@ -2,8 +2,8 @@
  * Shared rule utility functions used by both engine.ts and instruction-builder.ts.
  */
 
-import type { PieceMovement } from '../../models/types.js';
-import { isReportObjectConfig } from '../instruction/InstructionBuilder.js';
+import type { PieceMovement, OutputContractEntry } from '../../models/types.js';
+import { isOutputContractItem } from '../instruction/InstructionBuilder.js';
 
 /**
  * Check whether a movement has tag-based rules (i.e., rules that require
@@ -38,12 +38,12 @@ export function getAutoSelectedTag(step: PieceMovement): string {
 }
 
 /**
- * Get report file names from a movement's report configuration.
- * Handles all three report config formats: string, ReportObjectConfig, and ReportConfig[].
+ * Get report file names from a movement's output contracts.
  */
-export function getReportFiles(report: PieceMovement['report']): string[] {
-  if (!report) return [];
-  if (typeof report === 'string') return [report];
-  if (isReportObjectConfig(report)) return [report.name];
-  return report.map((rc) => rc.path);
+export function getReportFiles(outputContracts: OutputContractEntry[] | undefined): string[] {
+  if (!outputContracts || outputContracts.length === 0) return [];
+  return outputContracts.map((entry) => {
+    if (isOutputContractItem(entry)) return entry.name;
+    return entry.path;
+  });
 }

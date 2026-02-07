@@ -324,22 +324,126 @@ describe('Piece Loader IT: report config loading', () => {
     const config = loadPiece('default', testDir);
     expect(config).not.toBeNull();
 
-    // default piece: plan movement has a report config
+    // default piece: plan movement has output contracts
     const planStep = config!.movements.find((s) => s.name === 'plan');
     expect(planStep).toBeDefined();
-    expect(planStep!.report).toBeDefined();
+    expect(planStep!.outputContracts).toBeDefined();
   });
 
   it('should load multi-report config from expert piece', () => {
     const config = loadPiece('expert', testDir);
     expect(config).not.toBeNull();
 
-    // implement movement has multi-report: [Scope, Decisions]
+    // implement movement has multi-output contracts: [Scope, Decisions]
     const implementStep = config!.movements.find((s) => s.name === 'implement');
     expect(implementStep).toBeDefined();
-    expect(implementStep!.report).toBeDefined();
-    expect(Array.isArray(implementStep!.report)).toBe(true);
-    expect((implementStep!.report as unknown[]).length).toBe(2);
+    expect(implementStep!.outputContracts).toBeDefined();
+    expect(Array.isArray(implementStep!.outputContracts)).toBe(true);
+    expect((implementStep!.outputContracts as unknown[]).length).toBe(2);
+  });
+});
+
+describe('Piece Loader IT: quality_gates loading', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = createTestDir();
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('should parse quality_gates from YAML', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+
+    writeFileSync(join(piecesDir, 'with-gates.yaml'), `
+name: with-gates
+description: Piece with quality gates
+max_iterations: 5
+initial_movement: implement
+
+movements:
+  - name: implement
+    persona: coder
+    edit: true
+    quality_gates:
+      - "All tests must pass"
+      - "No TypeScript errors"
+      - "Coverage must be above 80%"
+    rules:
+      - condition: Done
+        next: COMPLETE
+    instruction: "Implement the feature"
+`);
+
+    const config = loadPiece('with-gates', testDir);
+
+    expect(config).not.toBeNull();
+    const implementStep = config!.movements.find((s) => s.name === 'implement');
+    expect(implementStep).toBeDefined();
+    expect(implementStep!.qualityGates).toBeDefined();
+    expect(implementStep!.qualityGates).toEqual([
+      'All tests must pass',
+      'No TypeScript errors',
+      'Coverage must be above 80%',
+    ]);
+  });
+
+  it('should allow movement without quality_gates', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+
+    writeFileSync(join(piecesDir, 'no-gates.yaml'), `
+name: no-gates
+description: Piece without quality gates
+max_iterations: 5
+initial_movement: implement
+
+movements:
+  - name: implement
+    persona: coder
+    rules:
+      - condition: Done
+        next: COMPLETE
+    instruction: "Implement the feature"
+`);
+
+    const config = loadPiece('no-gates', testDir);
+
+    expect(config).not.toBeNull();
+    const implementStep = config!.movements.find((s) => s.name === 'implement');
+    expect(implementStep).toBeDefined();
+    expect(implementStep!.qualityGates).toBeUndefined();
+  });
+
+  it('should allow empty quality_gates array', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+
+    writeFileSync(join(piecesDir, 'empty-gates.yaml'), `
+name: empty-gates
+description: Piece with empty quality gates
+max_iterations: 5
+initial_movement: implement
+
+movements:
+  - name: implement
+    persona: coder
+    quality_gates: []
+    rules:
+      - condition: Done
+        next: COMPLETE
+    instruction: "Implement the feature"
+`);
+
+    const config = loadPiece('empty-gates', testDir);
+
+    expect(config).not.toBeNull();
+    const implementStep = config!.movements.find((s) => s.name === 'implement');
+    expect(implementStep).toBeDefined();
+    expect(implementStep!.qualityGates).toEqual([]);
   });
 });
 

@@ -69,13 +69,13 @@ describe('JudgmentStrategies', () => {
   });
 
   describe('ReportBasedStrategy', () => {
-    it('should apply when reportDir and report files are configured', () => {
+    it('should apply when reportDir and output contracts are configured', () => {
       const strategy = new ReportBasedStrategy();
-      const stepWithReport: PieceMovement = {
+      const stepWithOutputContracts: PieceMovement = {
         ...mockStep,
-        report: 'review-report.md',
+        outputContracts: [{ label: 'review', path: 'review-report.md' }],
       };
-      expect(strategy.canApply({ ...mockContext, step: stepWithReport })).toBe(true);
+      expect(strategy.canApply({ ...mockContext, step: stepWithOutputContracts })).toBe(true);
     });
 
     it('should not apply when reportDir is missing', () => {
@@ -83,9 +83,9 @@ describe('JudgmentStrategies', () => {
       expect(strategy.canApply({ ...mockContext, reportDir: undefined })).toBe(false);
     });
 
-    it('should not apply when step has no report files configured', () => {
+    it('should not apply when step has no output contracts configured', () => {
       const strategy = new ReportBasedStrategy();
-      // mockStep has no report field → getReportFiles returns []
+      // mockStep has no outputContracts field → getReportFiles returns []
       expect(strategy.canApply(mockContext)).toBe(false);
     });
   });

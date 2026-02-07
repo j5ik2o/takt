@@ -1,25 +1,12 @@
-# Passthrough TAKT Piece
-# Thinnest wrapper. Pass task directly to coder as-is.
-#
-# Flow:
-# execute (do the task)
-#   ↓
-# COMPLETE
-
 name: passthrough
 description: Single-agent thin wrapper. Pass task directly to coder as-is.
-
 max_iterations: 10
-
 policies:
   coding: ../policies/coding.md
   testing: ../policies/testing.md
-
 personas:
   coder: ../personas/coder.md
-
 initial_movement: execute
-
 movements:
   - name: execute
     edit: true
@@ -27,8 +14,6 @@ movements:
     policy:
       - coding
       - testing
-    report:
-      - Summary: summary.md
     allowed_tools:
       - Read
       - Glob
@@ -50,3 +35,5 @@ movements:
         interactive_only: true
     instruction_template: |
       Do the task.
+    output_contracts:
+      - Summary: summary.md

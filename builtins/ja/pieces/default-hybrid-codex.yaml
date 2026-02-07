@@ -26,6 +26,14 @@ instructions:
   review-qa: ../instructions/review-qa.md
   fix: ../instructions/fix.md
   supervise: ../instructions/supervise.md
+report_formats:
+  plan: ../output-contracts/plan.md
+  architecture-design: ../output-contracts/architecture-design.md
+  ai-review: ../output-contracts/ai-review.md
+  architecture-review: ../output-contracts/architecture-review.md
+  qa-review: ../output-contracts/qa-review.md
+  validation: ../output-contracts/validation.md
+  summary: ../output-contracts/summary.md
 initial_movement: plan
 loop_monitors:
   - cycle:
@@ -56,9 +64,6 @@ movements:
   - name: plan
     edit: false
     persona: planner
-    report:
-      name: 00-plan.md
-      format: plan
     allowed_tools:
       - Read
       - Glob
@@ -78,12 +83,12 @@ movements:
           - {質問1}
           - {質問2}
     instruction: plan
+    output_contracts:
+      - name: 00-plan.md
+        format: plan
   - name: architect
     edit: false
     persona: architect-planner
-    report:
-      name: 01-architecture.md
-      format: architecture-design
     allowed_tools:
       - Read
       - Glob
@@ -98,6 +103,9 @@ movements:
       - condition: 情報不足、判断できない
         next: ABORT
     instruction: architect
+    output_contracts:
+      - name: 01-architecture.md
+        format: architecture-design
   - name: implement
     edit: true
     persona: coder
@@ -109,9 +117,6 @@ movements:
     knowledge:
       - backend
       - architecture
-    report:
-      - Scope: 02-coder-scope.md
-      - Decisions: 03-coder-decisions.md
     allowed_tools:
       - Read
       - Glob
@@ -134,15 +139,15 @@ movements:
         requires_user_input: true
         interactive_only: true
     instruction: implement
+    output_contracts:
+      - Scope: 02-coder-scope.md
+      - Decisions: 03-coder-decisions.md
   - name: ai_review
     edit: false
     persona: ai-antipattern-reviewer
     policy:
       - review
       - ai-antipattern
-    report:
-      name: 04-ai-review.md
-      format: ai-review
     allowed_tools:
       - Read
       - Glob
@@ -155,6 +160,9 @@ movements:
       - condition: AI特有の問題あり
         next: ai_fix
     instruction: ai-review
+    output_contracts:
+      - name: 04-ai-review.md
+        format: ai-review
   - name: ai_fix
     edit: true
     persona: coder
@@ -207,9 +215,6 @@ movements:
         knowledge:
           - architecture
           - backend
-        report:
-          name: 05-architect-review.md
-          format: architecture-review
         allowed_tools:
           - Read
           - Glob
@@ -220,15 +225,15 @@ movements:
           - condition: approved
           - condition: needs_fix
         instruction: review-arch
+        output_contracts:
+          - name: 05-architect-review.md
+            format: architecture-review
       - name: qa-review
         edit: false
         persona: qa-reviewer
         policy:
           - review
           - qa
-        report:
-          name: 06-qa-review.md
-          format: qa-review
         allowed_tools:
           - Read
           - Glob
@@ -239,6 +244,9 @@ movements:
           - condition: approved
           - condition: needs_fix
         instruction: review-qa
+        output_contracts:
+          - name: 06-qa-review.md
+            format: qa-review
     rules:
       - condition: all("approved")
         next: supervise
@@ -274,9 +282,6 @@ movements:
     edit: false
     persona: supervisor
     policy: review
-    report:
-      - Validation: 07-supervisor-validation.md
-      - Summary: summary.md
     allowed_tools:
       - Read
       - Glob
@@ -290,17 +295,12 @@ movements:
       - condition: 要求未達成、テスト失敗、ビルドエラー
         next: plan
     instruction: supervise
+    output_contracts:
+      - Validation: 07-supervisor-validation.md
+      - Summary: summary.md
 policies:
   coding: ../policies/coding.md
   review: ../policies/review.md
   testing: ../policies/testing.md
   ai-antipattern: ../policies/ai-antipattern.md
   qa: ../policies/qa.md
-output_contracts:
-  plan: ../output-contracts/plan.md
-  architecture-design: ../output-contracts/architecture-design.md
-  ai-review: ../output-contracts/ai-review.md
-  architecture-review: ../output-contracts/architecture-review.md
-  qa-review: ../output-contracts/qa-review.md
-  validation: ../output-contracts/validation.md
-  summary: ../output-contracts/summary.md

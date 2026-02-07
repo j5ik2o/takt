@@ -8,8 +8,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
-import { isReportObjectConfig } from '../core/piece/index.js';
-import type { PieceMovement, ReportObjectConfig, ReportConfig } from '../core/models/index.js';
+import { isOutputContractItem } from '../core/piece/index.js';
+import type { PieceMovement, OutputContractItem, OutputContractLabelPath, OutputContractEntry } from '../core/models/index.js';
 
 /**
  * Extracted emitMovementReports logic for unit testing.
@@ -23,17 +23,12 @@ function emitMovementReports(
   reportDir: string,
   projectCwd: string,
 ): void {
-  if (!movement.report || !reportDir) return;
+  if (!movement.outputContracts || movement.outputContracts.length === 0 || !reportDir) return;
   const baseDir = join(projectCwd, reportDir);
 
-  if (typeof movement.report === 'string') {
-    emitIfReportExists(emitter, movement, baseDir, movement.report);
-  } else if (isReportObjectConfig(movement.report)) {
-    emitIfReportExists(emitter, movement, baseDir, movement.report.name);
-  } else {
-    for (const rc of movement.report) {
-      emitIfReportExists(emitter, movement, baseDir, rc.path);
-    }
+  for (const entry of movement.outputContracts) {
+    const fileName = isOutputContractItem(entry) ? entry.name : entry.path;
+    emitIfReportExists(emitter, movement, baseDir, fileName);
   }
 }
 
@@ -77,9 +72,10 @@ describe('emitMovementReports', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('should emit movement:report when string report file exists', () => {
-    // Given: a movement with string report and the file exists
-    const movement = createMovement({ report: 'plan.md' });
+  it('should emit movement:report when output contract file exists', () => {
+    // Given: a movement with output contract and the file exists
+    const outputContracts: OutputContractEntry[] = [{ name: 'plan.md' }];
+    const movement = createMovement({ outputContracts });
     writeFileSync(join(reportBaseDir, 'plan.md'), '# Plan', 'utf-8');
     const emitter = new EventEmitter();
     const handler = vi.fn();
@@ -93,9 +89,10 @@ describe('emitMovementReports', () => {
     expect(handler).toHaveBeenCalledWith(movement, join(reportBaseDir, 'plan.md'), 'plan.md');
   });
 
-  it('should not emit when string report file does not exist', () => {
-    // Given: a movement with string report but file doesn't exist
-    const movement = createMovement({ report: 'missing.md' });
+  it('should not emit when output contract file does not exist', () => {
+    // Given: a movement with output contract but file doesn't exist
+    const outputContracts: OutputContractEntry[] = [{ name: 'missing.md' }];
+    const movement = createMovement({ outputContracts });
     const emitter = new EventEmitter();
     const handler = vi.fn();
     emitter.on('movement:report', handler);
@@ -107,10 +104,10 @@ describe('emitMovementReports', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it('should emit movement:report when ReportObjectConfig report file exists', () => {
-    // Given: a movement with ReportObjectConfig and the file exists
-    const report: ReportObjectConfig = { name: '03-review.md', format: '# Review' };
-    const movement = createMovement({ report });
+  it('should emit movement:report when OutputContractItem file exists', () => {
+    // Given: a movement with OutputContractItem and the file exists
+    const outputContracts: OutputContractEntry[] = [{ name: '03-review.md', format: '# Review' }];
+    const movement = createMovement({ outputContracts });
     writeFileSync(join(reportBaseDir, '03-review.md'), '# Review\nOK', 'utf-8');
     const emitter = new EventEmitter();
     const handler = vi.fn();
@@ -124,14 +121,14 @@ describe('emitMovementReports', () => {
     expect(handler).toHaveBeenCalledWith(movement, join(reportBaseDir, '03-review.md'), '03-review.md');
   });
 
-  it('should emit for each existing file in ReportConfig[] array', () => {
-    // Given: a movement with array report, two files exist, one missing
-    const report: ReportConfig[] = [
+  it('should emit for each existing file in output contracts array', () => {
+    // Given: a movement with array output contracts, two files exist, one missing
+    const outputContracts: OutputContractEntry[] = [
       { label: 'Scope', path: '01-scope.md' },
       { label: 'Decisions', path: '02-decisions.md' },
       { label: 'Missing', path: '03-missing.md' },
     ];
-    const movement = createMovement({ report });
+    const movement = createMovement({ outputContracts });
     writeFileSync(join(reportBaseDir, '01-scope.md'), '# Scope', 'utf-8');
     writeFileSync(join(reportBaseDir, '02-decisions.md'), '# Decisions', 'utf-8');
     const emitter = new EventEmitter();
@@ -147,9 +144,9 @@ describe('emitMovementReports', () => {
     expect(handler).toHaveBeenCalledWith(movement, join(reportBaseDir, '02-decisions.md'), '02-decisions.md');
   });
 
-  it('should not emit when movement has no report', () => {
-    // Given: a movement without report
-    const movement = createMovement({ report: undefined });
+  it('should not emit when movement has no output contracts', () => {
+    // Given: a movement without output contracts
+    const movement = createMovement({ outputContracts: undefined });
     const emitter = new EventEmitter();
     const handler = vi.fn();
     emitter.on('movement:report', handler);
@@ -162,8 +159,9 @@ describe('emitMovementReports', () => {
   });
 
   it('should not emit when reportDir is empty', () => {
-    // Given: a movement with report but empty reportDir
-    const movement = createMovement({ report: 'plan.md' });
+    // Given: a movement with output contracts but empty reportDir
+    const outputContracts: OutputContractEntry[] = [{ name: 'plan.md' }];
+    const movement = createMovement({ outputContracts });
     writeFileSync(join(reportBaseDir, 'plan.md'), '# Plan', 'utf-8');
     const emitter = new EventEmitter();
     const handler = vi.fn();

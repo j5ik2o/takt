@@ -1,32 +1,11 @@
-# Research Piece
-# 調査タスクを自律的に実行するピース
-# Planner が計画を立て、Digger が実行し、Supervisor が確認する
-#
-# フロー:
-# plan -> dig -> supervise -> COMPLETE (approved)
-#                          -> plan (rejected: 計画からやり直し)
-#
-# テンプレート変数:
-#   {iteration}      - ピース全体のターン数（全エージェントで実行されたムーブメントの合計）
-#   {max_iterations} - ピースの最大イテレーション数
-#   {movement_iteration} - ムーブメントごとのイテレーション数（このムーブメントが何回実行されたか）
-#   {task}           - 元のユーザー要求
-#   {previous_response} - 前のムーブメントの出力
-#   {user_inputs}    - ピース中に蓄積されたユーザー入力
-#   {report_dir}     - レポートディレクトリ名（例: "20250126-143052-task-summary"）
-
 name: research
 description: 調査ピース - 質問せずに自律的に調査を実行
-
 max_iterations: 10
-
 personas:
   research-planner: ../personas/research-planner.md
   research-digger: ../personas/research-digger.md
   research-supervisor: ../personas/research-supervisor.md
-
 initial_movement: plan
-
 movements:
   - name: plan
     persona: research-planner
@@ -63,7 +42,6 @@ movements:
         next: dig
       - condition: 情報が不足しており計画を立てられない
         next: ABORT
-
   - name: dig
     persona: research-digger
     allowed_tools:
@@ -104,7 +82,6 @@ movements:
         next: supervise
       - condition: 調査を実行できない
         next: ABORT
-
   - name: supervise
     persona: research-supervisor
     allowed_tools:

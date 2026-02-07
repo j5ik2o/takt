@@ -350,7 +350,7 @@ instructions:
 knowledge:
   architecture: ../knowledge/architecture.md
 
-output_contracts:
+report_formats:
   review: ../output-contracts/review.md
 
 movements:
@@ -369,9 +369,9 @@ movements:
     policy: review            # 異なる RULES
     instruction: review       # 異なる WHAT（共有も可能）
     knowledge: architecture   # 同じ CONTEXT — 再利用
-    report:
-      name: review.md
-      format: review          # OUTPUT — output_contracts.review を参照
+    output_contracts:
+      - name: review.md
+        format: review        # OUTPUT — report_formats.review を参照
     edit: false
     rules:
       - condition: Approved

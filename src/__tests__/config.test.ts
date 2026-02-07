@@ -146,15 +146,15 @@ describe('default piece parallel reviewers movement', () => {
     expect(qaReview.persona).toContain('qa-reviewer');
   });
 
-  it('should have reports configured on sub-movements', () => {
+  it('should have output contracts configured on sub-movements', () => {
     const piece = getBuiltinPiece('default');
     const reviewersMovement = piece!.movements.find((s) => s.name === 'reviewers')!;
 
     const archReview = reviewersMovement.parallel!.find((s) => s.name === 'arch-review')!;
-    expect(archReview.report).toBeDefined();
+    expect(archReview.outputContracts).toBeDefined();
 
     const qaReview = reviewersMovement.parallel!.find((s) => s.name === 'qa-review')!;
-    expect(qaReview.report).toBeDefined();
+    expect(qaReview.outputContracts).toBeDefined();
   });
 });
 

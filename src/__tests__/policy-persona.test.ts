@@ -383,7 +383,7 @@ describe('InstructionBuilder policy injection', () => {
     expect(result).toContain('## Policy');
     expect(result).toContain('# Coding Policy');
     expect(result).toContain('Write clean code.');
-    expect(result).toContain('Policy Reminder');
+    expect(result).toContain('必ず遵守してください');
   });
 
   it('should inject policy content into instruction (EN)', () => {
@@ -401,7 +401,7 @@ describe('InstructionBuilder policy injection', () => {
 
     expect(result).toContain('## Policy');
     expect(result).toContain('Write clean code.');
-    expect(result).toContain('Policy Reminder');
+    expect(result).toContain('You MUST comply');
   });
 
   it('should not inject policy section when no policyContents', () => {
@@ -417,7 +417,6 @@ describe('InstructionBuilder policy injection', () => {
     const result = builder.build();
 
     expect(result).not.toContain('## Policy');
-    expect(result).not.toContain('Policy Reminder');
   });
 
   it('should join multiple policies with separator', () => {
@@ -549,24 +548,24 @@ describe('section reference resolution', () => {
     expect(config.movements[0]!.instructionTemplate).toBe('Implement the feature.');
   });
 
-  it('should resolve output contract from output_contracts section by name', () => {
+  it('should resolve output contract from report_formats section by name', () => {
     const raw = {
       name: 'test-piece',
-      output_contracts: { plan: './output-contracts/plan.md' },
+      report_formats: { plan: './output-contracts/plan.md' },
       movements: [{
         name: 'plan',
         persona: 'planner',
         instruction: '{task}',
-        report: {
+        output_contracts: [{
           name: '00-plan.md',
           format: 'plan',
-        },
+        }],
       }],
     };
 
     const config = normalizePieceConfig(raw, testDir);
-    const report = config.movements[0]!.report as { name: string; format?: string };
-    expect(report.format).toBe('# Plan Report\n## Goal\n{goal}');
+    const outputContract = config.movements[0]!.outputContracts![0] as { name: string; format?: string };
+    expect(outputContract.format).toBe('# Plan Report\n## Goal\n{goal}');
   });
 
   it('should treat unresolved name as inline value (no section match)', () => {
@@ -606,7 +605,7 @@ describe('section reference resolution', () => {
       personas: { coder: './personas/coder.md' },
       policies: { coding: './policies/coding.md' },
       instructions: { implement: './instructions/implement.md' },
-      output_contracts: { plan: './output-contracts/plan.md' },
+      report_formats: { plan: './output-contracts/plan.md' },
       movements: [{
         name: 'impl',
         persona: 'coder',
@@ -618,7 +617,7 @@ describe('section reference resolution', () => {
     expect(config.personas).toEqual({ coder: './personas/coder.md' });
     expect(config.policies).toEqual({ coding: '# Coding Policy\nWrite clean code.' });
     expect(config.instructions).toEqual({ implement: 'Implement the feature.' });
-    expect(config.outputContracts).toEqual({ plan: '# Plan Report\n## Goal\n{goal}' });
+    expect(config.reportFormats).toEqual({ plan: '# Plan Report\n## Goal\n{goal}' });
   });
 
   it('should work with section references in parallel sub-movements', () => {

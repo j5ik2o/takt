@@ -1,73 +1,29 @@
-# Coding TAKT Piece
-# Plan -> Implement -> Parallel Review (AI + Architecture) -> Fix if needed
-#
-# Lightweight development piece with planning and parallel reviews.
-# architect-planner investigates and organizes requirements, resolving unknowns by reading code.
-# After parallel reviews, completes directly if no issues, enabling fast feedback loops.
-#
-# Flow:
-# plan (requirements investigation & planning)
-#   ↓
-# implement (implementation)
-#   ↓
-# reviewers (parallel review)
-# ├─ ai_review (AI-specific issue detection)
-# └─ arch-review (design compliance check)
-#   ↓
-#  [judgment]
-#   ├─ all(approved) → COMPLETE
-#   └─ any(needs_fix) → fix → reviewers (re-review)
-#
-# Template Variables (auto-injected by buildInstruction):
-#   {iteration}      - Piece-wide turn count (total movements executed across all agents)
-#   {max_iterations} - Maximum iterations allowed for the piece
-#   {movement_iteration} - Per-movement iteration count (how many times THIS movement has been executed)
-#   {task}           - Original user request
-#   {previous_response} - Output from the previous movement
-#   {user_inputs}    - Accumulated user inputs during piece
-#   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
-
 name: coding
 description: Lightweight development piece with planning and parallel reviews (plan -> implement -> parallel review -> complete)
-
 max_iterations: 20
-
 policies:
   coding: ../policies/coding.md
   review: ../policies/review.md
   testing: ../policies/testing.md
   ai-antipattern: ../policies/ai-antipattern.md
-
 knowledge:
   architecture: ../knowledge/architecture.md
-
 personas:
   architect-planner: ../personas/architect-planner.md
   coder: ../personas/coder.md
   ai-antipattern-reviewer: ../personas/ai-antipattern-reviewer.md
   architecture-reviewer: ../personas/architecture-reviewer.md
-
 instructions:
   plan: ../instructions/plan.md
   implement: ../instructions/implement.md
   ai-review: ../instructions/ai-review.md
   review-arch: ../instructions/review-arch.md
   fix: ../instructions/fix.md
-
-output_contracts:
-  plan: ../output-contracts/plan.md
-  ai-review: ../output-contracts/ai-review.md
-  architecture-review: ../output-contracts/architecture-review.md
-
 initial_movement: plan
-
 movements:
   - name: plan
     edit: false
     persona: architect-planner
-    report:
-      name: 00-plan.md
-      format: plan
     allowed_tools:
       - Read
       - Glob
@@ -83,7 +39,9 @@ movements:
       - condition: Requirements are unclear, insufficient information
         next: ABORT
     instruction: plan
-
+    output_contracts:
+      - name: 00-plan.md
+        format: plan
   - name: implement
     edit: true
     persona: coder
@@ -92,9 +50,6 @@ movements:
       - testing
     session: refresh
     knowledge: architecture
-    report:
-      - Scope: 02-coder-scope.md
-      - Decisions: 03-coder-decisions.md
     allowed_tools:
       - Read
       - Glob
@@ -117,7 +72,9 @@ movements:
         requires_user_input: true
         interactive_only: true
     instruction: implement
-
+    output_contracts:
+      - Scope: 02-coder-scope.md
+      - Decisions: 03-coder-decisions.md
   - name: reviewers
     parallel:
       - name: ai_review
@@ -126,9 +83,6 @@ movements:
         policy:
           - review
           - ai-antipattern
-        report:
-          name: 04-ai-review.md
-          format: ai-review
         allowed_tools:
           - Read
           - Glob
@@ -139,15 +93,14 @@ movements:
           - condition: No AI-specific issues
           - condition: AI-specific issues found
         instruction: ai-review
-
+        output_contracts:
+          - name: 04-ai-review.md
+            format: ai-review
       - name: arch-review
         edit: false
         persona: architecture-reviewer
         policy: review
         knowledge: architecture
-        report:
-          name: 05-architect-review.md
-          format: architecture-review
         allowed_tools:
           - Read
           - Glob
@@ -158,13 +111,14 @@ movements:
           - condition: approved
           - condition: needs_fix
         instruction: review-arch
-
+        output_contracts:
+          - name: 05-architect-review.md
+            format: architecture-review
     rules:
       - condition: all("No AI-specific issues", "approved")
         next: COMPLETE
       - condition: any("AI-specific issues found", "needs_fix")
         next: fix
-
   - name: fix
     edit: true
     persona: coder
@@ -188,3 +142,7 @@ movements:
       - condition: Cannot determine, insufficient information
         next: ABORT
     instruction: fix
+report_formats:
+  plan: ../output-contracts/plan.md
+  ai-review: ../output-contracts/ai-review.md
+  architecture-review: ../output-contracts/architecture-review.md

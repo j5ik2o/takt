@@ -15,8 +15,6 @@ movements:
     policy:
       - coding
       - testing
-    report:
-      - Summary: summary.md
     allowed_tools:
       - Read
       - Glob
@@ -38,6 +36,8 @@ movements:
         interactive_only: true
     instruction_template: |
       Do the task.
+    output_contracts:
+      - Summary: summary.md
 policies:
   coding: ../policies/coding.md
   testing: ../policies/testing.md

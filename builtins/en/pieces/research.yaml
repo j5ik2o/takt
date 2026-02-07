@@ -1,32 +1,11 @@
-# Research Piece
-# A piece that autonomously executes research tasks
-# Planner creates the plan, Digger executes, Supervisor verifies
-#
-# Flow:
-# plan -> dig -> supervise -> COMPLETE (approved)
-#                          -> plan (rejected: restart from planning)
-#
-# Template Variables:
-#   {iteration}      - Piece-wide turn count (total movements executed across all agents)
-#   {max_iterations} - Maximum iterations allowed for the piece
-#   {movement_iteration} - Per-movement iteration count (how many times THIS movement has been executed)
-#   {task}           - Original user request
-#   {previous_response} - Output from the previous movement
-#   {user_inputs}    - Accumulated user inputs during piece
-#   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
-
 name: research
 description: Research piece - autonomously executes research without asking questions
-
 max_iterations: 10
-
 personas:
   research-planner: ../personas/research-planner.md
   research-digger: ../personas/research-digger.md
   research-supervisor: ../personas/research-supervisor.md
-
 initial_movement: plan
-
 movements:
   - name: plan
     persona: research-planner
@@ -63,7 +42,6 @@ movements:
         next: dig
       - condition: Insufficient information to create a plan
         next: ABORT
-
   - name: dig
     persona: research-digger
     allowed_tools:
@@ -104,7 +82,6 @@ movements:
         next: supervise
       - condition: Unable to conduct research
         next: ABORT
-
   - name: supervise
     persona: research-supervisor
     allowed_tools:

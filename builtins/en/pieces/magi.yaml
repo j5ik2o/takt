@@ -1,28 +1,11 @@
-# MAGI System Piece
-# A deliberation piece modeled after Evangelion's MAGI system
-# Three personas (scientist, nurturer, pragmatist) analyze from different perspectives and vote
-#
-# Template Variables:
-#   {iteration}      - Piece-wide turn count (total movements executed across all agents)
-#   {max_iterations} - Maximum iterations allowed for the piece
-#   {movement_iteration} - Per-movement iteration count (how many times THIS movement has been executed)
-#   {task}           - Original user request
-#   {previous_response} - Output from the previous movement
-#   {user_inputs}    - Accumulated user inputs during piece
-#   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
-
 name: magi
 description: MAGI Deliberation System - Analyze from 3 perspectives and decide by majority
-
 max_iterations: 5
-
 personas:
   melchior: ../personas/melchior.md
   balthasar: ../personas/balthasar.md
   casper: ../personas/casper.md
-
 initial_movement: melchior
-
 movements:
   - name: melchior
     persona: melchior
@@ -60,7 +43,6 @@ movements:
     rules:
       - condition: Judgment completed
         next: balthasar
-
   - name: balthasar
     persona: balthasar
     allowed_tools:
@@ -101,7 +83,6 @@ movements:
     rules:
       - condition: Judgment completed
         next: casper
-
   - name: casper
     persona: casper
     allowed_tools:

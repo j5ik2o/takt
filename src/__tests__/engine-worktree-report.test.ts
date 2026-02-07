@@ -68,7 +68,7 @@ function buildSimpleConfig(): PieceConfig {
     initialMovement: 'review',
     movements: [
       makeMovement('review', {
-        report: '00-review.md',
+        outputContracts: [{ label: 'review', path: '00-review.md' }],
         rules: [
           makeRule('approved', 'COMPLETE'),
         ],
@@ -138,7 +138,7 @@ describe('PieceEngine: worktree reportDir resolution', () => {
       movements: [
         makeMovement('review', {
           instructionTemplate: 'Write report to {report_dir}',
-          report: '00-review.md',
+          outputContracts: [{ label: 'review', path: '00-review.md' }],
           rules: [
             makeRule('approved', 'COMPLETE'),
           ],

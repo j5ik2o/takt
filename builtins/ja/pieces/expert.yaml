@@ -1,41 +1,17 @@
-# Expert Review Piece
-# アーキテクチャ、フロントエンド、セキュリティ、QAの専門家によるレビューピース
-#
-# フロー:
-# plan -> implement -> ai_review -> reviewers (parallel) -> supervise -> COMPLETE
-#                         ↓              ├─ arch-review        ↓
-#                       ai_fix           ├─ frontend-review  fix_supervisor
-#                                        ├─ security-review
-#                                        └─ qa-review
-#                                   any("needs_fix") → fix → reviewers
-#
-# テンプレート変数:
-#   {iteration}      - ピース全体のターン数（全エージェントで実行されたムーブメントの合計）
-#   {max_iterations} - ピースの最大イテレーション数
-#   {movement_iteration} - ムーブメントごとのイテレーション数（このムーブメントが何回実行されたか）
-#   {task}           - 元のユーザー要求
-#   {previous_response} - 前のムーブメントの出力
-#   {user_inputs}    - ピース中に蓄積されたユーザー入力
-#   {report_dir}     - レポートディレクトリ名（例: "20250126-143052-task-summary"）
-
 name: expert
 description: アーキテクチャ・フロントエンド・セキュリティ・QA専門家レビュー
-
 max_iterations: 30
-
 policies:
   coding: ../policies/coding.md
   review: ../policies/review.md
   testing: ../policies/testing.md
   ai-antipattern: ../policies/ai-antipattern.md
   qa: ../policies/qa.md
-
 knowledge:
   frontend: ../knowledge/frontend.md
   backend: ../knowledge/backend.md
   security: ../knowledge/security.md
   architecture: ../knowledge/architecture.md
-
 personas:
   planner: ../personas/planner.md
   coder: ../personas/coder.md
@@ -45,7 +21,6 @@ personas:
   security-reviewer: ../personas/security-reviewer.md
   qa-reviewer: ../personas/qa-reviewer.md
   expert-supervisor: ../personas/expert-supervisor.md
-
 instructions:
   plan: ../instructions/plan.md
   implement: ../instructions/implement.md
@@ -59,29 +34,11 @@ instructions:
   fix: ../instructions/fix.md
   supervise: ../instructions/supervise.md
   fix-supervisor: ../instructions/fix-supervisor.md
-
-output_contracts:
-  plan: ../output-contracts/plan.md
-  ai-review: ../output-contracts/ai-review.md
-  architecture-review: ../output-contracts/architecture-review.md
-  frontend-review: ../output-contracts/frontend-review.md
-  security-review: ../output-contracts/security-review.md
-  qa-review: ../output-contracts/qa-review.md
-  validation: ../output-contracts/validation.md
-  summary: ../output-contracts/summary.md
-
 initial_movement: plan
-
 movements:
-  # ===========================================
-  # Movement 0: Planning
-  # ===========================================
   - name: plan
     edit: false
     persona: planner
-    report:
-      name: 00-plan.md
-      format: plan
     allowed_tools:
       - Read
       - Glob
@@ -95,10 +52,9 @@ movements:
         next: implement
       - condition: 要件が不明確で計画を立てられない
         next: ABORT
-
-  # ===========================================
-  # Movement 1: Implementation
-  # ===========================================
+    output_contracts:
+      - name: 00-plan.md
+        format: plan
   - name: implement
     edit: true
     persona: coder
@@ -106,10 +62,11 @@ movements:
       - coding
       - testing
     session: refresh
-    knowledge: [frontend, backend, security, architecture]
-    report:
-      - Scope: 01-coder-scope.md
-      - Decisions: 02-coder-decisions.md
+    knowledge:
+      - frontend
+      - backend
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -131,19 +88,15 @@ movements:
         next: implement
         requires_user_input: true
         interactive_only: true
-
-  # ===========================================
-  # Movement 2: AI Review
-  # ===========================================
+    output_contracts:
+      - Scope: 01-coder-scope.md
+      - Decisions: 02-coder-decisions.md
   - name: ai_review
     edit: false
     persona: ai-antipattern-reviewer
     policy:
       - review
       - ai-antipattern
-    report:
-      name: 03-ai-review.md
-      format: ai-review
     allowed_tools:
       - Read
       - Glob
@@ -156,7 +109,9 @@ movements:
         next: reviewers
       - condition: AI特有の問題が検出された
         next: ai_fix
-
+    output_contracts:
+      - name: 03-ai-review.md
+        format: ai-review
   - name: ai_fix
     edit: true
     persona: coder
@@ -164,7 +119,11 @@ movements:
       - coding
       - testing
     session: refresh
-    knowledge: [frontend, backend, security, architecture]
+    knowledge:
+      - frontend
+      - backend
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -182,7 +141,6 @@ movements:
         next: ai_no_fix
       - condition: 修正を進行できない
         next: ai_no_fix
-
   - name: ai_no_fix
     edit: false
     persona: architecture-reviewer
@@ -197,105 +155,99 @@ movements:
       - condition: ai_fixの判断が妥当（修正不要）
         next: reviewers
     instruction: arbitrate
-
-  # ===========================================
-  # Movement 3: Expert Reviews (Parallel)
-  # ===========================================
   - name: reviewers
     parallel:
       - name: arch-review
         edit: false
         persona: architecture-reviewer
         policy: review
-        knowledge: [architecture, backend]
-        report:
-          name: 04-architect-review.md
-          format: architecture-review
+        knowledge:
+          - architecture
+          - backend
         allowed_tools:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
           - condition: approved
           - condition: needs_fix
         instruction: review-arch
-
+        output_contracts:
+          - name: 04-architect-review.md
+            format: architecture-review
       - name: frontend-review
         edit: false
         persona: frontend-reviewer
         policy: review
         knowledge: frontend
-        report:
-          name: 05-frontend-review.md
-          format: frontend-review
         allowed_tools:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
           - condition: approved
           - condition: needs_fix
         instruction: review-frontend
-
+        output_contracts:
+          - name: 05-frontend-review.md
+            format: frontend-review
       - name: security-review
         edit: false
         persona: security-reviewer
         policy: review
         knowledge: security
-        report:
-          name: 06-security-review.md
-          format: security-review
         allowed_tools:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
           - condition: approved
           - condition: needs_fix
         instruction: review-security
-
+        output_contracts:
+          - name: 06-security-review.md
+            format: security-review
       - name: qa-review
         edit: false
         persona: qa-reviewer
         policy:
           - review
           - qa
-        report:
-          name: 07-qa-review.md
-          format: qa-review
         allowed_tools:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
           - condition: approved
           - condition: needs_fix
         instruction: review-qa
+        output_contracts:
+          - name: 07-qa-review.md
+            format: qa-review
     rules:
       - condition: all("approved")
         next: supervise
       - condition: any("needs_fix")
         next: fix
-
   - name: fix
     edit: true
     persona: coder
     policy:
       - coding
       - testing
-    knowledge: [frontend, backend, security, architecture]
+    knowledge:
+      - frontend
+      - backend
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -312,17 +264,10 @@ movements:
       - condition: 修正を進行できない
         next: plan
     instruction: fix
-
-  # ===========================================
-  # Movement 4: Supervision
-  # ===========================================
   - name: supervise
     edit: false
     persona: expert-supervisor
     policy: review
-    report:
-      - Validation: 08-supervisor-validation.md
-      - Summary: summary.md
     allowed_tools:
       - Read
       - Glob
@@ -335,14 +280,20 @@ movements:
         next: COMPLETE
       - condition: 問題が検出された
         next: fix_supervisor
-
+    output_contracts:
+      - Validation: 08-supervisor-validation.md
+      - Summary: summary.md
   - name: fix_supervisor
     edit: true
     persona: coder
     policy:
       - coding
       - testing
-    knowledge: [frontend, backend, security, architecture]
+    knowledge:
+      - frontend
+      - backend
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -358,3 +309,12 @@ movements:
         next: supervise
       - condition: 修正を進行できない
         next: plan
+report_formats:
+  plan: ../output-contracts/plan.md
+  ai-review: ../output-contracts/ai-review.md
+  architecture-review: ../output-contracts/architecture-review.md
+  frontend-review: ../output-contracts/frontend-review.md
+  security-review: ../output-contracts/security-review.md
+  qa-review: ../output-contracts/qa-review.md
+  validation: ../output-contracts/validation.md
+  summary: ../output-contracts/summary.md

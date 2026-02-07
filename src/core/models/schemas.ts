@@ -56,20 +56,20 @@ export const StatusSchema = z.enum([
 export const PermissionModeSchema = z.enum(['readonly', 'edit', 'full']);
 
 /**
- * Report object schema (new structured format).
+ * Output contract item schema (new structured format).
  *
  * YAML format:
- *   report:
- *     name: 00-plan.md
- *     order: |
- *       **レポート出力:** {report:00-plan.md} に出力してください。
- *     format: |
- *       **出力契約:**
- *       ```markdown
- *       ...
- *       ```
+ *   output_contracts:
+ *     - name: 00-plan.md
+ *       order: |
+ *         **レポート出力:** {report:00-plan.md} に出力してください。
+ *       format: |
+ *         **出力契約:**
+ *         ```markdown
+ *         ...
+ *         ```
  */
-export const ReportObjectSchema = z.object({
+export const OutputContractItemSchema = z.object({
   /** Report file name */
   name: z.string().min(1),
   /** Instruction prepended before instruction_template (e.g., output destination) */
@@ -79,25 +79,28 @@ export const ReportObjectSchema = z.object({
 });
 
 /**
- * Report field schema.
+ * Output contracts field schema for movement-level definition.
  *
  * YAML formats:
- *   report: 00-plan.md          # single file (string)
- *   report:                     # multiple files (label: path map entries)
+ *   output_contracts:                     # array of label:path entries
  *     - Scope: 01-scope.md
  *     - Decisions: 02-decisions.md
- *   report:                     # object form (name + order + format)
- *     name: 00-plan.md
- *     order: ...
- *     format: ...
+ *   output_contracts:                     # array of objects (name + order + format)
+ *     - name: 00-plan.md
+ *       order: ...
+ *       format: plan
  *
- * Array items are parsed as single-key objects: [{Scope: "01-scope.md"}, ...]
+ * Array items can be single-key objects or full item objects.
  */
-export const ReportFieldSchema = z.union([
-  z.string().min(1),
-  z.array(z.record(z.string(), z.string())).min(1),
-  ReportObjectSchema,
-]);
+export const OutputContractsFieldSchema = z.array(
+  z.union([
+    z.record(z.string(), z.string()),  // {Scope: "01-scope.md"} format
+    OutputContractItemSchema,           // {name, order?, format?} format
+  ])
+).optional();
+
+/** Quality gates schema - AI directives for movement completion (string array) */
+export const QualityGatesSchema = z.array(z.string()).optional();
 
 /** Rule-based transition schema (new unified format) */
 export const PieceRuleSchema = z.object({
@@ -132,7 +135,10 @@ export const ParallelSubMovementRawSchema = z.object({
   instruction: z.string().optional(),
   instruction_template: z.string().optional(),
   rules: z.array(PieceRuleSchema).optional(),
-  report: ReportFieldSchema.optional(),
+  /** Output contracts for this movement (report definitions) */
+  output_contracts: OutputContractsFieldSchema,
+  /** Quality gates for this movement (AI directives) */
+  quality_gates: QualityGatesSchema,
   pass_previous_response: z.boolean().optional().default(true),
 });
 
@@ -161,8 +167,10 @@ export const PieceMovementRawSchema = z.object({
   instruction_template: z.string().optional(),
   /** Rules for movement routing */
   rules: z.array(PieceRuleSchema).optional(),
-  /** Report file(s) for this movement */
-  report: ReportFieldSchema.optional(),
+  /** Output contracts for this movement (report definitions) */
+  output_contracts: OutputContractsFieldSchema,
+  /** Quality gates for this movement (AI directives) */
+  quality_gates: QualityGatesSchema,
   pass_previous_response: z.boolean().optional().default(true),
   /** Sub-movements to execute in parallel */
   parallel: z.array(ParallelSubMovementRawSchema).optional(),
@@ -208,8 +216,8 @@ export const PieceConfigRawSchema = z.object({
   knowledge: z.record(z.string(), z.string()).optional(),
   /** Piece-level instruction definitions — map of name to .md file path or inline content */
   instructions: z.record(z.string(), z.string()).optional(),
-  /** Piece-level output contract definitions — map of name to .md file path or inline content */
-  output_contracts: z.record(z.string(), z.string()).optional(),
+  /** Piece-level report format definitions — map of name to .md file path or inline content */
+  report_formats: z.record(z.string(), z.string()).optional(),
   movements: z.array(PieceMovementRawSchema).min(1),
   initial_movement: z.string().optional(),
   max_iterations: z.number().int().positive().optional().default(10),

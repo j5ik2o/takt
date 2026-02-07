@@ -1,37 +1,12 @@
-# レビュー専用ピース
-# コードやPRをレビューするだけで編集は行わない
-# ローカル: コンソール出力のみ。PR指定時: PRにインラインコメント＋サマリを投稿
-#
-# フロー:
-# plan -> reviewers (parallel: arch-review + security-review + ai-review) -> supervise
-#   -> pr-comment -> COMPLETE (PRコメント要求時)
-#   -> COMPLETE (ローカル: コンソール出力のみ)
-#   -> ABORT (rejected)
-#
-# 全ムーブメント edit: false（ファイル変更なし）
-#
-# テンプレート変数:
-#   {iteration}         - ピース全体のターン数
-#   {max_iterations}    - 最大イテレーション数
-#   {movement_iteration}    - ムーブメントごとのイテレーション数
-#   {task}              - 元のユーザー要求
-#   {previous_response} - 前のムーブメントの出力
-#   {user_inputs}       - 蓄積されたユーザー入力
-#   {report_dir}        - レポートディレクトリ名
-
 name: review-only
 description: レビュー専用ピース - コードをレビューするだけで編集は行わない
-
 max_iterations: 10
-
 policies:
   review: ../policies/review.md
   ai-antipattern: ../policies/ai-antipattern.md
-
 knowledge:
   architecture: ../knowledge/architecture.md
   security: ../knowledge/security.md
-
 personas:
   planner: ../personas/planner.md
   architecture-reviewer: ../personas/architecture-reviewer.md
@@ -39,20 +14,11 @@ personas:
   ai-antipattern-reviewer: ../personas/ai-antipattern-reviewer.md
   supervisor: ../personas/supervisor.md
   pr-commenter: ../personas/pr-commenter.md
-
 instructions:
   review-arch: ../instructions/review-arch.md
   review-security: ../instructions/review-security.md
   review-ai: ../instructions/review-ai.md
-
-output_contracts:
-  architecture-review: ../output-contracts/architecture-review.md
-  security-review: ../output-contracts/security-review.md
-  ai-review: ../output-contracts/ai-review.md
-  review-summary: ../output-contracts/review-summary.md
-
 initial_movement: plan
-
 movements:
   - name: plan
     edit: false
@@ -88,7 +54,6 @@ movements:
 
       **PR番号が記載されている場合**（例: "PR #42"）、レビュアーが
       PRの変更ファイルに集中できるよう計画に含めてください。
-
   - name: reviewers
     parallel:
       - name: arch-review
@@ -96,73 +61,65 @@ movements:
         persona: architecture-reviewer
         policy: review
         knowledge: architecture
-        report:
-          name: 01-architect-review.md
-          format: architecture-review
         allowed_tools:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
           - condition: approved
           - condition: needs_fix
         instruction: review-arch
-
+        output_contracts:
+          - name: 01-architect-review.md
+            format: architecture-review
       - name: security-review
         edit: false
         persona: security-reviewer
         policy: review
         knowledge: security
-        report:
-          name: 02-security-review.md
-          format: security-review
         allowed_tools:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
           - condition: approved
           - condition: needs_fix
         instruction: review-security
-
+        output_contracts:
+          - name: 02-security-review.md
+            format: security-review
       - name: ai-review
         edit: false
         persona: ai-antipattern-reviewer
         policy:
           - review
           - ai-antipattern
-        report:
-          name: 03-ai-review.md
-          format: ai-review
         allowed_tools:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
           - condition: approved
           - condition: needs_fix
         instruction: review-ai
+        output_contracts:
+          - name: 03-ai-review.md
+            format: ai-review
     rules:
       - condition: all("approved")
         next: supervise
       - condition: any("needs_fix")
         next: supervise
-
   - name: supervise
     edit: false
     persona: supervisor
     policy: review
-    report:
-      - Review Summary: 04-review-summary.md
     allowed_tools:
       - Read
       - Glob
@@ -218,7 +175,8 @@ movements:
       ## 改善提案
       - {全レビューからの統合提案}
       ```
-
+    output_contracts:
+      - Review Summary: 04-review-summary.md
   - name: pr-comment
     edit: false
     persona: pr-commenter
@@ -269,3 +227,8 @@ movements:
       ---
       *[takt](https://github.com/toruticas/takt) review-only ピースで生成*
       ```
+report_formats:
+  architecture-review: ../output-contracts/architecture-review.md
+  security-review: ../output-contracts/security-review.md
+  ai-review: ../output-contracts/ai-review.md
+  review-summary: ../output-contracts/review-summary.md

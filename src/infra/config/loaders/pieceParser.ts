@@ -11,7 +11,7 @@ import { join, dirname, basename } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import type { z } from 'zod';
 import { PieceConfigRawSchema, PieceMovementRawSchema } from '../../../core/models/index.js';
-import type { PieceConfig, PieceMovement, PieceRule, ReportConfig, ReportObjectConfig, LoopMonitorConfig, LoopMonitorJudge } from '../../../core/models/index.js';
+import type { PieceConfig, PieceMovement, PieceRule, OutputContractEntry, OutputContractLabelPath, OutputContractItem, LoopMonitorConfig, LoopMonitorJudge } from '../../../core/models/index.js';
 
 type RawStep = z.output<typeof PieceMovementRawSchema>;
 
@@ -110,33 +110,54 @@ interface PieceSections {
   resolvedKnowledge?: Record<string, string>;
   /** Instruction name → resolved content */
   resolvedInstructions?: Record<string, string>;
-  /** Output contract name → resolved content */
-  resolvedOutputContracts?: Record<string, string>;
+  /** Report format name → resolved content */
+  resolvedReportFormats?: Record<string, string>;
 }
 
-/** Check if a raw report value is the object form (has 'name' property). */
-function isReportObject(raw: unknown): raw is { name: string; order?: string; format?: string } {
+/** Check if a raw output contract item is the object form (has 'name' property). */
+function isOutputContractItem(raw: unknown): raw is { name: string; order?: string; format?: string } {
   return typeof raw === 'object' && raw !== null && !Array.isArray(raw) && 'name' in raw;
 }
 
-/** Normalize the raw report field from YAML into internal format. */
-function normalizeReport(
-  raw: string | Record<string, string>[] | { name: string; order?: string; format?: string } | undefined,
+/**
+ * Normalize the raw output_contracts field from YAML into internal format.
+ *
+ * Input formats (YAML):
+ *   output_contracts:
+ *     - Scope: 01-scope.md           # label:path format
+ *     - name: 00-plan.md             # item format
+ *       format: plan
+ *
+ * Output: OutputContractEntry[]
+ */
+function normalizeOutputContracts(
+  raw: Array<Record<string, string> | { name: string; order?: string; format?: string }> | undefined,
   pieceDir: string,
-  resolvedOutputContracts?: Record<string, string>,
-): string | ReportConfig[] | ReportObjectConfig | undefined {
-  if (raw == null) return undefined;
-  if (typeof raw === 'string') return raw;
-  if (isReportObject(raw)) {
-    return {
-      name: raw.name,
-      order: raw.order ? resolveRefToContent(raw.order, resolvedOutputContracts, pieceDir) : undefined,
-      format: raw.format ? resolveRefToContent(raw.format, resolvedOutputContracts, pieceDir) : undefined,
-    };
+  resolvedReportFormats?: Record<string, string>,
+): OutputContractEntry[] | undefined {
+  if (raw == null || raw.length === 0) return undefined;
+
+  const result: OutputContractEntry[] = [];
+
+  for (const entry of raw) {
+    if (isOutputContractItem(entry)) {
+      // Item format: {name, order?, format?}
+      const item: OutputContractItem = {
+        name: entry.name,
+        order: entry.order ? resolveRefToContent(entry.order, resolvedReportFormats, pieceDir) : undefined,
+        format: entry.format ? resolveRefToContent(entry.format, resolvedReportFormats, pieceDir) : undefined,
+      };
+      result.push(item);
+    } else {
+      // Label:path format: {Scope: "01-scope.md"}
+      for (const [label, path] of Object.entries(entry)) {
+        const labelPath: OutputContractLabelPath = { label, path };
+        result.push(labelPath);
+      }
+    }
   }
-  return (raw as Record<string, string>[]).flatMap((entry) =>
-    Object.entries(entry).map(([label, path]) => ({ label, path })),
-  );
+
+  return result.length > 0 ? result : undefined;
 }
 
 /** Regex to detect ai("...") condition expressions */
@@ -255,7 +276,8 @@ function normalizeStepFromRaw(
     edit: step.edit,
     instructionTemplate: resolveResourceContent(step.instruction_template, pieceDir) || expandedInstruction || '{task}',
     rules,
-    report: normalizeReport(step.report, pieceDir, sections.resolvedOutputContracts),
+    outputContracts: normalizeOutputContracts(step.output_contracts, pieceDir, sections.resolvedReportFormats),
+    qualityGates: step.quality_gates,
     passPreviousResponse: step.pass_previous_response ?? true,
     policyContents,
     knowledgeContents,
@@ -307,14 +329,14 @@ export function normalizePieceConfig(raw: unknown, pieceDir: string): PieceConfi
   const resolvedPolicies = resolveSectionMap(parsed.policies, pieceDir);
   const resolvedKnowledge = resolveSectionMap(parsed.knowledge, pieceDir);
   const resolvedInstructions = resolveSectionMap(parsed.instructions, pieceDir);
-  const resolvedOutputContracts = resolveSectionMap(parsed.output_contracts, pieceDir);
+  const resolvedReportFormats = resolveSectionMap(parsed.report_formats, pieceDir);
 
   const sections: PieceSections = {
     personas: parsed.personas,
     resolvedPolicies,
     resolvedKnowledge,
     resolvedInstructions,
-    resolvedOutputContracts,
+    resolvedReportFormats,
   };
 
   const movements: PieceMovement[] = parsed.movements.map((step) =>
@@ -331,7 +353,7 @@ export function normalizePieceConfig(raw: unknown, pieceDir: string): PieceConfi
     policies: resolvedPolicies,
     knowledge: resolvedKnowledge,
     instructions: resolvedInstructions,
-    outputContracts: resolvedOutputContracts,
+    reportFormats: resolvedReportFormats,
     movements,
     initialMovement,
     maxIterations: parsed.max_iterations,

@@ -5,7 +5,7 @@
         pieceStructure, iteration, movementIteration, movement, hasReport, reportInfo,
         phaseNote, hasTaskSection, userRequest, hasPreviousResponse, previousResponse,
         hasUserInputs, userInputs, hasRetryNote, retryNote, hasPolicy, policyContent,
-        hasKnowledge, knowledgeContent, instructions
+        hasKnowledge, knowledgeContent, hasQualityGates, qualityGatesContent, instructions
   builder: InstructionBuilder
 -->
 ## 実行コンテキスト
@@ -60,6 +60,13 @@
 
 ## Instructions
 {{instructions}}
+{{#if hasQualityGates}}
+
+## Quality Gates
+このムーブメントを完了する前に、以下の要件を満たしてください:
+
+{{qualityGatesContent}}
+{{/if}}
 {{#if hasPolicy}}
 
 ## Policy

@@ -1,44 +1,22 @@
-# Review-Fix Minimal TAKT Piece
-# Review -> Fix (if needed) -> Re-review -> Complete
-# (Starts with review, no implementation movement)
-#
-# Template Variables (auto-injected):
-#   {iteration}      - Piece-wide turn count (total movements executed across all agents)
-#   {max_iterations} - Maximum iterations allowed for the piece
-#   {movement_iteration} - Per-movement iteration count (how many times THIS movement has been executed)
-#   {task}           - Original user request (auto-injected)
-#   {previous_response} - Output from the previous movement (auto-injected)
-#   {user_inputs}    - Accumulated user inputs during piece (auto-injected)
-#   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
-
 name: review-fix-minimal
 description: Review and fix piece for existing code (starts with review, no implementation)
-
 max_iterations: 20
-
 policies:
   coding: ../policies/coding.md
   review: ../policies/review.md
   testing: ../policies/testing.md
   ai-antipattern: ../policies/ai-antipattern.md
-
 personas:
   coder: ../personas/coder.md
   ai-antipattern-reviewer: ../personas/ai-antipattern-reviewer.md
   supervisor: ../personas/supervisor.md
-
 instructions:
   implement: ../instructions/implement.md
   review-ai: ../instructions/review-ai.md
   ai-fix: ../instructions/ai-fix.md
   supervise: ../instructions/supervise.md
   fix-supervisor: ../instructions/fix-supervisor.md
-
-output_contracts:
-  ai-review: ../output-contracts/ai-review.md
-
 initial_movement: reviewers
-
 movements:
   - name: implement
     edit: true
@@ -46,9 +24,6 @@ movements:
     policy:
       - coding
       - testing
-    report:
-      - Scope: 01-coder-scope.md
-      - Decisions: 02-coder-decisions.md
     allowed_tools:
       - Read
       - Glob
@@ -69,7 +44,9 @@ movements:
         next: implement
         requires_user_input: true
         interactive_only: true
-
+    output_contracts:
+      - Scope: 01-coder-scope.md
+      - Decisions: 02-coder-decisions.md
   - name: reviewers
     parallel:
       - name: ai_review
@@ -78,41 +55,37 @@ movements:
         policy:
           - review
           - ai-antipattern
-        report:
-          name: 03-ai-review.md
-          format: ai-review
         allowed_tools:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         instruction: review-ai
         rules:
-          - condition: "No AI-specific issues"
-          - condition: "AI-specific issues found"
-
+          - condition: No AI-specific issues
+          - condition: AI-specific issues found
+        output_contracts:
+          - name: 03-ai-review.md
+            format: ai-review
       - name: supervise
         edit: false
         persona: supervisor
         policy: review
-        report:
-          - Validation: 05-supervisor-validation.md
-          - Summary: summary.md
         allowed_tools:
           - Read
           - Glob
           - Grep
-
           - Bash
           - WebSearch
           - WebFetch
         instruction: supervise
         rules:
-          - condition: "All checks passed"
-          - condition: "Requirements unmet, tests failing"
-
+          - condition: All checks passed
+          - condition: Requirements unmet, tests failing
+        output_contracts:
+          - Validation: 05-supervisor-validation.md
+          - Summary: summary.md
     rules:
       - condition: all("No AI-specific issues", "All checks passed")
         next: COMPLETE
@@ -122,7 +95,6 @@ movements:
         next: ai_fix
       - condition: any("Requirements unmet, tests failing")
         next: supervise_fix
-
   - name: fix_both
     parallel:
       - name: ai_fix_parallel
@@ -136,7 +108,6 @@ movements:
           - Glob
           - Grep
           - Edit
-
           - Bash
           - WebSearch
           - WebFetch
@@ -146,7 +117,6 @@ movements:
           - condition: No fix needed (verified target files/spec)
           - condition: Cannot proceed, insufficient info
         instruction: ai-fix
-
       - name: supervise_fix_parallel
         edit: true
         persona: coder
@@ -158,7 +128,6 @@ movements:
           - Glob
           - Grep
           - Edit
-
           - Bash
           - WebSearch
           - WebFetch
@@ -167,13 +136,11 @@ movements:
           - condition: Supervisor's issues fixed
           - condition: Cannot proceed, insufficient info
         instruction: fix-supervisor
-
     rules:
       - condition: all("AI Reviewer's issues fixed", "Supervisor's issues fixed")
         next: reviewers
       - condition: any("No fix needed (verified target files/spec)", "Cannot proceed, insufficient info")
         next: implement
-
   - name: ai_fix
     edit: true
     persona: coder
@@ -198,7 +165,6 @@ movements:
       - condition: Cannot proceed, insufficient info
         next: implement
     instruction: ai-fix
-
   - name: supervise_fix
     edit: true
     persona: coder
@@ -221,3 +187,5 @@ movements:
       - condition: Cannot proceed, insufficient info
         next: implement
     instruction: fix-supervisor
+report_formats:
+  ai-review: ../output-contracts/ai-review.md

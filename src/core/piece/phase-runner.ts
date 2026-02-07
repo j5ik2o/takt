@@ -83,7 +83,7 @@ export async function runReportPhase(
 
   log.debug('Running report phase', { movement: step.name, sessionId: currentSessionId });
 
-  const reportFiles = getReportFiles(step.report);
+  const reportFiles = getReportFiles(step.outputContracts);
   if (reportFiles.length === 0) {
     log.debug('No report files configured, skipping report phase');
     return;

@@ -110,7 +110,7 @@ export class ParallelRunner {
         const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(state, subResponse.content, updatePersonaSession, this.deps.onPhaseStart, this.deps.onPhaseComplete);
 
         // Phase 2: report output for sub-movement
-        if (subMovement.report) {
+        if (subMovement.outputContracts && subMovement.outputContracts.length > 0) {
           await runReportPhase(subMovement, subIteration, phaseCtx);
         }
 

@@ -31,14 +31,20 @@ instructions:
   fix: ../instructions/fix.md
   supervise: ../instructions/supervise.md
   fix-supervisor: ../instructions/fix-supervisor.md
+report_formats:
+  plan: ../output-contracts/plan.md
+  ai-review: ../output-contracts/ai-review.md
+  architecture-review: ../output-contracts/architecture-review.md
+  frontend-review: ../output-contracts/frontend-review.md
+  security-review: ../output-contracts/security-review.md
+  qa-review: ../output-contracts/qa-review.md
+  validation: ../output-contracts/validation.md
+  summary: ../output-contracts/summary.md
 initial_movement: plan
 movements:
   - name: plan
     edit: false
     persona: planner
-    report:
-      name: 00-plan.md
-      format: plan
     allowed_tools:
       - Read
       - Glob
@@ -52,6 +58,9 @@ movements:
         next: implement
       - condition: 要件が不明確で計画を立てられない
         next: ABORT
+    output_contracts:
+      - name: 00-plan.md
+        format: plan
   - name: implement
     edit: true
     persona: coder
@@ -65,9 +74,6 @@ movements:
       - backend
       - security
       - architecture
-    report:
-      - Scope: 01-coder-scope.md
-      - Decisions: 02-coder-decisions.md
     allowed_tools:
       - Read
       - Glob
@@ -89,15 +95,15 @@ movements:
         next: implement
         requires_user_input: true
         interactive_only: true
+    output_contracts:
+      - Scope: 01-coder-scope.md
+      - Decisions: 02-coder-decisions.md
   - name: ai_review
     edit: false
     persona: ai-antipattern-reviewer
     policy:
       - review
       - ai-antipattern
-    report:
-      name: 03-ai-review.md
-      format: ai-review
     allowed_tools:
       - Read
       - Glob
@@ -110,6 +116,9 @@ movements:
         next: reviewers
       - condition: AI特有の問題が検出された
         next: ai_fix
+    output_contracts:
+      - name: 03-ai-review.md
+        format: ai-review
   - name: ai_fix
     edit: true
     persona: coder
@@ -163,9 +172,6 @@ movements:
         knowledge:
           - architecture
           - backend
-        report:
-          name: 04-architect-review.md
-          format: architecture-review
         allowed_tools:
           - Read
           - Glob
@@ -176,14 +182,14 @@ movements:
           - condition: approved
           - condition: needs_fix
         instruction: review-arch
+        output_contracts:
+          - name: 04-architect-review.md
+            format: architecture-review
       - name: frontend-review
         edit: false
         persona: frontend-reviewer
         policy: review
         knowledge: frontend
-        report:
-          name: 05-frontend-review.md
-          format: frontend-review
         allowed_tools:
           - Read
           - Glob
@@ -194,14 +200,14 @@ movements:
           - condition: approved
           - condition: needs_fix
         instruction: review-frontend
+        output_contracts:
+          - name: 05-frontend-review.md
+            format: frontend-review
       - name: security-review
         edit: false
         persona: security-reviewer
         policy: review
         knowledge: security
-        report:
-          name: 06-security-review.md
-          format: security-review
         allowed_tools:
           - Read
           - Glob
@@ -212,15 +218,15 @@ movements:
           - condition: approved
           - condition: needs_fix
         instruction: review-security
+        output_contracts:
+          - name: 06-security-review.md
+            format: security-review
       - name: qa-review
         edit: false
         persona: qa-reviewer
         policy:
           - review
           - qa
-        report:
-          name: 07-qa-review.md
-          format: qa-review
         allowed_tools:
           - Read
           - Glob
@@ -231,6 +237,9 @@ movements:
           - condition: approved
           - condition: needs_fix
         instruction: review-qa
+        output_contracts:
+          - name: 07-qa-review.md
+            format: qa-review
     rules:
       - condition: all("approved")
         next: supervise
@@ -268,9 +277,6 @@ movements:
     edit: false
     persona: expert-supervisor
     policy: review
-    report:
-      - Validation: 08-supervisor-validation.md
-      - Summary: summary.md
     allowed_tools:
       - Read
       - Glob
@@ -283,6 +289,9 @@ movements:
         next: COMPLETE
       - condition: 問題が検出された
         next: fix_supervisor
+    output_contracts:
+      - Validation: 08-supervisor-validation.md
+      - Summary: summary.md
   - name: fix_supervisor
     edit: true
     persona: coder
@@ -316,12 +325,3 @@ policies:
   testing: ../policies/testing.md
   ai-antipattern: ../policies/ai-antipattern.md
   qa: ../policies/qa.md
-output_contracts:
-  plan: ../output-contracts/plan.md
-  ai-review: ../output-contracts/ai-review.md
-  architecture-review: ../output-contracts/architecture-review.md
-  frontend-review: ../output-contracts/frontend-review.md
-  security-review: ../output-contracts/security-review.md
-  qa-review: ../output-contracts/qa-review.md
-  validation: ../output-contracts/validation.md
-  summary: ../output-contracts/summary.md

@@ -53,10 +53,11 @@ export class OptionsBuilder {
 
   /** Build RunAgentOptions for Phase 1 (main execution) */
   buildAgentOptions(step: PieceMovement): RunAgentOptions {
-    // Phase 1: exclude Write from allowedTools when movement has report config AND edit is NOT enabled
-    // (If edit is enabled, Write is needed for code implementation even if report exists)
+    // Phase 1: exclude Write from allowedTools when movement has output contracts AND edit is NOT enabled
+    // (If edit is enabled, Write is needed for code implementation even if output contracts exist)
     // Note: edit defaults to undefined, so check !== true to catch both false and undefined
-    const allowedTools = step.report && step.edit !== true
+    const hasOutputContracts = step.outputContracts && step.outputContracts.length > 0;
+    const allowedTools = hasOutputContracts && step.edit !== true
       ? step.allowedTools?.filter((t) => t !== 'Write')
       : step.allowedTools;
 

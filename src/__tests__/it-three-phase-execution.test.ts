@@ -88,7 +88,7 @@ function makeMovement(
   name: string,
   agentPath: string,
   rules: PieceRule[],
-  options: { report?: string | { label: string; path: string }[]; edit?: boolean } = {},
+  options: { outputContracts?: { label: string; path: string }[]; edit?: boolean } = {},
 ): PieceMovement {
   return {
     name,
@@ -98,7 +98,7 @@ function makeMovement(
     instructionTemplate: '{task}',
     passPreviousResponse: true,
     rules,
-    report: options.report,
+    outputContracts: options.outputContracts,
     edit: options.edit,
   };
 }
@@ -190,7 +190,7 @@ describe('Three-Phase Execution IT: phase1 + phase2 (report defined)', () => {
         makeMovement('step', agentPath, [
           makeRule('Done', 'COMPLETE'),
           makeRule('Not done', 'ABORT'),
-        ], { report: 'test-report.md' }),
+        ], { outputContracts: [{ label: 'test', path: 'test-report.md' }] }),
       ],
     };
 
@@ -219,7 +219,7 @@ describe('Three-Phase Execution IT: phase1 + phase2 (report defined)', () => {
       movements: [
         makeMovement('step', agentPath, [
           makeRule('Done', 'COMPLETE'),
-        ], { report: [{ label: 'Scope', path: 'scope.md' }, { label: 'Decisions', path: 'decisions.md' }] }),
+        ], { outputContracts: [{ label: 'Scope', path: 'scope.md' }, { label: 'Decisions', path: 'decisions.md' }] }),
       ],
     };
 
@@ -322,7 +322,7 @@ describe('Three-Phase Execution IT: all three phases', () => {
         makeMovement('step', agentPath, [
           makeRule('Done', 'COMPLETE'),
           makeRule('Not done', 'ABORT'),
-        ], { report: 'test-report.md' }),
+        ], { outputContracts: [{ label: 'test', path: 'test-report.md' }] }),
       ],
     };
 

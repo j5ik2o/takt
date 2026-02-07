@@ -1,31 +1,15 @@
-# Default TAKT Piece
-# Plan -> Architect -> Implement -> AI Review -> Reviewers (parallel: Architect + QA) -> Supervisor Approval
-#
-# Template Variables (auto-injected by buildInstruction):
-#   {iteration}      - Piece-wide turn count (total movements executed across all agents)
-#   {max_iterations} - Maximum iterations allowed for the piece
-#   {movement_iteration} - Per-movement iteration count (how many times THIS movement has been executed)
-#   {task}           - Original user request
-#   {previous_response} - Output from the previous movement
-#   {user_inputs}    - Accumulated user inputs during piece
-#   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
-
 name: default
 description: Standard development piece with planning and specialized reviews
-
 max_iterations: 30
-
 policies:
   coding: ../policies/coding.md
   review: ../policies/review.md
   testing: ../policies/testing.md
   ai-antipattern: ../policies/ai-antipattern.md
   qa: ../policies/qa.md
-
 knowledge:
   architecture: ../knowledge/architecture.md
   backend: ../knowledge/backend.md
-
 personas:
   planner: ../personas/planner.md
   architect-planner: ../personas/architect-planner.md
@@ -34,7 +18,6 @@ personas:
   architecture-reviewer: ../personas/architecture-reviewer.md
   qa-reviewer: ../personas/qa-reviewer.md
   supervisor: ../personas/supervisor.md
-
 instructions:
   plan: ../instructions/plan.md
   architect: ../instructions/architect.md
@@ -46,20 +29,11 @@ instructions:
   review-qa: ../instructions/review-qa.md
   fix: ../instructions/fix.md
   supervise: ../instructions/supervise.md
-
-output_contracts:
-  plan: ../output-contracts/plan.md
-  architecture-design: ../output-contracts/architecture-design.md
-  ai-review: ../output-contracts/ai-review.md
-  architecture-review: ../output-contracts/architecture-review.md
-  qa-review: ../output-contracts/qa-review.md
-  validation: ../output-contracts/validation.md
-  summary: ../output-contracts/summary.md
-
 initial_movement: plan
-
 loop_monitors:
-  - cycle: [ai_review, ai_fix]
+  - cycle:
+      - ai_review
+      - ai_fix
     threshold: 3
     judge:
       persona: supervisor
@@ -81,14 +55,10 @@ loop_monitors:
           next: ai_review
         - condition: 非生産的（改善なし）
           next: reviewers
-
 movements:
   - name: plan
     edit: false
     persona: planner
-    report:
-      name: 00-plan.md
-      format: plan
     allowed_tools:
       - Read
       - Glob
@@ -108,13 +78,12 @@ movements:
           - {質問1}
           - {質問2}
     instruction: plan
-
+    output_contracts:
+      - name: 00-plan.md
+        format: plan
   - name: architect
     edit: false
     persona: architect-planner
-    report:
-      name: 01-architecture.md
-      format: architecture-design
     allowed_tools:
       - Read
       - Glob
@@ -129,7 +98,9 @@ movements:
       - condition: 情報不足、判断できない
         next: ABORT
     instruction: architect
-
+    output_contracts:
+      - name: 01-architecture.md
+        format: architecture-design
   - name: implement
     edit: true
     persona: coder
@@ -137,10 +108,9 @@ movements:
       - coding
       - testing
     session: refresh
-    knowledge: [backend, architecture]
-    report:
-      - Scope: 02-coder-scope.md
-      - Decisions: 03-coder-decisions.md
+    knowledge:
+      - backend
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -163,16 +133,15 @@ movements:
         requires_user_input: true
         interactive_only: true
     instruction: implement
-
+    output_contracts:
+      - Scope: 02-coder-scope.md
+      - Decisions: 03-coder-decisions.md
   - name: ai_review
     edit: false
     persona: ai-antipattern-reviewer
     policy:
       - review
       - ai-antipattern
-    report:
-      name: 04-ai-review.md
-      format: ai-review
     allowed_tools:
       - Read
       - Glob
@@ -185,7 +154,9 @@ movements:
       - condition: AI特有の問題あり
         next: ai_fix
     instruction: ai-review
-
+    output_contracts:
+      - name: 04-ai-review.md
+        format: ai-review
   - name: ai_fix
     edit: true
     persona: coder
@@ -193,7 +164,9 @@ movements:
       - coding
       - testing
     session: refresh
-    knowledge: [backend, architecture]
+    knowledge:
+      - backend
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -212,7 +185,6 @@ movements:
       - condition: 判断できない、情報不足
         next: ai_no_fix
     instruction: ai-fix
-
   - name: ai_no_fix
     edit: false
     persona: architecture-reviewer
@@ -227,17 +199,15 @@ movements:
       - condition: ai_fixの判断が妥当（修正不要）
         next: reviewers
     instruction: arbitrate
-
   - name: reviewers
     parallel:
       - name: arch-review
         edit: false
         persona: architecture-reviewer
         policy: review
-        knowledge: [architecture, backend]
-        report:
-          name: 05-architect-review.md
-          format: architecture-review
+        knowledge:
+          - architecture
+          - backend
         allowed_tools:
           - Read
           - Glob
@@ -248,16 +218,15 @@ movements:
           - condition: approved
           - condition: needs_fix
         instruction: review-arch
-
+        output_contracts:
+          - name: 05-architect-review.md
+            format: architecture-review
       - name: qa-review
         edit: false
         persona: qa-reviewer
         policy:
           - review
           - qa
-        report:
-          name: 06-qa-review.md
-          format: qa-review
         allowed_tools:
           - Read
           - Glob
@@ -268,19 +237,23 @@ movements:
           - condition: approved
           - condition: needs_fix
         instruction: review-qa
+        output_contracts:
+          - name: 06-qa-review.md
+            format: qa-review
     rules:
       - condition: all("approved")
         next: supervise
       - condition: any("needs_fix")
         next: fix
-
   - name: fix
     edit: true
     persona: coder
     policy:
       - coding
       - testing
-    knowledge: [backend, architecture]
+    knowledge:
+      - backend
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -297,14 +270,10 @@ movements:
       - condition: 判断できない、情報不足
         next: plan
     instruction: fix
-
   - name: supervise
     edit: false
     persona: supervisor
     policy: review
-    report:
-      - Validation: 07-supervisor-validation.md
-      - Summary: summary.md
     allowed_tools:
       - Read
       - Glob
@@ -318,3 +287,14 @@ movements:
       - condition: 要求未達成、テスト失敗、ビルドエラー
         next: plan
     instruction: supervise
+    output_contracts:
+      - Validation: 07-supervisor-validation.md
+      - Summary: summary.md
+report_formats:
+  plan: ../output-contracts/plan.md
+  architecture-design: ../output-contracts/architecture-design.md
+  ai-review: ../output-contracts/ai-review.md
+  architecture-review: ../output-contracts/architecture-review.md
+  qa-review: ../output-contracts/qa-review.md
+  validation: ../output-contracts/validation.md
+  summary: ../output-contracts/summary.md

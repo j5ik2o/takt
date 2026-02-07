@@ -17,14 +17,15 @@ instructions:
   ai-review: ../instructions/ai-review.md
   review-arch: ../instructions/review-arch.md
   fix: ../instructions/fix.md
+report_formats:
+  plan: ../output-contracts/plan.md
+  ai-review: ../output-contracts/ai-review.md
+  architecture-review: ../output-contracts/architecture-review.md
 initial_movement: plan
 movements:
   - name: plan
     edit: false
     persona: architect-planner
-    report:
-      name: 00-plan.md
-      format: plan
     allowed_tools:
       - Read
       - Glob
@@ -40,6 +41,9 @@ movements:
       - condition: Requirements are unclear, insufficient information
         next: ABORT
     instruction: plan
+    output_contracts:
+      - name: 00-plan.md
+        format: plan
   - name: implement
     edit: true
     persona: coder
@@ -49,9 +53,6 @@ movements:
       - testing
     session: refresh
     knowledge: architecture
-    report:
-      - Scope: 02-coder-scope.md
-      - Decisions: 03-coder-decisions.md
     allowed_tools:
       - Read
       - Glob
@@ -74,6 +75,9 @@ movements:
         requires_user_input: true
         interactive_only: true
     instruction: implement
+    output_contracts:
+      - Scope: 02-coder-scope.md
+      - Decisions: 03-coder-decisions.md
   - name: reviewers
     parallel:
       - name: ai_review
@@ -82,9 +86,6 @@ movements:
         policy:
           - review
           - ai-antipattern
-        report:
-          name: 04-ai-review.md
-          format: ai-review
         allowed_tools:
           - Read
           - Glob
@@ -95,14 +96,14 @@ movements:
           - condition: No AI-specific issues
           - condition: AI-specific issues found
         instruction: ai-review
+        output_contracts:
+          - name: 04-ai-review.md
+            format: ai-review
       - name: arch-review
         edit: false
         persona: architecture-reviewer
         policy: review
         knowledge: architecture
-        report:
-          name: 05-architect-review.md
-          format: architecture-review
         allowed_tools:
           - Read
           - Glob
@@ -113,6 +114,9 @@ movements:
           - condition: approved
           - condition: needs_fix
         instruction: review-arch
+        output_contracts:
+          - name: 05-architect-review.md
+            format: architecture-review
     rules:
       - condition: all("No AI-specific issues", "approved")
         next: COMPLETE
@@ -147,7 +151,3 @@ policies:
   review: ../policies/review.md
   testing: ../policies/testing.md
   ai-antipattern: ../policies/ai-antipattern.md
-output_contracts:
-  plan: ../output-contracts/plan.md
-  ai-review: ../output-contracts/ai-review.md
-  architecture-review: ../output-contracts/architecture-review.md

@@ -284,7 +284,7 @@ describe('Instruction Builder IT: buildReportInstruction', () => {
   it('should build report instruction with report context', () => {
     const step = makeMovement({
       name: 'plan',
-      report: { name: '00-plan.md', format: '# Plan\n{movement_iteration}' },
+      outputContracts: [{ name: '00-plan.md', format: '# Plan\n{movement_iteration}' }],
     });
 
     const result = buildReportInstruction(step, {
@@ -299,8 +299,8 @@ describe('Instruction Builder IT: buildReportInstruction', () => {
     expect(result).toContain('report');
   });
 
-  it('should throw for step without report config', () => {
-    const step = makeMovement({ report: undefined });
+  it('should throw for step without output contracts', () => {
+    const step = makeMovement({ outputContracts: undefined });
 
     expect(() =>
       buildReportInstruction(step, {
@@ -308,7 +308,7 @@ describe('Instruction Builder IT: buildReportInstruction', () => {
         reportDir: '/tmp/reports',
         movementIteration: 1,
       }),
-    ).toThrow(/no report config/);
+    ).toThrow(/no output contracts/);
   });
 });
 
@@ -335,6 +335,44 @@ describe('Instruction Builder IT: buildStatusJudgmentInstruction', () => {
     expect(() =>
       buildStatusJudgmentInstruction(step, { language: 'en' }),
     ).toThrow(/no rules/);
+  });
+});
+
+describe('Instruction Builder IT: quality gates injection', () => {
+  it('should inject quality gates section when qualityGates is defined', () => {
+    const step = makeMovement({
+      qualityGates: [
+        'All tests must pass',
+        'No TypeScript errors',
+        'No ESLint violations',
+      ],
+    });
+    const ctx = makeContext();
+
+    const result = buildInstruction(step, ctx);
+
+    expect(result).toContain('## Quality Gates');
+    expect(result).toContain('- All tests must pass');
+    expect(result).toContain('- No TypeScript errors');
+    expect(result).toContain('- No ESLint violations');
+  });
+
+  it('should NOT inject quality gates section when qualityGates is undefined', () => {
+    const step = makeMovement({ qualityGates: undefined });
+    const ctx = makeContext();
+
+    const result = buildInstruction(step, ctx);
+
+    expect(result).not.toContain('## Quality Gates');
+  });
+
+  it('should NOT inject quality gates section when qualityGates is empty', () => {
+    const step = makeMovement({ qualityGates: [] });
+    const ctx = makeContext();
+
+    const result = buildInstruction(step, ctx);
+
+    expect(result).not.toContain('## Quality Gates');
   });
 });
 

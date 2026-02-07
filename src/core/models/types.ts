@@ -26,8 +26,9 @@ export type {
 // Piece configuration and runtime state
 export type {
   PieceRule,
-  ReportConfig,
-  ReportObjectConfig,
+  OutputContractLabelPath,
+  OutputContractItem,
+  OutputContractEntry,
   PieceMovement,
   LoopDetectionConfig,
   LoopMonitorConfig,

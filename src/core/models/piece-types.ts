@@ -32,23 +32,26 @@ export interface PieceRule {
   aggregateConditionText?: string | string[];
 }
 
-/** Report file configuration for a piece movement (label: path pair) */
-export interface ReportConfig {
+/** Output contract configuration (label: path pair format) */
+export interface OutputContractLabelPath {
   /** Display label (e.g., "Scope", "Decisions") */
   label: string;
   /** File path relative to report directory (e.g., "01-coder-scope.md") */
   path: string;
 }
 
-/** Report object configuration with order/format instructions */
-export interface ReportObjectConfig {
+/** Output contract item configuration with order/format instructions */
+export interface OutputContractItem {
   /** Report file name (e.g., "00-plan.md") */
   name: string;
   /** Instruction prepended before instruction_template (e.g., output destination) */
   order?: string;
-  /** Instruction appended after instruction_template (e.g., output format) */
+  /** Instruction appended after instruction_template (e.g., output format) - resolved from report_formats */
   format?: string;
 }
+
+/** Union type for output contract entries */
+export type OutputContractEntry = OutputContractLabelPath | OutputContractItem;
 
 /** Single movement in a piece */
 export interface PieceMovement {
@@ -76,8 +79,10 @@ export interface PieceMovement {
   instructionTemplate: string;
   /** Rules for movement routing */
   rules?: PieceRule[];
-  /** Report file configuration. Single string, array of label:path, or object with order/format. */
-  report?: string | ReportConfig[] | ReportObjectConfig;
+  /** Output contracts for this movement (report definitions) */
+  outputContracts?: OutputContractEntry[];
+  /** Quality gates for this movement (AI directives for completion requirements) */
+  qualityGates?: string[];
   passPreviousResponse: boolean;
   /** Sub-movements to execute in parallel. When set, this movement runs all sub-movements concurrently. */
   parallel?: PieceMovement[];
@@ -137,8 +142,8 @@ export interface PieceConfig {
   knowledge?: Record<string, string>;
   /** Resolved instruction definitions — map of name to file content (resolved at parse time) */
   instructions?: Record<string, string>;
-  /** Resolved output contract definitions — map of name to file content (resolved at parse time) */
-  outputContracts?: Record<string, string>;
+  /** Resolved report format definitions — map of name to file content (resolved at parse time) */
+  reportFormats?: Record<string, string>;
   movements: PieceMovement[];
   initialMovement: string;
   maxIterations: number;

@@ -1,28 +1,11 @@
-# MAGI System Piece
-# エヴァンゲリオンのMAGIシステムを模した合議制ピース
-# 3つの人格（科学者・育成者・実務家）が異なる観点から分析・投票する
-#
-# テンプレート変数:
-#   {iteration}      - ピース全体のターン数（全エージェントで実行されたムーブメントの合計）
-#   {max_iterations} - ピースの最大イテレーション数
-#   {movement_iteration} - ムーブメントごとのイテレーション数（このムーブメントが何回実行されたか）
-#   {task}           - 元のユーザー要求
-#   {previous_response} - 前のムーブメントの出力
-#   {user_inputs}    - ピース中に蓄積されたユーザー入力
-#   {report_dir}     - レポートディレクトリ名（例: "20250126-143052-task-summary"）
-
 name: magi
 description: MAGI合議システム - 3つの観点から分析し多数決で判定
-
 max_iterations: 5
-
 personas:
   melchior: ../personas/melchior.md
   balthasar: ../personas/balthasar.md
   casper: ../personas/casper.md
-
 initial_movement: melchior
-
 movements:
   - name: melchior
     persona: melchior
@@ -60,7 +43,6 @@ movements:
     rules:
       - condition: 判定を完了した
         next: balthasar
-
   - name: balthasar
     persona: balthasar
     allowed_tools:
@@ -101,7 +83,6 @@ movements:
     rules:
       - condition: 判定を完了した
         next: casper
-
   - name: casper
     persona: casper
     allowed_tools:
