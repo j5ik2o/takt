@@ -96,11 +96,11 @@ describe('copyProjectResourcesToDir', () => {
 describe('getLanguageResourcesDir', () => {
   it('should return correct path for English', () => {
     const path = getLanguageResourcesDir('en');
-    expect(path).toContain('resources/global/en');
+    expect(path).toContain('builtins/en');
   });
 
   it('should return correct path for Japanese', () => {
     const path = getLanguageResourcesDir('ja');
-    expect(path).toContain('resources/global/ja');
+    expect(path).toContain('builtins/ja');
   });
 });

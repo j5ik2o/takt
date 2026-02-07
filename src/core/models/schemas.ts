@@ -276,7 +276,7 @@ export const GlobalConfigSchema = z.object({
   auto_pr: z.boolean().optional(),
   /** List of builtin piece/agent names to exclude from fallback loading */
   disabled_builtins: z.array(z.string()).optional().default([]),
-  /** Enable builtin pieces from resources/global/{lang}/pieces */
+  /** Enable builtin pieces from builtins/{lang}/pieces */
   enable_builtin_pieces: z.boolean().optional(),
   /** Anthropic API key for Claude Code SDK (overridden by TAKT_ANTHROPIC_API_KEY env var) */
   anthropic_api_key: z.string().optional(),

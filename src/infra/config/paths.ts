@@ -36,12 +36,12 @@ export function getGlobalConfigPath(): string {
   return join(getGlobalConfigDir(), 'config.yaml');
 }
 
-/** Get builtin pieces directory (resources/global/{lang}/pieces) */
+/** Get builtin pieces directory (builtins/{lang}/pieces) */
 export function getBuiltinPiecesDir(lang: Language): string {
   return join(getLanguageResourcesDir(lang), 'pieces');
 }
 
-/** Get builtin personas directory (resources/global/{lang}/personas) */
+/** Get builtin personas directory (builtins/{lang}/personas) */
 export function getBuiltinPersonasDir(lang: Language): string {
   return join(getLanguageResourcesDir(lang), 'personas');
 }

@@ -97,7 +97,7 @@ function resolvePieceFile(piecesDir: string, name: string): string | null {
  * Priority:
  * 1. Project-local pieces → .takt/pieces/{name}.yaml
  * 2. User pieces → ~/.takt/pieces/{name}.yaml
- * 3. Builtin pieces → resources/global/{lang}/pieces/{name}.yaml
+ * 3. Builtin pieces → builtins/{lang}/pieces/{name}.yaml
  */
 export function loadPiece(
   name: string,

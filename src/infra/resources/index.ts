@@ -3,10 +3,15 @@
  *
  * Contains default piece definitions and resource paths.
  * Resources are organized into:
- * - resources/global/{lang}/pieces/ - Builtin pieces (loaded via fallback)
- * - resources/global/{lang}/agents/   - Builtin agents (loaded via fallback)
- * - resources/global/{lang}/prompts/  - Builtin prompt templates
- * - resources/project/                - Project-level template files (.gitignore)
+ * - builtins/{lang}/pieces/    - Builtin pieces (loaded via fallback)
+ * - builtins/{lang}/personas/  - Builtin personas (loaded via fallback)
+ * - builtins/{lang}/stances/   - Builtin stances
+ * - builtins/{lang}/instructions/ - Builtin instructions
+ * - builtins/{lang}/knowledge/ - Builtin knowledge files
+ * - builtins/{lang}/report-formats/ - Builtin report formats
+ * - builtins/{lang}/templates/ - Builtin templates
+ * - builtins/project/          - Project-level template files (.gitignore)
+ * - builtins/skill/            - Claude Code skill files
  */
 
 import { readFileSync, readdirSync, existsSync, statSync, mkdirSync, writeFileSync } from 'fs';
@@ -20,29 +25,22 @@ import type { Language } from '../../core/models/index.js';
  */
 export function getResourcesDir(): string {
   const currentDir = dirname(fileURLToPath(import.meta.url));
-  // From src/infra/resources or dist/infra/resources, go up to project root then into resources/
-  return join(currentDir, '..', '..', '..', 'resources');
+  // From src/infra/resources or dist/infra/resources, go up to project root then into builtins/
+  return join(currentDir, '..', '..', '..', 'builtins');
 }
 
 /**
- * Get the global resources directory path (resources/global/)
- */
-export function getGlobalResourcesDir(): string {
-  return join(getResourcesDir(), 'global');
-}
-
-/**
- * Get the project resources directory path (resources/project/)
+ * Get the project resources directory path (builtins/project/)
  */
 export function getProjectResourcesDir(): string {
   return join(getResourcesDir(), 'project');
 }
 
 /**
- * Get the language-specific global resources directory path (resources/global/{lang}/)
+ * Get the language-specific resources directory path (builtins/{lang}/)
  */
 export function getLanguageResourcesDir(lang: Language): string {
-  return join(getGlobalResourcesDir(), lang);
+  return join(getResourcesDir(), lang);
 }
 
 /**

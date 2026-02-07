@@ -34,8 +34,7 @@ function sanitizeSlug(input: string, maxLength = 30): string {
  * Convert Japanese text to romaji slug.
  */
 function toRomajiSlug(text: string): string {
-  const truncated = text.slice(0, 100);
-  const romaji = wanakana.toRomaji(truncated, { customRomajiMapping: {} });
+  const romaji = wanakana.toRomaji(text, { customRomajiMapping: {} });
   return sanitizeSlug(romaji);
 }
 

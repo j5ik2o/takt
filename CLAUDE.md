@@ -183,7 +183,7 @@ Implemented in `src/core/piece/evaluation/RuleEvaluator.ts`. The matched method 
 ### Data Flow
 
 1. User provides task (text or `#N` issue reference) or slash command → CLI
-2. CLI loads piece with **correct priority** (v0.3.8+): user `~/.takt/pieces/` → project `.takt/pieces/` → builtin `resources/global/{lang}/pieces/`
+2. CLI loads piece with **correct priority** (v0.3.8+): user `~/.takt/pieces/` → project `.takt/pieces/` → builtin `builtins/{lang}/pieces/`
 3. PieceEngine starts at `initial_step`
 4. Each step: `buildInstruction()` → Phase 1 (main) → Phase 2 (report) → Phase 3 (status) → `detectMatchedRule()` → `determineNextStep()`
 5. Rule evaluation determines next step name (v0.3.8+: uses **last match** when multiple `[STEP:N]` tags appear)
@@ -204,13 +204,14 @@ Implemented in `src/core/piece/evaluation/RuleEvaluator.ts`. The matched method 
   reports/                # Execution reports (auto-generated)
   logs/                   # Session logs in NDJSON format (gitignored)
 
-resources/                # Bundled defaults (builtin, read from dist/ at runtime)
-  global/
-    en/                   # English personas, stances, instructions, and pieces
-    ja/                   # Japanese personas, stances, instructions, and pieces
+builtins/                 # Bundled defaults (builtin, read from dist/ at runtime)
+  en/                     # English personas, stances, instructions, and pieces
+  ja/                     # Japanese personas, stances, instructions, and pieces
+  project/                # Project-level template files
+  skill/                  # Claude Code skill files
 ```
 
-Builtin resources are embedded in the npm package (`dist/resources/`). User files in `~/.takt/` take priority. Use `/eject` to copy builtins to `~/.takt/` for customization.
+Builtin resources are embedded in the npm package (`builtins/`). User files in `~/.takt/` take priority. Use `/eject` to copy builtins to `~/.takt/` for customization.
 
 ## Piece YAML Schema
 
@@ -299,7 +300,7 @@ Key points about parallel steps:
 ### Piece Categories
 
 Pieces can be organized into categories for better UI presentation. Categories are configured in:
-- `resources/global/{lang}/default-categories.yaml` - Default builtin categories
+- `builtins/{lang}/piece-categories.yaml` - Default builtin categories
 - `~/.takt/config.yaml` - User-defined categories (via `piece_categories` field)
 
 Category configuration supports:
@@ -370,7 +371,7 @@ Files: `.takt/logs/{sessionId}.jsonl`, with `latest.json` pointer. Legacy `.json
 
 **Instruction auto-injection over explicit placeholders.** The instruction builder auto-injects `{task}`, `{previous_response}`, `{user_inputs}`, and status rules. Templates should contain only step-specific instructions, not boilerplate.
 
-**Persona prompts contain only domain knowledge.** Persona prompt files (`resources/global/{lang}/personas/*.md`) must contain only domain expertise and behavioral principles — never piece-specific procedures. Piece-specific details (which reports to read, step routing, specific templates with hardcoded step names) belong in the piece YAML's `instruction_template`. This keeps personas reusable across different pieces.
+**Persona prompts contain only domain knowledge.** Persona prompt files (`builtins/{lang}/personas/*.md`) must contain only domain expertise and behavioral principles — never piece-specific procedures. Piece-specific details (which reports to read, step routing, specific templates with hardcoded step names) belong in the piece YAML's `instruction_template`. This keeps personas reusable across different pieces.
 
 What belongs in persona prompts:
 - Role definition ("You are a ... specialist")
@@ -449,7 +450,7 @@ Debug logs are written to `.takt/logs/debug.log` (ndjson format). Log levels: `d
 **Persona prompt resolution:**
 - Persona paths in piece YAML are resolved relative to the piece file's directory
 - `../personas/coder.md` resolves from piece file location
-- Built-in personas are loaded from `dist/resources/global/{lang}/personas/`
+- Built-in personas are loaded from `builtins/{lang}/personas/`
 - User personas are loaded from `~/.takt/personas/` (legacy: `~/.takt/agents/`)
 - If persona file doesn't exist, the persona string is used as inline system prompt
 

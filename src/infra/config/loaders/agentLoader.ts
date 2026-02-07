@@ -3,7 +3,7 @@
  *
  * Loads persona prompts with user → builtin fallback:
  * 1. User personas: ~/.takt/personas/*.md
- * 2. Builtin personas: resources/global/{lang}/personas/*.md
+ * 2. Builtin personas: builtins/{lang}/personas/*.md
  */
 
 import { readFileSync, existsSync, readdirSync } from 'node:fs';

@@ -47,7 +47,7 @@ export interface GlobalConfig {
   autoPr?: boolean;
   /** List of builtin piece/agent names to exclude from fallback loading */
   disabledBuiltins?: string[];
-  /** Enable builtin pieces from resources/global/{lang}/pieces */
+  /** Enable builtin pieces from builtins/{lang}/pieces */
   enableBuiltinPieces?: boolean;
   /** Anthropic API key for Claude Code SDK (overridden by TAKT_ANTHROPIC_API_KEY env var) */
   anthropicApiKey?: string;

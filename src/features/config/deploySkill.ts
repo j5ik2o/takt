@@ -1,5 +1,5 @@
 /**
- * takt export-cc — Deploy takt pieces and personas as Claude Code Skill.
+ * takt export-cc — Deploy takt skill files to Claude Code.
  *
  * Copies the following to ~/.claude/:
  *   commands/takt.md          — /takt command entry point
@@ -7,6 +7,11 @@
  *   skills/takt/references/   — Engine logic + YAML schema
  *   skills/takt/pieces/       — Builtin piece YAML files
  *   skills/takt/personas/     — Builtin persona .md files
+ *   skills/takt/stances/      — Builtin stance files
+ *   skills/takt/instructions/ — Builtin instruction files
+ *   skills/takt/knowledge/    — Builtin knowledge files
+ *   skills/takt/report-formats/ — Builtin report format files
+ *   skills/takt/templates/    — Builtin template files
  *
  * Piece YAML persona paths (../personas/...) work as-is because
  * the directory structure is mirrored.
@@ -16,12 +21,8 @@ import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, rmSync
 import { homedir } from 'node:os';
 import { join, dirname, relative } from 'node:path';
 
-import {
-  getBuiltinPiecesDir,
-  getBuiltinPersonasDir,
-  getLanguage,
-} from '../../infra/config/index.js';
-import { getResourcesDir } from '../../infra/resources/index.js';
+import { getLanguage } from '../../infra/config/index.js';
+import { getResourcesDir, getLanguageResourcesDir } from '../../infra/resources/index.js';
 import { confirm } from '../../shared/prompt/index.js';
 import { header, success, info, warn, blankLine } from '../../shared/ui/index.js';
 
@@ -37,6 +38,17 @@ function getCommandDir(): string {
   return join(homedir(), '.claude', 'commands');
 }
 
+/** Directories within builtins/{lang}/ to copy as resource types */
+const RESOURCE_DIRS = [
+  'pieces',
+  'personas',
+  'stances',
+  'instructions',
+  'knowledge',
+  'report-formats',
+  'templates',
+] as const;
+
 /**
  * Deploy takt skill to Claude Code (~/.claude/).
  */
@@ -45,8 +57,7 @@ export async function deploySkill(): Promise<void> {
 
   const lang = getLanguage();
   const skillResourcesDir = join(getResourcesDir(), 'skill');
-  const builtinPiecesDir = getBuiltinPiecesDir(lang);
-  const builtinPersonasDir = getBuiltinPersonasDir(lang);
+  const langResourcesDir = getLanguageResourcesDir(lang);
   const skillDir = getSkillDir();
   const commandDir = getCommandDir();
 
@@ -60,7 +71,10 @@ export async function deploySkill(): Promise<void> {
   const skillExists = existsSync(join(skillDir, 'SKILL.md'));
   if (skillExists) {
     info('Claude Code Skill が既にインストールされています。');
-    const overwrite = await confirm('上書きしますか？', false);
+    const overwrite = await confirm(
+      '既存のスキルファイルをすべて削除し、最新版に置き換えます。続行しますか？',
+      false,
+    );
     if (!overwrite) {
       info('キャンセルしました。');
       return;
@@ -86,15 +100,13 @@ export async function deploySkill(): Promise<void> {
   cleanDir(refsDestDir);
   copyDirRecursive(refsSrcDir, refsDestDir, copiedFiles);
 
-  // 4. Deploy builtin piece YAMLs → skills/takt/pieces/
-  const piecesDestDir = join(skillDir, 'pieces');
-  cleanDir(piecesDestDir);
-  copyDirRecursive(builtinPiecesDir, piecesDestDir, copiedFiles);
-
-  // 5. Deploy builtin persona .md files → skills/takt/personas/
-  const personasDestDir = join(skillDir, 'personas');
-  cleanDir(personasDestDir);
-  copyDirRecursive(builtinPersonasDir, personasDestDir, copiedFiles);
+  // 4. Deploy all resource directories from builtins/{lang}/
+  for (const resourceDir of RESOURCE_DIRS) {
+    const srcDir = join(langResourcesDir, resourceDir);
+    const destDir = join(skillDir, resourceDir);
+    cleanDir(destDir);
+    copyDirRecursive(srcDir, destDir, copiedFiles);
+  }
 
   // Report results
   blankLine();
@@ -106,28 +118,50 @@ export async function deploySkill(): Promise<void> {
     const skillBase = join(homedir(), '.claude');
     const commandFiles = copiedFiles.filter((f) => f.startsWith(commandDir));
     const skillFiles = copiedFiles.filter(
-      (f) => f.startsWith(skillDir) && !f.includes('/pieces/') && !f.includes('/personas/'),
+      (f) =>
+        f.startsWith(skillDir) &&
+        !RESOURCE_DIRS.some((dir) => f.includes(`/${dir}/`)),
     );
     const pieceFiles = copiedFiles.filter((f) => f.includes('/pieces/'));
     const personaFiles = copiedFiles.filter((f) => f.includes('/personas/'));
+    const stanceFiles = copiedFiles.filter((f) => f.includes('/stances/'));
+    const instructionFiles = copiedFiles.filter((f) => f.includes('/instructions/'));
+    const knowledgeFiles = copiedFiles.filter((f) => f.includes('/knowledge/'));
+    const reportFormatFiles = copiedFiles.filter((f) => f.includes('/report-formats/'));
+    const templateFiles = copiedFiles.filter((f) => f.includes('/templates/'));
 
     if (commandFiles.length > 0) {
-      info(`  コマンド: ${commandFiles.length} ファイル`);
+      info(`  コマンド:      ${commandFiles.length} ファイル`);
       for (const f of commandFiles) {
         info(`    ${relative(skillBase, f)}`);
       }
     }
     if (skillFiles.length > 0) {
-      info(`  スキル:   ${skillFiles.length} ファイル`);
+      info(`  スキル:        ${skillFiles.length} ファイル`);
       for (const f of skillFiles) {
         info(`    ${relative(skillBase, f)}`);
       }
     }
     if (pieceFiles.length > 0) {
-      info(`  ピース:   ${pieceFiles.length} ファイル`);
+      info(`  ピース:        ${pieceFiles.length} ファイル`);
     }
     if (personaFiles.length > 0) {
-      info(`  ペルソナ:   ${personaFiles.length} ファイル`);
+      info(`  ペルソナ:      ${personaFiles.length} ファイル`);
+    }
+    if (stanceFiles.length > 0) {
+      info(`  スタンス:      ${stanceFiles.length} ファイル`);
+    }
+    if (instructionFiles.length > 0) {
+      info(`  インストラクション: ${instructionFiles.length} ファイル`);
+    }
+    if (knowledgeFiles.length > 0) {
+      info(`  ナレッジ:      ${knowledgeFiles.length} ファイル`);
+    }
+    if (reportFormatFiles.length > 0) {
+      info(`  レポート形式:  ${reportFormatFiles.length} ファイル`);
+    }
+    if (templateFiles.length > 0) {
+      info(`  テンプレート:  ${templateFiles.length} ファイル`);
     }
 
     blankLine();

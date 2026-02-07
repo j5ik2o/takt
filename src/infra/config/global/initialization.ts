@@ -2,7 +2,7 @@
  * Initialization module for first-time setup
  *
  * Handles language selection and initial config.yaml creation.
- * Builtin agents/pieces are loaded via fallback from resources/
+ * Builtin agents/pieces are loaded via fallback from builtins/
  * and no longer copied to ~/.takt/ on setup.
  */
 

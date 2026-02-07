@@ -54,7 +54,7 @@
   "files": [
     "dist/",
     "bin/",
-    "resources/"
+    "builtins/"
   ],
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.19",

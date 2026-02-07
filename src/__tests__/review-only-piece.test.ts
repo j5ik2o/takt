@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { PieceConfigRawSchema } from '../core/models/index.js';
 
-const RESOURCES_DIR = join(import.meta.dirname, '../../resources/global');
+const RESOURCES_DIR = join(import.meta.dirname, '../../builtins');
 
 function loadReviewOnlyYaml(lang: 'en' | 'ja') {
   const filePath = join(RESOURCES_DIR, lang, 'pieces', 'review-only.yaml');
