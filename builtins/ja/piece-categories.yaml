@@ -1,46 +1,37 @@
 piece_categories:
-  "🚀 クイックスタート":
+  🚀 クイックスタート:
     pieces:
       - default
       - passthrough
       - coding
       - minimal
-
-  "🔍 レビュー＆修正":
+  🔍 レビュー＆修正:
     pieces:
       - review-fix-minimal
-
-  "🎨 フロントエンド":
-    {}
-
-  "⚙️ バックエンド":
-    {}
-
-  "🔧 フルスタック":
+  🎨 フロントエンド: {}
+  ⚙️ バックエンド: {}
+  🔧 フルスタック:
     pieces:
       - expert
       - expert-cqrs
-
-  "🔀 ハイブリッド (Codex Coding)":
-    "🚀 クイックスタート":
+  🔀 ハイブリッド (Codex Coding):
+    🚀 クイックスタート:
       pieces:
-        - default-hybrid-codex
-        - passthrough-hybrid-codex
         - coding-hybrid-codex
+        - default-hybrid-codex
         - minimal-hybrid-codex
-    "🔍 レビュー＆修正":
+        - passthrough-hybrid-codex
+    🔧 フルスタック:
+      pieces:
+        - expert-cqrs-hybrid-codex
+        - expert-hybrid-codex
+    🔍 レビュー＆修正:
       pieces:
         - review-fix-minimal-hybrid-codex
-    "🔧 フルスタック":
-      pieces:
-        - expert-hybrid-codex
-        - expert-cqrs-hybrid-codex
-
-  "その他":
+  その他:
     pieces:
       - research
       - magi
       - review-only
-
 show_others_category: true
-others_category_name: "その他"
+others_category_name: その他

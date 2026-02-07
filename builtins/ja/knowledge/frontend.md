@@ -1,5 +1,42 @@
 # フロントエンド専門知識
 
+## フロントエンドの層構造
+
+依存方向は一方向。逆方向の依存は禁止。
+
+```
+app/routes/ → features/ → shared/
+```
+
+| 層 | 責務 | ルール |
+|---|------|--------|
+| `app/routes/` | ルート定義のみ | UIロジックを持たない。feature の View を呼ぶだけ |
+| `features/` | 機能単位の自己完結モジュール | 他の feature を直接参照しない |
+| `shared/` | 全 feature 横断の共有コード | feature に依存しない |
+
+ルートファイルは薄いラッパーに徹する。
+
+```tsx
+// CORRECT - ルートは薄い
+// app/routes/schedule-management.tsx
+export default function ScheduleManagementRoute() {
+  return <ScheduleManagementView />
+}
+
+// WRONG - ルートにロジックを書く
+export default function ScheduleManagementRoute() {
+  const [filter, setFilter] = useState('all')
+  const { data } = useListSchedules({ filter })
+  return <ScheduleTable data={data} onFilterChange={setFilter} />
+}
+```
+
+View コンポーネント（`features/*/components/*-view.tsx`）がデータ取得・状態管理を担当する。
+
+```
+ルート（route） → View（データ取得・状態管理） → 子コンポーネント（表示）
+```
+
 ## コンポーネント設計
 
 1ファイルにベタ書きしない。必ずコンポーネント分割する。
@@ -32,6 +69,37 @@
 | Presentational | 表示のみ | `UserCard` |
 | Layout | 配置・構造 | `PageLayout`, `Grid` |
 | Utility | 共通機能 | `ErrorBoundary`, `Portal` |
+
+### UIプリミティブの設計原則
+
+shared/components/ui/ に配置するHTML要素ラッパーの設計ルール:
+
+- `forwardRef` で ref を転送する（外部からの制御を可能にする）
+- `className` を受け取り、外からスタイル拡張可能にする
+- ネイティブ props をスプレッドで透過する（`...props`）
+- variants は別ファイルに分離する（`button.variants.ts`）
+
+```tsx
+// CORRECT - プリミティブの設計
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
+  ({ variant, size, className, children, ...props }, ref) => {
+    return (
+      <button
+        ref={ref}
+        className={cn(buttonVariants({ variant, size }), className)}
+        {...props}
+      >
+        {children}
+      </button>
+    )
+  }
+)
+
+// WRONG - refもclassNameも透過しない閉じたコンポーネント
+export const Button = ({ label, onClick }: { label: string; onClick: () => void }) => {
+  return <button className="fixed-style" onClick={onClick}>{label}</button>
+}
+```
 
 ディレクトリ構成:
 ```
@@ -151,11 +219,61 @@ const WeeklyCalendar = ({ facilityId }) => {
 
 | ケース | 理由 |
 |--------|------|
+| 独立ウィジェット | どのページにも置ける自己完結型コンポーネント |
 | 無限スクロール | スクロール位置というUI内部状態に依存 |
 | 検索オートコンプリート | 入力値に依存したリアルタイム検索 |
-| 独立したウィジェット | 通知バッジ、天気等。親のデータと完全に無関係 |
 | リアルタイム更新 | WebSocket/Pollingでの自動更新 |
 | モーダル内の詳細取得 | 開いたときだけ追加データを取得 |
+
+### 独立ウィジェットパターン
+
+WordPress のサイドバーウィジェットのように、どのページにも「置くだけ」で動くコンポーネント。親のデータフローに参加しない自己完結型。
+
+該当する例:
+- 通知バッジ・通知ベル（未読数を自分で取得）
+- ログインユーザー情報表示（ヘッダーのアバター等）
+- お知らせバナー
+- 天気・為替など外部データ表示
+- アクティビティフィード（サイドバー）
+
+```tsx
+// OK - 独立ウィジェット。どのページに置いても自分で動く
+const NotificationBell = () => {
+  const { data } = useNotificationCount({ refetchInterval: 30000 })
+  return (
+    <button aria-label="通知">
+      <Bell />
+      {data?.unreadCount > 0 && <span className="badge">{data.unreadCount}</span>}
+    </button>
+  )
+}
+
+// OK - ヘッダーに常駐するユーザーメニュー
+const UserMenu = () => {
+  const { data: user } = useCurrentUser()
+  return <Avatar name={user?.name} />
+}
+```
+
+ウィジェットと判定する条件（すべて満たすこと）:
+- 親のデータと**完全に無関係**（親から props でデータを受け取る必要がない）
+- 親の状態に**影響を与えない**（結果を親にバブリングしない）
+- **どのページに置いても同じ動作**をする（ページ固有のコンテキストに依存しない）
+
+1つでも満たさない場合は View でデータ取得し、props で渡す。
+
+```tsx
+// WRONG - ウィジェットに見えるが、orderId という親のコンテキストに依存
+const OrderStatusWidget = ({ orderId }: { orderId: string }) => {
+  const { data } = useGetOrder(orderId)
+  return <StatusBadge status={data?.status} />
+}
+
+// CORRECT - 親のデータフローに参加するならpropsで受け取る
+const OrderStatusWidget = ({ status }: { status: OrderStatus }) => {
+  return <StatusBadge status={status} />
+}
+```
 
 判断基準: 「親が管理する意味がない / 親に影響を与えない」ケースのみ許容。
 
@@ -168,6 +286,33 @@ const WeeklyCalendar = ({ facilityId }) => {
 | N+1クエリ的なフェッチ | REJECT |
 
 ## 共有コンポーネントと抽象化
+
+### カテゴリ分類
+
+shared コンポーネントは責務別にサブディレクトリで分類する。
+
+```
+shared/components/
+├── ui/              # HTMLプリミティブのラッパー（Button, Card, Badge, Dialog）
+├── form/            # フォーム入力要素（TextInput, Select, Checkbox）
+├── layout/          # ページ構造・ルート保護（Layout, ProtectedRoute）
+├── navigation/      # ナビゲーション（Tabs, BackLink, SidebarItem）
+├── data-display/    # データ表示（Table, DetailField, Calendar）
+├── feedback/        # 状態フィードバック（LoadingState, ErrorState）
+├── domain/          # ドメイン固有だが横断的（StatusBadge, CategoryBadge）
+└── index.ts         # barrel export
+```
+
+| カテゴリ | 配置基準 |
+|---------|---------|
+| ui/ | HTML要素を薄くラップ。ドメイン知識を持たない |
+| form/ | ラベル・エラー・必須マークを統合したフォーム部品 |
+| layout/ | ページ全体の骨格。認証・ロール制御を含む |
+| domain/ | 特定ドメインに依存するが、複数 feature で共有 |
+
+ui/ と domain/ の判断基準: ドメイン用語がコンポーネント名やpropsに含まれるなら domain/。
+
+### 共有化の基準
 
 同じパターンのUIは共有コンポーネント化する。インラインスタイルのコピペは禁止。
 
@@ -410,6 +555,62 @@ function TaskCard({ task }: { task: Task }) {
 判断基準: 「この計算結果がサーバーとズレたら業務が壊れるか?」
 - YES → バックエンドに配置（ドメインロジック）
 - NO → フロントエンドでもOK（表示ロジック）
+
+## 横断的関心事の処理層
+
+横断的関心事は適切な層で処理する。コンポーネント内に散在させない。
+
+| 関心事 | 処理層 | パターン |
+|-------|--------|---------|
+| 認証トークン付与 | APIクライアント層 | リクエストインターセプタ |
+| 認証エラー（401/403） | APIクライアント層 | レスポンスインターセプタ |
+| ルート保護 | レイアウト層 | ProtectedRoute + Outlet |
+| ロール別振り分け | レイアウト層 | ユーザー種別による分岐 |
+| ローディング/エラー表示 | View（Container）層 | 早期リターン |
+
+```tsx
+// CORRECT - 横断的関心事はインターセプタ層で処理
+// api/axios-instance.ts
+instance.interceptors.request.use((config) => {
+  const token = localStorage.getItem('auth_token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+// WRONG - 各コンポーネントで個別にトークンを付与
+const MyComponent = () => {
+  const token = localStorage.getItem('auth_token')
+  const { data } = useQuery({
+    queryFn: () => fetch('/api/data', {
+      headers: { Authorization: `Bearer ${token}` },
+    }),
+  })
+}
+```
+
+```tsx
+// CORRECT - ルート保護はレイアウト層で
+// shared/components/layout/protected-route.tsx
+function ProtectedRoute() {
+  const { isAuthenticated } = useAuthStore()
+  if (!isAuthenticated) return <Navigate to="/login" replace />
+  return <Layout><Outlet /></Layout>
+}
+
+// routes でラップ
+<Route element={<ProtectedRoute />}>
+  <Route path="/dashboard" element={<DashboardView />} />
+</Route>
+
+// WRONG - 各ページで個別に認証チェック
+function DashboardView() {
+  const { isAuthenticated } = useAuthStore()
+  if (!isAuthenticated) return <Navigate to="/login" />
+  return <div>...</div>
+}
+```
 
 ## パフォーマンス
 

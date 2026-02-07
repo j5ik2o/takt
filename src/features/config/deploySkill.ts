@@ -1,17 +1,16 @@
 /**
  * takt export-cc — Deploy takt skill files to Claude Code.
  *
- * Copies the following to ~/.claude/:
- *   commands/takt.md          — /takt command entry point
- *   skills/takt/SKILL.md      — Engine overview
- *   skills/takt/references/   — Engine logic + YAML schema
- *   skills/takt/pieces/       — Builtin piece YAML files
- *   skills/takt/personas/     — Builtin persona .md files
- *   skills/takt/stances/      — Builtin stance files
- *   skills/takt/instructions/ — Builtin instruction files
- *   skills/takt/knowledge/    — Builtin knowledge files
- *   skills/takt/report-formats/ — Builtin report format files
- *   skills/takt/templates/    — Builtin template files
+ * Copies the following to ~/.claude/skills/takt/:
+ *   SKILL.md                  — Engine overview (user-invocable as /takt)
+ *   references/               — Engine logic + YAML schema
+ *   pieces/                   — Builtin piece YAML files
+ *   personas/                 — Builtin persona .md files
+ *   stances/                  — Builtin stance files
+ *   instructions/             — Builtin instruction files
+ *   knowledge/                — Builtin knowledge files
+ *   report-formats/           — Builtin report format files
+ *   templates/                — Builtin template files
  *
  * Piece YAML persona paths (../personas/...) work as-is because
  * the directory structure is mirrored.
@@ -32,10 +31,6 @@ const SKIP_FILES = new Set(['.DS_Store', 'Thumbs.db']);
 /** Target paths under ~/.claude/ */
 function getSkillDir(): string {
   return join(homedir(), '.claude', 'skills', 'takt');
-}
-
-function getCommandDir(): string {
-  return join(homedir(), '.claude', 'commands');
 }
 
 /** Directories within builtins/{lang}/ to copy as resource types */
@@ -59,7 +54,6 @@ export async function deploySkill(): Promise<void> {
   const skillResourcesDir = join(getResourcesDir(), 'skill');
   const langResourcesDir = getLanguageResourcesDir(lang);
   const skillDir = getSkillDir();
-  const commandDir = getCommandDir();
 
   // Verify source directories exist
   if (!existsSync(skillResourcesDir)) {
@@ -84,23 +78,18 @@ export async function deploySkill(): Promise<void> {
 
   const copiedFiles: string[] = [];
 
-  // 1. Deploy command file: ~/.claude/commands/takt.md
-  const commandSrc = join(skillResourcesDir, 'takt-command.md');
-  const commandDest = join(commandDir, 'takt.md');
-  copyFile(commandSrc, commandDest, copiedFiles);
-
-  // 2. Deploy SKILL.md
+  // 1. Deploy SKILL.md
   const skillSrc = join(skillResourcesDir, 'SKILL.md');
   const skillDest = join(skillDir, 'SKILL.md');
   copyFile(skillSrc, skillDest, copiedFiles);
 
-  // 3. Deploy references/ (engine.md, yaml-schema.md)
+  // 2. Deploy references/ (engine.md, yaml-schema.md)
   const refsSrcDir = join(skillResourcesDir, 'references');
   const refsDestDir = join(skillDir, 'references');
   cleanDir(refsDestDir);
   copyDirRecursive(refsSrcDir, refsDestDir, copiedFiles);
 
-  // 4. Deploy all resource directories from builtins/{lang}/
+  // 3. Deploy all resource directories from builtins/{lang}/
   for (const resourceDir of RESOURCE_DIRS) {
     const srcDir = join(langResourcesDir, resourceDir);
     const destDir = join(skillDir, resourceDir);
@@ -116,7 +105,6 @@ export async function deploySkill(): Promise<void> {
 
     // Show summary by category
     const skillBase = join(homedir(), '.claude');
-    const commandFiles = copiedFiles.filter((f) => f.startsWith(commandDir));
     const skillFiles = copiedFiles.filter(
       (f) =>
         f.startsWith(skillDir) &&
@@ -130,12 +118,6 @@ export async function deploySkill(): Promise<void> {
     const reportFormatFiles = copiedFiles.filter((f) => f.includes('/report-formats/'));
     const templateFiles = copiedFiles.filter((f) => f.includes('/templates/'));
 
-    if (commandFiles.length > 0) {
-      info(`  コマンド:      ${commandFiles.length} ファイル`);
-      for (const f of commandFiles) {
-        info(`    ${relative(skillBase, f)}`);
-      }
-    }
     if (skillFiles.length > 0) {
       info(`  スキル:        ${skillFiles.length} ファイル`);
       for (const f of skillFiles) {

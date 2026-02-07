@@ -1,46 +1,38 @@
 piece_categories:
-  "🚀 Quick Start":
+  🚀 Quick Start:
     pieces:
       - default
       - passthrough
       - coding
       - minimal
-
-  "🔍 Review & Fix":
+  🔍 Review & Fix:
     pieces:
       - review-fix-minimal
-
-  "🎨 Frontend":
-    {}
-
-  "⚙️ Backend":
-    {}
-
-  "🔧 Expert":
-    "Full Stack":
+  🎨 Frontend: {}
+  ⚙️ Backend: {}
+  🔧 Expert:
+    Full Stack:
       pieces:
         - expert
         - expert-cqrs
-
-  "🔀 Hybrid (Codex Coding)":
-    "🚀 Quick Start":
+  🔀 Hybrid (Codex Coding):
+    🚀 Quick Start:
       pieces:
+        - coding-hybrid-codex
         - default-hybrid-codex
-        - passthrough-hybrid-codex
         - minimal-hybrid-codex
-    "🔍 Review & Fix":
+        - passthrough-hybrid-codex
+    🔧 Expert:
+      pieces:
+        - expert-cqrs-hybrid-codex
+        - expert-hybrid-codex
+    🔍 Review & Fix:
       pieces:
         - review-fix-minimal-hybrid-codex
-    "🔧 Expert":
-      pieces:
-        - expert-hybrid-codex
-        - expert-cqrs-hybrid-codex
-
-  "Others":
+  Others:
     pieces:
       - research
       - magi
       - review-only
-
 show_others_category: true
-others_category_name: "Others"
+others_category_name: Others

@@ -39,8 +39,10 @@ stances:
 
 knowledge:
   frontend: ../knowledge/frontend.md
+  backend: ../knowledge/backend.md
   cqrs-es: ../knowledge/cqrs-es.md
   security: ../knowledge/security.md
+  architecture: ../knowledge/architecture.md
 
 personas:
   planner: ../personas/planner.md
@@ -113,6 +115,7 @@ movements:
       - coding
       - testing
     session: refresh
+    knowledge: [frontend, backend, cqrs-es, security, architecture]
     report:
       - Scope: 01-coder-scope.md
       - Decisions: 02-coder-decisions.md
@@ -168,6 +171,7 @@ movements:
       - coding
       - testing
     session: refresh
+    knowledge: [frontend, backend, cqrs-es, security, architecture]
     allowed_tools:
       - Read
       - Glob
@@ -210,7 +214,7 @@ movements:
         edit: false
         persona: cqrs-es-reviewer
         stance: review
-        knowledge: cqrs-es
+        knowledge: [cqrs-es, backend]
         report:
           name: 04-cqrs-es-review.md
           format: cqrs-es-review
@@ -296,6 +300,7 @@ movements:
     stance:
       - coding
       - testing
+    knowledge: [frontend, backend, cqrs-es, security, architecture]
     allowed_tools:
       - Read
       - Glob
@@ -342,6 +347,7 @@ movements:
     stance:
       - coding
       - testing
+    knowledge: [frontend, backend, cqrs-es, security, architecture]
     allowed_tools:
       - Read
       - Glob

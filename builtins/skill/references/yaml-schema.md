@@ -9,9 +9,35 @@ name: piece-name              # ピース名（必須）
 description: 説明テキスト      # ピースの説明（任意）
 max_iterations: 10            # 最大イテレーション数（必須）
 initial_movement: plan        # 最初に実行する movement 名（必須）
+
+# セクションマップ（キー → ファイルパスの対応表）
+stances:                      # スタンス定義（任意）
+  coding: ../stances/coding.md
+  review: ../stances/review.md
+personas:                     # ペルソナ定義（任意）
+  coder: ../personas/coder.md
+  reviewer: ../personas/architecture-reviewer.md
+instructions:                 # 指示テンプレート定義（任意）
+  plan: ../instructions/plan.md
+  implement: ../instructions/implement.md
+report_formats:               # レポートフォーマット定義（任意）
+  plan: ../report-formats/plan.md
+  review: ../report-formats/architecture-review.md
+knowledge:                    # ナレッジ定義（任意）
+  architecture: ../knowledge/architecture.md
+
 movements: [...]              # movement 定義の配列（必須）
 loop_monitors: [...]          # ループ監視設定（任意）
 ```
+
+### セクションマップの解決
+
+各セクションマップのパスは **ピースYAMLファイルのディレクトリからの相対パス** で解決する。
+movement 内では**キー名**で参照する（パスを直接書かない）。
+
+例: ピースが `~/.claude/skills/takt/pieces/coding.yaml` にあり、`personas:` セクションに `coder: ../personas/coder.md` がある場合
+→ 絶対パスは `~/.claude/skills/takt/personas/coder.md`
+→ movement では `persona: coder` で参照
 
 ## Movement 定義
 
@@ -19,48 +45,56 @@ loop_monitors: [...]          # ループ監視設定（任意）
 
 ```yaml
 - name: movement-name          # movement 名（必須、一意）
-  agent: ../agents/path.md     # エージェントプロンプトへの相対パス（任意）
-  agent_name: coder            # 表示名（任意）
+  persona: coder               # ペルソナキー（personas マップを参照、任意）
+  stance: coding               # スタンスキー（stances マップを参照、任意）
+  stance: [coding, testing]    # 複数指定も可（配列）
+  instruction: implement       # 指示テンプレートキー（instructions マップを参照、任意）
+  knowledge: architecture      # ナレッジキー（knowledge マップを参照、任意）
   edit: true                   # ファイル編集可否（必須）
   permission_mode: edit        # 権限モード: edit / readonly / full（任意）
   session: refresh             # セッション管理（任意）
   pass_previous_response: true # 前の出力を渡すか（デフォルト: true）
   allowed_tools: [...]         # 許可ツール一覧（任意、参考情報）
-  instruction_template: |      # ステップ固有の指示テンプレート（任意）
+  instruction_template: |      # インライン指示テンプレート（instruction キーの代替、任意）
     指示内容...
   report: ...                  # レポート設定（任意）
   rules: [...]                 # 遷移ルール（必須）
 ```
+
+**`instruction` vs `instruction_template`**: `instruction` はトップレベル `instructions:` セクションのキー参照。`instruction_template` はインラインで指示を記述。どちらか一方を使用する。
 
 ### Parallel Movement
 
 ```yaml
 - name: reviewers              # 親 movement 名（必須）
   parallel:                    # 並列サブステップ配列（これがあると parallel movement）
-    - name: sub-step-1         # サブステップ名
-      agent: ../agents/a.md
+    - name: arch-review
+      persona: architecture-reviewer
+      stance: review
+      knowledge: architecture
       edit: false
-      instruction_template: |
-        ...
-      rules:                   # サブステップの rules（condition のみ、next は無視される）
+      instruction: review-arch
+      report:
+        name: 05-architect-review.md
+        format: architecture-review
+      rules:
         - condition: "approved"
         - condition: "needs_fix"
-      # report, allowed_tools 等も指定可能
 
-    - name: sub-step-2
-      agent: ../agents/b.md
+    - name: qa-review
+      persona: qa-reviewer
+      stance: review
       edit: false
-      instruction_template: |
-        ...
+      instruction: review-qa
       rules:
-        - condition: "passed"
-        - condition: "failed"
+        - condition: "approved"
+        - condition: "needs_fix"
 
   rules:                       # 親の rules（aggregate 条件で遷移先を決定）
-    - condition: all("approved", "passed")
-      next: complete-step
-    - condition: any("needs_fix", "failed")
-      next: fix-step
+    - condition: all("approved")
+      next: supervise
+    - condition: any("needs_fix")
+      next: fix
 ```
 
 **重要**: サブステップの `rules` は結果分類のための condition 定義のみ。`next` は無視される（親の rules が遷移先を決定）。
@@ -97,20 +131,26 @@ rules:
 
 ## Report 定義
 
-### 形式1: 単一レポート（name + format）
+### 形式1: 単一レポート（name + format キー参照）
 
 ```yaml
 report:
   name: 01-plan.md
-  format: |
-    ```markdown
+  format: plan                 # report_formats マップのキーを参照
+```
+
+`format` がキー文字列の場合、トップレベル `report_formats:` セクションから対応する .md ファイルを読み込み、フォーマット指示として使用する。
+
+### 形式1b: 単一レポート（name + format インライン）
+
+```yaml
+report:
+  name: 01-plan.md
+  format: |                    # インラインでフォーマットを記述
     # レポートタイトル
     ## セクション
     {内容}
-    ```
 ```
-
-`format` はエージェントへの出力フォーマット指示。レポート抽出時の参考情報。
 
 ### 形式2: 複数レポート（配列）
 
@@ -125,7 +165,7 @@ report:
 
 ## テンプレート変数
 
-`instruction_template` 内で使用可能な変数:
+`instruction_template`（またはインストラクションファイル）内で使用可能な変数:
 
 | 変数 | 説明 |
 |-----|------|
@@ -146,7 +186,7 @@ loop_monitors:
   - cycle: [movement_a, movement_b]   # 監視対象の movement サイクル
     threshold: 3                       # 発動閾値（サイクル回数）
     judge:
-      agent: ../agents/supervisor.md   # 判定エージェント
+      persona: supervisor              # ペルソナキー参照
       instruction_template: |          # 判定用指示
         サイクルが {cycle_count} 回繰り返されました。
         健全性を判断してください。
@@ -157,7 +197,7 @@ loop_monitors:
           next: alternative_movement
 ```
 
-特定の movement 間のサイクルが閾値に達した場合、judge エージェントが介入して遷移先を判断する。
+特定の movement 間のサイクルが閾値に達した場合、judge が介入して遷移先を判断する。
 
 ## allowed_tools について
 

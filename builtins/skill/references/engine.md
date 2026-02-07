@@ -20,7 +20,8 @@ Task tool:
 ### permission_mode
 
 コマンド引数で解析された `permission_mode` をそのまま Task tool の `mode` に渡す。
-- `/takt coding yolo タスク` → `permission_mode = "bypassPermissions"`（確認なし）
+- `/takt coding --permit-full タスク` → `permission_mode = "bypassPermissions"`（確認なし）
+- `/takt coding --permit-edit タスク` → `permission_mode = "acceptEdits"`（編集は自動許可）
 - `/takt coding タスク` → `permission_mode = "default"`（権限確認あり）
 
 ## 通常 Movement の実行
@@ -42,7 +43,7 @@ Task tool:
 2. **全ての Task tool を1つのメッセージで並列に呼び出す**（依存関係がないため）
 3. 全チームメイトの完了を待つ
 4. 各サブステップの出力を収集する
-5. 各サブステップの出力に対して、そのサブステップの `rules` で条件マッチを判定する
+5. 各サブステップの出力に対して、そのサブステップの `rules` で条件マッチを判定
 6. 親 movement の `rules` で aggregate 評価（all()/any()）を行う
 
 ### サブステップの条件マッチ判定
@@ -55,6 +56,21 @@ Task tool:
 
 マッチした condition 文字列を記録する（次の aggregate 評価で使う）。
 
+## セクションマップの解決
+
+ピースYAMLのトップレベルにある `personas:`, `stances:`, `instructions:`, `report_formats:`, `knowledge:` はキーとファイルパスの対応表。movement 内ではキー名で参照する。
+
+### 解決手順
+
+1. ピースYAMLを読み込む
+2. 各セクションマップのパスを、**ピースYAMLファイルのディレクトリ**を基準に絶対パスに変換する
+3. movement の `persona: coder` → `personas:` セクションの `coder` キー → ファイルパス → Read で内容を取得
+
+例: ピースが `~/.claude/skills/takt/pieces/default.yaml` の場合
+- `personas.coder: ../personas/coder.md` → `~/.claude/skills/takt/personas/coder.md`
+- `stances.coding: ../stances/coding.md` → `~/.claude/skills/takt/stances/coding.md`
+- `instructions.plan: ../instructions/plan.md` → `~/.claude/skills/takt/instructions/plan.md`
+
 ## プロンプト構築
 
 各チームメイト起動時、以下を結合してプロンプトを組み立てる。
@@ -62,15 +78,53 @@ Task tool:
 ### 構成要素（上から順に結合）
 
 ```
-1. エージェントプロンプト（agent: で参照される .md の全内容）
+1. ペルソナプロンプト（persona: で参照される .md の全内容）
 2. ---（区切り線）
-3. 実行コンテキスト情報
-4. instruction_template の内容（テンプレート変数を展開済み）
-5. ユーザーのタスク（{task} が template に含まれない場合、末尾に自動追加）
-6. 前の movement の出力（pass_previous_response: true の場合、自動追加）
-7. レポート出力指示（report フィールドがある場合、自動追加）
-8. ステータスタグ出力指示（rules がある場合、自動追加）
+3. スタンス（stance: で参照される .md の内容。複数ある場合は結合）
+4. ---（区切り線）
+5. 実行コンテキスト情報
+6. ナレッジ（knowledge: で参照される .md の内容）
+7. インストラクション内容（instruction: で参照される .md、または instruction_template のインライン内容）
+8. ユーザーのタスク（{task} が template に含まれない場合、末尾に自動追加）
+9. 前の movement の出力（pass_previous_response: true の場合、自動追加）
+10. レポート出力指示（report フィールドがある場合、自動追加）
+11. ステータスタグ出力指示（rules がある場合、自動追加）
+12. スタンスリマインダー（スタンスがある場合、末尾に再掲）
 ```
+
+### ペルソナプロンプト
+
+movement の `persona:` キーからセクションマップを経由して .md ファイルを解決し、その全内容をプロンプトの冒頭に配置する。ペルソナはドメイン知識と行動原則のみを含む（ピース固有の手順は含まない）。
+
+### スタンス注入
+
+movement の `stance:` キー（単一または配列）からスタンスファイルを解決し、内容を結合する。スタンスは行動ルール（コーディング規約、レビュー基準等）を定義する。
+
+**Lost in the Middle 対策**: スタンスはプロンプトの前半に配置し、末尾にリマインダーとして再掲する。
+
+```
+（プロンプト冒頭付近）
+## スタンス（行動ルール）
+{スタンスの内容}
+
+（プロンプト末尾）
+---
+**リマインダー**: 以下のスタンスに従ってください。
+{スタンスの内容（再掲）}
+```
+
+### ナレッジ注入
+
+movement の `knowledge:` キーからナレッジファイルを解決し、ドメイン固有の参考情報としてプロンプトに含める。
+
+```
+## ナレッジ
+{ナレッジの内容}
+```
+
+### インストラクション
+
+movement の `instruction:` キーから指示テンプレートファイルを解決する。または `instruction_template:` でインライン記述。テンプレート変数（{task}, {previous_response} 等）を展開した上でプロンプトに含める。
 
 ### 実行コンテキスト情報
 
@@ -85,7 +139,7 @@ Task tool:
 
 ### テンプレート変数の展開
 
-`instruction_template` 内の以下のプレースホルダーを置換する:
+インストラクション内の以下のプレースホルダーを置換する:
 
 | 変数 | 値 |
 |-----|-----|
@@ -99,31 +153,28 @@ Task tool:
 
 ### {report:ファイル名} の処理
 
-`instruction_template` 内に `{report:04-ai-review.md}` のような記法がある場合:
+インストラクション内に `{report:04-ai-review.md}` のような記法がある場合:
 1. レポートディレクトリ内に対応するレポートファイルがあれば Read で読む
 2. 読み込んだ内容をプレースホルダーに展開する
 3. ファイルが存在しない場合は「（レポート未作成）」に置換する
 
-### agent フィールドがない場合
+### persona フィールドがない場合
 
-`agent:` が指定されていない movement の場合、エージェントプロンプト部分を省略し、`instruction_template` の内容のみでプロンプトを構成する。
+`persona:` が指定されていない movement の場合、ペルソナプロンプト部分を省略し、インストラクションの内容のみでプロンプトを構成する。
 
 ## レポート出力指示の自動注入
 
 movement に `report` フィールドがある場合、プロンプト末尾にレポート出力指示を自動追加する。
 
-### 形式1: name + format
+### 形式1: name + format（キー参照）
 
 ```yaml
 report:
   name: 01-plan.md
-  format: |
-    # タスク計画
-    ## 元の要求
-    ...
+  format: plan                 # report_formats セクションのキー
 ```
 
-→ プロンプトに追加する指示:
+→ `report_formats:` セクションの `plan` キーから .md ファイルを解決し、Read で読んだ内容をフォーマット指示に使う:
 
 ```
 ---
@@ -133,9 +184,7 @@ report:
 
 ファイル名: 01-plan.md
 フォーマット:
-# タスク計画
-## 元の要求
-...
+{report_formats の plan キーの .md ファイル内容}
 ```
 
 ### 形式2: 配列（複数レポート）
@@ -288,7 +337,7 @@ loop_monitors:
   - cycle: [ai_review, ai_fix]
     threshold: 3
     judge:
-      agent: ../agents/default/supervisor.md
+      persona: supervisor
       instruction_template: |
         サイクルが {cycle_count} 回繰り返されました...
       rules:
@@ -303,7 +352,7 @@ loop_monitors:
 1. movement 遷移履歴を記録する（例: `[plan, implement, ai_review, ai_fix, ai_review, ai_fix, ...]`）
 2. 各 loop_monitor の `cycle` パターンが履歴の末尾に `threshold` 回以上連続で出現するかチェックする
 3. 閾値に達した場合:
-   a. judge の `agent` を Read で読み込む
+   a. judge の `persona` キーからペルソナファイルを Read で読み込む
    b. `instruction_template` の `{cycle_count}` を実際のサイクル回数に置換する
    c. Task tool でチームメイト（judge）を起動する
    d. judge の出力を judge の `rules` で評価する
@@ -332,16 +381,16 @@ loop_monitors:
 
 ### レポートの参照
 
-後続の movement の `instruction_template` 内で `{report:ファイル名}` として参照すると、そのレポートファイルを Read して内容をプレースホルダーに展開する。
+後続の movement のインストラクション内で `{report:ファイル名}` として参照すると、そのレポートファイルを Read して内容をプレースホルダーに展開する。
 
 ## 状態遷移の全体像
 
 ```
 [開始]
   ↓
-ピースYAML読み込み + エージェント .md 読み込み
+ピースYAML読み込み + セクションマップ解決（personas, stances, instructions, report_formats, knowledge）
   ↓
-Teammate(spawnTeam) でチーム作成
+TeamCreate でチーム作成
   ↓
 レポートディレクトリ作成
   ↓
@@ -349,8 +398,9 @@ initial_movement を取得
   ↓
 ┌─→ Task tool でチームメイト起動
 │     ├── 通常: 1つの Task tool 呼び出し
-│     │     prompt = agent.md + context + instruction + task
-│     │           + previous_response + レポート指示 + タグ指示
+│     │     prompt = persona + stance + context + knowledge
+│     │           + instruction + task + previous_response
+│     │           + レポート指示 + タグ指示 + スタンスリマインダー
 │     └── parallel: 複数の Task tool を1メッセージで並列呼び出し
 │           各サブステップを別々のチームメイトとして起動
 │   ↓
@@ -366,8 +416,8 @@ initial_movement を取得
 │     ├── parallel: サブステップ条件 → aggregate(all/any)
 │   ↓
 │   next を決定
-│     ├── COMPLETE → Teammate(cleanup) → ユーザーに結果報告
-│     ├── ABORT → Teammate(cleanup) → ユーザーにエラー報告
+│     ├── COMPLETE → TeamDelete → ユーザーに結果報告
+│     ├── ABORT → TeamDelete → ユーザーにエラー報告
 │     └── movement名 → ループ検出チェック → 次の movement
 │                                              ↓
 └──────────────────────────────────────────────┘

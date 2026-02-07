@@ -60,6 +60,97 @@ data class Notification(val notificationId: String) {
 }
 ```
 
+### Adapterパターン（ドメインとフレームワークの分離）
+
+ドメインモデルにフレームワークのアノテーション（`@Aggregate`, `@CommandHandler`等）を直接付けない。Adapterクラスがフレームワーク統合を担当し、ドメインモデルはビジネスロジックに専念する。
+
+```kotlin
+// ドメインモデル: フレームワーク非依存。ビジネスロジックのみ
+data class Order(
+    val orderId: String,
+    val status: OrderStatus = OrderStatus.PENDING
+) {
+    companion object {
+        fun place(orderId: String, customerId: String): OrderPlacedEvent {
+            require(customerId.isNotBlank()) { "Customer ID cannot be blank" }
+            return OrderPlacedEvent(orderId, customerId)
+        }
+
+        fun from(event: OrderPlacedEvent): Order {
+            return Order(orderId = event.orderId, status = OrderStatus.PENDING)
+        }
+    }
+
+    fun confirm(confirmedBy: String): OrderConfirmedEvent {
+        require(status == OrderStatus.PENDING) { "確定できる状態ではありません" }
+        return OrderConfirmedEvent(orderId, confirmedBy, LocalDateTime.now())
+    }
+
+    fun apply(event: OrderEvent): Order = when (event) {
+        is OrderPlacedEvent -> from(event)
+        is OrderConfirmedEvent -> copy(status = OrderStatus.CONFIRMED)
+        is OrderCancelledEvent -> copy(status = OrderStatus.CANCELLED)
+    }
+}
+
+// Adapter: フレームワーク統合。ドメイン呼び出し → イベント発行の中継
+@Aggregate
+class OrderAggregateAdapter() {
+    private var order: Order? = null
+
+    @AggregateIdentifier
+    fun orderId(): String? = order?.orderId
+
+    @CommandHandler
+    constructor(command: PlaceOrderCommand) : this() {
+        val event = Order.place(command.orderId, command.customerId)
+        AggregateLifecycle.apply(event)
+    }
+
+    @CommandHandler
+    fun handle(command: ConfirmOrderCommand) {
+        val event = order!!.confirm(command.confirmedBy)
+        AggregateLifecycle.apply(event)
+    }
+
+    @EventSourcingHandler
+    fun on(event: OrderEvent) {
+        this.order = when (event) {
+            is OrderPlacedEvent -> Order.from(event)
+            else -> order?.apply(event)
+        }
+    }
+}
+```
+
+分離の利点:
+- ドメインモデル単体でユニットテスト可能（フレームワーク不要）
+- フレームワーク移行時にドメインモデルは変更不要
+- Adapterはコマンド受信 → ドメイン呼び出し → イベント発行の定型コード
+
+### apply/from パターン（イベント再生）
+
+ドメインモデルが自身の状態をイベントから再構築するパターン。
+
+- `from(event)`: 生成イベントから初期状態を構築するファクトリ
+- `apply(event)`: イベントを受けて新しい状態を返す（`copy()` でイミュータブルに更新）
+- `when` 式 + sealed interface で全イベント型の網羅性をコンパイラが保証
+
+```kotlin
+fun apply(event: OrderEvent): Order = when (event) {
+    is OrderPlacedEvent -> from(event)
+    is OrderConfirmedEvent -> copy(status = OrderStatus.CONFIRMED)
+    is OrderShippedEvent -> copy(status = OrderStatus.SHIPPED)
+    // sealed interface なので、イベント型の追加漏れはコンパイルエラーになる
+}
+```
+
+| 基準 | 判定 |
+|------|------|
+| apply 内にビジネスロジック（バリデーション等） | REJECT。applyは状態復元のみ |
+| apply が副作用を持つ（DB操作、イベント発行等） | REJECT |
+| apply が例外をスローする | REJECT。再生時の失敗は許容しない |
+
 ## イベント設計
 
 | 基準 | 判定 |
@@ -78,6 +169,36 @@ OrderPlaced, PaymentReceived, ItemShipped
 // Bad: CRUDスタイル
 OrderUpdated, OrderDeleted
 ```
+
+### sealed interface によるイベント型階層
+
+集約のイベントは sealed interface で型階層化する。集約ルートIDを共通フィールドとして強制し、`when` 式の網羅性チェックを有効にする。
+
+```kotlin
+sealed interface OrderEvent {
+    val orderId: String  // 全イベントに必須
+}
+
+data class OrderPlacedEvent(
+    override val orderId: String,
+    val customerId: String
+) : OrderEvent
+
+data class OrderConfirmedEvent(
+    override val orderId: String,
+    val approvalInfo: ApprovalInfo
+) : OrderEvent
+
+data class OrderCancelledEvent(
+    override val orderId: String,
+    val cancellationInfo: CancellationInfo
+) : OrderEvent
+```
+
+利点:
+- `when (event)` で全イベント型を列挙しないとコンパイルエラー（`apply` メソッドで特に重要）
+- 集約ルートIDの存在をコンパイラが保証
+- 型ベースのイベントハンドラ分岐が安全
 
 イベント粒度:
 - 細かすぎ: `OrderFieldChanged` → ドメインの意図が不明
@@ -101,6 +222,86 @@ OrderUpdated, OrderDeleted
 4. 発行されたイベントを保存
 ```
 
+### 多層バリデーション
+
+バリデーションは層ごとに役割が異なる。すべてを1箇所に集めない。
+
+| 層 | 責務 | 手段 | 例 |
+|----|------|------|-----|
+| API層 | 構造的バリデーション | `@NotBlank`, `init` ブロック | 必須項目、型、フォーマット |
+| UseCase層 | ビジネスルール検証 | Read Modelへの問い合わせ | 重複チェック、前提条件の存在確認 |
+| ドメイン層 | 状態遷移の不変条件 | `require` | 「PENDINGでないと承認できない」 |
+
+```kotlin
+// API層: 構造的バリデーション
+data class OrderPostRequest(
+    @field:NotBlank val customerId: String,
+    @field:NotNull val items: List<OrderItemRequest>
+) {
+    init {
+        require(items.isNotEmpty()) { "注文には1つ以上の商品が必要です" }
+    }
+}
+
+// UseCase層: ビジネスルール検証（Read Model参照）
+@Service
+class PlaceOrderUseCase(
+    private val commandGateway: CommandGateway,
+    private val customerRepository: CustomerRepository,
+    private val inventoryRepository: InventoryRepository
+) {
+    fun execute(input: PlaceOrderInput): Mono<PlaceOrderOutput> {
+        return Mono.fromCallable {
+            // 顧客の存在確認
+            customerRepository.findById(input.customerId)
+                ?: throw CustomerNotFoundException("顧客が存在しません")
+            // 在庫の事前確認
+            validateInventory(input.items)
+            // コマンド送信
+            val orderId = UUID.randomUUID().toString()
+            commandGateway.send<Any>(PlaceOrderCommand(orderId, input.customerId, input.items))
+            PlaceOrderOutput(orderId)
+        }
+    }
+}
+
+// ドメイン層: 状態遷移の不変条件
+fun confirm(confirmedBy: String): OrderConfirmedEvent {
+    require(status == OrderStatus.PENDING) { "確定できる状態ではありません" }
+    return OrderConfirmedEvent(orderId, confirmedBy, LocalDateTime.now())
+}
+```
+
+| 基準 | 判定 |
+|------|------|
+| ドメイン層のバリデーションがAPI層にある | REJECT。状態遷移ルールはドメインに |
+| UseCase層のバリデーションがController内にある | REJECT。UseCase層に分離 |
+| API層のバリデーション（@NotBlank等）がドメインにある | REJECT。構造検証はAPI層で |
+
+## UseCase層（オーケストレーション）
+
+Controller と CommandGateway の間にUseCase層を置く。コマンド発行前に複数集約のRead Modelを参照してバリデーションし、必要な前処理を行う。
+
+```
+Controller → UseCase → CommandGateway → Aggregate
+                ↓
+          QueryGateway / Repository（Read Model参照）
+```
+
+UseCaseが必要なケース:
+- コマンド発行前にRead Modelから他集約の状態を確認する
+- 複数のバリデーションを直列に実行する
+- コマンド送信後の結果整合性を待機する（ポーリング等）
+
+UseCaseが不要なケース:
+- Controllerからコマンドを1つ送るだけで完結する単純な操作
+
+| 基準 | 判定 |
+|------|------|
+| ControllerがRepository直接参照してバリデーション | UseCase層に分離 |
+| UseCaseがHTTPリクエスト/レスポンスに依存 | REJECT。UseCaseはプロトコル非依存 |
+| UseCaseがAggregate内部状態を直接変更 | REJECT。CommandGateway経由 |
+
 ## プロジェクション設計
 
 | 基準 | 判定 |
@@ -114,6 +315,58 @@ OrderUpdated, OrderDeleted
 - 特定の読み取りユースケースに最適化
 - イベントから冪等に再構築可能
 - Writeモデルから完全に独立
+
+### Projection と EventHandler（サイドエフェクト）の区別
+
+どちらも `@EventHandler` を使うが、責務が異なる。混同しない。
+
+| 種類 | 責務 | やること | やらないこと |
+|------|------|---------|-------------|
+| Projection | Read Model 更新 | Entity の保存・更新 | コマンド送信、外部API呼び出し |
+| EventHandler | サイドエフェクト | 他集約へのコマンド送信 | Read Model 更新 |
+
+```kotlin
+// Projection: Read Model 更新のみ
+@Component
+class OrderProjection(private val orderRepository: OrderRepository) {
+    @EventHandler
+    fun on(event: OrderPlacedEvent) {
+        val entity = OrderEntity(
+            orderId = event.orderId,
+            customerId = event.customerId,
+            status = OrderStatus.PENDING
+        )
+        orderRepository.save(entity)
+    }
+
+    @EventHandler
+    fun on(event: OrderConfirmedEvent) {
+        orderRepository.findById(event.orderId).ifPresent { entity ->
+            entity.status = OrderStatus.CONFIRMED
+            orderRepository.save(entity)
+        }
+    }
+}
+
+// EventHandler: サイドエフェクト（他集約へのコマンド送信）
+@Component
+class InventoryReleaseHandler(private val commandGateway: CommandGateway) {
+    @EventHandler
+    fun on(event: OrderCancelledEvent) {
+        val command = ReleaseInventoryCommand(
+            productId = event.productId,
+            quantity = event.quantity
+        )
+        commandGateway.send<Any>(command)
+    }
+}
+```
+
+| 基準 | 判定 |
+|------|------|
+| Projection 内で CommandGateway を使用 | REJECT。EventHandler に分離 |
+| EventHandler 内で Repository に save | REJECT。Projection に分離 |
+| 1クラスに Projection と EventHandler の責務が混在 | REJECT。クラスを分離 |
 
 ## Query側の設計
 
@@ -407,6 +660,66 @@ fun `注文詳細が取得できる`() {
 | Aggregateテストが状態ではなくイベントを検証している | 必須 |
 | Query側テストがCommand経由でデータを作っていない | 推奨 |
 | 統合テストでAxonの非同期処理を考慮している | 必須 |
+
+## 値オブジェクト設計
+
+Aggregate とイベントの構成要素として値オブジェクトを使う。プリミティブ型（String, Int）で済ませない。
+
+```kotlin
+// NG - プリミティブ型のまま
+data class OrderPlacedEvent(
+    val orderId: String,
+    val categoryId: String,      // ただの文字列
+    val from: LocalDateTime,     // 意味が不明確
+    val to: LocalDateTime
+)
+
+// OK - 値オブジェクトで意味と制約を表現
+data class OrderPlacedEvent(
+    val orderId: String,
+    val categoryId: CategoryId,
+    val period: OrderPeriod
+)
+```
+
+値オブジェクトの設計ルール:
+- `data class` で equals/hashCode を自動生成（同値性で比較）
+- `init` ブロックで不変条件を保証（生成時に必ず検証）
+- ドメインロジック（計算）は含まない（純粋なデータホルダー）
+- `@JsonValue` でシリアライゼーションを制御
+
+```kotlin
+// ID系: 単一値ラッパー
+data class CategoryId(@get:JsonValue val value: String) {
+    init {
+        require(value.isNotBlank()) { "Category ID cannot be blank" }
+    }
+    override fun toString(): String = value
+}
+
+// 範囲系: 複数値の不変条件を保証
+data class OrderPeriod(
+    val from: LocalDateTime,
+    val to: LocalDateTime
+) {
+    init {
+        require(!to.isBefore(from)) { "終了日は開始日以降でなければなりません" }
+    }
+}
+
+// メタ情報系: イベントペイロード内の付随情報
+data class ApprovalInfo(
+    val approvedBy: String,
+    val approvalTime: LocalDateTime
+)
+```
+
+| 基準 | 判定 |
+|------|------|
+| IDをStringのまま使い回す | 値オブジェクト化を検討 |
+| 同じフィールドの組み合わせ（from/to等）が複数箇所に | 値オブジェクトに抽出 |
+| 値オブジェクトにビジネスロジック（状態遷移等） | REJECT。Aggregateの責務 |
+| init ブロックなしで不変条件が保証されない | REJECT |
 
 ## インフラ層
 

@@ -27,6 +27,10 @@ max_iterations: 10
 stances:
   review: ../stances/review.md
 
+knowledge:
+  architecture: ../knowledge/architecture.md
+  security: ../knowledge/security.md
+
 personas:
   planner: ../personas/planner.md
   architecture-reviewer: ../personas/architecture-reviewer.md
@@ -90,6 +94,7 @@ movements:
         edit: false
         persona: architecture-reviewer
         stance: review
+        knowledge: architecture
         report:
           name: 01-architect-review.md
           format: architecture-review
@@ -109,6 +114,7 @@ movements:
         edit: false
         persona: security-reviewer
         stance: review
+        knowledge: security
         report:
           name: 02-security-review.md
           format: security-review

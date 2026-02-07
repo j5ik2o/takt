@@ -1,33 +1,23 @@
-# Passthrough TAKT Piece
-# Thinnest wrapper. Pass task directly to coder as-is.
-#
-# Flow:
-# execute (do the task)
-#   ↓
-# COMPLETE
+# Auto-generated from passthrough.yaml by tools/generate-hybrid-codex.mjs
+# Do not edit manually. Edit the source piece and re-run the generator.
 
 name: passthrough-hybrid-codex
 description: Single-agent thin wrapper. Pass task directly to coder as-is.
-
 max_iterations: 10
-
 stances:
   coding: ../stances/coding.md
   testing: ../stances/testing.md
-
 personas:
   coder: ../personas/coder.md
-
 initial_movement: execute
-
 movements:
   - name: execute
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
     report:
       - Summary: summary.md
     allowed_tools:

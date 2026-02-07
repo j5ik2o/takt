@@ -21,6 +21,7 @@ stances:
   testing: ../stances/testing.md
 
 knowledge:
+  backend: ../knowledge/backend.md
   architecture: ../knowledge/architecture.md
 
 personas:
@@ -134,6 +135,7 @@ movements:
       - coding
       - testing
     session: refresh
+    knowledge: [backend, architecture]
     report:
       - Scope: 02-coder-scope.md
       - Decisions: 03-coder-decisions.md
@@ -187,6 +189,7 @@ movements:
       - coding
       - testing
     session: refresh
+    knowledge: [backend, architecture]
     allowed_tools:
       - Read
       - Glob
@@ -227,7 +230,7 @@ movements:
         edit: false
         persona: architecture-reviewer
         stance: review
-        knowledge: architecture
+        knowledge: [architecture, backend]
         report:
           name: 05-architect-review.md
           format: architecture-review
@@ -271,6 +274,7 @@ movements:
     stance:
       - coding
       - testing
+    knowledge: [backend, architecture]
     allowed_tools:
       - Read
       - Glob

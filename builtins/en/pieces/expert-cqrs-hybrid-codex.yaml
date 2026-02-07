@@ -1,33 +1,19 @@
-# Expert CQRS Review Piece
-# Review piece with CQRS+ES, Frontend, Security, and QA experts
-#
-# Flow:
-# plan -> implement -> ai_review -> reviewers (parallel) -> supervise -> COMPLETE
-#                          ↓              ├─ cqrs-es-review      ↓
-#                        ai_fix           ├─ frontend-review   fix_supervisor
-#                                         ├─ security-review
-#                                         └─ qa-review
-#                                    any("needs_fix") → fix → reviewers
-#
-# Template Variables:
-#   {iteration}      - Piece-wide turn count (total movements executed across all agents)
-#   {max_iterations} - Maximum iterations allowed for the piece
-#   {movement_iteration} - Per-movement iteration count (how many times THIS movement has been executed)
-#   {task}           - Original user request
-#   {previous_response} - Output from the previous movement
-#   {user_inputs}    - Accumulated user inputs during piece
-#   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
+# Auto-generated from expert-cqrs.yaml by tools/generate-hybrid-codex.mjs
+# Do not edit manually. Edit the source piece and re-run the generator.
 
 name: expert-cqrs-hybrid-codex
 description: CQRS+ES, Frontend, Security, QA Expert Review
-
 max_iterations: 30
-
 stances:
   coding: ../stances/coding.md
   review: ../stances/review.md
   testing: ../stances/testing.md
-
+knowledge:
+  frontend: ../knowledge/frontend.md
+  backend: ../knowledge/backend.md
+  cqrs-es: ../knowledge/cqrs-es.md
+  security: ../knowledge/security.md
+  architecture: ../knowledge/architecture.md
 personas:
   planner: ../personas/planner.md
   coder: ../personas/coder.md
@@ -38,7 +24,6 @@ personas:
   security-reviewer: ../personas/security-reviewer.md
   qa-reviewer: ../personas/qa-reviewer.md
   expert-supervisor: ../personas/expert-supervisor.md
-
 instructions:
   plan: ../instructions/plan.md
   implement: ../instructions/implement.md
@@ -52,7 +37,6 @@ instructions:
   fix: ../instructions/fix.md
   supervise: ../instructions/supervise.md
   fix-supervisor: ../instructions/fix-supervisor.md
-
 report_formats:
   plan: ../report-formats/plan.md
   ai-review: ../report-formats/ai-review.md
@@ -62,13 +46,8 @@ report_formats:
   qa-review: ../report-formats/qa-review.md
   validation: ../report-formats/validation.md
   summary: ../report-formats/summary.md
-
 initial_movement: plan
-
 movements:
-  # ===========================================
-  # Movement 0: Planning
-  # ===========================================
   - name: plan
     edit: false
     persona: planner
@@ -88,18 +67,20 @@ movements:
         next: implement
       - condition: Requirements are unclear and planning cannot proceed
         next: ABORT
-
-  # ===========================================
-  # Movement 1: Implementation
-  # ===========================================
   - name: implement
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
     session: refresh
+    knowledge:
+      - frontend
+      - backend
+      - cqrs-es
+      - security
+      - architecture
     report:
       - Scope: 01-coder-scope.md
       - Decisions: 02-coder-decisions.md
@@ -124,10 +105,6 @@ movements:
         next: implement
         requires_user_input: true
         interactive_only: true
-
-  # ===========================================
-  # Movement 2: AI Review
-  # ===========================================
   - name: ai_review
     edit: false
     persona: ai-antipattern-reviewer
@@ -147,15 +124,20 @@ movements:
         next: reviewers
       - condition: AI-specific issues detected
         next: ai_fix
-
   - name: ai_fix
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
     session: refresh
+    knowledge:
+      - frontend
+      - backend
+      - cqrs-es
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -173,7 +155,6 @@ movements:
         next: ai_no_fix
       - condition: Unable to proceed with fixes
         next: ai_no_fix
-
   - name: ai_no_fix
     edit: false
     persona: architecture-reviewer
@@ -188,16 +169,15 @@ movements:
       - condition: ai_fix's judgment is valid (no fix needed)
         next: reviewers
     instruction: arbitrate
-
-  # ===========================================
-  # Movement 3: Expert Reviews (Parallel)
-  # ===========================================
   - name: reviewers
     parallel:
       - name: cqrs-es-review
         edit: false
         persona: cqrs-es-reviewer
         stance: review
+        knowledge:
+          - cqrs-es
+          - backend
         report:
           name: 04-cqrs-es-review.md
           format: cqrs-es-review
@@ -205,18 +185,17 @@ movements:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
           - condition: approved
           - condition: needs_fix
         instruction: review-cqrs-es
-
       - name: frontend-review
         edit: false
         persona: frontend-reviewer
         stance: review
+        knowledge: frontend
         report:
           name: 05-frontend-review.md
           format: frontend-review
@@ -224,18 +203,17 @@ movements:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
           - condition: approved
           - condition: needs_fix
         instruction: review-frontend
-
       - name: security-review
         edit: false
         persona: security-reviewer
         stance: review
+        knowledge: security
         report:
           name: 06-security-review.md
           format: security-review
@@ -243,14 +221,12 @@ movements:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
           - condition: approved
           - condition: needs_fix
         instruction: review-security
-
       - name: qa-review
         edit: false
         persona: qa-reviewer
@@ -262,7 +238,6 @@ movements:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
@@ -274,14 +249,19 @@ movements:
         next: supervise
       - condition: any("needs_fix")
         next: fix
-
   - name: fix
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
+    knowledge:
+      - frontend
+      - backend
+      - cqrs-es
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -298,10 +278,6 @@ movements:
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction: fix
-
-  # ===========================================
-  # Movement 4: Supervision
-  # ===========================================
   - name: supervise
     edit: false
     persona: expert-supervisor
@@ -321,14 +297,19 @@ movements:
         next: COMPLETE
       - condition: Issues detected during final review
         next: fix_supervisor
-
   - name: fix_supervisor
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
+    knowledge:
+      - frontend
+      - backend
+      - cqrs-es
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob

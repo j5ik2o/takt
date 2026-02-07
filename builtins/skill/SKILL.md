@@ -1,9 +1,38 @@
 ---
-name: takt-engine
-description: TAKT ピースエンジン。Agent Team を使ったマルチエージェントオーケストレーション。/takt コマンドから使用される。
+name: takt
+description: TAKT ピースエンジン。Agent Team を使ったマルチエージェントオーケストレーション。ピースYAMLワークフローに従ってマルチエージェントを実行する。
+user-invocable: true
 ---
 
 # TAKT Piece Engine
+
+## 引数の解析
+
+$ARGUMENTS を以下のように解析する:
+
+```
+/takt {piece} [permission] {task...}
+```
+
+- **第1トークン**: ピース名またはYAMLファイルパス（必須）
+- **第2トークン**: 権限モード（任意）。以下のキーワードの場合は権限モードとして解釈する:
+  - `--permit-full` — 全権限付与（mode: "bypassPermissions"）
+  - `--permit-edit` — 編集許可（mode: "acceptEdits"）
+  - 上記以外 → タスク内容の一部として扱う
+- **残りのトークン**: タスク内容（省略時は AskUserQuestion でユーザーに入力を求める）
+- **権限モード省略時のデフォルト**: `"default"`（権限確認あり）
+
+例:
+- `/takt coding FizzBuzzを作って` → coding ピース、default 権限
+- `/takt coding --permit-full FizzBuzzを作って` → coding ピース、bypassPermissions
+- `/takt /path/to/custom.yaml 実装して` → カスタムYAML、default 権限
+
+## 事前準備: リファレンスの読み込み
+
+手順を開始する前に、以下の2ファイルを **Read tool で読み込む**:
+
+1. `~/.claude/skills/takt/references/engine.md` - プロンプト構築、レポート管理、ループ検出の詳細
+2. `~/.claude/skills/takt/references/yaml-schema.md` - ピースYAMLの構造定義
 
 ## あなたの役割: Team Lead
 
@@ -30,11 +59,11 @@ description: TAKT ピースエンジン。Agent Team を使ったマルチエー
 
 | やること | 使うツール | 説明 |
 |---------|-----------|------|
-| チーム作成 | **Teammate** tool (operation: "spawnTeam") | 最初に1回だけ呼ぶ |
-| チーム解散 | **Teammate** tool (operation: "cleanup") | 最後に1回だけ呼ぶ |
+| チーム作成 | **TeamCreate** tool | 最初に1回だけ呼ぶ |
+| チーム解散 | **TeamDelete** tool | 最後に1回だけ呼ぶ |
 | チームメイト起動 | **Task** tool (team_name 付き) | movement ごとに呼ぶ。**結果は同期的に返る** |
 
-**Teammate tool でチームメイトを個別に起動することはできない。** チームメイトの起動は必ず Task tool を使う。
+**TeamCreate / TeamDelete でチームメイトを個別に起動することはできない。** チームメイトの起動は必ず Task tool を使う。
 **Task tool は同期的に結果を返す。** TaskOutput やポーリングは不要。呼べば結果が返ってくる。
 
 ## 手順（この順序で厳密に実行せよ）
@@ -55,24 +84,24 @@ description: TAKT ピースエンジン。Agent Team を使ったマルチエー
 
 YAMLから以下を抽出する（→ references/yaml-schema.md 参照）:
 - `name`, `max_iterations`, `initial_movement`, `movements` 配列
+- セクションマップ: `personas`, `stances`, `instructions`, `report_formats`, `knowledge`
 
-### 手順 2: エージェント .md の事前読み込み
+### 手順 2: セクションリソースの事前読み込み
 
-全 movement（parallel のサブステップ含む）から `agent:` パスを収集する。
+ピースYAMLのセクションマップ（`personas:`, `stances:`, `instructions:`, `report_formats:`, `knowledge:`）から全ファイルパスを収集する。
 パスは **ピースYAMLファイルのディレクトリからの相対パス** で解決する。
 
-例: ピースが `~/.claude/skills/takt/pieces/coding.yaml` にあり、`agent: ../agents/default/coder.md` の場合
-→ 絶対パスは `~/.claude/skills/takt/agents/default/coder.md`
+例: ピースが `~/.claude/skills/takt/pieces/default.yaml` にあり、`personas:` に `coder: ../personas/coder.md` がある場合
+→ 絶対パスは `~/.claude/skills/takt/personas/coder.md`
 
-重複を除いて Read で全て読み込む。読み込んだ内容はチームメイトへのプロンプトに使う。
+重複を除いて Read で全て読み込む。読み込んだ内容はチームメイトへのプロンプト構築に使う。
 
 ### 手順 3: Agent Team 作成
 
-**今すぐ** Teammate tool を呼べ:
+**今すぐ** TeamCreate tool を呼べ:
 
 ```
-Teammate tool を呼ぶ:
-  operation: "spawnTeam"
+TeamCreate tool を呼ぶ:
   team_name: "takt"
   description: "TAKT {piece_name} ワークフロー"
 ```
@@ -84,7 +113,7 @@ Teammate tool を呼ぶ:
 - `iteration = 1`
 - `current_movement = initial_movement の movement 定義`
 - `previous_response = ""`
-- `permission_mode = コマンドで解析された権限モード（"bypassPermissions" または "default"）`
+- `permission_mode = コマンドで解析された権限モード（"bypassPermissions" / "acceptEdits" / "default"）`
 - `movement_history = []`（遷移履歴。Loop Monitor 用）
 
 **レポートディレクトリ**: いずれかの movement に `report` フィールドがある場合、`.takt/reports/{YYYYMMDD-HHmmss}-{slug}/` を作成し、パスを `report_dir` 変数に保持する。
@@ -96,6 +125,14 @@ Teammate tool を呼ぶ:
 **iteration が max_iterations を超えていたら → 手順 8（ABORT: イテレーション上限）に進む。**
 
 current_movement のプロンプトを構築する（→ references/engine.md のプロンプト構築を参照）。
+
+プロンプト構築の要素:
+1. **ペルソナ**: `persona:` キー → `personas:` セクション → .md ファイル内容
+2. **スタンス**: `stance:` キー → `stances:` セクション → .md ファイル内容（複数可、末尾にリマインダー再掲）
+3. **実行コンテキスト**: cwd, ピース名, movement名, イテレーション情報
+4. **ナレッジ**: `knowledge:` キー → `knowledge:` セクション → .md ファイル内容
+5. **インストラクション**: `instruction:` キー → `instructions:` セクション → .md ファイル内容（テンプレート変数展開済み）
+6. **タスク/前回出力/レポート指示/タグ指示**: 自動注入
 
 **通常 movement の場合（parallel フィールドなし）:**
 
@@ -183,10 +220,9 @@ matched_rule の `next` を確認する:
 
 ### 手順 8: 終了
 
-1. Teammate tool を呼ぶ:
+1. TeamDelete tool を呼ぶ:
 ```
-Teammate tool を呼ぶ:
-  operation: "cleanup"
+TeamDelete tool を呼ぶ
 ```
 
 2. ユーザーに結果を報告する:

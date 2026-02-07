@@ -1,25 +1,16 @@
-# Default TAKT Piece
-# Plan -> Architect -> Implement -> AI Review -> Reviewers (parallel: Architect + QA) -> Supervisor Approval
-#
-# Template Variables (auto-injected by buildInstruction):
-#   {iteration}      - Piece-wide turn count (total movements executed across all agents)
-#   {max_iterations} - Maximum iterations allowed for the piece
-#   {movement_iteration} - Per-movement iteration count (how many times THIS movement has been executed)
-#   {task}           - Original user request
-#   {previous_response} - Output from the previous movement
-#   {user_inputs}    - Accumulated user inputs during piece
-#   {report_dir}     - Report directory name (e.g., "20250126-143052-task-summary")
+# Auto-generated from default.yaml by tools/generate-hybrid-codex.mjs
+# Do not edit manually. Edit the source piece and re-run the generator.
 
 name: default-hybrid-codex
 description: Standard development piece with planning and specialized reviews
-
 max_iterations: 30
-
 stances:
   coding: ../stances/coding.md
   review: ../stances/review.md
   testing: ../stances/testing.md
-
+knowledge:
+  architecture: ../knowledge/architecture.md
+  backend: ../knowledge/backend.md
 personas:
   planner: ../personas/planner.md
   architect-planner: ../personas/architect-planner.md
@@ -28,7 +19,6 @@ personas:
   architecture-reviewer: ../personas/architecture-reviewer.md
   qa-reviewer: ../personas/qa-reviewer.md
   supervisor: ../personas/supervisor.md
-
 instructions:
   plan: ../instructions/plan.md
   architect: ../instructions/architect.md
@@ -40,7 +30,6 @@ instructions:
   review-qa: ../instructions/review-qa.md
   fix: ../instructions/fix.md
   supervise: ../instructions/supervise.md
-
 report_formats:
   plan: ../report-formats/plan.md
   architecture-design: ../report-formats/architecture-design.md
@@ -49,11 +38,11 @@ report_formats:
   qa-review: ../report-formats/qa-review.md
   validation: ../report-formats/validation.md
   summary: ../report-formats/summary.md
-
 initial_movement: plan
-
 loop_monitors:
-  - cycle: [ai_review, ai_fix]
+  - cycle:
+      - ai_review
+      - ai_fix
     threshold: 3
     judge:
       persona: supervisor
@@ -75,7 +64,6 @@ loop_monitors:
           next: ai_review
         - condition: 非生産的（改善なし）
           next: reviewers
-
 movements:
   - name: plan
     edit: false
@@ -102,7 +90,6 @@ movements:
           - {質問1}
           - {質問2}
     instruction: plan
-
   - name: architect
     edit: false
     persona: architect-planner
@@ -123,15 +110,17 @@ movements:
       - condition: 情報不足、判断できない
         next: ABORT
     instruction: architect
-
   - name: implement
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
     session: refresh
+    knowledge:
+      - backend
+      - architecture
     report:
       - Scope: 02-coder-scope.md
       - Decisions: 03-coder-decisions.md
@@ -157,7 +146,6 @@ movements:
         requires_user_input: true
         interactive_only: true
     instruction: implement
-
   - name: ai_review
     edit: false
     persona: ai-antipattern-reviewer
@@ -177,15 +165,17 @@ movements:
       - condition: AI特有の問題あり
         next: ai_fix
     instruction: ai-review
-
   - name: ai_fix
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
     session: refresh
+    knowledge:
+      - backend
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -204,7 +194,6 @@ movements:
       - condition: 判断できない、情報不足
         next: ai_no_fix
     instruction: ai-fix
-
   - name: ai_no_fix
     edit: false
     persona: architecture-reviewer
@@ -219,13 +208,15 @@ movements:
       - condition: ai_fixの判断が妥当（修正不要）
         next: reviewers
     instruction: arbitrate
-
   - name: reviewers
     parallel:
       - name: arch-review
         edit: false
         persona: architecture-reviewer
         stance: review
+        knowledge:
+          - architecture
+          - backend
         report:
           name: 05-architect-review.md
           format: architecture-review
@@ -239,7 +230,6 @@ movements:
           - condition: approved
           - condition: needs_fix
         instruction: review-arch
-
       - name: qa-review
         edit: false
         persona: qa-reviewer
@@ -262,14 +252,16 @@ movements:
         next: supervise
       - condition: any("needs_fix")
         next: fix
-
   - name: fix
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
+    knowledge:
+      - backend
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -286,7 +278,6 @@ movements:
       - condition: 判断できない、情報不足
         next: plan
     instruction: fix
-
   - name: supervise
     edit: false
     persona: supervisor

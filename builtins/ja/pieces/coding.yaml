@@ -37,6 +37,9 @@ stances:
   review: ../stances/review.md
   testing: ../stances/testing.md
 
+knowledge:
+  architecture: ../knowledge/architecture.md
+
 personas:
   architect-planner: ../personas/architect-planner.md
   coder: ../personas/coder.md
@@ -87,6 +90,7 @@ movements:
       - coding
       - testing
     session: refresh
+    knowledge: architecture
     report:
       - Scope: 02-coder-scope.md
       - Decisions: 03-coder-decisions.md
@@ -137,6 +141,7 @@ movements:
         edit: false
         persona: architecture-reviewer
         stance: review
+        knowledge: architecture
         report:
           name: 05-architect-review.md
           format: architecture-review
@@ -163,6 +168,7 @@ movements:
     stance:
       - coding
       - testing
+    knowledge: architecture
     allowed_tools:
       - Read
       - Glob

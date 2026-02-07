@@ -783,6 +783,7 @@ export TAKT_OPENAI_API_KEY=sk-...
 
 ## ドキュメント
 
+- [Faceted Prompting](./prompt-composition.ja.md) - AIプロンプトへの関心の分離（Persona, Stance, Instruction, Knowledge, Report Format）
 - [Piece Guide](./pieces.md) - ピースの作成とカスタマイズ
 - [Agent Guide](./agents.md) - カスタムエージェントの設定
 - [Changelog](../CHANGELOG.md) - バージョン履歴

@@ -1,34 +1,16 @@
-# Default TAKT Piece
-# Plan -> Architect -> Implement -> AI Review -> Reviewers (parallel: Architect + QA) -> Supervisor Approval
-#
-# Boilerplate sections (Piece Context, User Request, Previous Response,
-# Additional User Inputs, Instructions heading) are auto-injected by buildInstruction().
-# Only movement-specific content belongs in instruction_template.
-#
-# Template Variables (available in instruction_template):
-#   {iteration}         - Piece-wide turn count (total movements executed across all agents)
-#   {max_iterations}    - Maximum iterations allowed for the piece
-#   {movement_iteration}    - Per-movement iteration count (how many times THIS movement has been executed)
-#   {previous_response} - Output from the previous movement (only when pass_previous_response: true)
-#   {report_dir}        - Report directory name (e.g., "20250126-143052-task-summary")
-#
-# Movement-level Fields:
-#   report:  - Report file(s) for the movement (auto-injected as Report File/Files in Piece Context)
-#              Single: report: 00-plan.md
-#              Multiple: report:
-#                          - Scope: 01-coder-scope.md
-#                          - Decisions: 02-coder-decisions.md
+# Auto-generated from default.yaml by tools/generate-hybrid-codex.mjs
+# Do not edit manually. Edit the source piece and re-run the generator.
 
 name: default-hybrid-codex
 description: Standard development piece with planning and specialized reviews
-
 max_iterations: 30
-
 stances:
   coding: ../stances/coding.md
   review: ../stances/review.md
   testing: ../stances/testing.md
-
+knowledge:
+  backend: ../knowledge/backend.md
+  architecture: ../knowledge/architecture.md
 personas:
   planner: ../personas/planner.md
   architect-planner: ../personas/architect-planner.md
@@ -37,7 +19,6 @@ personas:
   architecture-reviewer: ../personas/architecture-reviewer.md
   qa-reviewer: ../personas/qa-reviewer.md
   supervisor: ../personas/supervisor.md
-
 instructions:
   plan: ../instructions/plan.md
   architect: ../instructions/architect.md
@@ -49,7 +30,6 @@ instructions:
   review-qa: ../instructions/review-qa.md
   fix: ../instructions/fix.md
   supervise: ../instructions/supervise.md
-
 report_formats:
   plan: ../report-formats/plan.md
   architecture-design: ../report-formats/architecture-design.md
@@ -58,11 +38,11 @@ report_formats:
   qa-review: ../report-formats/qa-review.md
   validation: ../report-formats/validation.md
   summary: ../report-formats/summary.md
-
 initial_movement: plan
-
 loop_monitors:
-  - cycle: [ai_review, ai_fix]
+  - cycle:
+      - ai_review
+      - ai_fix
     threshold: 3
     judge:
       persona: supervisor
@@ -84,7 +64,6 @@ loop_monitors:
           next: ai_review
         - condition: Unproductive (no improvement)
           next: reviewers
-
 movements:
   - name: plan
     edit: false
@@ -111,7 +90,6 @@ movements:
           - {Question 1}
           - {Question 2}
     instruction: plan
-
   - name: architect
     edit: false
     persona: architect-planner
@@ -132,15 +110,17 @@ movements:
       - condition: Insufficient info, cannot proceed
         next: ABORT
     instruction: architect
-
   - name: implement
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
     session: refresh
+    knowledge:
+      - backend
+      - architecture
     report:
       - Scope: 02-coder-scope.md
       - Decisions: 03-coder-decisions.md
@@ -166,7 +146,6 @@ movements:
         requires_user_input: true
         interactive_only: true
     instruction: implement
-
   - name: ai_review
     edit: false
     persona: ai-antipattern-reviewer
@@ -186,15 +165,17 @@ movements:
       - condition: AI-specific issues found
         next: ai_fix
     instruction: ai-review
-
   - name: ai_fix
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
     session: refresh
+    knowledge:
+      - backend
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -213,7 +194,6 @@ movements:
       - condition: Cannot proceed, insufficient info
         next: ai_no_fix
     instruction: ai-fix
-
   - name: ai_no_fix
     edit: false
     persona: architecture-reviewer
@@ -228,13 +208,15 @@ movements:
       - condition: ai_fix's judgment is valid (no fix needed)
         next: reviewers
     instruction: arbitrate
-
   - name: reviewers
     parallel:
       - name: arch-review
         edit: false
         persona: architecture-reviewer
         stance: review
+        knowledge:
+          - architecture
+          - backend
         report:
           name: 05-architect-review.md
           format: architecture-review
@@ -248,7 +230,6 @@ movements:
           - condition: approved
           - condition: needs_fix
         instruction: review-arch
-
       - name: qa-review
         edit: false
         persona: qa-reviewer
@@ -271,14 +252,16 @@ movements:
         next: supervise
       - condition: any("needs_fix")
         next: fix
-
   - name: fix
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
+    knowledge:
+      - backend
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -295,7 +278,6 @@ movements:
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction: fix
-
   - name: supervise
     edit: false
     persona: supervisor

@@ -1,45 +1,18 @@
-# Expert Review Piece
-# Review piece with Architecture, Frontend, Security, and QA experts
-#
-# Flow:
-# plan -> implement -> ai_review -> reviewers (parallel) -> supervise -> COMPLETE
-#                          ↓              ├─ arch-review        ↓
-#                        ai_fix           ├─ frontend-review  fix_supervisor
-#                                         ├─ security-review
-#                                         └─ qa-review
-#                                    any("needs_fix") → fix → reviewers
-#
-# AI review runs immediately after implementation to catch AI-specific issues early,
-# before expert reviews begin.
-#
-# Boilerplate sections (Piece Context, User Request, Previous Response,
-# Additional User Inputs, Instructions heading) are auto-injected by buildInstruction().
-# Only movement-specific content belongs in instruction_template.
-#
-# Template Variables (available in instruction_template):
-#   {iteration}         - Piece-wide turn count (total movements executed across all agents)
-#   {max_iterations}    - Maximum iterations allowed for the piece
-#   {movement_iteration}    - Per-movement iteration count (how many times THIS movement has been executed)
-#   {previous_response} - Output from the previous movement (only when pass_previous_response: true)
-#   {report_dir}        - Report directory name (e.g., "20250126-143052-task-summary")
-#
-# Movement-level Fields:
-#   report:  - Report file(s) for the movement (auto-injected as Report File/Files in Piece Context)
-#              Single: report: 00-plan.md
-#              Multiple: report:
-#                          - Scope: 01-coder-scope.md
-#                          - Decisions: 02-coder-decisions.md
+# Auto-generated from expert.yaml by tools/generate-hybrid-codex.mjs
+# Do not edit manually. Edit the source piece and re-run the generator.
 
 name: expert-hybrid-codex
 description: Architecture, Frontend, Security, QA Expert Review
-
 max_iterations: 30
-
 stances:
   coding: ../stances/coding.md
   review: ../stances/review.md
   testing: ../stances/testing.md
-
+knowledge:
+  frontend: ../knowledge/frontend.md
+  backend: ../knowledge/backend.md
+  security: ../knowledge/security.md
+  architecture: ../knowledge/architecture.md
 personas:
   planner: ../personas/planner.md
   coder: ../personas/coder.md
@@ -49,7 +22,6 @@ personas:
   security-reviewer: ../personas/security-reviewer.md
   qa-reviewer: ../personas/qa-reviewer.md
   expert-supervisor: ../personas/expert-supervisor.md
-
 instructions:
   plan: ../instructions/plan.md
   implement: ../instructions/implement.md
@@ -63,7 +35,6 @@ instructions:
   fix: ../instructions/fix.md
   supervise: ../instructions/supervise.md
   fix-supervisor: ../instructions/fix-supervisor.md
-
 report_formats:
   plan: ../report-formats/plan.md
   ai-review: ../report-formats/ai-review.md
@@ -73,13 +44,8 @@ report_formats:
   qa-review: ../report-formats/qa-review.md
   validation: ../report-formats/validation.md
   summary: ../report-formats/summary.md
-
 initial_movement: plan
-
 movements:
-  # ===========================================
-  # Movement 0: Planning
-  # ===========================================
   - name: plan
     edit: false
     persona: planner
@@ -99,18 +65,19 @@ movements:
         next: implement
       - condition: Requirements are unclear and planning cannot proceed
         next: ABORT
-
-  # ===========================================
-  # Movement 1: Implementation
-  # ===========================================
   - name: implement
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
     session: refresh
+    knowledge:
+      - frontend
+      - backend
+      - security
+      - architecture
     report:
       - Scope: 01-coder-scope.md
       - Decisions: 02-coder-decisions.md
@@ -135,10 +102,6 @@ movements:
         next: implement
         requires_user_input: true
         interactive_only: true
-
-  # ===========================================
-  # Movement 2: AI Review
-  # ===========================================
   - name: ai_review
     edit: false
     persona: ai-antipattern-reviewer
@@ -158,15 +121,19 @@ movements:
         next: reviewers
       - condition: AI-specific issues detected
         next: ai_fix
-
   - name: ai_fix
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
     session: refresh
+    knowledge:
+      - frontend
+      - backend
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -184,7 +151,6 @@ movements:
         next: ai_no_fix
       - condition: Unable to proceed with fixes
         next: ai_no_fix
-
   - name: ai_no_fix
     edit: false
     persona: architecture-reviewer
@@ -199,16 +165,15 @@ movements:
       - condition: ai_fix's judgment is valid (no fix needed)
         next: reviewers
     instruction: arbitrate
-
-  # ===========================================
-  # Movement 3: Expert Reviews (Parallel)
-  # ===========================================
   - name: reviewers
     parallel:
       - name: arch-review
         edit: false
         persona: architecture-reviewer
         stance: review
+        knowledge:
+          - architecture
+          - backend
         report:
           name: 04-architect-review.md
           format: architecture-review
@@ -216,18 +181,17 @@ movements:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
           - condition: approved
           - condition: needs_fix
         instruction: review-arch
-
       - name: frontend-review
         edit: false
         persona: frontend-reviewer
         stance: review
+        knowledge: frontend
         report:
           name: 05-frontend-review.md
           format: frontend-review
@@ -235,18 +199,17 @@ movements:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
           - condition: approved
           - condition: needs_fix
         instruction: review-frontend
-
       - name: security-review
         edit: false
         persona: security-reviewer
         stance: review
+        knowledge: security
         report:
           name: 06-security-review.md
           format: security-review
@@ -254,14 +217,12 @@ movements:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
           - condition: approved
           - condition: needs_fix
         instruction: review-security
-
       - name: qa-review
         edit: false
         persona: qa-reviewer
@@ -273,7 +234,6 @@ movements:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
@@ -285,14 +245,18 @@ movements:
         next: supervise
       - condition: any("needs_fix")
         next: fix
-
   - name: fix
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
+    knowledge:
+      - frontend
+      - backend
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -309,10 +273,6 @@ movements:
       - condition: Cannot proceed, insufficient info
         next: plan
     instruction: fix
-
-  # ===========================================
-  # Movement 4: Supervision
-  # ===========================================
   - name: supervise
     edit: false
     persona: expert-supervisor
@@ -332,14 +292,18 @@ movements:
         next: COMPLETE
       - condition: Issues detected during final review
         next: fix_supervisor
-
   - name: fix_supervisor
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
+    knowledge:
+      - frontend
+      - backend
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob

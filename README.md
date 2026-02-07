@@ -787,6 +787,7 @@ export TAKT_OPENAI_API_KEY=sk-...
 
 ## Documentation
 
+- [Faceted Prompting](./docs/prompt-composition.md) - Separation of Concerns for AI prompts (Persona, Stance, Instruction, Knowledge, Report Format)
 - [Piece Guide](./docs/pieces.md) - Creating and customizing pieces
 - [Agent Guide](./docs/agents.md) - Configuring custom agents
 - [Changelog](../CHANGELOG.md) - Version history

@@ -1,42 +1,19 @@
-# Expert Review Piece
-# CQRS+ES、フロントエンド、セキュリティ、QAの専門家によるレビューピース
-#
-# フロー:
-# plan -> implement -> ai_review -> reviewers (parallel) -> supervise -> COMPLETE
-#                          ↓              ├─ cqrs-es-review      ↓
-#                        ai_fix           ├─ frontend-review   fix_supervisor
-#                                         ├─ security-review
-#                                         └─ qa-review
-#                                    any("needs_fix") → fix → reviewers
-#
-# ボイラープレートセクション（Piece Context, User Request, Previous Response,
-# Additional User Inputs, Instructions heading）はbuildInstruction()が自動挿入。
-# instruction_templateにはムーブメント固有の内容のみ記述。
-#
-# テンプレート変数（instruction_template内で使用可能）:
-#   {iteration}         - ピース全体のターン数（全エージェントで実行されたムーブメントの合計）
-#   {max_iterations}    - ピースの最大イテレーション数
-#   {movement_iteration}    - ムーブメントごとのイテレーション数（このムーブメントが何回実行されたか）
-#   {previous_response} - 前のムーブメントの出力（pass_previous_response: true の場合のみ）
-#   {report_dir}        - レポートディレクトリ名（例: "20250126-143052-task-summary"）
-#
-# ムーブメントレベルフィールド:
-#   report:  - ムーブメントのレポートファイル（Piece ContextにReport File/Filesとして自動挿入）
-#              単一: report: 00-plan.md
-#              複数: report:
-#                      - Scope: 01-coder-scope.md
-#                      - Decisions: 02-coder-decisions.md
+# Auto-generated from expert-cqrs.yaml by tools/generate-hybrid-codex.mjs
+# Do not edit manually. Edit the source piece and re-run the generator.
 
 name: expert-cqrs-hybrid-codex
 description: CQRS+ES・フロントエンド・セキュリティ・QA専門家レビュー
-
 max_iterations: 30
-
 stances:
   coding: ../stances/coding.md
   review: ../stances/review.md
   testing: ../stances/testing.md
-
+knowledge:
+  frontend: ../knowledge/frontend.md
+  backend: ../knowledge/backend.md
+  cqrs-es: ../knowledge/cqrs-es.md
+  security: ../knowledge/security.md
+  architecture: ../knowledge/architecture.md
 personas:
   planner: ../personas/planner.md
   coder: ../personas/coder.md
@@ -47,7 +24,6 @@ personas:
   security-reviewer: ../personas/security-reviewer.md
   qa-reviewer: ../personas/qa-reviewer.md
   expert-supervisor: ../personas/expert-supervisor.md
-
 instructions:
   plan: ../instructions/plan.md
   implement: ../instructions/implement.md
@@ -61,7 +37,6 @@ instructions:
   fix: ../instructions/fix.md
   supervise: ../instructions/supervise.md
   fix-supervisor: ../instructions/fix-supervisor.md
-
 report_formats:
   plan: ../report-formats/plan.md
   ai-review: ../report-formats/ai-review.md
@@ -71,13 +46,8 @@ report_formats:
   qa-review: ../report-formats/qa-review.md
   validation: ../report-formats/validation.md
   summary: ../report-formats/summary.md
-
 initial_movement: plan
-
 movements:
-  # ===========================================
-  # Movement 0: Planning
-  # ===========================================
   - name: plan
     edit: false
     persona: planner
@@ -97,18 +67,20 @@ movements:
         next: implement
       - condition: 要件が不明確で計画を立てられない
         next: ABORT
-
-  # ===========================================
-  # Movement 1: Implementation
-  # ===========================================
   - name: implement
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
     session: refresh
+    knowledge:
+      - frontend
+      - backend
+      - cqrs-es
+      - security
+      - architecture
     report:
       - Scope: 01-coder-scope.md
       - Decisions: 02-coder-decisions.md
@@ -133,10 +105,6 @@ movements:
         next: implement
         requires_user_input: true
         interactive_only: true
-
-  # ===========================================
-  # Movement 2: AI Review
-  # ===========================================
   - name: ai_review
     edit: false
     persona: ai-antipattern-reviewer
@@ -156,15 +124,20 @@ movements:
         next: reviewers
       - condition: AI特有の問題が検出された
         next: ai_fix
-
   - name: ai_fix
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
     session: refresh
+    knowledge:
+      - frontend
+      - backend
+      - cqrs-es
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -182,7 +155,6 @@ movements:
         next: ai_no_fix
       - condition: 修正を進行できない
         next: ai_no_fix
-
   - name: ai_no_fix
     edit: false
     persona: architecture-reviewer
@@ -197,16 +169,15 @@ movements:
       - condition: ai_fixの判断が妥当（修正不要）
         next: reviewers
     instruction: arbitrate
-
-  # ===========================================
-  # Movement 3: Expert Reviews (Parallel)
-  # ===========================================
   - name: reviewers
     parallel:
       - name: cqrs-es-review
         edit: false
         persona: cqrs-es-reviewer
         stance: review
+        knowledge:
+          - cqrs-es
+          - backend
         report:
           name: 04-cqrs-es-review.md
           format: cqrs-es-review
@@ -214,18 +185,17 @@ movements:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
           - condition: approved
           - condition: needs_fix
         instruction: review-cqrs-es
-
       - name: frontend-review
         edit: false
         persona: frontend-reviewer
         stance: review
+        knowledge: frontend
         report:
           name: 05-frontend-review.md
           format: frontend-review
@@ -233,18 +203,17 @@ movements:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
           - condition: approved
           - condition: needs_fix
         instruction: review-frontend
-
       - name: security-review
         edit: false
         persona: security-reviewer
         stance: review
+        knowledge: security
         report:
           name: 06-security-review.md
           format: security-review
@@ -252,14 +221,12 @@ movements:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
           - condition: approved
           - condition: needs_fix
         instruction: review-security
-
       - name: qa-review
         edit: false
         persona: qa-reviewer
@@ -271,7 +238,6 @@ movements:
           - Read
           - Glob
           - Grep
-
           - WebSearch
           - WebFetch
         rules:
@@ -283,14 +249,19 @@ movements:
         next: supervise
       - condition: any("needs_fix")
         next: fix
-
   - name: fix
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
+    knowledge:
+      - frontend
+      - backend
+      - cqrs-es
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
@@ -307,10 +278,6 @@ movements:
       - condition: 修正を進行できない
         next: plan
     instruction: fix
-
-  # ===========================================
-  # Movement 4: Supervision
-  # ===========================================
   - name: supervise
     edit: false
     persona: expert-supervisor
@@ -330,14 +297,19 @@ movements:
         next: COMPLETE
       - condition: 問題が検出された
         next: fix_supervisor
-
   - name: fix_supervisor
     edit: true
     persona: coder
+    provider: codex
     stance:
       - coding
       - testing
-    provider: codex
+    knowledge:
+      - frontend
+      - backend
+      - cqrs-es
+      - security
+      - architecture
     allowed_tools:
       - Read
       - Glob
