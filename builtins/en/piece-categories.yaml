@@ -21,20 +21,6 @@ piece_categories:
     Refactoring:
       pieces:
         - structural-reform
-  🔀 Hybrid (Codex Coding):
-    🚀 Quick Start:
-      pieces:
-        - coding-hybrid-codex
-        - default-hybrid-codex
-        - minimal-hybrid-codex
-        - passthrough-hybrid-codex
-    🔧 Expert:
-      pieces:
-        - expert-cqrs-hybrid-codex
-        - expert-hybrid-codex
-    🔍 Review & Fix:
-      pieces:
-        - review-fix-minimal-hybrid-codex
   Others:
     pieces:
       - research

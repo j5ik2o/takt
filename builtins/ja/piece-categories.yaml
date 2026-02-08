@@ -21,20 +21,6 @@ piece_categories:
     リファクタリング:
       pieces:
         - structural-reform
-  🔀 ハイブリッド (Codex Coding):
-    🚀 クイックスタート:
-      pieces:
-        - coding-hybrid-codex
-        - default-hybrid-codex
-        - minimal-hybrid-codex
-        - passthrough-hybrid-codex
-    🔧 フルスタック:
-      pieces:
-        - expert-cqrs-hybrid-codex
-        - expert-hybrid-codex
-    🔍 レビュー＆修正:
-      pieces:
-        - review-fix-minimal-hybrid-codex
   その他:
     pieces:
       - research
