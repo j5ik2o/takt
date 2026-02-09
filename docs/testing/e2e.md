@@ -92,6 +92,16 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
     - `.takt/tasks/` にタスクYAMLを追加する（`piece` に `e2e/fixtures/pieces/mock-single-step.yaml` を指定）。
     - 出力に `Task "watch-task" completed` が含まれることを確認する。
     - `Ctrl+C` で終了する。
+- Run tasks graceful shutdown on SIGINT（`e2e/specs/run-sigint-graceful.e2e.ts`）
+  - 目的: `takt run` を並列実行中に `Ctrl+C` した際、新規クローン投入を止めてグレースフルに終了することを確認。
+  - LLM: 呼び出さない（`--provider mock` 固定）
+  - 手順（ユーザー行動/コマンド）:
+    - `.takt/tasks.yaml` に `worktree: true` の pending タスクを3件投入する（`concurrency: 2`）。
+    - 各タスクの `piece` に `e2e/fixtures/pieces/mock-slow-multi-step.yaml` を指定する。
+    - `TAKT_MOCK_SCENARIO=e2e/fixtures/scenarios/run-sigint-parallel.json` を設定する。
+    - `takt run --provider mock` を起動し、`=== Running Piece:` が出たら `Ctrl+C` を送る。
+    - 3件目タスク（`sigint-c`）が開始されないことを確認する。
+    - `=== Tasks Summary ===` 以降に新規タスク開始やクローン作成ログが出ないことを確認する。
 - List tasks non-interactive（`e2e/specs/list-non-interactive.e2e.ts`）
   - 目的: `takt list` の非対話モードでブランチ操作ができることを確認。
   - LLM: 呼び出さない（LLM不使用の操作のみ）

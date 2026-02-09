@@ -3,14 +3,18 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { PieceWithSource } from '../infra/config/index.js';
 
+const languageState = vi.hoisted(() => ({
+  value: 'en' as 'en' | 'ja',
+}));
+
 const pathsState = vi.hoisted(() => ({
-  resourcesDir: '',
+  resourcesRoot: '',
   userCategoriesPath: '',
 }));
 
@@ -18,7 +22,9 @@ vi.mock('../infra/config/global/globalConfig.js', async (importOriginal) => {
   const original = await importOriginal() as Record<string, unknown>;
   return {
     ...original,
-    getLanguage: () => 'en',
+    getLanguage: () => languageState.value,
+    getBuiltinPiecesEnabled: () => true,
+    getDisabledBuiltins: () => [],
   };
 });
 
@@ -26,13 +32,15 @@ vi.mock('../infra/resources/index.js', async (importOriginal) => {
   const original = await importOriginal() as Record<string, unknown>;
   return {
     ...original,
-    getLanguageResourcesDir: () => pathsState.resourcesDir,
+    getLanguageResourcesDir: (lang: string) => join(pathsState.resourcesRoot, lang),
   };
 });
 
-vi.mock('../infra/config/global/pieceCategories.js', async () => {
+vi.mock('../infra/config/global/pieceCategories.js', async (importOriginal) => {
+  const original = await importOriginal() as Record<string, unknown>;
   return {
-    ensureUserCategoriesFile: () => pathsState.userCategoriesPath,
+    ...original,
+    getPieceCategoriesPath: () => pathsState.userCategoriesPath,
   };
 });
 
@@ -70,76 +78,21 @@ describe('piece category config loading', () => {
 
   beforeEach(() => {
     testDir = join(tmpdir(), `takt-cat-config-${randomUUID()}`);
-    resourcesDir = join(testDir, 'resources');
+    resourcesDir = join(testDir, 'resources', 'en');
 
     mkdirSync(resourcesDir, { recursive: true });
-    pathsState.resourcesDir = resourcesDir;
+    mkdirSync(join(testDir, 'resources', 'ja'), { recursive: true });
+    pathsState.resourcesRoot = join(testDir, 'resources');
+    languageState.value = 'en';
+    pathsState.userCategoriesPath = join(testDir, 'user-piece-categories.yaml');
   });
 
   afterEach(() => {
     rmSync(testDir, { recursive: true, force: true });
   });
 
-  it('should load categories from user file (auto-copied from default)', () => {
-    const userPath = join(testDir, 'piece-categories.yaml');
-    writeYaml(userPath, `
-piece_categories:
-  Default:
-    pieces:
-      - simple
-show_others_category: true
-others_category_name: "Others"
-`);
-    pathsState.userCategoriesPath = userPath;
-
+  it('should return null when builtin categories file is missing', () => {
     const config = getPieceCategories();
-    expect(config).not.toBeNull();
-    expect(config!.pieceCategories).toEqual([
-      { name: 'Default', pieces: ['simple'], children: [] },
-    ]);
-    expect(config!.showOthersCategory).toBe(true);
-    expect(config!.othersCategoryName).toBe('Others');
-  });
-
-  it('should return null when user file has no piece_categories', () => {
-    const userPath = join(testDir, 'piece-categories.yaml');
-    writeYaml(userPath, `
-show_others_category: true
-`);
-    pathsState.userCategoriesPath = userPath;
-
-    const config = getPieceCategories();
-    expect(config).toBeNull();
-  });
-
-  it('should parse nested categories from user file', () => {
-    const userPath = join(testDir, 'piece-categories.yaml');
-    writeYaml(userPath, `
-piece_categories:
-  Parent:
-    pieces:
-      - parent-piece
-    Child:
-      pieces:
-        - child-piece
-`);
-    pathsState.userCategoriesPath = userPath;
-
-    const config = getPieceCategories();
-    expect(config).not.toBeNull();
-    expect(config!.pieceCategories).toEqual([
-      {
-        name: 'Parent',
-        pieces: ['parent-piece'],
-        children: [
-          { name: 'Child', pieces: ['child-piece'], children: [] },
-        ],
-      },
-    ]);
-  });
-
-  it('should return null when default categories file is missing', () => {
-    const config = loadDefaultCategories();
     expect(config).toBeNull();
   });
 
@@ -156,19 +109,170 @@ piece_categories:
     expect(config!.pieceCategories).toEqual([
       { name: 'Quick Start', pieces: ['default'], children: [] },
     ]);
+    expect(config!.builtinPieceCategories).toEqual([
+      { name: 'Quick Start', pieces: ['default'], children: [] },
+    ]);
+    expect(config!.userPieceCategories).toEqual([]);
+  });
+
+  it('should use builtin categories when user overlay file is missing', () => {
+    writeYaml(join(resourcesDir, 'piece-categories.yaml'), `
+piece_categories:
+  Main:
+    pieces:
+      - default
+show_others_category: true
+others_category_name: Others
+`);
+
+    const config = getPieceCategories();
+    expect(config).not.toBeNull();
+    expect(config!.pieceCategories).toEqual([
+      { name: 'Main', pieces: ['default'], children: [] },
+    ]);
+    expect(config!.userPieceCategories).toEqual([]);
+    expect(config!.showOthersCategory).toBe(true);
+    expect(config!.othersCategoryName).toBe('Others');
+  });
+
+  it('should merge user overlay categories with builtin categories', () => {
+    writeYaml(join(resourcesDir, 'piece-categories.yaml'), `
+piece_categories:
+  Main:
+    pieces:
+      - default
+      - coding
+    Child:
+      pieces:
+        - nested
+  Review:
+    pieces:
+      - review-only
+      - e2e-test
+show_others_category: true
+others_category_name: Others
+`);
+
+    writeYaml(pathsState.userCategoriesPath, `
+piece_categories:
+  Main:
+    pieces:
+      - custom
+  My Team:
+    pieces:
+      - team-flow
+show_others_category: false
+others_category_name: Unclassified
+`);
+
+    const config = getPieceCategories();
+    expect(config).not.toBeNull();
+    expect(config!.pieceCategories).toEqual([
+      {
+        name: 'Main',
+        pieces: ['custom'],
+        children: [
+          { name: 'Child', pieces: ['nested'], children: [] },
+        ],
+      },
+      { name: 'Review', pieces: ['review-only', 'e2e-test'], children: [] },
+      { name: 'My Team', pieces: ['team-flow'], children: [] },
+    ]);
+    expect(config!.builtinPieceCategories).toEqual([
+      {
+        name: 'Main',
+        pieces: ['default', 'coding'],
+        children: [
+          { name: 'Child', pieces: ['nested'], children: [] },
+        ],
+      },
+      { name: 'Review', pieces: ['review-only', 'e2e-test'], children: [] },
+    ]);
+    expect(config!.userPieceCategories).toEqual([
+      { name: 'Main', pieces: ['custom'], children: [] },
+      { name: 'My Team', pieces: ['team-flow'], children: [] },
+    ]);
+    expect(config!.showOthersCategory).toBe(false);
+    expect(config!.othersCategoryName).toBe('Unclassified');
+  });
+
+  it('should load ja builtin categories and include e2e-test under レビュー', () => {
+    languageState.value = 'ja';
+
+    writeYaml(join(testDir, 'resources', 'ja', 'piece-categories.yaml'), `
+piece_categories:
+  レビュー:
+    pieces:
+      - review-only
+      - e2e-test
+`);
+
+    const config = getPieceCategories();
+    expect(config).not.toBeNull();
+    expect(config!.pieceCategories).toEqual([
+      { name: 'レビュー', pieces: ['review-only', 'e2e-test'], children: [] },
+    ]);
+  });
+
+  it('should override others settings without replacing categories when user overlay has no piece_categories', () => {
+    writeYaml(join(resourcesDir, 'piece-categories.yaml'), `
+piece_categories:
+  Main:
+    pieces:
+      - default
+  Review:
+    pieces:
+      - review-only
+show_others_category: true
+others_category_name: Others
+`);
+
+    writeYaml(pathsState.userCategoriesPath, `
+show_others_category: false
+others_category_name: Unclassified
+`);
+
+    const config = getPieceCategories();
+    expect(config).not.toBeNull();
+    expect(config!.pieceCategories).toEqual([
+      { name: 'Main', pieces: ['default'], children: [] },
+      { name: 'Review', pieces: ['review-only'], children: [] },
+    ]);
+    expect(config!.builtinPieceCategories).toEqual([
+      { name: 'Main', pieces: ['default'], children: [] },
+      { name: 'Review', pieces: ['review-only'], children: [] },
+    ]);
+    expect(config!.userPieceCategories).toEqual([]);
+    expect(config!.showOthersCategory).toBe(false);
+    expect(config!.othersCategoryName).toBe('Unclassified');
   });
 });
 
 describe('buildCategorizedPieces', () => {
-  it('should place all pieces (user and builtin) into a unified category tree', () => {
+  it('should collect missing pieces with source information', () => {
     const allPieces = createPieceMap([
-      { name: 'a', source: 'user' },
-      { name: 'b', source: 'user' },
-      { name: 'c', source: 'builtin' },
+      { name: 'custom', source: 'user' },
+      { name: 'nested', source: 'builtin' },
+      { name: 'team-flow', source: 'user' },
     ]);
     const config = {
       pieceCategories: [
-        { name: 'Cat', pieces: ['a', 'missing', 'c'], children: [] },
+        {
+          name: 'Main',
+          pieces: ['custom'],
+          children: [{ name: 'Child', pieces: ['nested'], children: [] }],
+        },
+        { name: 'My Team', pieces: ['team-flow'], children: [] },
+      ],
+      builtinPieceCategories: [
+        {
+          name: 'Main',
+          pieces: ['default'],
+          children: [{ name: 'Child', pieces: ['nested'], children: [] }],
+        },
+      ],
+      userPieceCategories: [
+        { name: 'My Team', pieces: ['missing-user-piece'], children: [] },
       ],
       showOthersCategory: true,
       othersCategoryName: 'Others',
@@ -176,28 +280,17 @@ describe('buildCategorizedPieces', () => {
 
     const categorized = buildCategorizedPieces(allPieces, config);
     expect(categorized.categories).toEqual([
-      { name: 'Cat', pieces: ['a', 'c'], children: [] },
-      { name: 'Others', pieces: ['b'], children: [] },
+      {
+        name: 'Main',
+        pieces: ['custom'],
+        children: [{ name: 'Child', pieces: ['nested'], children: [] }],
+      },
+      { name: 'My Team', pieces: ['team-flow'], children: [] },
     ]);
     expect(categorized.missingPieces).toEqual([
-      { categoryPath: ['Cat'], pieceName: 'missing' },
+      { categoryPath: ['Main'], pieceName: 'default', source: 'builtin' },
+      { categoryPath: ['My Team'], pieceName: 'missing-user-piece', source: 'user' },
     ]);
-  });
-
-  it('should skip empty categories', () => {
-    const allPieces = createPieceMap([
-      { name: 'a', source: 'user' },
-    ]);
-    const config = {
-      pieceCategories: [
-        { name: 'Empty', pieces: [], children: [] },
-      ],
-      showOthersCategory: false,
-      othersCategoryName: 'Others',
-    };
-
-    const categorized = buildCategorizedPieces(allPieces, config);
-    expect(categorized.categories).toEqual([]);
   });
 
   it('should append Others category for uncategorized pieces', () => {
@@ -209,6 +302,10 @@ describe('buildCategorizedPieces', () => {
       pieceCategories: [
         { name: 'Main', pieces: ['default'], children: [] },
       ],
+      builtinPieceCategories: [
+        { name: 'Main', pieces: ['default'], children: [] },
+      ],
+      userPieceCategories: [],
       showOthersCategory: true,
       othersCategoryName: 'Others',
     };
@@ -217,28 +314,6 @@ describe('buildCategorizedPieces', () => {
     expect(categorized.categories).toEqual([
       { name: 'Main', pieces: ['default'], children: [] },
       { name: 'Others', pieces: ['extra'], children: [] },
-    ]);
-  });
-
-  it('should merge uncategorized pieces into existing Others category', () => {
-    const allPieces = createPieceMap([
-      { name: 'default', source: 'builtin' },
-      { name: 'extra', source: 'builtin' },
-      { name: 'user-piece', source: 'user' },
-    ]);
-    const config = {
-      pieceCategories: [
-        { name: 'Main', pieces: ['default'], children: [] },
-        { name: 'Others', pieces: ['extra'], children: [] },
-      ],
-      showOthersCategory: true,
-      othersCategoryName: 'Others',
-    };
-
-    const categorized = buildCategorizedPieces(allPieces, config);
-    expect(categorized.categories).toEqual([
-      { name: 'Main', pieces: ['default'], children: [] },
-      { name: 'Others', pieces: ['extra', 'user-piece'], children: [] },
     ]);
   });
 
@@ -251,6 +326,10 @@ describe('buildCategorizedPieces', () => {
       pieceCategories: [
         { name: 'Main', pieces: ['default'], children: [] },
       ],
+      builtinPieceCategories: [
+        { name: 'Main', pieces: ['default'], children: [] },
+      ],
+      userPieceCategories: [],
       showOthersCategory: false,
       othersCategoryName: 'Others',
     };
@@ -284,27 +363,5 @@ describe('buildCategorizedPieces', () => {
 
     const paths = findPieceCategories('nested', categories);
     expect(paths).toEqual(['Parent / Child']);
-  });
-});
-
-describe('ensureUserCategoriesFile (integration)', () => {
-  let testDir: string;
-
-  beforeEach(() => {
-    testDir = join(tmpdir(), `takt-cat-ensure-${randomUUID()}`);
-    mkdirSync(testDir, { recursive: true });
-  });
-
-  afterEach(() => {
-    rmSync(testDir, { recursive: true, force: true });
-  });
-
-  it('should copy default categories to user path when missing', async () => {
-    // Use real ensureUserCategoriesFile (not mocked)
-    const { ensureUserCategoriesFile } = await import('../infra/config/global/pieceCategories.js');
-
-    // This test depends on the mock still being active — just verify the mock returns our path
-    const result = ensureUserCategoriesFile('/tmp/default.yaml');
-    expect(typeof result).toBe('string');
   });
 });

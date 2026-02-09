@@ -10,7 +10,10 @@ piece_categories:
     pieces:
       - review-fix-minimal
       - review-only
+  🧪 Testing:
+    pieces:
       - unit-test
+      - e2e-test
   🎨 Frontend: {}
   ⚙️ Backend: {}
   🔧 Expert:

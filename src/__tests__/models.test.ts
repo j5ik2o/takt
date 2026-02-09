@@ -33,6 +33,7 @@ describe('StatusSchema', () => {
     expect(StatusSchema.parse('approved')).toBe('approved');
     expect(StatusSchema.parse('rejected')).toBe('rejected');
     expect(StatusSchema.parse('blocked')).toBe('blocked');
+    expect(StatusSchema.parse('error')).toBe('error');
     expect(StatusSchema.parse('answer')).toBe('answer');
   });
 

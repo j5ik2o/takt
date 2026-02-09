@@ -15,7 +15,7 @@ import { getProjectFacetDir, getGlobalFacetDir, getBuiltinFacetDir } from '../pa
 
 /** Context for 3-layer facet resolution. */
 export interface FacetResolutionContext {
-  projectDir: string;
+  projectDir?: string;
   lang: Language;
 }
 
@@ -63,7 +63,7 @@ export function resolveFacetPath(
   context: FacetResolutionContext,
 ): string | undefined {
   const candidateDirs = [
-    getProjectFacetDir(context.projectDir, facetType),
+    ...(context.projectDir ? [getProjectFacetDir(context.projectDir, facetType)] : []),
     getGlobalFacetDir(facetType),
     getBuiltinFacetDir(context.lang, facetType),
   ];

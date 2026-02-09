@@ -48,6 +48,7 @@ export const StatusSchema = z.enum([
   'pending',
   'done',
   'blocked',
+  'error',
   'approved',
   'rejected',
   'improve',

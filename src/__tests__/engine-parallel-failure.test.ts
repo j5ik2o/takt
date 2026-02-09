@@ -4,7 +4,7 @@
  * Covers:
  * - One sub-movement fails while another succeeds → piece continues
  * - All sub-movements fail → piece aborts
- * - Failed sub-movement is recorded as blocked with error
+ * - Failed sub-movement is recorded as error with error message
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -141,10 +141,10 @@ describe('PieceEngine Integration: Parallel Movement Partial Failure', () => {
 
     expect(state.status).toBe('completed');
 
-    // arch-review should be recorded as blocked
+    // arch-review should be recorded as error
     const archReviewOutput = state.movementOutputs.get('arch-review');
     expect(archReviewOutput).toBeDefined();
-    expect(archReviewOutput!.status).toBe('blocked');
+    expect(archReviewOutput!.status).toBe('error');
     expect(archReviewOutput!.error).toContain('exit');
 
     // security-review should be recorded as done

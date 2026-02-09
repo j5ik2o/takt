@@ -508,4 +508,110 @@ describe('normalizePieceConfig with layer resolution', () => {
     expect(config.movements[0]!.knowledgeContents).toBeDefined();
     expect(config.movements[0]!.knowledgeContents![0]).toBe('# Domain Knowledge');
   });
+
+  it('should resolve instruction_template from section map before layer resolution', () => {
+    const raw = {
+      name: 'test-piece',
+      instructions: {
+        implement: 'Mapped instruction template',
+      },
+      movements: [
+        {
+          name: 'step1',
+          persona: 'coder',
+          instruction_template: 'implement',
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const context: FacetResolutionContext = { projectDir, lang: 'ja' };
+    const config = normalizePieceConfig(raw, pieceDir, context);
+
+    expect(config.movements[0]!.instructionTemplate).toBe('Mapped instruction template');
+  });
+
+  it('should resolve instruction_template by name via layer resolution', () => {
+    const instructionsDir = join(projectDir, '.takt', 'instructions');
+    mkdirSync(instructionsDir, { recursive: true });
+    writeFileSync(join(instructionsDir, 'implement.md'), 'Project implement template');
+
+    const raw = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'step1',
+          persona: 'coder',
+          instruction_template: 'implement',
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const context: FacetResolutionContext = { projectDir, lang: 'ja' };
+    const config = normalizePieceConfig(raw, pieceDir, context);
+
+    expect(config.movements[0]!.instructionTemplate).toBe('Project implement template');
+  });
+
+  it('should keep inline instruction_template when no facet is found', () => {
+    const inlineTemplate = `Use this inline template.
+Second line remains inline.`;
+    const raw = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'step1',
+          persona: 'coder',
+          instruction_template: inlineTemplate,
+          instruction: '{task}',
+        },
+      ],
+    };
+
+    const context: FacetResolutionContext = { projectDir, lang: 'ja' };
+    const config = normalizePieceConfig(raw, pieceDir, context);
+
+    expect(config.movements[0]!.instructionTemplate).toBe(inlineTemplate);
+  });
+
+  it('should resolve loop monitor judge instruction_template via layer resolution', () => {
+    const instructionsDir = join(projectDir, '.takt', 'instructions');
+    mkdirSync(instructionsDir, { recursive: true });
+    writeFileSync(join(instructionsDir, 'judge-template.md'), 'Project judge template');
+
+    const raw = {
+      name: 'test-piece',
+      movements: [
+        {
+          name: 'step1',
+          persona: 'coder',
+          instruction: '{task}',
+          rules: [{ condition: 'next', next: 'step2' }],
+        },
+        {
+          name: 'step2',
+          persona: 'coder',
+          instruction: '{task}',
+          rules: [{ condition: 'done', next: 'COMPLETE' }],
+        },
+      ],
+      loop_monitors: [
+        {
+          cycle: ['step1', 'step2'],
+          threshold: 2,
+          judge: {
+            persona: 'coder',
+            instruction_template: 'judge-template',
+            rules: [{ condition: 'continue', next: 'step2' }],
+          },
+        },
+      ],
+    };
+
+    const context: FacetResolutionContext = { projectDir, lang: 'ja' };
+    const config = normalizePieceConfig(raw, pieceDir, context);
+
+    expect(config.loopMonitors?.[0]?.judge.instructionTemplate).toBe('Project judge template');
+  });
 });

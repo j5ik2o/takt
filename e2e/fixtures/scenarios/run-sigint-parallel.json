@@ -1,0 +1,32 @@
+[
+  {
+    "persona": "summarizer",
+    "status": "done",
+    "content": "sigint-a"
+  },
+  {
+    "persona": "summarizer",
+    "status": "done",
+    "content": "sigint-b"
+  },
+  {
+    "persona": "summarizer",
+    "status": "done",
+    "content": "sigint-c"
+  },
+  {
+    "persona": "test-coder",
+    "status": "done",
+    "content": "[EXECUTE:1]\n\nDone"
+  },
+  {
+    "persona": "test-coder",
+    "status": "done",
+    "content": "[EXECUTE:1]\n\nDone"
+  },
+  {
+    "persona": "test-coder",
+    "status": "done",
+    "content": "[EXECUTE:1]\n\nDone"
+  }
+]

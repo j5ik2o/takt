@@ -12,7 +12,7 @@ export interface MockCallOptions {
   /** Fixed response content (optional, defaults to generic mock response) */
   mockResponse?: string;
   /** Fixed status to return (optional, defaults to 'done') */
-  mockStatus?: 'done' | 'blocked' | 'approved' | 'rejected' | 'improve';
+  mockStatus?: 'done' | 'blocked' | 'error' | 'approved' | 'rejected' | 'improve';
 }
 
 /** A single entry in a mock scenario */
@@ -20,7 +20,7 @@ export interface ScenarioEntry {
   /** Persona name to match (optional — if omitted, consumed by call order) */
   persona?: string;
   /** Response status */
-  status: 'done' | 'blocked' | 'approved' | 'rejected' | 'improve';
+  status: 'done' | 'blocked' | 'error' | 'approved' | 'rejected' | 'improve';
   /** Response content body */
   content: string;
 }

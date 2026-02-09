@@ -131,7 +131,7 @@ export class ParallelRunner {
       }),
     );
 
-    // Map settled results: fulfilled → as-is, rejected → blocked AgentResponse
+    // Map settled results: fulfilled → as-is, rejected → error AgentResponse
     const subResults = settled.map((result, index) => {
       if (result.status === 'fulfilled') {
         return result.value;
@@ -139,15 +139,15 @@ export class ParallelRunner {
       const failedMovement = subMovements[index]!;
       const errorMsg = getErrorMessage(result.reason);
       log.error('Sub-movement failed', { movement: failedMovement.name, error: errorMsg });
-      const blockedResponse: AgentResponse = {
+      const errorResponse: AgentResponse = {
         persona: failedMovement.name,
-        status: 'blocked',
+        status: 'error',
         content: '',
         timestamp: new Date(),
         error: errorMsg,
       };
-      state.movementOutputs.set(failedMovement.name, blockedResponse);
-      return { subMovement: failedMovement, response: blockedResponse, instruction: '' };
+      state.movementOutputs.set(failedMovement.name, errorResponse);
+      return { subMovement: failedMovement, response: errorResponse, instruction: '' };
     });
 
     // If all sub-movements failed (error-originated), throw

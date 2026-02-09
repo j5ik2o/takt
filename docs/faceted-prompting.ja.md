@@ -327,52 +327,33 @@ Faceted Promptingの中核メカニズムは**宣言的な合成**である。�
 
 ### TAKTでの実装例
 
-[TAKT](https://github.com/nrslib/takt) はFaceted PromptingをYAMLベースのワークフロー定義（「ピース」と呼ぶ）で実装している。各関心はセクションマップで短いキーにマッピングされ、各ステップ（TAKTでは「ムーブメント」と呼ぶ）からキーで参照される。
+[TAKT](https://github.com/nrslib/takt) はFaceted PromptingをYAMLベースのワークフロー定義（「ピース」と呼ぶ）で実装している。builtinの各ファセットは、各ステップ（TAKTでは「ムーブメント」と呼ぶ）から bare name で直接参照できる。セクションマップは「名前とファイル名が異なる」場合のカスタムエイリアス用途でのみ任意で使う。
 
 ```yaml
 name: my-workflow
 max_iterations: 10
 initial_movement: plan
 
-# セクションマップ — キー: ファイルパス（このYAMLからの相対パス）
-personas:
-  coder: ../personas/coder.md
-  reviewer: ../personas/architecture-reviewer.md
-
-policies:
-  coding: ../policies/coding.md
-  review: ../policies/review.md
-
-instructions:
-  plan: ../instructions/plan.md
-  implement: ../instructions/implement.md
-
-knowledge:
-  architecture: ../knowledge/architecture.md
-
-report_formats:
-  review: ../output-contracts/review.md
-
 movements:
   - name: implement
-    persona: coder            # WHO — personas.coder を参照
-    policy: coding            # RULES — policies.coding を参照
-    instruction: implement    # WHAT — instructions.implement を参照
-    knowledge: architecture   # CONTEXT — knowledge.architecture を参照
+    persona: coder            # WHO — builtins/{lang}/personas/coder.md
+    policy: coding            # RULES — builtins/{lang}/policies/coding.md
+    instruction: implement    # WHAT — builtins/{lang}/instructions/implement.md
+    knowledge: architecture   # CONTEXT — builtins/{lang}/knowledge/architecture.md
     edit: true
     rules:
       - condition: Implementation complete
         next: review
 
   - name: review
-    persona: reviewer         # 異なる WHO
+    persona: architecture-reviewer   # 異なる WHO
     policy: review            # 異なる RULES
     instruction: review       # 異なる WHAT（共有も可能）
     knowledge: architecture   # 同じ CONTEXT — 再利用
     output_contracts:
       report:
         - name: review.md
-          format: review      # OUTPUT — report_formats.review を参照
+          format: architecture-review # OUTPUT — builtins/{lang}/output-contracts/architecture-review.md
     edit: false
     rules:
       - condition: Approved

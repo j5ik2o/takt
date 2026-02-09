@@ -18,6 +18,12 @@ export interface ResolvedTaskExecution {
   issueNumber?: number;
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new Error('Task execution aborted');
+  }
+}
+
 /**
  * Resolve execution directory and piece from task data.
  * If the task has worktree settings, create a shared clone and use it as cwd.
@@ -27,9 +33,11 @@ export async function resolveTaskExecution(
   task: TaskInfo,
   defaultCwd: string,
   defaultPiece: string,
+  abortSignal?: AbortSignal,
 ): Promise<ResolvedTaskExecution> {
-  const data = task.data;
+  throwIfAborted(abortSignal);
 
+  const data = task.data;
   if (!data) {
     return { execCwd: defaultCwd, execPiece: defaultPiece, isWorktree: false };
   }
@@ -40,10 +48,12 @@ export async function resolveTaskExecution(
   let baseBranch: string | undefined;
 
   if (data.worktree) {
+    throwIfAborted(abortSignal);
     baseBranch = getCurrentBranch(defaultCwd);
     info('Generating branch name...');
     const taskSlug = await summarizeTaskName(task.content, { cwd: defaultCwd });
 
+    throwIfAborted(abortSignal);
     info('Creating clone...');
     const result = createSharedClone(defaultCwd, {
       worktree: data.worktree,
@@ -51,6 +61,7 @@ export async function resolveTaskExecution(
       taskSlug,
       issueNumber: data.issue,
     });
+    throwIfAborted(abortSignal);
     execCwd = result.path;
     branch = result.branch;
     isWorktree = true;

@@ -10,6 +10,7 @@ export default defineConfig({
       'e2e/specs/watch.e2e.ts',
       'e2e/specs/list-non-interactive.e2e.ts',
       'e2e/specs/multi-step-parallel.e2e.ts',
+      'e2e/specs/run-sigint-graceful.e2e.ts',
     ],
     environment: 'node',
     globals: false,

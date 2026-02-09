@@ -36,10 +36,10 @@ function toCodexOptions(options: ProviderCallOptions): CodexCallOptions {
   };
 }
 
-function blockedResponse(agentName: string): AgentResponse {
+function errorResponse(agentName: string): AgentResponse {
   return {
     persona: agentName,
-    status: 'blocked',
+    status: 'error',
     content: NOT_GIT_REPO_MESSAGE,
     timestamp: new Date(),
   };
@@ -59,7 +59,7 @@ export class CodexProvider implements Provider {
     if (systemPrompt) {
       return {
         call: async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
-          if (!isInsideGitRepo(options.cwd)) return blockedResponse(name);
+          if (!isInsideGitRepo(options.cwd)) return errorResponse(name);
           return callCodexCustom(name, prompt, systemPrompt, toCodexOptions(options));
         },
       };
@@ -67,7 +67,7 @@ export class CodexProvider implements Provider {
 
     return {
       call: async (prompt: string, options: ProviderCallOptions): Promise<AgentResponse> => {
-        if (!isInsideGitRepo(options.cwd)) return blockedResponse(name);
+        if (!isInsideGitRepo(options.cwd)) return errorResponse(name);
         return callCodex(name, prompt, toCodexOptions(options));
       },
     };

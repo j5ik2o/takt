@@ -142,7 +142,7 @@ describe('runWithWorkerPool', () => {
     });
   });
 
-  it('should not pass taskPrefix or abortSignal for sequential execution (concurrency = 1)', async () => {
+  it('should pass abortSignal but not taskPrefix for sequential execution (concurrency = 1)', async () => {
     // Given
     const tasks = [createTask('seq-task')];
     const runner = createMockTaskRunner([]);
@@ -154,7 +154,7 @@ describe('runWithWorkerPool', () => {
     expect(mockExecuteAndCompleteTask).toHaveBeenCalledTimes(1);
     const parallelOpts = mockExecuteAndCompleteTask.mock.calls[0]?.[5];
     expect(parallelOpts).toEqual({
-      abortSignal: undefined,
+      abortSignal: expect.any(AbortSignal),
       taskPrefix: undefined,
       taskColorIndex: undefined,
     });
@@ -248,6 +248,51 @@ describe('runWithWorkerPool', () => {
 
     // Then: Treated as failure
     expect(result).toEqual({ success: 0, fail: 1 });
+  });
+
+  it('should wait for in-flight tasks to settle after SIGINT before returning', async () => {
+    // Given: Two running tasks that resolve after abort is triggered.
+    const tasks = [createTask('t1'), createTask('t2')];
+    const runner = createMockTaskRunner([]);
+    const deferred: Array<() => void> = [];
+    const startedSignals: AbortSignal[] = [];
+
+    mockExecuteAndCompleteTask.mockImplementation((_task, _runner, _cwd, _piece, _opts, parallelOpts) => {
+      const signal = parallelOpts?.abortSignal;
+      if (signal) startedSignals.push(signal);
+      return new Promise<boolean>((resolve) => {
+        if (signal) {
+          signal.addEventListener('abort', () => deferred.push(() => resolve(false)), { once: true });
+        } else {
+          deferred.push(() => resolve(true));
+        }
+      });
+    });
+
+    const resultPromise = runWithWorkerPool(
+      runner as never, tasks, 2, '/cwd', 'default', undefined, TEST_POLL_INTERVAL_MS,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const sigintListeners = process.rawListeners('SIGINT') as ((...args: unknown[]) => void)[];
+    const handler = sigintListeners[sigintListeners.length - 1];
+    expect(handler).toBeDefined();
+    handler!();
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(startedSignals).toHaveLength(2);
+    for (const signal of startedSignals) {
+      expect(signal.aborted).toBe(true);
+    }
+
+    for (const resolveTask of deferred) {
+      resolveTask();
+    }
+
+    // Then: pool returns after in-flight tasks settle, counting them as failures.
+    const result = await resultPromise;
+    expect(result).toEqual({ success: 0, fail: 2 });
   });
 
   describe('polling', () => {

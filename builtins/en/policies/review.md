@@ -98,6 +98,36 @@ To prevent circular rejections, track findings by ID.
 - Issues without `finding_id` are invalid (cannot be used as rejection grounds)
 - REJECT is allowed only when there is at least one `new` or `persists` issue
 
+## Reopen Conditions (`resolved` -> open)
+
+Reopening a resolved finding requires reproducible evidence.
+
+- To reopen a previously `resolved` finding, all of the following are required  
+  1. Reproduction steps (command/input)  
+  2. Expected result vs. actual result  
+  3. Failing file/line evidence
+- If any of the three is missing, the reopen attempt is invalid (cannot be used as REJECT grounds)
+- If reproduction conditions changed, treat it as a different problem and issue a new `finding_id`
+
+## Immutable Meaning of `finding_id`
+
+Do not mix different problems under the same ID.
+
+- A `finding_id` must refer to one and only one problem
+- If problem meaning, evidence files, or reproduction conditions change, issue a new `finding_id`
+- Rewriting an existing `finding_id` to represent a different problem is prohibited
+
+## Handling Test File Size and Duplication
+
+Test file length and duplication are warning-level maintainability concerns by default.
+
+- Excessive test file length and duplicated test setup are `Warning` by default
+- They may be `REJECT` only when reproducible harm is shown  
+  - flaky behavior  
+  - false positives/false negatives  
+  - inability to detect regressions
+- "Too long" or "duplicated" alone is not sufficient for `REJECT`
+
 ## Boy Scout Rule
 
 Leave it better than you found it.

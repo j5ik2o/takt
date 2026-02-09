@@ -7,8 +7,14 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
 import { createLogger } from '../../shared/utils/index.js';
+import {
+  createBranchBaseResolutionCache,
+  findFirstTaktCommit,
+  resolveBranchBaseCommit,
+  resolveGitCwd,
+  type BranchBaseResolutionCache,
+} from './branchGitResolver.js';
 
 import type { BranchInfo, BranchListItem } from './types.js';
 
@@ -31,19 +37,22 @@ export class BranchManager {
       ).trim();
       const prefix = 'refs/remotes/origin/';
       return ref.startsWith(prefix) ? ref.slice(prefix.length) : ref;
-    } catch {
+    } catch (error) {
+      log.debug('detectDefaultBranch symbolic-ref failed', { error: String(error), cwd });
       try {
         execFileSync('git', ['rev-parse', '--verify', 'main'], {
           cwd, encoding: 'utf-8', stdio: 'pipe',
         });
         return 'main';
-      } catch {
+      } catch (mainError) {
+        log.debug('detectDefaultBranch main lookup failed', { error: String(mainError), cwd });
         try {
           execFileSync('git', ['rev-parse', '--verify', 'master'], {
             cwd, encoding: 'utf-8', stdio: 'pipe',
           });
           return 'master';
-        } catch {
+        } catch (masterError) {
+          log.debug('detectDefaultBranch master lookup failed', { error: String(masterError), cwd });
           return 'main';
         }
       }
@@ -110,16 +119,35 @@ export class BranchManager {
     return entries;
   }
 
-  /** Get the number of files changed between the default branch and a given branch */
-  getFilesChanged(cwd: string, defaultBranch: string, branch: string, worktreePath?: string): number {
+  /** Get the number of files changed between a branch and its inferred base commit */
+  getFilesChanged(
+    cwd: string,
+    defaultBranch: string,
+    branch: string,
+    worktreePath?: string,
+    baseCommit?: string | null,
+    cache?: BranchBaseResolutionCache,
+  ): number {
     try {
-      // If worktreePath is provided, use it for git diff (for worktree-sessions branches)
-      const gitCwd = worktreePath && existsSync(worktreePath) ? worktreePath : cwd;
+      const gitCwd = resolveGitCwd(cwd, worktreePath);
+      let resolvedBaseCommit: string;
+      if (baseCommit === null) {
+        throw new Error(`Failed to resolve base commit for branch: ${branch}`);
+      }
+      if (baseCommit) {
+        resolvedBaseCommit = baseCommit;
+      } else {
+        resolvedBaseCommit = resolveBranchBaseCommit(gitCwd, defaultBranch, branch, cache);
+      }
 
-      log.debug('getFilesChanged', { gitCwd, defaultBranch, branch, worktreePath });
+      if (!resolvedBaseCommit) {
+        throw new Error(`Failed to resolve base commit for branch: ${branch}`);
+      }
+
+      log.debug('getFilesChanged', { gitCwd, baseCommit: resolvedBaseCommit, branch, worktreePath });
 
       const output = execFileSync(
-        'git', ['diff', '--numstat', `${defaultBranch}...${branch}`],
+        'git', ['diff', '--numstat', `${resolvedBaseCommit}..${branch}`],
         { cwd: gitCwd, encoding: 'utf-8', stdio: 'pipe' },
       );
 
@@ -148,12 +176,40 @@ export class BranchManager {
     cwd: string,
     defaultBranch: string,
     branch: string,
+    baseCommit?: string | null,
+    cache?: BranchBaseResolutionCache,
+    worktreePath?: string,
   ): string {
     try {
+      if (baseCommit === null) {
+        throw new Error(`Failed to resolve base commit for branch: ${branch}`);
+      }
+
+      const gitCwd = resolveGitCwd(cwd, worktreePath);
+      const resolvedBaseCommitOption = baseCommit ? baseCommit : undefined;
+      const firstTaktCommit = findFirstTaktCommit(gitCwd, defaultBranch, branch, {
+        baseCommit: resolvedBaseCommitOption,
+        cache,
+      });
+      if (firstTaktCommit) {
+        const TAKT_COMMIT_PREFIX = 'takt:';
+        if (firstTaktCommit.subject.startsWith(TAKT_COMMIT_PREFIX)) {
+          return firstTaktCommit.subject.slice(TAKT_COMMIT_PREFIX.length).trim();
+        }
+        return firstTaktCommit.subject;
+      }
+
+      const resolvedBaseCommit = baseCommit
+        ? baseCommit
+        : resolveBranchBaseCommit(gitCwd, defaultBranch, branch, cache);
+      if (!resolvedBaseCommit) {
+        throw new Error(`Failed to resolve base commit for branch: ${branch}`);
+      }
+
       const output = execFileSync(
         'git',
-        ['log', '--format=%s', '--reverse', `${defaultBranch}..${branch}`],
-        { cwd, encoding: 'utf-8', stdio: 'pipe' },
+        ['log', '--format=%s', '--reverse', `${resolvedBaseCommit}..${branch}`],
+        { cwd: gitCwd, encoding: 'utf-8', stdio: 'pipe' },
       ).trim();
 
       if (!output) return '';
@@ -165,7 +221,8 @@ export class BranchManager {
       }
 
       return firstLine;
-    } catch {
+    } catch (error) {
+      log.debug('getOriginalInstruction failed', { error: String(error), cwd, defaultBranch, branch });
       return '';
     }
   }
@@ -176,12 +233,32 @@ export class BranchManager {
     branches: BranchInfo[],
     defaultBranch: string,
   ): BranchListItem[] {
-    return branches.map(br => ({
-      info: br,
-      filesChanged: this.getFilesChanged(projectDir, defaultBranch, br.branch, br.worktreePath),
-      taskSlug: BranchManager.extractTaskSlug(br.branch),
-      originalInstruction: this.getOriginalInstruction(projectDir, defaultBranch, br.branch),
-    }));
+    const cache = createBranchBaseResolutionCache();
+
+    return branches.map(br => {
+      const gitCwd = resolveGitCwd(projectDir, br.worktreePath);
+      let baseCommit: string | null = null;
+
+      try {
+        baseCommit = resolveBranchBaseCommit(gitCwd, defaultBranch, br.branch, cache);
+      } catch (error) {
+        log.debug('buildListItems base commit resolution failed', { error: String(error), branch: br.branch, gitCwd });
+      }
+
+      return {
+        info: br,
+        filesChanged: this.getFilesChanged(projectDir, defaultBranch, br.branch, br.worktreePath, baseCommit, cache),
+        taskSlug: BranchManager.extractTaskSlug(br.branch),
+        originalInstruction: this.getOriginalInstruction(
+          projectDir,
+          defaultBranch,
+          br.branch,
+          baseCommit,
+          cache,
+          br.worktreePath,
+        ),
+      };
+    });
   }
 }
 

@@ -327,52 +327,33 @@ Key properties:
 
 ### Implementation Example: TAKT
 
-[TAKT](https://github.com/nrslib/takt) implements Faceted Prompting using YAML-based workflow definitions called "pieces." Concerns are mapped to short keys via section maps, then referenced by key in each step (called "movement" in TAKT):
+[TAKT](https://github.com/nrslib/takt) implements Faceted Prompting using YAML-based workflow definitions called "pieces." Builtin facets can be referenced directly by bare name in each step (called "movement" in TAKT). Section maps are optional and only needed for custom aliases (name differs from file name):
 
 ```yaml
 name: my-workflow
 max_iterations: 10
 initial_movement: plan
 
-# Section maps — key: file path (relative to this YAML)
-personas:
-  coder: ../personas/coder.md
-  reviewer: ../personas/architecture-reviewer.md
-
-policies:
-  coding: ../policies/coding.md
-  review: ../policies/review.md
-
-instructions:
-  plan: ../instructions/plan.md
-  implement: ../instructions/implement.md
-
-knowledge:
-  architecture: ../knowledge/architecture.md
-
-output_contracts:
-  review: ../output-contracts/review.md
-
 movements:
   - name: implement
-    persona: coder            # WHO — references personas.coder
-    policy: coding            # RULES — references policies.coding
-    instruction: implement    # WHAT — references instructions.implement
-    knowledge: architecture   # CONTEXT — references knowledge.architecture
+    persona: coder            # WHO — builtins/{lang}/personas/coder.md
+    policy: coding            # RULES — builtins/{lang}/policies/coding.md
+    instruction: implement    # WHAT — builtins/{lang}/instructions/implement.md
+    knowledge: architecture   # CONTEXT — builtins/{lang}/knowledge/architecture.md
     edit: true
     rules:
       - condition: Implementation complete
         next: review
 
   - name: review
-    persona: reviewer         # Different WHO
+    persona: architecture-reviewer   # Different WHO
     policy: review            # Different RULES
     instruction: review       # Different WHAT (but could share)
     knowledge: architecture   # Same CONTEXT — reused
     output_contracts:
       report:
         - name: review.md
-          format: review      # OUTPUT — references report_formats.review
+          format: architecture-review # OUTPUT — builtins/{lang}/output-contracts/architecture-review.md
     edit: false
     rules:
       - condition: Approved
