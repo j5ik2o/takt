@@ -29,7 +29,7 @@ export class ClaudeClient {
       if (result.interrupted) {
         return 'interrupted';
       }
-      return 'blocked';
+      return 'error';
     }
     return 'done';
   }
@@ -146,7 +146,7 @@ export class ClaudeClient {
 
     return {
       persona: `skill:${skillName}`,
-      status: result.success ? 'done' : 'blocked',
+      status: result.success ? 'done' : 'error',
       content: result.content,
       timestamp: new Date(),
       sessionId: result.sessionId,

@@ -141,4 +141,28 @@ describe('PieceEngine Integration: Blocked Handling', () => {
     expect(userInputFn).toHaveBeenCalledOnce();
     expect(state.userInputs).toContain('User provided clarification');
   });
+
+  it('should abort immediately when movement returns error status', async () => {
+    const config = buildDefaultPieceConfig();
+    const onUserInput = vi.fn().mockResolvedValueOnce('should not be called');
+    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir, onUserInput });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', status: 'error', content: 'Transport error', error: 'Transport error' }),
+    ]);
+
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    const abortFn = vi.fn();
+    engine.on('piece:abort', abortFn);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(onUserInput).not.toHaveBeenCalled();
+    expect(abortFn).toHaveBeenCalledWith(expect.anything(), expect.stringContaining('Transport error'));
+  });
+
 });

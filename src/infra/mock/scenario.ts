@@ -130,7 +130,7 @@ function validateEntry(entry: unknown, index: number): ScenarioEntry {
   }
 
   // status defaults to 'done'
-  const validStatuses = ['done', 'blocked', 'approved', 'rejected', 'improve'] as const;
+  const validStatuses = ['done', 'blocked', 'error', 'approved', 'rejected', 'improve'] as const;
   const status = obj.status ?? 'done';
   if (typeof status !== 'string' || !validStatuses.includes(status as typeof validStatuses[number])) {
     throw new Error(

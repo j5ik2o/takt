@@ -522,6 +522,13 @@ export class PieceEngine extends EventEmitter {
           break;
         }
 
+        if (response.status === 'error') {
+          const detail = response.error ?? response.content ?? `Movement "${movement.name}" returned error status`;
+          this.state.status = 'aborted';
+          this.emit('piece:abort', this.state, `Movement "${movement.name}" failed: ${detail}`);
+          break;
+        }
+
         let nextMovement = this.resolveNextMovement(movement, response);
         log.debug('Movement transition', {
           from: movement.name,

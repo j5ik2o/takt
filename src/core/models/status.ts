@@ -10,6 +10,7 @@ export type Status =
   | 'pending'
   | 'done'
   | 'blocked'
+  | 'error'
   | 'approved'
   | 'rejected'
   | 'improve'

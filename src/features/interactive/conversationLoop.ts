@@ -109,7 +109,7 @@ export async function callAIWithRetry(
       onStream: display.createHandler(),
     });
     display.flush();
-    const success = response.status !== 'blocked';
+    const success = response.status !== 'blocked' && response.status !== 'error';
 
     if (!success && sessionId) {
       log.info('Session invalid, retrying without session');
@@ -129,7 +129,7 @@ export async function callAIWithRetry(
         updatePersonaSession(cwd, ctx.personaName, sessionId, ctx.providerType);
       }
       return {
-        result: { content: retry.content, sessionId: retry.sessionId, success: retry.status !== 'blocked' },
+        result: { content: retry.content, sessionId: retry.sessionId, success: retry.status !== 'blocked' && retry.status !== 'error' },
         sessionId,
       };
     }
