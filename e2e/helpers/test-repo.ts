@@ -11,6 +11,11 @@ export interface TestRepo {
   cleanup: () => void;
 }
 
+export interface CreateTestRepoOptions {
+  /** Skip creating a test branch (stay on default branch). Use for pipeline tests. */
+  skipBranch?: boolean;
+}
+
 function getGitHubUser(): string {
   const user = execFileSync('gh', ['api', 'user', '--jq', '.login'], {
     encoding: 'utf-8',
@@ -33,7 +38,7 @@ function getGitHubUser(): string {
  *   2. Close any PRs created during the test
  *   3. Delete local directory
  */
-export function createTestRepo(): TestRepo {
+export function createTestRepo(options?: CreateTestRepoOptions): TestRepo {
   const user = getGitHubUser();
   const repoName = `${user}/takt-testing`;
 
@@ -56,49 +61,80 @@ export function createTestRepo(): TestRepo {
     stdio: 'pipe',
   });
 
-  // Create test branch
-  const testBranch = `e2e-test-${Date.now()}`;
-  execFileSync('git', ['checkout', '-b', testBranch], {
-    cwd: repoPath,
-    stdio: 'pipe',
-  });
+  // Create test branch (unless skipped for pipeline tests)
+  const testBranch = options?.skipBranch
+    ? undefined
+    : `e2e-test-${Date.now()}`;
+  if (testBranch) {
+    execFileSync('git', ['checkout', '-b', testBranch], {
+      cwd: repoPath,
+      stdio: 'pipe',
+    });
+  }
+
+  const currentBranch = testBranch
+    ?? execFileSync('git', ['branch', '--show-current'], {
+      cwd: repoPath,
+      encoding: 'utf-8',
+    }).trim();
 
   return {
     path: repoPath,
     repoName,
-    branch: testBranch,
+    branch: currentBranch,
     cleanup: () => {
-      // 1. Delete remote branch (best-effort)
-      try {
-        execFileSync(
-          'git',
-          ['push', 'origin', '--delete', testBranch],
-          { cwd: repoPath, stdio: 'pipe' },
-        );
-      } catch {
-        // Branch may not have been pushed; ignore
-      }
-
-      // 2. Close any PRs from this branch (best-effort)
-      try {
-        const prList = execFileSync(
-          'gh',
-          ['pr', 'list', '--head', testBranch, '--repo', repoName, '--json', 'number', '--jq', '.[].number'],
-          { encoding: 'utf-8', stdio: 'pipe' },
-        ).trim();
-
-        for (const prNumber of prList.split('\n').filter(Boolean)) {
+      if (testBranch) {
+        // 1. Delete remote branch (best-effort)
+        try {
           execFileSync(
-            'gh',
-            ['pr', 'close', prNumber, '--repo', repoName, '--delete-branch'],
-            { stdio: 'pipe' },
+            'git',
+            ['push', 'origin', '--delete', testBranch],
+            { cwd: repoPath, stdio: 'pipe' },
           );
+        } catch {
+          // Branch may not have been pushed; ignore
         }
-      } catch {
-        // No PRs or already closed; ignore
+
+        // 2. Close any PRs from this branch (best-effort)
+        try {
+          const prList = execFileSync(
+            'gh',
+            ['pr', 'list', '--head', testBranch, '--repo', repoName, '--json', 'number', '--jq', '.[].number'],
+            { encoding: 'utf-8', stdio: 'pipe' },
+          ).trim();
+
+          for (const prNumber of prList.split('\n').filter(Boolean)) {
+            execFileSync(
+              'gh',
+              ['pr', 'close', prNumber, '--repo', repoName, '--delete-branch'],
+              { stdio: 'pipe' },
+            );
+          }
+        } catch {
+          // No PRs or already closed; ignore
+        }
+      } else {
+        // Pipeline mode: clean up takt-created PRs (best-effort)
+        try {
+          const prNumbers = execFileSync(
+            'gh',
+            ['pr', 'list', '--state', 'open', '--repo', repoName, '--json', 'number', '--jq', '.[].number'],
+            { encoding: 'utf-8', stdio: 'pipe' },
+          ).trim();
+
+          for (const prNumber of prNumbers.split('\n').filter(Boolean)) {
+            execFileSync(
+              'gh',
+              ['pr', 'close', prNumber, '--repo', repoName, '--delete-branch'],
+              { stdio: 'pipe' },
+            );
+          }
+        } catch {
+          // ignore
+        }
       }
 
-      // 3. Delete local directory last
+      // Delete local directory last
       try {
         rmSync(repoPath, { recursive: true, force: true });
       } catch {

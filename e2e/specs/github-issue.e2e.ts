@@ -17,7 +17,7 @@ describe('E2E: GitHub Issue processing', () => {
 
   beforeEach(() => {
     isolatedEnv = createIsolatedEnv();
-    testRepo = createTestRepo();
+    testRepo = createTestRepo({ skipBranch: true });
 
     // Create a test issue
     const createOutput = execFileSync(

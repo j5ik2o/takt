@@ -16,7 +16,7 @@ describe('E2E: Pipeline mode (--pipeline --auto-pr)', () => {
 
   beforeEach(() => {
     isolatedEnv = createIsolatedEnv();
-    testRepo = createTestRepo();
+    testRepo = createTestRepo({ skipBranch: true });
   });
 
   afterEach(() => {
