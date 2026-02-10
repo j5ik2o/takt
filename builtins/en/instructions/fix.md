@@ -1,5 +1,6 @@
 Address the reviewer's feedback.
-Review the session conversation history and fix the issues raised by the reviewer.
+Use reports in the Report Directory shown in the Piece Context and fix the issues raised by the reviewer.
+Use files in the Report Directory as primary evidence. If additional context is needed, you may consult Previous Response and conversation history as secondary sources (Previous Response may be unavailable). If information conflicts, prioritize reports in the Report Directory and actual file contents.
 
 **Required output (include headings)**
 ## Work results

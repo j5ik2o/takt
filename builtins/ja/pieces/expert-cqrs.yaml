@@ -26,6 +26,7 @@ movements:
   - name: implement
     edit: true
     persona: coder
+    pass_previous_response: false
     policy:
       - coding
       - testing
@@ -86,6 +87,7 @@ movements:
   - name: ai_fix
     edit: true
     persona: coder
+    pass_previous_response: false
     policy:
       - coding
       - testing
@@ -216,6 +218,7 @@ movements:
   - name: fix
     edit: true
     persona: coder
+    pass_previous_response: false
     policy:
       - coding
       - testing
@@ -264,6 +267,7 @@ movements:
   - name: fix_supervisor
     edit: true
     persona: coder
+    pass_previous_response: false
     policy:
       - coding
       - testing
