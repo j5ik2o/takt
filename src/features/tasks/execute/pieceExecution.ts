@@ -63,6 +63,7 @@ import { selectOption, promptInput } from '../../../shared/prompt/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import { installSigIntHandler } from './sigintHandler.js';
 import { buildRunPaths } from '../../../core/piece/run/run-paths.js';
+import { resolveMovementProviderModel } from '../../../core/piece/provider-resolution.js';
 import { writeFileAtomic, ensureDir } from '../../../infra/config/index.js';
 
 const log = createLogger('piece');
@@ -396,10 +397,11 @@ export async function executePiece(
   let onAbortSignal: (() => void) | undefined;
   let sigintCleanup: (() => void) | undefined;
   let onEpipe: ((err: NodeJS.ErrnoException) => void) | undefined;
+  const runAbortController = new AbortController();
 
   try {
     engine = new PieceEngine(pieceConfig, cwd, task, {
-      abortSignal: options.abortSignal,
+      abortSignal: runAbortController.signal,
       onStream: streamHandler,
       onUserInput,
       initialSessions: savedSessions,
@@ -482,6 +484,16 @@ export async function executePiece(
       movementIteration,
     });
     out.info(`[${iteration}/${pieceConfig.maxMovements}] ${step.name} (${step.personaDisplayName})`);
+    const resolved = resolveMovementProviderModel({
+      step,
+      provider: options.provider,
+      model: options.model,
+      personaProviders: options.personaProviders,
+    });
+    const movementProvider = resolved.provider ?? currentProvider;
+    const movementModel = resolved.model ?? globalConfig.model ?? '(default)';
+    out.info(`Provider: ${movementProvider}`);
+    out.info(`Model: ${movementModel}`);
 
     // Log prompt content for debugging
     if (instruction) {
@@ -686,6 +698,9 @@ export async function executePiece(
       if (!engine || !onEpipe) {
         throw new Error('Abort handler invoked before PieceEngine initialization');
       }
+      if (!runAbortController.signal.aborted) {
+        runAbortController.abort();
+      }
       process.on('uncaughtException', onEpipe);
       interruptAllQueries();
       engine.abort();
@@ -695,7 +710,11 @@ export async function executePiece(
     const useExternalAbort = Boolean(options.abortSignal);
     if (useExternalAbort) {
       onAbortSignal = abortEngine;
-      options.abortSignal!.addEventListener('abort', onAbortSignal, { once: true });
+      if (options.abortSignal!.aborted) {
+        abortEngine();
+      } else {
+        options.abortSignal!.addEventListener('abort', onAbortSignal, { once: true });
+      }
     } else {
       const handler = installSigIntHandler(abortEngine);
       sigintCleanup = handler.cleanup;

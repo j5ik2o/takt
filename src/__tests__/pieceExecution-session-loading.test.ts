@@ -18,9 +18,11 @@ const { MockPieceEngine, mockLoadPersonaSessions, mockLoadWorktreeSessions } = v
   class MockPieceEngine extends EE {
     static lastInstance: MockPieceEngine;
     readonly receivedOptions: Record<string, unknown>;
+    private readonly config: PieceConfig;
 
     constructor(config: PieceConfig, _cwd: string, _task: string, options: Record<string, unknown>) {
       super();
+      this.config = config;
       this.receivedOptions = options;
       MockPieceEngine.lastInstance = this;
     }
@@ -28,6 +30,10 @@ const { MockPieceEngine, mockLoadPersonaSessions, mockLoadWorktreeSessions } = v
     abort(): void {}
 
     async run(): Promise<{ status: string; iteration: number }> {
+      const firstStep = this.config.movements[0];
+      if (firstStep) {
+        this.emit('movement:start', firstStep, 1, firstStep.instructionTemplate);
+      }
       this.emit('piece:complete', { status: 'completed', iteration: 1 });
       return { status: 'completed', iteration: 1 };
     }
@@ -124,6 +130,7 @@ vi.mock('../shared/exitCodes.js', () => ({
 }));
 
 import { executePiece } from '../features/tasks/execute/pieceExecution.js';
+import { info } from '../shared/ui/index.js';
 
 function makeConfig(): PieceConfig {
   return {
@@ -217,5 +224,28 @@ describe('executePiece session loading', () => {
 
     // Then: sessions are loaded
     expect(mockLoadPersonaSessions).toHaveBeenCalledWith('/tmp/project', 'claude');
+  });
+
+  it('should log provider and model per movement with global defaults', async () => {
+    await executePiece(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+    });
+
+    const mockInfo = vi.mocked(info);
+    expect(mockInfo).toHaveBeenCalledWith('Provider: claude');
+    expect(mockInfo).toHaveBeenCalledWith('Model: (default)');
+  });
+
+  it('should log provider and model per movement with overrides', async () => {
+    await executePiece(makeConfig(), 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      provider: 'codex',
+      model: 'gpt-5',
+      personaProviders: { coder: 'opencode' },
+    });
+
+    const mockInfo = vi.mocked(info);
+    expect(mockInfo).toHaveBeenCalledWith('Provider: opencode');
+    expect(mockInfo).toHaveBeenCalledWith('Model: gpt-5');
   });
 });

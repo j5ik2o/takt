@@ -11,6 +11,7 @@ import type { RunAgentOptions } from '../../../agents/runner.js';
 import type { PhaseRunnerContext } from '../phase-runner.js';
 import type { PieceEngineOptions, PhaseName } from '../types.js';
 import { buildSessionKey } from '../session-key.js';
+import { resolveMovementProviderModel } from '../provider-resolution.js';
 
 export class OptionsBuilder {
   constructor(
@@ -30,13 +31,19 @@ export class OptionsBuilder {
     const movements = this.getPieceMovements();
     const currentIndex = movements.findIndex((m) => m.name === step.name);
     const currentPosition = currentIndex >= 0 ? `${currentIndex + 1}/${movements.length}` : '?/?';
+    const resolved = resolveMovementProviderModel({
+      step,
+      provider: this.engineOptions.provider,
+      model: this.engineOptions.model,
+      personaProviders: this.engineOptions.personaProviders,
+    });
 
     return {
       cwd: this.getCwd(),
       abortSignal: this.engineOptions.abortSignal,
       personaPath: step.personaPath,
-      provider: step.provider ?? this.engineOptions.personaProviders?.[step.personaDisplayName] ?? this.engineOptions.provider,
-      model: step.model ?? this.engineOptions.model,
+      provider: resolved.provider,
+      model: resolved.model,
       permissionMode: step.permissionMode,
       language: this.getLanguage(),
       onStream: this.engineOptions.onStream,

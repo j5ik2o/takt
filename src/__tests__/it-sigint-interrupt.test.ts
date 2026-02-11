@@ -27,14 +27,18 @@ const { mockInterruptAllQueries, MockPieceEngine } = vi.hoisted(() => {
   class MockPieceEngine extends EE {
     private abortRequested = false;
     private runResolve: ((value: { status: string; iteration: number }) => void) | null = null;
+    static lastOptions: { abortSignal?: AbortSignal } | null = null;
 
     constructor(
       _config: unknown,
       _cwd: string,
       _task: string,
-      _options: unknown,
+      options: unknown,
     ) {
       super();
+      if (options && typeof options === 'object') {
+        MockPieceEngine.lastOptions = options as { abortSignal?: AbortSignal };
+      }
     }
 
     abort(): void {
@@ -170,6 +174,7 @@ describe('executePiece: SIGINT handler integration', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    MockPieceEngine.lastOptions = null;
     tmpDir = join(tmpdir(), `takt-sigint-it-${randomUUID()}`);
     mkdirSync(tmpDir, { recursive: true });
     mkdirSync(join(tmpDir, '.takt', 'reports'), { recursive: true });
@@ -240,6 +245,30 @@ describe('executePiece: SIGINT handler integration', () => {
     expect(mockInterruptAllQueries).toHaveBeenCalledTimes(2);
 
     // Verify abort result
+    expect(result.success).toBe(false);
+  });
+
+  it('should abort provider signal on first SIGINT', async () => {
+    const config = makeConfig();
+
+    const resultPromise = executePiece(config, 'test task', tmpDir, {
+      projectCwd: tmpDir,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const signal = MockPieceEngine.lastOptions?.abortSignal;
+    expect(signal).toBeDefined();
+    expect(signal!.aborted).toBe(false);
+
+    const allListeners = process.rawListeners('SIGINT') as ((...args: unknown[]) => void)[];
+    const newListener = allListeners.find((l) => !savedSigintListeners.includes(l));
+    expect(newListener).toBeDefined();
+    newListener!();
+
+    expect(signal!.aborted).toBe(true);
+
+    const result = await resultPromise;
     expect(result.success).toBe(false);
   });
 
