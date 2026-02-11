@@ -31,45 +31,6 @@ class MockEventStream implements AsyncGenerator<unknown, void, unknown> {
   }
 }
 
-class HangingAfterEventsStream implements AsyncGenerator<unknown, void, unknown> {
-  private index = 0;
-  private closed = false;
-  private pendingResolve: ((value: IteratorResult<unknown, void>) => void) | undefined;
-  readonly returnSpy = vi.fn(async () => {
-    this.closed = true;
-    this.pendingResolve?.({ done: true, value: undefined });
-    return { done: true as const, value: undefined };
-  });
-
-  constructor(private readonly events: unknown[]) {}
-
-  [Symbol.asyncIterator](): AsyncGenerator<unknown, void, unknown> {
-    return this;
-  }
-
-  async next(): Promise<IteratorResult<unknown, void>> {
-    if (this.closed) {
-      return { done: true, value: undefined };
-    }
-    if (this.index < this.events.length) {
-      const value = this.events[this.index];
-      this.index += 1;
-      return { done: false, value };
-    }
-    return new Promise<IteratorResult<unknown, void>>((resolve) => {
-      this.pendingResolve = resolve;
-    });
-  }
-
-  async return(): Promise<IteratorResult<unknown, void>> {
-    return this.returnSpy();
-  }
-
-  async throw(e?: unknown): Promise<IteratorResult<unknown, void>> {
-    throw e;
-  }
-}
-
 const { createOpencodeMock } = vi.hoisted(() => ({
   createOpencodeMock: vi.fn(),
 }));
@@ -188,9 +149,9 @@ describe('OpenCodeClient stream cleanup', () => {
     );
   });
 
-  it('should complete without hanging when assistant message is completed', async () => {
+  it('should continue after assistant message completed and finish on session.idle', async () => {
     const { OpenCodeClient } = await import('../infra/opencode/client.js');
-    const stream = new HangingAfterEventsStream([
+    const stream = new MockEventStream([
       {
         type: 'message.part.updated',
         properties: {
@@ -207,6 +168,17 @@ describe('OpenCodeClient stream cleanup', () => {
             time: { created: Date.now(), completed: Date.now() + 1 },
           },
         },
+      },
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: { id: 'p-1', type: 'text', text: 'done more' },
+          delta: ' more',
+        },
+      },
+      {
+        type: 'session.idle',
+        properties: { sessionID: 'session-3' },
       },
     ]);
 
@@ -235,7 +207,7 @@ describe('OpenCodeClient stream cleanup', () => {
     ]);
 
     expect(result.status).toBe('done');
-    expect(result.content).toBe('done');
+    expect(result.content).toBe('done more');
     expect(disposeInstance).toHaveBeenCalledWith(
       { directory: '/tmp' },
       expect.objectContaining({ signal: expect.any(AbortSignal) }),

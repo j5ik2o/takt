@@ -455,13 +455,51 @@ export class OpenCodeClient {
             };
             const info = messageProps.info;
             const isCurrentAssistantMessage = info?.sessionID === sessionId && info.role === 'assistant';
-            const isCompleted = typeof info?.time?.completed === 'number';
-            if (isCurrentAssistantMessage && isCompleted) {
-              const streamError = extractOpenCodeErrorMessage(info.error);
+            if (isCurrentAssistantMessage) {
+              const streamError = extractOpenCodeErrorMessage(info?.error);
               if (streamError) {
                 success = false;
                 failureMessage = streamError;
+                break;
               }
+            }
+            continue;
+          }
+
+          if (sseEvent.type === 'message.completed') {
+            const completedProps = sseEvent.properties as {
+              info?: {
+                sessionID?: string;
+                role?: 'assistant' | 'user';
+                error?: unknown;
+              };
+            };
+            const info = completedProps.info;
+            const isCurrentAssistantMessage = info?.sessionID === sessionId && info.role === 'assistant';
+            if (isCurrentAssistantMessage) {
+              const streamError = extractOpenCodeErrorMessage(info?.error);
+              if (streamError) {
+                success = false;
+                failureMessage = streamError;
+                break;
+              }
+            }
+            continue;
+          }
+
+          if (sseEvent.type === 'message.failed') {
+            const failedProps = sseEvent.properties as {
+              info?: {
+                sessionID?: string;
+                role?: 'assistant' | 'user';
+                error?: unknown;
+              };
+            };
+            const info = failedProps.info;
+            const isCurrentAssistantMessage = info?.sessionID === sessionId && info.role === 'assistant';
+            if (isCurrentAssistantMessage) {
+              success = false;
+              failureMessage = extractOpenCodeErrorMessage(info?.error) ?? 'OpenCode message failed';
               break;
             }
             continue;
