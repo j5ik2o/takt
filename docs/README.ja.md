@@ -2,7 +2,7 @@
 
 **T**ask **A**gent **K**oordination **T**ool - AIエージェントの協調手順・人の介入ポイント・記録をYAMLで定義する
 
-TAKTは複数のAIエージェント（Claude Code、Codex）をYAMLで定義されたワークフローに従って実行します。各ステップで誰が実行し、何を見て、何を許可し、失敗時にどうするかはピースファイルに宣言され、エージェント任せにしません。
+TAKTは複数のAIエージェント（Claude Code、Codex、OpenCode）をYAMLで定義されたワークフローに従って実行します。各ステップで誰が実行し、何を見て、何を許可し、失敗時にどうするかはピースファイルに宣言され、エージェント任せにしません。
 
 TAKTはTAKT自身で開発されています（ドッグフーディング）。
 
@@ -45,14 +45,14 @@ TAKTはエージェントの実行を**制御**し、プロンプトの構成要
 
 次のいずれかを選択してください。
 
-- **プロバイダーCLIを使用**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) または [Codex](https://github.com/openai/codex) をインストール
-- **API直接利用**: **Anthropic API Key** または **OpenAI API Key**（CLI不要）
+- **プロバイダーCLIを使用**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code)、[Codex](https://github.com/openai/codex)、または [OpenCode](https://opencode.ai) をインストール
+- **API直接利用**: **Anthropic API Key**、**OpenAI API Key**、または **OpenCode API Key**（CLI不要）
 
 追加で必要なもの:
 
 - [GitHub CLI](https://cli.github.com/) (`gh`) — `takt #N`（GitHub Issue実行）を使う場合のみ必要
 
-**料金について**: API Key を使用する場合、TAKT は Claude API（Anthropic）または OpenAI API を直接呼び出します。料金体系は Claude Code や Codex を使った場合と同じです。特に CI/CD で自動実行する場合、API 使用量が増えるため、コストに注意してください。
+**料金について**: API Key を使用する場合、TAKT は Claude API（Anthropic）、OpenAI API、または OpenCode API を直接呼び出します。料金体系は各 CLI ツールを使った場合と同じです。特に CI/CD で自動実行する場合、API 使用量が増えるため、コストに注意してください。
 
 ## インストール
 
@@ -322,7 +322,7 @@ takt reset categories
 | `--repo <owner/repo>` | リポジトリ指定（PR作成時） |
 | `--create-worktree <yes\|no>` | worktree確認プロンプトをスキップ |
 | `-q, --quiet` | 最小限の出力モード: AIの出力を抑制（CI向け） |
-| `--provider <name>` | エージェントプロバイダーを上書き（claude\|codex\|mock） |
+| `--provider <name>` | エージェントプロバイダーを上書き（claude\|codex\|opencode\|mock） |
 | `--model <name>` | エージェントモデルを上書き |
 
 ## ピース
@@ -473,6 +473,7 @@ TAKTには複数のビルトインピースが同梱されています:
 | `structural-reform` | プロジェクト全体の構造改革: 段階的なファイル分割を伴う反復的なコードベース再構成。 |
 | `unit-test` | ユニットテスト重視ピース: テスト分析 → テスト実装 → レビュー → 修正。 |
 | `e2e-test` | E2Eテスト重視ピース: E2E分析 → E2E実装 → レビュー → 修正（VitestベースのE2Eフロー）。 |
+| `frontend` | フロントエンド特化開発ピース: React/Next.js 向けのレビューとナレッジ注入。 |
 
 **ペルソナ別プロバイダー設定:** 設定ファイルの `persona_providers` で、特定のペルソナを異なるプロバイダーにルーティングできます（例: coder は Codex、レビュアーは Claude）。ピースを複製する必要はありません。
 
@@ -560,7 +561,7 @@ Claude Code はエイリアス（`opus`、`sonnet`、`haiku`、`opusplan`、`def
 language: ja
 default_piece: default
 log_level: info
-provider: claude         # デフォルトプロバイダー: claude または codex
+provider: claude         # デフォルトプロバイダー: claude、codex、または opencode
 model: sonnet            # デフォルトモデル（オプション）
 branch_name_strategy: romaji  # ブランチ名生成: 'romaji'（高速）または 'ai'（低速）
 prevent_sleep: false     # macOS の実行中スリープ防止（caffeinate）
@@ -582,9 +583,10 @@ interactive_preview_movements: 3  # 対話モードでのムーブメントプ�
 #   ai-antipattern-reviewer: claude  # レビュアーは Claude のまま
 
 # API Key 設定（オプション）
-# 環境変数 TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY で上書き可能
+# 環境変数 TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY / TAKT_OPENCODE_API_KEY で上書き可能
 anthropic_api_key: sk-ant-...  # Claude (Anthropic) を使う場合
 # openai_api_key: sk-...       # Codex (OpenAI) を使う場合
+# opencode_api_key: ...        # OpenCode を使う場合
 
 # ビルトインピースのフィルタリング（オプション）
 # builtin_pieces_enabled: true           # false でビルトイン全体を無効化
@@ -608,17 +610,17 @@ anthropic_api_key: sk-ant-...  # Claude (Anthropic) を使う場合
 1. **環境変数で設定**:
    ```bash
    export TAKT_ANTHROPIC_API_KEY=sk-ant-...  # Claude の場合
-   # または
    export TAKT_OPENAI_API_KEY=sk-...         # Codex の場合
+   export TAKT_OPENCODE_API_KEY=...          # OpenCode の場合
    ```
 
 2. **設定ファイルで設定**:
-   上記の `~/.takt/config.yaml` に `anthropic_api_key` または `openai_api_key` を記述
+   上記の `~/.takt/config.yaml` に `anthropic_api_key`、`openai_api_key`、または `opencode_api_key` を記述
 
 優先順位: 環境変数 > `config.yaml` の設定
 
 **注意事項:**
-- API Key を設定した場合、Claude Code や Codex のインストールは不要です。TAKT が直接 Anthropic API または OpenAI API を呼び出します。
+- API Key を設定した場合、Claude Code、Codex、OpenCode のインストールは不要です。TAKT が直接各 API を呼び出します。
 - **セキュリティ**: `config.yaml` に API Key を記述した場合、このファイルを Git にコミットしないよう注意してください。環境変数での設定を使うか、`.gitignore` に `~/.takt/config.yaml` を追加することを検討してください。
 
 **パイプラインテンプレート変数:**
@@ -634,7 +636,7 @@ anthropic_api_key: sk-ant-...  # Claude (Anthropic) を使う場合
 1. ピースのムーブメントの `model`（最優先）
 2. カスタムエージェントの `model`
 3. グローバル設定の `model`
-4. プロバイダーデフォルト（Claude: sonnet、Codex: codex）
+4. プロバイダーデフォルト（Claude: sonnet、Codex: codex、OpenCode: プロバイダーデフォルト）
 
 ## 詳細ガイド
 
@@ -796,7 +798,7 @@ rules:
 | `edit` | - | ムーブメントがプロジェクトファイルを編集できるか（`true`/`false`） |
 | `pass_previous_response` | `true` | 前のムーブメントの出力を`{previous_response}`に渡す |
 | `allowed_tools` | - | エージェントが使用できるツール一覧（Read, Glob, Grep, Edit, Write, Bash等） |
-| `provider` | - | このムーブメントのプロバイダーを上書き（`claude`または`codex`） |
+| `provider` | - | このムーブメントのプロバイダーを上書き（`claude`、`codex`、または`opencode`） |
 | `model` | - | このムーブメントのモデルを上書き |
 | `permission_mode` | - | パーミッションモード: `readonly`、`edit`、`full`（プロバイダー非依存） |
 | `output_contracts` | - | レポートファイルの出力契約定義 |
@@ -874,7 +876,7 @@ npm install -g takt
 takt --pipeline --task "バグ修正" --auto-pr --repo owner/repo
 ```
 
-認証には `TAKT_ANTHROPIC_API_KEY` または `TAKT_OPENAI_API_KEY` 環境変数を設定してください（TAKT 独自のプレフィックス付き）。
+認証には `TAKT_ANTHROPIC_API_KEY`、`TAKT_OPENAI_API_KEY`、または `TAKT_OPENCODE_API_KEY` 環境変数を設定してください（TAKT 独自のプレフィックス付き）。
 
 ```bash
 # Claude (Anthropic) を使う場合
@@ -882,6 +884,9 @@ export TAKT_ANTHROPIC_API_KEY=sk-ant-...
 
 # Codex (OpenAI) を使う場合
 export TAKT_OPENAI_API_KEY=sk-...
+
+# OpenCode を使う場合
+export TAKT_OPENCODE_API_KEY=...
 ```
 
 ## ドキュメント

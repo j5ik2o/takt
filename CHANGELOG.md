@@ -4,6 +4,45 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.12.0] - 2026-02-11
+
+### Added
+
+- **OpenCode プロバイダー**: 第3のプロバイダーとして OpenCode をネイティブサポート — `@opencode-ai/sdk/v2` による SDK 統合、権限マッピング（readonly/edit/full → reject/once/always）、SSE ストリーム処理、リトライ機構（最大3回）、10分タイムアウトによるハング検出 (#236, #238)
+- **Arpeggio ムーブメント**: データ駆動バッチ処理の新ムーブメントタイプ — CSV データソースからバッチ分割、テンプレート展開（`{line:N}`, `{col:N:name}`, `{batch_index}`）、並行 LLM 呼び出し（Semaphore 制御）、concat/custom マージ戦略をサポート (#200)
+- **`frontend` ビルトインピース**: フロントエンド開発特化のピースを新規追加 — React/Next.js 向けの knowledge 注入、coding/testing ポリシー適用、並列アーキテクチャレビュー対応
+- **Slack Webhook 通知**: ピース実行完了時に Slack へ自動通知 — `TAKT_NOTIFY_WEBHOOK` 環境変数で設定、10秒タイムアウト、失敗時も他処理をブロックしない (#234)
+- **セッション選択 UI**: インタラクティブモード開始時に Claude Code の過去セッションから再開可能なセッションを選択可能に — 最新10セッションの一覧表示、初期入力・最終応答プレビュー付き (#180)
+- **プロバイダーイベントログ**: Claude/Codex/OpenCode の実行中イベントを NDJSON 形式でファイル出力 — `.takt/logs/{sessionId}-provider-events.jsonl` に記録、長大テキストの自動圧縮 (#236)
+- **プロバイダー・モデル名の出力表示**: 各ムーブメント実行時に使用中のプロバイダーとモデル名をコンソールに表示
+
+### Changed
+
+- **`takt add` の刷新**: Issue 選択時にタスクへの自動追加、インタラクティブモードの廃止、Issue 作成時のタスク積み込み確認 (#193, #194)
+- **`max_iteration` → `max_movement` 統一**: イテレーション上限の用語を統一し、無限実行指定として `ostinato` を追加 (#212)
+- **`previous_response` 注入仕様の改善**: 長さ制御と Source Path 常時注入を実装 (#207)
+- **タスク管理の改善**: `.takt/tasks/` を長文タスク仕様の置き場所として再定義、`completeTask()` で completed レコードを `tasks.yaml` から削除 (#201, #204)
+- **レビュー出力の改善**: レビュー出力を最新化し、過去レポートは履歴ログへ分離 (#209)
+- **ビルトインピース簡素化**: 全ビルトインピースのトップレベル宣言をさらに整理
+
+### Fixed
+
+- **Report Phase blocked 時の動作修正**: Report Phase（Phase 2）で blocked 状態の際に新規セッションでリトライするよう修正 (#163)
+- **OpenCode のハング・終了判定の修正**: プロンプトのエコー抑制、question の抑制、ハング問題の修正、終了判定の誤りを修正 (#238)
+- **OpenCode の権限・ツール設定の修正**: edit 実行時の権限とツール配線を修正
+- **Worktree へのタスク指示書コピー**: Worktree 実行時にタスク指示書が正しくコピーされるよう修正
+- lint エラーの修正（merge/resolveTask/confirm）
+
+### Internal
+
+- OpenCode プロバイダーの包括的なテスト追加（client-cleanup, config, provider, stream-handler, types）
+- Arpeggio の包括的なテスト追加（csv, data-source-factory, merge, schema, template, engine-arpeggio）
+- E2E テストの大幅な拡充: cli-catalog, cli-clear, cli-config, cli-export-cc, cli-help, cli-prompt, cli-reset-categories, cli-switch, error-handling, piece-error-handling, provider-error, quiet-mode, run-multiple-tasks, task-content-file (#192, #198)
+- `providerEventLogger.ts`, `providerModel.ts`, `slackWebhook.ts`, `session-reader.ts`, `sessionSelector.ts`, `provider-resolution.ts`, `run-paths.ts` の新規追加
+- `ArpeggioRunner.ts` の新規追加（データ駆動バッチ処理エンジン）
+- AI Judge をプロバイダーシステム経由に変更（Codex/OpenCode 対応）
+- テスト追加・拡充: report-phase-blocked, phase-runner-report-history, judgment-fallback, pieceExecution-session-loading, globalConfig-defaults, session-reader, sessionSelector, slackWebhook, providerEventLogger, provider-model, interactive, run-paths, engine-test-helpers
+
 ## [0.11.1] - 2026-02-10
 
 ### Fixed

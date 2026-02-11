@@ -4,7 +4,7 @@
 
 **T**ask **A**gent **K**oordination **T**ool - Define how AI agents coordinate, where humans intervene, and what gets recorded — in YAML
 
-TAKT runs multiple AI agents (Claude Code, Codex) through YAML-defined workflows. Each step — who runs, what they see, what's allowed, what happens on failure — is declared in a piece file, not left to the agent.
+TAKT runs multiple AI agents (Claude Code, Codex, OpenCode) through YAML-defined workflows. Each step — who runs, what they see, what's allowed, what happens on failure — is declared in a piece file, not left to the agent.
 
 TAKT is built with TAKT itself (dogfooding).
 
@@ -49,14 +49,14 @@ Personas, policies, and knowledge are managed as independent files and freely co
 
 Choose one:
 
-- **Use provider CLIs**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or [Codex](https://github.com/openai/codex) installed
-- **Use direct API**: **Anthropic API Key** or **OpenAI API Key** (no CLI required)
+- **Use provider CLIs**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), or [OpenCode](https://opencode.ai) installed
+- **Use direct API**: **Anthropic API Key**, **OpenAI API Key**, or **OpenCode API Key** (no CLI required)
 
 Additionally required:
 
 - [GitHub CLI](https://cli.github.com/) (`gh`) — Only needed for `takt #N` (GitHub Issue execution)
 
-**Pricing Note**: When using API Keys, TAKT directly calls the Claude API (Anthropic) or OpenAI API. The pricing structure is the same as using Claude Code or Codex. Be mindful of costs, especially when running automated tasks in CI/CD environments, as API usage can accumulate.
+**Pricing Note**: When using API Keys, TAKT directly calls the Claude API (Anthropic), OpenAI API, or OpenCode API. The pricing structure is the same as using the respective CLI tools. Be mindful of costs, especially when running automated tasks in CI/CD environments, as API usage can accumulate.
 
 ## Installation
 
@@ -322,7 +322,7 @@ takt reset categories
 | `--repo <owner/repo>` | Specify repository (for PR creation) |
 | `--create-worktree <yes\|no>` | Skip worktree confirmation prompt |
 | `-q, --quiet` | Minimal output mode: suppress AI output (for CI) |
-| `--provider <name>` | Override agent provider (claude\|codex\|mock) |
+| `--provider <name>` | Override agent provider (claude\|codex\|opencode\|mock) |
 | `--model <name>` | Override agent model |
 
 ## Pieces
@@ -473,6 +473,7 @@ TAKT includes multiple builtin pieces:
 | `structural-reform` | Full project review and structural reform: iterative codebase restructuring with staged file splits. |
 | `unit-test` | Unit test focused piece: test analysis → test implementation → review → fix. |
 | `e2e-test` | E2E test focused piece: E2E analysis → E2E implementation → review → fix (Vitest-based E2E flow). |
+| `frontend` | Frontend-specialized development piece with React/Next.js focused reviews and knowledge injection. |
 
 **Per-persona provider overrides:** Use `persona_providers` in config to route specific personas to different providers (e.g., coder on Codex, reviewers on Claude) without duplicating pieces.
 
@@ -560,7 +561,7 @@ Configure default provider and model in `~/.takt/config.yaml`:
 language: en
 default_piece: default
 log_level: info
-provider: claude         # Default provider: claude or codex
+provider: claude         # Default provider: claude, codex, or opencode
 model: sonnet            # Default model (optional)
 branch_name_strategy: romaji  # Branch name generation: 'romaji' (fast) or 'ai' (slow)
 prevent_sleep: false     # Prevent macOS idle sleep during execution (caffeinate)
@@ -582,9 +583,10 @@ interactive_preview_movements: 3  # Movement previews in interactive mode (0-10,
 #   ai-antipattern-reviewer: claude  # Keep reviewers on Claude
 
 # API Key configuration (optional)
-# Can be overridden by environment variables TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY
+# Can be overridden by environment variables TAKT_ANTHROPIC_API_KEY / TAKT_OPENAI_API_KEY / TAKT_OPENCODE_API_KEY
 anthropic_api_key: sk-ant-...  # For Claude (Anthropic)
 # openai_api_key: sk-...       # For Codex (OpenAI)
+# opencode_api_key: ...        # For OpenCode
 
 # Builtin piece filtering (optional)
 # builtin_pieces_enabled: true           # Set false to disable all builtins
@@ -608,17 +610,17 @@ anthropic_api_key: sk-ant-...  # For Claude (Anthropic)
 1. **Set via environment variables**:
    ```bash
    export TAKT_ANTHROPIC_API_KEY=sk-ant-...  # For Claude
-   # or
    export TAKT_OPENAI_API_KEY=sk-...         # For Codex
+   export TAKT_OPENCODE_API_KEY=...          # For OpenCode
    ```
 
 2. **Set in config file**:
-   Write `anthropic_api_key` or `openai_api_key` in `~/.takt/config.yaml` as shown above
+   Write `anthropic_api_key`, `openai_api_key`, or `opencode_api_key` in `~/.takt/config.yaml` as shown above
 
 Priority: Environment variables > `config.yaml` settings
 
 **Notes:**
-- If you set an API Key, installing Claude Code or Codex is not necessary. TAKT directly calls the Anthropic API or OpenAI API.
+- If you set an API Key, installing Claude Code, Codex, or OpenCode is not necessary. TAKT directly calls the respective API.
 - **Security**: If you write API Keys in `config.yaml`, be careful not to commit this file to Git. Consider using environment variables or adding `~/.takt/config.yaml` to `.gitignore`.
 
 **Pipeline Template Variables:**
@@ -634,7 +636,7 @@ Priority: Environment variables > `config.yaml` settings
 1. Piece movement `model` (highest priority)
 2. Custom agent `model`
 3. Global config `model`
-4. Provider default (Claude: sonnet, Codex: codex)
+4. Provider default (Claude: sonnet, Codex: codex, OpenCode: provider default)
 
 ## Detailed Guides
 
@@ -796,7 +798,7 @@ Special `next` values: `COMPLETE` (success), `ABORT` (failure)
 | `edit` | - | Whether movement can edit project files (`true`/`false`) |
 | `pass_previous_response` | `true` | Pass previous movement output to `{previous_response}` |
 | `allowed_tools` | - | List of tools agent can use (Read, Glob, Grep, Edit, Write, Bash, etc.) |
-| `provider` | - | Override provider for this movement (`claude` or `codex`) |
+| `provider` | - | Override provider for this movement (`claude`, `codex`, or `opencode`) |
 | `model` | - | Override model for this movement |
 | `permission_mode` | - | Permission mode: `readonly`, `edit`, `full` (provider-independent) |
 | `output_contracts` | - | Output contract definitions for report files |
@@ -874,7 +876,7 @@ npm install -g takt
 takt --pipeline --task "Fix bug" --auto-pr --repo owner/repo
 ```
 
-For authentication, set `TAKT_ANTHROPIC_API_KEY` or `TAKT_OPENAI_API_KEY` environment variables (TAKT-specific prefix).
+For authentication, set `TAKT_ANTHROPIC_API_KEY`, `TAKT_OPENAI_API_KEY`, or `TAKT_OPENCODE_API_KEY` environment variables (TAKT-specific prefix).
 
 ```bash
 # For Claude (Anthropic)
@@ -882,6 +884,9 @@ export TAKT_ANTHROPIC_API_KEY=sk-ant-...
 
 # For Codex (OpenAI)
 export TAKT_OPENAI_API_KEY=sk-...
+
+# For OpenCode
+export TAKT_OPENCODE_API_KEY=...
 ```
 
 ## Documentation
