@@ -10,7 +10,13 @@ import { createServer } from 'node:net';
 import type { AgentResponse } from '../../core/models/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { parseProviderModel } from '../../shared/utils/providerModel.js';
-import { mapToOpenCodePermissionReply, type OpenCodeCallOptions } from './types.js';
+import {
+  buildOpenCodePermissionConfig,
+  buildOpenCodePermissionRuleset,
+  mapToOpenCodePermissionReply,
+  mapToOpenCodeTools,
+  type OpenCodeCallOptions,
+} from './types.js';
 import {
   type OpenCodeStreamEvent,
   type OpenCodePart,
@@ -29,6 +35,7 @@ const OPENCODE_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const OPENCODE_STREAM_ABORTED_MESSAGE = 'OpenCode execution aborted';
 const OPENCODE_RETRY_MAX_ATTEMPTS = 3;
 const OPENCODE_RETRY_BASE_DELAY_MS = 250;
+const OPENCODE_INTERACTION_TIMEOUT_MS = 5000;
 const OPENCODE_RETRYABLE_ERROR_PATTERNS = [
   'stream disconnected before completion',
   'transport error',
@@ -40,6 +47,31 @@ const OPENCODE_RETRYABLE_ERROR_PATTERNS = [
   'fetch failed',
   'failed to start server on port',
 ];
+
+async function withTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  timeoutErrorMessage: string,
+): Promise<T> {
+  const controller = new AbortController();
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      controller.abort();
+      reject(new Error(timeoutErrorMessage));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([
+      operation(controller.signal),
+      timeoutPromise,
+    ]);
+  } finally {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+  }
+}
 
 function extractOpenCodeErrorMessage(error: unknown): string | undefined {
   if (!error || typeof error !== 'object') {
@@ -256,10 +288,11 @@ export class OpenCodeClient {
         const parsedModel = parseProviderModel(options.model, 'OpenCode model');
         const fullModel = `${parsedModel.providerID}/${parsedModel.modelID}`;
         const port = await getFreePort();
+        const permission = buildOpenCodePermissionConfig(options.permissionMode);
         const config = {
           model: fullModel,
           small_model: fullModel,
-          permission: { question: 'deny' as const },
+          permission,
           ...(options.opencodeApiKey
             ? { provider: { opencode: { options: { apiKey: options.opencodeApiKey } } } }
             : {}),
@@ -274,7 +307,10 @@ export class OpenCodeClient {
 
         const sessionResult = options.sessionId
           ? { data: { id: options.sessionId } }
-          : await client.session.create({ directory: options.cwd });
+          : await client.session.create({
+            directory: options.cwd,
+            permission: buildOpenCodePermissionRuleset(options.permissionMode),
+          });
 
         const sessionId = sessionResult.data?.id;
         if (!sessionId) {
@@ -286,11 +322,13 @@ export class OpenCodeClient {
         );
         resetIdleTimeout();
 
+        const tools = mapToOpenCodeTools(options.allowedTools);
         await client.session.promptAsync(
           {
             sessionID: sessionId,
             directory: options.cwd,
             model: parsedModel,
+            ...(tools ? { tools } : {}),
             parts: [{ type: 'text' as const, text: fullPrompt }],
           },
           { signal: streamAbortController.signal },
@@ -348,11 +386,15 @@ export class OpenCodeClient {
               const reply = options.permissionMode
                 ? mapToOpenCodePermissionReply(options.permissionMode)
                 : 'once';
-              await client.permission.reply({
-                requestID: permProps.id,
-                directory: options.cwd,
-                reply,
-              });
+              await withTimeout(
+                (signal) => client.permission.reply({
+                  requestID: permProps.id,
+                  directory: options.cwd,
+                  reply,
+                }, { signal }),
+                OPENCODE_INTERACTION_TIMEOUT_MS,
+                'OpenCode permission reply timed out',
+              );
             }
             continue;
           }
@@ -361,10 +403,14 @@ export class OpenCodeClient {
             const questionProps = sseEvent.properties as OpenCodeQuestionAskedProperties;
             if (questionProps.sessionID === sessionId) {
               if (!options.onAskUserQuestion) {
-                await client.question.reject({
-                  requestID: questionProps.id,
-                  directory: options.cwd,
-                });
+                await withTimeout(
+                  (signal) => client.question.reject({
+                    requestID: questionProps.id,
+                    directory: options.cwd,
+                  }, { signal }),
+                  OPENCODE_INTERACTION_TIMEOUT_MS,
+                  'OpenCode question reject timed out',
+                );
                 success = false;
                 failureMessage = 'OpenCode asked a question, but no question handler is configured';
                 break;
@@ -372,16 +418,24 @@ export class OpenCodeClient {
 
               try {
                 const answers = await options.onAskUserQuestion(toQuestionInput(questionProps));
-                await client.question.reply({
-                  requestID: questionProps.id,
-                  directory: options.cwd,
-                  answers: toQuestionAnswers(questionProps, answers),
-                });
+                await withTimeout(
+                  (signal) => client.question.reply({
+                    requestID: questionProps.id,
+                    directory: options.cwd,
+                    answers: toQuestionAnswers(questionProps, answers),
+                  }, { signal }),
+                  OPENCODE_INTERACTION_TIMEOUT_MS,
+                  'OpenCode question reply timed out',
+                );
               } catch {
-                await client.question.reject({
-                  requestID: questionProps.id,
-                  directory: options.cwd,
-                });
+                await withTimeout(
+                  (signal) => client.question.reject({
+                    requestID: questionProps.id,
+                    directory: options.cwd,
+                  }, { signal }),
+                  OPENCODE_INTERACTION_TIMEOUT_MS,
+                  'OpenCode question reject timed out',
+                );
                 success = false;
                 failureMessage = 'OpenCode question handling failed';
                 break;

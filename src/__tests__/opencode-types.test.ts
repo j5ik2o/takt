@@ -3,7 +3,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { mapToOpenCodePermissionReply } from '../infra/opencode/types.js';
+import {
+  buildOpenCodePermissionConfig,
+  buildOpenCodePermissionRuleset,
+  mapToOpenCodePermissionReply,
+  mapToOpenCodeTools,
+} from '../infra/opencode/types.js';
 import type { PermissionMode } from '../core/models/index.js';
 
 describe('mapToOpenCodePermissionReply', () => {
@@ -25,6 +30,55 @@ describe('mapToOpenCodePermissionReply', () => {
 
     modes.forEach((mode, index) => {
       expect(mapToOpenCodePermissionReply(mode)).toBe(expectedReplies[index]);
+    });
+  });
+});
+
+describe('mapToOpenCodeTools', () => {
+  it('should map built-in tool names to OpenCode tool IDs', () => {
+    expect(mapToOpenCodeTools(['Read', 'Edit', 'Bash', 'WebSearch', 'WebFetch'])).toEqual({
+      read: true,
+      edit: true,
+      bash: true,
+      websearch: true,
+      webfetch: true,
+    });
+  });
+
+  it('should keep unknown tool names as-is', () => {
+    expect(mapToOpenCodeTools(['mcp__github__search', 'custom_tool'])).toEqual({
+      mcp__github__search: true,
+      custom_tool: true,
+    });
+  });
+
+  it('should return undefined when tools are not provided', () => {
+    expect(mapToOpenCodeTools(undefined)).toBeUndefined();
+    expect(mapToOpenCodeTools([])).toBeUndefined();
+  });
+});
+
+describe('OpenCode permissions', () => {
+  it('should build allow config for full mode', () => {
+    expect(buildOpenCodePermissionConfig('full')).toBe('allow');
+  });
+
+  it('should build deny config for readonly mode', () => {
+    expect(buildOpenCodePermissionConfig('readonly')).toBe('deny');
+  });
+
+  it('should build ruleset for edit mode', () => {
+    const ruleset = buildOpenCodePermissionRuleset('edit');
+    expect(ruleset.length).toBeGreaterThan(0);
+    expect(ruleset.find((rule) => rule.permission === 'edit')).toEqual({
+      permission: 'edit',
+      pattern: '**',
+      action: 'allow',
+    });
+    expect(ruleset.find((rule) => rule.permission === 'question')).toEqual({
+      permission: 'question',
+      pattern: '**',
+      action: 'deny',
     });
   });
 });

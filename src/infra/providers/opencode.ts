@@ -17,6 +17,7 @@ function toOpenCodeOptions(options: ProviderCallOptions): OpenCodeCallOptions {
     abortSignal: options.abortSignal,
     sessionId: options.sessionId,
     model: options.model,
+    allowedTools: options.allowedTools,
     permissionMode: options.permissionMode,
     onStream: options.onStream,
     onAskUserQuestion: options.onAskUserQuestion,
