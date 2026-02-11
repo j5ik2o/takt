@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-TAKT (Task Agent Koordination Tool) is a multi-agent orchestration system for Claude Code. It enables YAML-based piece definitions that coordinate multiple AI agents through state machine transitions with rule-based routing.
+TAKT (TAKT Agent Koordination Topology) is a multi-agent orchestration system for Claude Code. It enables YAML-based piece definitions that coordinate multiple AI agents through state machine transitions with rule-based routing.
 
 ## Development Commands
 

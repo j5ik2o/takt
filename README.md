@@ -2,7 +2,7 @@
 
 🇯🇵 [日本語ドキュメント](./docs/README.ja.md)
 
-**T**AKT **A**gent **K**oordination **T**ool - Define how AI agents coordinate, where humans intervene, and what gets recorded — in YAML
+**T**AKT **A**gent **K**oordination **T**opology - Define how AI agents coordinate, where humans intervene, and what gets recorded — in YAML
 
 TAKT runs multiple AI agents (Claude Code, Codex, OpenCode) through YAML-defined workflows. Each step — who runs, what they see, what's allowed, what happens on failure — is declared in a piece file, not left to the agent.
 

@@ -1,6 +1,6 @@
 # TAKT
 
-**T**ask **A**gent **K**oordination **T**ool - AIエージェントの協調手順・人の介入ポイント・記録をYAMLで定義する
+**T**AKT **A**gent **K**oordination **T**opology - AIエージェントの協調手順・人の介入ポイント・記録をYAMLで定義する
 
 TAKTは複数のAIエージェント（Claude Code、Codex、OpenCode）をYAMLで定義されたワークフローに従って実行します。各ステップで誰が実行し、何を見て、何を許可し、失敗時にどうするかはピースファイルに宣言され、エージェント任せにしません。
 

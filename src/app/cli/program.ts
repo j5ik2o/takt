@@ -36,7 +36,7 @@ export const program = new Command();
 
 program
   .name('takt')
-  .description('TAKT: Task Agent Koordination Tool')
+  .description('TAKT: TAKT Agent Koordination Topology')
   .version(cliVersion);
 
 // --- Global options ---

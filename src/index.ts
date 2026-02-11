@@ -1,5 +1,5 @@
 /**
- * TAKT - Task Agent Koordination Tool
+ * TAKT - TAKT Agent Koordination Topology
  *
  * This module exports the public API for programmatic usage.
  */
