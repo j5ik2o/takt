@@ -171,7 +171,7 @@ Code to remove:
 | Pattern | Example | Verdict |
 |---------|---------|---------|
 | deprecated + no usage | `@deprecated` annotation with no one using it | Remove immediately |
-| Both old and new APIs exist | Old function remains alongside new function | Remove old |
+| Both old and new APIs exist | Old function remains alongside new function | Remove old, unless both have active usage sites |
 | Completed migration wrapper | Wrapper created for compatibility but migration is complete | Remove |
 | Comment says "remove later" | `// TODO: remove after migration` left abandoned | Remove now |
 | Excessive proxy/adapter usage | Complexity added solely for backward compatibility | Replace simply |
@@ -186,8 +186,9 @@ Code to keep:
 
 Decision criteria:
 1. Are there usage sites? -> Verify with grep/search. Remove if none
-2. Is it externally published? -> Can remove immediately if internal only
-3. Is migration complete? -> Remove if complete
+2. Do both old and new have usage sites? -> If both are currently in use, this may be intentional coexistence rather than backward compatibility. Check callers
+3. Is it externally published? -> Can remove immediately if internal only
+4. Is migration complete? -> Remove if complete
 
 When AI says "for backward compatibility", be skeptical. Verify if it's truly necessary.
 
