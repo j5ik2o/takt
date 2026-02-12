@@ -9,7 +9,10 @@ piece_categories:
   🎨 Frontend:
     pieces:
       - frontend
-  ⚙️ Backend: {}
+  ⚙️ Backend:
+    pieces:
+      - backend
+      - backend-cqrs
   🔧 Expert:
     Full Stack:
       pieces:

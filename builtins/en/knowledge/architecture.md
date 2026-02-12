@@ -18,6 +18,26 @@
 - No circular dependencies
 - Appropriate directory hierarchy
 
+**Operation Discoverability:**
+
+When calls to the same generic function are scattered across the codebase with different purposes, it becomes impossible to understand what the system does without grepping every call site. Group related operations into purpose-named functions within a single module. Reading that module should reveal the complete list of operations the system performs.
+
+| Judgment | Criteria |
+|----------|----------|
+| REJECT | Same generic function called directly from 3+ places with different purposes |
+| REJECT | Understanding all system operations requires grepping every call site |
+| OK | Purpose-named functions defined and collected in a single module |
+
+**Public API Surface:**
+
+Public APIs should expose only domain-level functions and types. Do not export infrastructure internals (provider-specific functions, internal parsers, etc.).
+
+| Judgment | Criteria |
+|----------|----------|
+| REJECT | Infrastructure-layer functions exported from public API |
+| REJECT | Internal implementation functions callable from outside |
+| OK | External consumers interact only through domain-level abstractions |
+
 **Function Design:**
 
 - One responsibility per function
@@ -299,19 +319,18 @@ Correct handling:
 
 ## DRY Violation Detection
 
-Detect duplicate code.
+Eliminate duplication by default. When logic is essentially the same and should be unified, apply DRY. Do not judge mechanically by count.
 
 | Pattern | Judgment |
 |---------|----------|
-| Same logic in 3+ places | Immediate REJECT - Extract to function/method |
-| Same validation in 2+ places | Immediate REJECT - Extract to validator function |
-| Similar components 3+ | Immediate REJECT - Create shared component |
-| Copy-paste derived code | Immediate REJECT - Parameterize or abstract |
+| Essentially identical logic duplicated | REJECT - Extract to function/method |
+| Same validation duplicated | REJECT - Extract to validator function |
+| Essentially identical component structure | REJECT - Create shared component |
+| Copy-paste derived code | REJECT - Parameterize or abstract |
 
-AHA principle (Avoid Hasty Abstractions) balance:
-- 2 duplications → Wait and see
-- 3 duplications → Extract immediately
-- Different domain duplications → Don't abstract (e.g., customer validation vs admin validation are different)
+When NOT to apply DRY:
+- Different domains: Don't abstract (e.g., customer validation vs admin validation are different things)
+- Superficially similar but different reasons to change: Treat as separate code
 
 ## Spec Compliance Verification
 
