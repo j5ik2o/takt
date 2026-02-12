@@ -42,16 +42,6 @@ export {
 // Piece engine
 export {
   PieceEngine,
-  COMPLETE_MOVEMENT,
-  ABORT_MOVEMENT,
-  ERROR_MESSAGES,
-  determineNextMovementByRules,
-  extractBlockedPrompt,
-  LoopDetector,
-  createInitialState,
-  addUserInput,
-  getPreviousOutput,
-  handleBlocked,
   isOutputContractItem,
   executeAgent,
   generateReport,
@@ -67,8 +57,6 @@ export type {
   SessionUpdateCallback,
   IterationLimitCallback,
   PieceEngineOptions,
-  LoopCheckResult,
   ProviderType,
   JudgeStatusResult,
-  BlockedHandlerResult,
 } from './core/piece/index.js';

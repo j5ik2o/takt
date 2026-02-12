@@ -11,7 +11,6 @@ import { createLogger } from '../../shared/utils/index.js';
 import { loadTemplate } from '../../shared/prompts/index.js';
 
 export type { ClaudeCallOptions } from './types.js';
-export { detectRuleIndex, isRegexSafe } from './utils.js';
 
 const log = createLogger('client');
 

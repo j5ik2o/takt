@@ -61,13 +61,5 @@ export {
   buildSdkOptions,
 } from './options-builder.js';
 
-// Client functions
-export {
-  callClaude,
-  callClaudeCustom,
-  callClaudeAgent,
-  callClaudeSkill,
-  detectRuleIndex,
-  isRegexSafe,
-} from './client.js';
+
 

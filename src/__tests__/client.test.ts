@@ -3,10 +3,8 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import {
-  detectRuleIndex,
-  isRegexSafe,
-} from '../infra/claude/client.js';
+import { isRegexSafe } from '../infra/claude/utils.js';
+import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
 
 describe('isRegexSafe', () => {
   it('should accept simple patterns', () => {

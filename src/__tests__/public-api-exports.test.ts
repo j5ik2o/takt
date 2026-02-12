@@ -15,11 +15,6 @@ describe('public API exports', () => {
     expect(typeof api.decomposeTask).toBe('function');
 
     expect(typeof api.PieceEngine).toBe('function');
-    expect(typeof api.createInitialState).toBe('function');
-    expect(typeof api.addUserInput).toBe('function');
-    expect(typeof api.getPreviousOutput).toBe('function');
-    expect(api.COMPLETE_MOVEMENT).toBeDefined();
-    expect(api.ABORT_MOVEMENT).toBeDefined();
 
     expect(typeof api.loadPiece).toBe('function');
     expect(typeof api.loadPieceByIdentifier).toBe('function');
@@ -43,6 +38,16 @@ describe('public API exports', () => {
     expect('ParallelLogger' in api).toBe(false);
     expect('InstructionBuilder' in api).toBe(false);
     expect('ReportInstructionBuilder' in api).toBe(false);
+    expect('COMPLETE_MOVEMENT' in api).toBe(false);
+    expect('ABORT_MOVEMENT' in api).toBe(false);
+    expect('ERROR_MESSAGES' in api).toBe(false);
+    expect('determineNextMovementByRules' in api).toBe(false);
+    expect('extractBlockedPrompt' in api).toBe(false);
+    expect('LoopDetector' in api).toBe(false);
+    expect('createInitialState' in api).toBe(false);
+    expect('addUserInput' in api).toBe(false);
+    expect('getPreviousOutput' in api).toBe(false);
+    expect('handleBlocked' in api).toBe(false);
   });
 
   it('should not expose infrastructure implementations and internal shared utilities', async () => {

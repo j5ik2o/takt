@@ -13,7 +13,7 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { setMockScenario, resetScenario } from '../infra/mock/index.js';
-import { detectRuleIndex } from '../infra/claude/index.js';
+import { detectRuleIndex } from '../shared/utils/ruleIndex.js';
 import { callAiJudge } from '../agents/ai-judge.js';
 
 // --- Mocks ---

@@ -2,7 +2,7 @@
  * Type definitions for agent execution
  */
 
-import type { StreamCallback, PermissionHandler, AskUserQuestionHandler } from '../infra/claude/index.js';
+import type { StreamCallback, PermissionHandler, AskUserQuestionHandler } from '../infra/claude/types.js';
 import type { PermissionMode, Language, McpServerConfig } from '../core/models/index.js';
 
 export type { StreamCallback };
