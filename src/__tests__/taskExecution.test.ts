@@ -120,6 +120,7 @@ describe('resolveTaskExecution', () => {
       execCwd: '/project',
       execPiece: 'default',
       isWorktree: false,
+      autoPr: false,
     });
     expect(mockSummarizeTaskName).not.toHaveBeenCalled();
     expect(mockCreateSharedClone).not.toHaveBeenCalled();
@@ -177,6 +178,7 @@ describe('resolveTaskExecution', () => {
       execCwd: '/project/../20260128T0504-add-auth',
       execPiece: 'default',
       isWorktree: true,
+      autoPr: false,
       branch: 'takt/20260128T0504-add-auth',
       baseBranch: 'main',
     });
@@ -372,7 +374,7 @@ describe('resolveTaskExecution', () => {
     expect(result.autoPr).toBe(true);
   });
 
-  it('should return undefined autoPr when neither task nor config specifies', async () => {
+  it('should return false autoPr when neither task nor config specifies', async () => {
     // Given: Neither task nor config has autoPr
     mockLoadGlobalConfig.mockReturnValue({
       language: 'en',
@@ -393,7 +395,7 @@ describe('resolveTaskExecution', () => {
     const result = await resolveTaskExecution(task, '/project', 'default');
 
     // Then
-    expect(result.autoPr).toBeUndefined();
+    expect(result.autoPr).toBe(false);
   });
 
   it('should prioritize task YAML auto_pr over global config', async () => {

@@ -3,7 +3,7 @@
  */
 
 import { loadPieceByIdentifier, isPiecePath, loadGlobalConfig } from '../../../infra/config/index.js';
-import { TaskRunner, type TaskInfo, autoCommitAndPush } from '../../../infra/task/index.js';
+import { TaskRunner, type TaskInfo } from '../../../infra/task/index.js';
 import {
   header,
   info,
@@ -17,9 +17,10 @@ import { getLabel } from '../../../shared/i18n/index.js';
 import { executePiece } from './pieceExecution.js';
 import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
 import type { TaskExecutionOptions, ExecuteTaskOptions, PieceExecutionResult } from './types.js';
-import { createPullRequest, buildPrBody, pushBranch, fetchIssue, checkGhCli } from '../../../infra/github/index.js';
+import { fetchIssue, checkGhCli } from '../../../infra/github/index.js';
 import { runWithWorkerPool } from './parallelExecution.js';
 import { resolveTaskExecution } from './resolveTask.js';
+import { postExecutionFlow } from './postExecution.js';
 
 export type { TaskExecutionOptions, ExecuteTaskOptions };
 
@@ -167,37 +168,17 @@ export async function executeAndCompleteTask(
     const completedAt = new Date().toISOString();
 
     if (taskSuccess && isWorktree) {
-      const commitResult = autoCommitAndPush(execCwd, task.name, cwd);
-      if (commitResult.success && commitResult.commitHash) {
-        info(`Auto-committed & pushed: ${commitResult.commitHash}`);
-      } else if (!commitResult.success) {
-        error(`Auto-commit failed: ${commitResult.message}`);
-      }
-
-      // Create PR if autoPr is enabled and commit succeeded
-      if (commitResult.success && commitResult.commitHash && branch && autoPr) {
-        info('Creating pull request...');
-        // Push branch from project cwd to origin
-        try {
-          pushBranch(cwd, branch);
-        } catch (pushError) {
-          // Branch may already be pushed, continue to PR creation
-          log.info('Branch push from project cwd failed (may already exist)', { error: pushError });
-        }
-        const issues = resolveTaskIssue(issueNumber);
-        const prBody = buildPrBody(issues, `Piece \`${execPiece}\` completed successfully.`);
-        const prResult = createPullRequest(cwd, {
-          branch,
-          title: task.name.length > 100 ? `${task.name.slice(0, 97)}...` : task.name,
-          body: prBody,
-          base: baseBranch,
-        });
-        if (prResult.success) {
-          success(`PR created: ${prResult.url}`);
-        } else {
-          error(`PR creation failed: ${prResult.error}`);
-        }
-      }
+      const issues = resolveTaskIssue(issueNumber);
+      await postExecutionFlow({
+        execCwd,
+        projectCwd: cwd,
+        task: task.name,
+        branch,
+        baseBranch,
+        shouldCreatePr: autoPr,
+        pieceIdentifier: execPiece,
+        issues,
+      });
     }
 
     const taskResult = {

@@ -19,6 +19,7 @@ import {
   autoCommitAndPush,
   type BranchListItem,
 } from '../../../infra/task/index.js';
+import { loadGlobalConfig, getPieceDescription } from '../../../infra/config/index.js';
 import { selectOption } from '../../../shared/prompt/index.js';
 import { info, success, error as logError, warn, header, blankLine } from '../../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
@@ -29,6 +30,7 @@ import { runInstructMode } from './instructMode.js';
 import { saveTaskFile } from '../add/index.js';
 import { selectPiece } from '../../pieceSelection/index.js';
 import { dispatchConversationAction } from '../../interactive/actionDispatcher.js';
+import type { PieceContext } from '../../interactive/interactive.js';
 
 const log = createLogger('list-tasks');
 
@@ -306,7 +308,7 @@ function getBranchContext(projectDir: string, branch: string): string {
 
 /**
  * Instruct branch: create a temp clone, give additional instructions via
- * interactive conversation, then auto-commit+push or save as task file.
+ * interactive conversation, then auto-commit+push+PR or save as task file.
  */
 export async function instructBranch(
   projectDir: string,
@@ -315,21 +317,23 @@ export async function instructBranch(
 ): Promise<boolean> {
   const { branch } = item.info;
 
-  const branchContext = getBranchContext(projectDir, branch);
-  const result = await runInstructMode(projectDir, branchContext, branch);
-  let selectedPiece: string | null = null;
+  const selectedPiece = await selectPiece(projectDir);
+  if (!selectedPiece) {
+    info('Cancelled');
+    return false;
+  }
 
-  const ensurePieceSelected = async (): Promise<string | null> => {
-    if (selectedPiece) {
-      return selectedPiece;
-    }
-    selectedPiece = await selectPiece(projectDir);
-    if (!selectedPiece) {
-      info('Cancelled');
-      return null;
-    }
-    return selectedPiece;
+  const globalConfig = loadGlobalConfig();
+  const pieceDesc = getPieceDescription(selectedPiece, projectDir, globalConfig.interactivePreviewMovements);
+  const pieceContext: PieceContext = {
+    name: pieceDesc.name,
+    description: pieceDesc.description,
+    pieceStructure: pieceDesc.pieceStructure,
+    movementPreviews: pieceDesc.movementPreviews,
   };
+
+  const branchContext = getBranchContext(projectDir, branch);
+  const result = await runInstructMode(projectDir, branchContext, branch, pieceContext);
 
   return dispatchConversationAction(result, {
     cancel: () => {
@@ -337,23 +341,19 @@ export async function instructBranch(
       return false;
     },
     save_task: async ({ task }) => {
-      const piece = await ensurePieceSelected();
-      if (!piece) {
-        return false;
-      }
-      const created = await saveTaskFile(projectDir, task, { piece });
+      const created = await saveTaskFile(projectDir, task, {
+        piece: selectedPiece,
+        worktree: true,
+        branch,
+        autoPr: false,
+      });
       success(`Task saved: ${created.taskName}`);
-      info(`  File: ${created.tasksFile}`);
-      log.info('Task saved from instruct mode', { branch, piece });
+      info(`  Branch: ${branch}`);
+      log.info('Task saved from instruct mode', { branch, piece: selectedPiece });
       return true;
     },
     execute: async ({ task }) => {
-      const piece = await ensurePieceSelected();
-      if (!piece) {
-        return false;
-      }
-
-      log.info('Instructing branch via temp clone', { branch, piece });
+      log.info('Instructing branch via temp clone', { branch, piece: selectedPiece });
       info(`Running instruction on ${branch}...`);
 
       const clone = createTempCloneForBranch(projectDir, branch);
@@ -366,17 +366,17 @@ export async function instructBranch(
         const taskSuccess = await executeTask({
           task: fullInstruction,
           cwd: clone.path,
-          pieceIdentifier: piece,
+          pieceIdentifier: selectedPiece,
           projectCwd: projectDir,
           agentOverrides: options,
         });
 
         if (taskSuccess) {
-          const commitResult = autoCommitAndPush(clone.path, item.taskSlug, projectDir);
+          const commitResult = autoCommitAndPush(clone.path, task, projectDir);
           if (commitResult.success && commitResult.commitHash) {
-            info(`Auto-committed & pushed: ${commitResult.commitHash}`);
+            success(`Auto-committed & pushed: ${commitResult.commitHash}`);
           } else if (!commitResult.success) {
-            warn(`Auto-commit skipped: ${commitResult.message}`);
+            logError(`Auto-commit failed: ${commitResult.message}`);
           }
           success(`Instruction completed on ${branch}`);
           log.info('Instruction completed', { branch });

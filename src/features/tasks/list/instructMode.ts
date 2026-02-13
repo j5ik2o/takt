@@ -17,6 +17,7 @@ import {
   resolveLanguage,
   buildSummaryActionOptions,
   selectSummaryAction,
+  type PieceContext,
 } from '../../interactive/interactive.js';
 import { loadTemplate } from '../../../shared/prompts/index.js';
 import { getLabelObject } from '../../../shared/i18n/index.js';
@@ -66,6 +67,7 @@ export async function runInstructMode(
   cwd: string,
   branchContext: string,
   branchName: string,
+  pieceContext?: PieceContext,
 ): Promise<InstructModeResult> {
   const globalConfig = loadGlobalConfig();
   const lang = resolveLanguage(globalConfig.language);
@@ -113,7 +115,7 @@ export async function runInstructMode(
     selectAction: createSelectInstructAction(ui),
   };
 
-  const result = await runConversationLoop(cwd, ctx, strategy, undefined, undefined);
+  const result = await runConversationLoop(cwd, ctx, strategy, pieceContext, undefined);
 
   if (result.action === 'cancel') {
     return { action: 'cancel', task: '' };
