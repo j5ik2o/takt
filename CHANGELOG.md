@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.14.0] - 2026-02-14
+
+### Added
+
+- **`takt list` インストラクトモード (#267)**: 既存ブランチに対して追加指示を行えるインストラクトモードを追加 — 会話ループで要件を詳細化してからピース実行が可能に
+- **`takt list` 完了タスクアクション (#271)**: 完了タスクに対する diff 表示・ブランチ操作（マージ、削除）を追加
+- **Claude サンドボックス設定**: `provider_options.claude.sandbox` でサンドボックスの除外コマンド（`excluded_commands`）やサンドボックス無効化（`allow_unsandboxed_commands`）を設定可能に
+- **`provider_options` のグローバル/プロジェクト設定**: `provider_options` を `~/.takt/config.yaml`（グローバル）および `.takt/config.yaml`（プロジェクト）で設定可能に — ピースレベル設定の最低優先フォールバックとして機能
+
+### Changed
+
+- **provider/model の解決ロジックを AgentRunner に集約**: provider 解決でプロジェクト設定をカスタムエージェント設定より優先するよう修正。ステップレベルの `stepModel` / `stepProvider` による上書きを追加
+- **ポストエクスキューションの共通化**: インタラクティブモードとインストラクトモードで post-execution フロー（auto-commit, push, PR 作成）を `postExecution.ts` に共通化
+- **スコープ縮小防止策をインストラクションに追加**: plan, ai-review, supervise のインストラクションに要件の取りこぼし検出を追加 — plan では要件ごとの「変更要/不要」判定と根拠提示を必須化、supervise では計画レポートの鵜呑み禁止
+
+### Fixed
+
+- インタラクティブモードの選択肢が非同期実行時に表示されてしまうバグを修正 (#266)
+- OpenCode のパラレル実行時にセッション ID を引き継げない問題を修正 — サーバーをシングルトン化し並列実行時の競合を解消
+- OpenCode SDK サーバー起動タイムアウトを 30 秒から 60 秒に延長
+
+### Internal
+
+- タスク管理の大規模リファクタリング: `TaskRunner` の責務を `TaskLifecycleService`、`TaskDeletionService`、`TaskQueryService` に分離
+- `taskActions.ts` を機能別に分割: `taskBranchLifecycleActions.ts`、`taskDiffActions.ts`、`taskInstructionActions.ts`、`taskDeleteActions.ts`
+- `postExecution.ts`、`taskResultHandler.ts`、`instructMode.ts`、`taskActionTarget.ts` を新規追加
+- ピース選択ロジックを `pieceSelection/index.ts` に集約（`selectAndExecute.ts` から抽出）
+- テスト追加: instructMode, listNonInteractive-completedActions, listTasksInteractiveStatusActions, option-resolution-order, taskInstructionActions, selectAndExecute-autoPr 等を新規・拡充
+- E2E テストに Claude Code サンドボックス対応オプション（`dangerouslyDisableSandbox`）を追加
+- `OPENCODE_CONFIG_CONTENT` を `.gitignore` に追加
+
 ## [0.13.0] - 2026-02-13
 
 ### Added

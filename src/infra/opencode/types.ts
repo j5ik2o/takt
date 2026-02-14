@@ -187,15 +187,11 @@ export interface OpenCodeCallOptions {
   model: string;
   systemPrompt?: string;
   allowedTools?: string[];
-  /** Permission mode for automatic permission handling */
   permissionMode?: PermissionMode;
-  /** Override network access (webfetch/websearch) */
   networkAccess?: boolean;
-  /** Enable streaming mode with callback (best-effort) */
   onStream?: StreamCallback;
   onAskUserQuestion?: AskUserQuestionHandler;
-  /** OpenCode API key */
   opencodeApiKey?: string;
-  /** JSON Schema for structured output */
   outputSchema?: Record<string, unknown>;
+  interactionTimeoutMs?: number;
 }

@@ -8,6 +8,7 @@ Review the code for AI-specific issues:
 - Plausible but incorrect patterns
 - Compatibility with the existing codebase
 - Scope creep detection
+- Scope shrinkage detection (missing task requirements)
 
 ## Judgment Procedure
 

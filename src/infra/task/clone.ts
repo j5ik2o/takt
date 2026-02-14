@@ -42,7 +42,7 @@ export class CloneManager {
         ? globalConfig.worktreeDir
         : path.resolve(projectDir, globalConfig.worktreeDir);
     }
-    return path.join(projectDir, '..');
+    return path.join(projectDir, '..', 'takt-worktree');
   }
 
   /** Resolve the clone path based on options and global config */

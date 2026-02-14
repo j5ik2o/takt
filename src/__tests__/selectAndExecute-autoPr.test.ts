@@ -4,6 +4,25 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+const {
+  mockAddTask,
+  mockCompleteTask,
+  mockFailTask,
+  mockExecuteTask,
+} = vi.hoisted(() => ({
+  mockAddTask: vi.fn(() => ({
+    name: 'test-task',
+    content: 'test task',
+    filePath: '/project/.takt/tasks.yaml',
+    createdAt: '2026-02-14T00:00:00.000Z',
+    status: 'pending',
+    data: { task: 'test task' },
+  })),
+  mockCompleteTask: vi.fn(),
+  mockFailTask: vi.fn(),
+  mockExecuteTask: vi.fn(),
+}));
+
 vi.mock('../shared/prompt/index.js', () => ({
   confirm: vi.fn(),
 }));
@@ -13,9 +32,6 @@ vi.mock('../infra/config/index.js', () => ({
   listPieces: vi.fn(() => ['default']),
   listPieceEntries: vi.fn(() => []),
   isPiecePath: vi.fn(() => false),
-  loadAllPiecesWithSources: vi.fn(() => new Map()),
-  getPieceCategories: vi.fn(() => null),
-  buildCategorizedPieces: vi.fn(),
   loadGlobalConfig: vi.fn(() => ({})),
 }));
 
@@ -24,6 +40,11 @@ vi.mock('../infra/task/index.js', () => ({
   autoCommitAndPush: vi.fn(),
   summarizeTaskName: vi.fn(),
   getCurrentBranch: vi.fn(() => 'main'),
+  TaskRunner: vi.fn(() => ({
+    addTask: (...args: unknown[]) => mockAddTask(...args),
+    completeTask: (...args: unknown[]) => mockCompleteTask(...args),
+    failTask: (...args: unknown[]) => mockFailTask(...args),
+  })),
 }));
 
 vi.mock('../shared/ui/index.js', () => ({
@@ -53,39 +74,30 @@ vi.mock('../infra/github/index.js', () => ({
 }));
 
 vi.mock('../features/tasks/execute/taskExecution.js', () => ({
-  executeTask: vi.fn(),
+  executeTask: (...args: unknown[]) => mockExecuteTask(...args),
 }));
 
 vi.mock('../features/pieceSelection/index.js', () => ({
   warnMissingPieces: vi.fn(),
   selectPieceFromCategorizedPieces: vi.fn(),
   selectPieceFromEntries: vi.fn(),
+  selectPiece: vi.fn(),
 }));
 
 import { confirm } from '../shared/prompt/index.js';
-import {
-  getCurrentPiece,
-  loadAllPiecesWithSources,
-  getPieceCategories,
-  buildCategorizedPieces,
-} from '../infra/config/index.js';
 import { createSharedClone, autoCommitAndPush, summarizeTaskName } from '../infra/task/index.js';
-import { warnMissingPieces, selectPieceFromCategorizedPieces } from '../features/pieceSelection/index.js';
+import { selectPiece } from '../features/pieceSelection/index.js';
 import { selectAndExecuteTask, determinePiece } from '../features/tasks/execute/selectAndExecute.js';
 
 const mockConfirm = vi.mocked(confirm);
-const mockGetCurrentPiece = vi.mocked(getCurrentPiece);
-const mockLoadAllPiecesWithSources = vi.mocked(loadAllPiecesWithSources);
-const mockGetPieceCategories = vi.mocked(getPieceCategories);
-const mockBuildCategorizedPieces = vi.mocked(buildCategorizedPieces);
 const mockCreateSharedClone = vi.mocked(createSharedClone);
 const mockAutoCommitAndPush = vi.mocked(autoCommitAndPush);
 const mockSummarizeTaskName = vi.mocked(summarizeTaskName);
-const mockWarnMissingPieces = vi.mocked(warnMissingPieces);
-const mockSelectPieceFromCategorizedPieces = vi.mocked(selectPieceFromCategorizedPieces);
+const mockSelectPiece = vi.mocked(selectPiece);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockExecuteTask.mockResolvedValue(true);
 });
 
 describe('resolveAutoPr default in selectAndExecuteTask', () => {
@@ -98,10 +110,6 @@ describe('resolveAutoPr default in selectAndExecuteTask', () => {
       branch: 'takt/test-task',
     });
 
-    const { executeTask } = await import(
-      '../features/tasks/execute/taskExecution.js'
-    );
-    vi.mocked(executeTask).mockResolvedValue(true);
     mockAutoCommitAndPush.mockReturnValue({
       success: false,
       message: 'no changes',
@@ -121,44 +129,86 @@ describe('resolveAutoPr default in selectAndExecuteTask', () => {
     expect(autoPrCall![1]).toBe(true);
   });
 
-  it('should warn only user-origin missing pieces during interactive selection', async () => {
-    // Given: category selection is enabled and both builtin/user missing pieces exist
-    mockGetCurrentPiece.mockReturnValue('default');
-    mockLoadAllPiecesWithSources.mockReturnValue(new Map([
-      ['default', {
-        source: 'builtin',
-        config: {
-          name: 'default',
-          movements: [],
-          initialMovement: 'start',
-          maxMovements: 1,
-        },
-      }],
-    ]));
-    mockGetPieceCategories.mockReturnValue({
-      pieceCategories: [],
-      builtinPieceCategories: [],
-      userPieceCategories: [],
-      showOthersCategory: true,
-      othersCategoryName: 'Others',
-    });
-    mockBuildCategorizedPieces.mockReturnValue({
-      categories: [],
-      allPieces: new Map(),
-      missingPieces: [
-        { categoryPath: ['Quick Start'], pieceName: 'default', source: 'builtin' },
-        { categoryPath: ['Custom'], pieceName: 'my-missing', source: 'user' },
-      ],
-    });
-    mockSelectPieceFromCategorizedPieces.mockResolvedValue('default');
+  it('should call selectPiece when no override is provided', async () => {
+    mockSelectPiece.mockResolvedValue('selected-piece');
 
-    // When
     const selected = await determinePiece('/project');
 
-    // Then
-    expect(selected).toBe('default');
-    expect(mockWarnMissingPieces).toHaveBeenCalledWith([
-      { categoryPath: ['Custom'], pieceName: 'my-missing', source: 'user' },
-    ]);
+    expect(selected).toBe('selected-piece');
+    expect(mockSelectPiece).toHaveBeenCalledWith('/project');
+  });
+
+  it('should fail task record when executeTask throws', async () => {
+    mockConfirm.mockResolvedValue(true);
+    mockSummarizeTaskName.mockResolvedValue('test-task');
+    mockCreateSharedClone.mockReturnValue({
+      path: '/project/../clone',
+      branch: 'takt/test-task',
+    });
+    mockExecuteTask.mockRejectedValue(new Error('boom'));
+
+    await expect(selectAndExecuteTask('/project', 'test task', {
+      piece: 'default',
+      createWorktree: true,
+    })).rejects.toThrow('boom');
+
+    expect(mockAddTask).toHaveBeenCalledTimes(1);
+    expect(mockFailTask).toHaveBeenCalledTimes(1);
+    expect(mockCompleteTask).not.toHaveBeenCalled();
+  });
+
+  it('should record task and complete when executeTask returns true', async () => {
+    mockConfirm.mockResolvedValue(true);
+    mockSummarizeTaskName.mockResolvedValue('test-task');
+    mockCreateSharedClone.mockReturnValue({
+      path: '/project/../clone',
+      branch: 'takt/test-task',
+    });
+    mockExecuteTask.mockResolvedValue(true);
+
+    await selectAndExecuteTask('/project', 'test task', {
+      piece: 'default',
+      createWorktree: true,
+    });
+
+    expect(mockAddTask).toHaveBeenCalledWith('test task', expect.objectContaining({
+      piece: 'default',
+      worktree: true,
+      branch: 'takt/test-task',
+      worktree_path: '/project/../clone',
+      auto_pr: true,
+    }));
+    expect(mockCompleteTask).toHaveBeenCalledTimes(1);
+    expect(mockFailTask).not.toHaveBeenCalled();
+  });
+
+  it('should record task and fail when executeTask returns false', async () => {
+    mockConfirm.mockResolvedValue(false);
+    mockSummarizeTaskName.mockResolvedValue('test-task');
+    mockCreateSharedClone.mockReturnValue({
+      path: '/project/../clone',
+      branch: 'takt/test-task',
+    });
+    mockExecuteTask.mockResolvedValue(false);
+
+    const processExitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {
+      throw new Error('process exit');
+    }) as (code?: string | number | null | undefined) => never);
+
+    await expect(selectAndExecuteTask('/project', 'test task', {
+      piece: 'default',
+      createWorktree: true,
+    })).rejects.toThrow('process exit');
+
+    expect(mockAddTask).toHaveBeenCalledWith('test task', expect.objectContaining({
+      piece: 'default',
+      worktree: true,
+      branch: 'takt/test-task',
+      worktree_path: '/project/../clone',
+      auto_pr: false,
+    }));
+    expect(mockFailTask).toHaveBeenCalledTimes(1);
+    expect(mockCompleteTask).not.toHaveBeenCalled();
+    processExitSpy.mockRestore();
   });
 });

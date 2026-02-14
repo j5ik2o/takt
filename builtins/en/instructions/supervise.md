@@ -3,7 +3,8 @@ Run tests, verify the build, and perform final approval.
 **Overall piece verification:**
 1. Whether the plan and implementation results are consistent
 2. Whether findings from each review movement have been addressed
-3. Whether the original task objective has been achieved
+3. Whether each task spec requirement has been achieved
+   - Do not rely on the plan report's judgment; independently verify each requirement against actual code (file:line)
 
 **Report verification:** Read all reports in the Report Directory and
 check for any unaddressed improvement suggestions.

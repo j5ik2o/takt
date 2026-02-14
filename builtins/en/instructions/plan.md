@@ -12,6 +12,7 @@ For small tasks, skip the design sections in the report.
 
 **Actions:**
 1. Understand the task requirements
+   - **For each requirement, determine "change needed / not needed". If "not needed", cite the relevant code (file:line) as evidence. Claiming "already correct" without evidence is prohibited**
 2. Investigate code to resolve unknowns
 3. Identify the impact area
 4. Determine file structure and design patterns (if needed)

@@ -29,14 +29,15 @@ export class AgentRunner {
     agentConfig?: CustomAgentConfig,
   ): ProviderType {
     if (options?.provider) return options.provider;
-    if (agentConfig?.provider) return agentConfig.provider;
     const projectConfig = loadProjectConfig(cwd);
     if (projectConfig.provider) return projectConfig.provider;
+    if (options?.stepProvider) return options.stepProvider;
+    if (agentConfig?.provider) return agentConfig.provider;
     try {
       const globalConfig = loadGlobalConfig();
       if (globalConfig.provider) return globalConfig.provider;
-    } catch {
-      // Ignore missing global config; fallback below
+    } catch (error) {
+      log.debug('Global config not available for provider resolution', { error });
     }
     return 'claude';
   }
@@ -52,6 +53,7 @@ export class AgentRunner {
     agentConfig?: CustomAgentConfig,
   ): string | undefined {
     if (options?.model) return options.model;
+    if (options?.stepModel) return options.stepModel;
     if (agentConfig?.model) return agentConfig.model;
     try {
       const globalConfig = loadGlobalConfig();
@@ -59,8 +61,8 @@ export class AgentRunner {
         const globalProvider = globalConfig.provider ?? 'claude';
         if (globalProvider === resolvedProvider) return globalConfig.model;
       }
-    } catch {
-      // Ignore missing global config
+    } catch (error) {
+      log.debug('Global config not available for model resolution', { error });
     }
     return undefined;
   }

@@ -10,6 +10,7 @@ export interface JudgeStatusOptions {
   cwd: string;
   movementName: string;
   language?: Language;
+  interactive?: boolean;
 }
 
 export interface JudgeStatusResult {
@@ -98,6 +99,14 @@ export async function judgeStatus(
     return { ruleIndex: 0, method: 'auto_select' };
   }
 
+  const interactiveEnabled = options.interactive === true;
+
+  const isValidRuleIndex = (index: number): boolean => {
+    if (index < 0 || index >= rules.length) return false;
+    const rule = rules[index];
+    return !(rule?.interactiveOnly && !interactiveEnabled);
+  };
+
   const agentOptions = {
     cwd: options.cwd,
     maxTurns: 3,
@@ -115,7 +124,7 @@ export async function judgeStatus(
     const stepNumber = structuredResponse.structuredOutput?.step;
     if (typeof stepNumber === 'number' && Number.isInteger(stepNumber)) {
       const ruleIndex = stepNumber - 1;
-      if (ruleIndex >= 0 && ruleIndex < rules.length) {
+      if (isValidRuleIndex(ruleIndex)) {
         return { ruleIndex, method: 'structured_output' };
       }
     }
@@ -126,16 +135,25 @@ export async function judgeStatus(
 
   if (tagResponse.status === 'done') {
     const tagRuleIndex = detectRuleIndex(tagResponse.content, options.movementName);
-    if (tagRuleIndex >= 0 && tagRuleIndex < rules.length) {
+    if (isValidRuleIndex(tagRuleIndex)) {
       return { ruleIndex: tagRuleIndex, method: 'phase3_tag' };
     }
   }
 
   // Stage 3: AI judge
-  const conditions = rules.map((rule, index) => ({ index, text: rule.condition }));
-  const fallbackIndex = await evaluateCondition(structuredInstruction, conditions, { cwd: options.cwd });
-  if (fallbackIndex >= 0 && fallbackIndex < rules.length) {
-    return { ruleIndex: fallbackIndex, method: 'ai_judge' };
+  const conditions = rules
+    .map((rule, index) => ({ rule, index }))
+    .filter(({ rule }) => interactiveEnabled || !rule.interactiveOnly)
+    .map(({ index, rule }) => ({ index, text: rule.condition }));
+
+  if (conditions.length > 0) {
+    const fallbackIndex = await evaluateCondition(structuredInstruction, conditions, { cwd: options.cwd });
+    if (fallbackIndex >= 0 && fallbackIndex < conditions.length) {
+      const originalIndex = conditions[fallbackIndex]?.index;
+      if (originalIndex !== undefined) {
+        return { ruleIndex: originalIndex, method: 'ai_judge' };
+      }
+    }
   }
 
   throw new Error(`Status not found for movement "${options.movementName}"`);

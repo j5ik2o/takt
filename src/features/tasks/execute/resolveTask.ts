@@ -16,10 +16,11 @@ export interface ResolvedTaskExecution {
   taskPrompt?: string;
   reportDirName?: string;
   branch?: string;
+  worktreePath?: string;
   baseBranch?: string;
   startMovement?: string;
   retryNote?: string;
-  autoPr?: boolean;
+  autoPr: boolean;
   issueNumber?: number;
 }
 
@@ -74,7 +75,7 @@ export async function resolveTaskExecution(
 
   const data = task.data;
   if (!data) {
-    return { execCwd: defaultCwd, execPiece: defaultPiece, isWorktree: false };
+    return { execCwd: defaultCwd, execPiece: defaultPiece, isWorktree: false, autoPr: false };
   }
 
   let execCwd = defaultCwd;
@@ -82,6 +83,7 @@ export async function resolveTaskExecution(
   let reportDirName: string | undefined;
   let taskPrompt: string | undefined;
   let branch: string | undefined;
+  let worktreePath: string | undefined;
   let baseBranch: string | undefined;
   if (task.taskDir) {
     const taskSlug = getTaskSlugFromTaskDir(task.taskDir);
@@ -114,8 +116,8 @@ export async function resolveTaskExecution(
     throwIfAborted(abortSignal);
     execCwd = result.path;
     branch = result.branch;
+    worktreePath = result.path;
     isWorktree = true;
-
   }
 
   if (task.taskDir && reportDirName) {
@@ -126,25 +128,26 @@ export async function resolveTaskExecution(
   const startMovement = data.start_movement;
   const retryNote = data.retry_note;
 
-  let autoPr: boolean | undefined;
+  let autoPr: boolean;
   if (data.auto_pr !== undefined) {
     autoPr = data.auto_pr;
   } else {
     const globalConfig = loadGlobalConfig();
-    autoPr = globalConfig.autoPr;
+    autoPr = globalConfig.autoPr ?? false;
   }
 
   return {
     execCwd,
     execPiece,
     isWorktree,
+    autoPr,
     ...(taskPrompt ? { taskPrompt } : {}),
     ...(reportDirName ? { reportDirName } : {}),
     ...(branch ? { branch } : {}),
+    ...(worktreePath ? { worktreePath } : {}),
     ...(baseBranch ? { baseBranch } : {}),
     ...(startMovement ? { startMovement } : {}),
     ...(retryNote ? { retryNote } : {}),
-    ...(autoPr !== undefined ? { autoPr } : {}),
     ...(data.issue !== undefined ? { issueNumber: data.issue } : {}),
   };
 }

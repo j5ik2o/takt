@@ -36,6 +36,7 @@ function buildBaseContext(
     if (reports.length > 0) {
       return {
         language: ctx.language,
+        interactive: ctx.interactive,
         reportContent: reports.join('\n\n---\n\n'),
         inputSource: 'report',
       };
@@ -46,6 +47,7 @@ function buildBaseContext(
 
   return {
     language: ctx.language,
+    interactive: ctx.interactive,
     lastResponse: ctx.lastResponse,
     inputSource: 'response',
   };
@@ -89,6 +91,7 @@ export async function runStatusJudgmentPhase(
       cwd: ctx.cwd,
       movementName: step.name,
       language: ctx.language,
+      interactive: ctx.interactive,
     });
     const tag = `[${step.name.toUpperCase()}:${result.ruleIndex + 1}]`;
     ctx.onPhaseComplete?.(step, 3, 'judge', tag, 'done');

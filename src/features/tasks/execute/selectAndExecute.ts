@@ -7,80 +7,24 @@
  */
 
 import {
-  getCurrentPiece,
   listPieces,
-  listPieceEntries,
   isPiecePath,
-  loadAllPiecesWithSources,
-  getPieceCategories,
-  buildCategorizedPieces,
-  loadGlobalConfig,
 } from '../../../infra/config/index.js';
 import { confirm } from '../../../shared/prompt/index.js';
-import { createSharedClone, autoCommitAndPush, summarizeTaskName, getCurrentBranch } from '../../../infra/task/index.js';
+import { createSharedClone, summarizeTaskName, getCurrentBranch, TaskRunner } from '../../../infra/task/index.js';
 import { DEFAULT_PIECE_NAME } from '../../../shared/constants.js';
-import { info, error, success, withProgress } from '../../../shared/ui/index.js';
+import { info, error, withProgress } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
-import { createPullRequest, buildPrBody, pushBranch } from '../../../infra/github/index.js';
 import { executeTask } from './taskExecution.js';
+import { resolveAutoPr, postExecutionFlow } from './postExecution.js';
 import type { TaskExecutionOptions, WorktreeConfirmationResult, SelectAndExecuteOptions } from './types.js';
-import {
-  warnMissingPieces,
-  selectPieceFromCategorizedPieces,
-  selectPieceFromEntries,
-} from '../../pieceSelection/index.js';
+import { selectPiece } from '../../pieceSelection/index.js';
+import { buildBooleanTaskResult, persistTaskError, persistTaskResult } from './taskResultHandler.js';
 
 export type { WorktreeConfirmationResult, SelectAndExecuteOptions };
 
 const log = createLogger('selectAndExecute');
 
-/**
- * Select a piece interactively with directory categories and bookmarks.
- */
-async function selectPieceWithDirectoryCategories(cwd: string): Promise<string | null> {
-  const availablePieces = listPieces(cwd);
-  const currentPiece = getCurrentPiece(cwd);
-
-  if (availablePieces.length === 0) {
-    info(`No pieces found. Using default: ${DEFAULT_PIECE_NAME}`);
-    return DEFAULT_PIECE_NAME;
-  }
-
-  if (availablePieces.length === 1 && availablePieces[0]) {
-    return availablePieces[0];
-  }
-
-  const entries = listPieceEntries(cwd);
-  return selectPieceFromEntries(entries, currentPiece);
-}
-
-
-/**
- * Select a piece interactively with 2-stage category support.
- */
-async function selectPiece(cwd: string): Promise<string | null> {
-  const categoryConfig = getPieceCategories();
-  if (categoryConfig) {
-    const current = getCurrentPiece(cwd);
-    const allPieces = loadAllPiecesWithSources(cwd);
-    if (allPieces.size === 0) {
-      info(`No pieces found. Using default: ${DEFAULT_PIECE_NAME}`);
-      return DEFAULT_PIECE_NAME;
-    }
-    const categorized = buildCategorizedPieces(allPieces, categoryConfig);
-    warnMissingPieces(categorized.missingPieces.filter((missing) => missing.source === 'user'));
-    return selectPieceFromCategorizedPieces(categorized, current);
-  }
-  return selectPieceWithDirectoryCategories(cwd);
-}
-
-/**
- * Determine piece to use.
- *
- * - If override looks like a path (isPiecePath), return it directly (validation is done at load time).
- * - If override is a name, validate it exists in available pieces.
- * - If no override, prompt user to select interactively.
- */
 export async function determinePiece(cwd: string, override?: string): Promise<string | null> {
   if (override) {
     if (isPiecePath(override)) {
@@ -132,26 +76,6 @@ export async function confirmAndCreateWorktree(
 }
 
 /**
- * Resolve auto-PR setting with priority: CLI option > config > prompt.
- * Only applicable when worktree is enabled.
- */
-async function resolveAutoPr(optionAutoPr: boolean | undefined): Promise<boolean> {
-  // CLI option takes precedence
-  if (typeof optionAutoPr === 'boolean') {
-    return optionAutoPr;
-  }
-
-  // Check global config
-  const globalConfig = loadGlobalConfig();
-  if (typeof globalConfig.autoPr === 'boolean') {
-    return globalConfig.autoPr;
-  }
-
-  // Fall back to interactive prompt
-  return confirm('Create pull request?', true);
-}
-
-/**
  * Execute a task with piece selection, optional worktree, and auto-commit.
  * Shared by direct task execution and interactive mode.
  */
@@ -181,47 +105,61 @@ export async function selectAndExecuteTask(
   }
 
   log.info('Starting task execution', { piece: pieceIdentifier, worktree: isWorktree, autoPr: shouldCreatePr });
-  const taskSuccess = await executeTask({
-    task,
-    cwd: execCwd,
-    pieceIdentifier,
-    projectCwd: cwd,
-    agentOverrides,
-    interactiveUserInput: options?.interactiveUserInput === true,
-    interactiveMetadata: options?.interactiveMetadata,
+  const taskRunner = new TaskRunner(cwd);
+  const taskRecord = taskRunner.addTask(task, {
+    piece: pieceIdentifier,
+    ...(isWorktree ? { worktree: true } : {}),
+    ...(branch ? { branch } : {}),
+    ...(isWorktree ? { worktree_path: execCwd } : {}),
+    auto_pr: shouldCreatePr,
   });
+  const startedAt = new Date().toISOString();
+
+  let taskSuccess: boolean;
+  try {
+    taskSuccess = await executeTask({
+      task,
+      cwd: execCwd,
+      pieceIdentifier,
+      projectCwd: cwd,
+      agentOverrides,
+      interactiveUserInput: options?.interactiveUserInput === true,
+      interactiveMetadata: options?.interactiveMetadata,
+    });
+  } catch (err) {
+    const completedAt = new Date().toISOString();
+    persistTaskError(taskRunner, taskRecord, startedAt, completedAt, err, {
+      responsePrefix: 'Task failed: ',
+    });
+    throw err;
+  }
+
+  const completedAt = new Date().toISOString();
+
+  const taskResult = buildBooleanTaskResult({
+    task: taskRecord,
+    taskSuccess,
+    successResponse: 'Task completed successfully',
+    failureResponse: 'Task failed',
+    startedAt,
+    completedAt,
+    branch,
+    ...(isWorktree ? { worktreePath: execCwd } : {}),
+  });
+  persistTaskResult(taskRunner, taskResult);
 
   if (taskSuccess && isWorktree) {
-    const commitResult = autoCommitAndPush(execCwd, task, cwd);
-    if (commitResult.success && commitResult.commitHash) {
-      success(`Auto-committed & pushed: ${commitResult.commitHash}`);
-    } else if (!commitResult.success) {
-      error(`Auto-commit failed: ${commitResult.message}`);
-    }
-
-    if (commitResult.success && commitResult.commitHash && branch && shouldCreatePr) {
-      info('Creating pull request...');
-      // Push branch from project cwd to origin (clone's origin is removed after shared clone)
-      try {
-        pushBranch(cwd, branch);
-      } catch (pushError) {
-        // Branch may already be pushed by autoCommitAndPush, continue to PR creation
-        log.info('Branch push from project cwd failed (may already exist)', { error: pushError });
-      }
-      const prBody = buildPrBody(options?.issues, `Piece \`${pieceIdentifier}\` completed successfully.`);
-      const prResult = createPullRequest(cwd, {
-        branch,
-        title: task.length > 100 ? `${task.slice(0, 97)}...` : task,
-        body: prBody,
-        base: baseBranch,
-        repo: options?.repo,
-      });
-      if (prResult.success) {
-        success(`PR created: ${prResult.url}`);
-      } else {
-        error(`PR creation failed: ${prResult.error}`);
-      }
-    }
+    await postExecutionFlow({
+      execCwd,
+      projectCwd: cwd,
+      task,
+      branch,
+      baseBranch,
+      shouldCreatePr,
+      pieceIdentifier,
+      issues: options?.issues,
+      repo: options?.repo,
+    });
   }
 
   if (!taskSuccess) {
