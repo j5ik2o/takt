@@ -16,6 +16,10 @@ vi.mock('../infra/config/index.js', () => ({
     concurrency: 1,
     taskPollIntervalMs: 500,
   })),
+  loadProjectConfig: vi.fn(() => ({
+    piece: 'default',
+    permissionMode: 'default',
+  })),
 }));
 
 import { loadGlobalConfig } from '../infra/config/index.js';
