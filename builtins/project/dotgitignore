@@ -1,11 +1,8 @@
-# Temporary files
-logs/
-runs/
-completed/
-tasks/
-worktrees/
-worktree-meta/
-clone-meta/
-worktree-sessions/
-agent_sessions.json
-input_history
+# Ignore everything by default
+*
+
+# This file itself
+!.gitignore
+
+# Project configuration
+!config.yaml
