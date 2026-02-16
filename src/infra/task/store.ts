@@ -13,10 +13,15 @@ function sleepSync(ms: number): void {
   Atomics.wait(arr, 0, 0, ms);
 }
 
+function fsErrorCode(err: unknown): string | undefined {
+  return (err as NodeJS.ErrnoException).code;
+}
+
 export class TaskStore {
   private readonly tasksFile: string;
   private readonly lockFile: string;
   private readonly taktDir: string;
+  private lockOwned = false;
 
   constructor(private readonly projectDir: string) {
     this.taktDir = path.join(projectDir, '.takt');
@@ -94,10 +99,10 @@ export class TaskStore {
     while (true) {
       try {
         fs.writeFileSync(this.lockFile, String(process.pid), { encoding: 'utf-8', flag: 'wx' });
+        this.lockOwned = true;
         return;
       } catch (err) {
-        const nodeErr = err as NodeJS.ErrnoException;
-        if (nodeErr.code !== 'EEXIST') {
+        if (fsErrorCode(err) !== 'EEXIST') {
           throw err;
         }
       }
@@ -120,8 +125,8 @@ export class TaskStore {
     try {
       pidRaw = fs.readFileSync(this.lockFile, 'utf-8').trim();
     } catch (err) {
-      const nodeErr = err as NodeJS.ErrnoException;
-      if (nodeErr.code === 'ENOENT') {
+      const code = fsErrorCode(err);
+      if (code === 'ENOENT' || code === 'EPERM') {
         return false;
       }
       throw err;
@@ -139,8 +144,7 @@ export class TaskStore {
     try {
       fs.unlinkSync(this.lockFile);
     } catch (err) {
-      const nodeErr = err as NodeJS.ErrnoException;
-      if (nodeErr.code !== 'ENOENT') {
+      if (fsErrorCode(err) !== 'ENOENT') {
         log.debug('Failed to remove stale lock, retrying.', { lockFile: this.lockFile, error: String(err) });
       }
     }
@@ -151,11 +155,11 @@ export class TaskStore {
       process.kill(pid, 0);
       return true;
     } catch (err) {
-      const nodeErr = err as NodeJS.ErrnoException;
-      if (nodeErr.code === 'ESRCH') {
+      const code = fsErrorCode(err);
+      if (code === 'ESRCH') {
         return false;
       }
-      if (nodeErr.code === 'EPERM') {
+      if (code === 'EPERM') {
         return true;
       }
       throw err;
@@ -163,19 +167,14 @@ export class TaskStore {
   }
 
   private releaseLock(): void {
+    if (!this.lockOwned) return;
+    this.lockOwned = false;
+
     try {
-      const holder = fs.readFileSync(this.lockFile, 'utf-8').trim();
-      if (holder !== String(process.pid)) {
-        return;
-      }
       fs.unlinkSync(this.lockFile);
     } catch (err) {
-      const nodeErr = err as NodeJS.ErrnoException;
-      if (nodeErr.code === 'ENOENT') {
-        return;
-      }
+      if (fsErrorCode(err) === 'ENOENT') return;
       log.debug('Failed to release tasks lock.', { lockFile: this.lockFile, error: String(err) });
-      throw err;
     }
   }
 }
