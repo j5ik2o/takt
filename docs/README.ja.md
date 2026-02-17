@@ -466,6 +466,7 @@ TAKTには複数のビルトインピースが同梱されています:
 | `backend-cqrs-mini` | ミニ CQRS+ES ピース: 計画 → 実装 → 並列レビュー（AI アンチパターン＋スーパーバイザー）。CQRS+ES ナレッジ注入付き。 |
 | `review-fix-minimal` | レビュー重視ピース: レビュー → 修正 → スーパーバイザー。レビューフィードバックに基づく反復改善向け。 |
 | `research` | リサーチピース: プランナー → ディガー → スーパーバイザー。質問せずに自律的にリサーチを実行。 |
+| `deep-research` | ディープリサーチピース: 計画 → 深掘り → 分析 → 統括。発見駆動型の調査で、多角的な分析を行う。 |
 | `expert` | フルスタック開発ピース: アーキテクチャ、フロントエンド、セキュリティ、QA レビューと修正ループ。 |
 | `expert-mini` | ミニエキスパートピース: 計画 → 実装 → 並列レビュー（AI アンチパターン＋エキスパートスーパーバイザー）。フルスタックナレッジ注入付き。 |
 | `expert-cqrs` | フルスタック開発ピース（CQRS+ES特化）: CQRS+ES、フロントエンド、セキュリティ、QA レビューと修正ループ。 |
@@ -502,6 +503,7 @@ TAKTには複数のビルトインピースが同梱されています:
 | **supervisor** | 最終検証、バリデーション、承認 |
 | **expert-supervisor** | 包括的なレビュー統合による専門レベルの最終検証 |
 | **research-planner** | リサーチタスクの計画・スコープ定義 |
+| **research-analyzer** | リサーチ結果の解釈と追加調査の計画 |
 | **research-digger** | 深掘り調査と情報収集 |
 | **research-supervisor** | リサーチ品質の検証と網羅性の評価 |
 | **test-planner** | テスト戦略分析と包括的なテスト計画 |
@@ -934,7 +936,7 @@ export TAKT_OPENCODE_API_KEY=...
 - [Faceted Prompting](./faceted-prompting.ja.md) - AIプロンプトへの関心の分離（Persona, Policy, Instruction, Knowledge, Output Contract）
 - [Piece Guide](./pieces.md) - ピースの作成とカスタマイズ
 - [Agent Guide](./agents.md) - カスタムエージェントの設定
-- [Changelog](../CHANGELOG.md) - バージョン履歴
+- [Changelog](../CHANGELOG.md) ([日本語](./CHANGELOG.ja.md)) - バージョン履歴
 - [Security Policy](../SECURITY.md) - 脆弱性報告
 - [ブログ: TAKT - AIエージェントオーケストレーション](https://zenn.dev/nrs/articles/c6842288a526d7) - 設計思想と実践的な使い方ガイド
 
