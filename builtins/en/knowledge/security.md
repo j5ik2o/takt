@@ -186,6 +186,21 @@ fun create(request: CreateRequest) {
 
 When a tenant resolver assumes a specific role (e.g., staff), the endpoint must have corresponding authorization controls. Without authorization, unexpected roles can access the endpoint and cause the resolver to fail.
 
+```kotlin
+// NG - Resolver assumes STAFF but no authorization control
+fun getSettings(): SettingsResponse {
+    val tenantId = tenantResolver.resolve()  // Fails for non-STAFF
+    return settingsService.getByTenant(tenantId)
+}
+
+// OK - Authorization ensures correct role
+@Authorized(roles = ["STAFF"])
+fun getSettings(): SettingsResponse {
+    val tenantId = tenantResolver.resolve()
+    return settingsService.getByTenant(tenantId)
+}
+```
+
 For endpoints with role-based branching, verify that tenant resolution succeeds on all paths.
 
 ## OWASP Top 10 Checklist

@@ -186,6 +186,21 @@ fun create(request: CreateRequest) {
 
 テナントリゾルバーが特定ロール（例: スタッフ）を前提とする場合、エンドポイントに対応する認可制御が必要。認可なしだと、前提外のロールがアクセスしてリゾルバーが失敗する。
 
+```kotlin
+// NG - リゾルバーが STAFF を前提とするが認可制御なし
+fun getSettings(): SettingsResponse {
+    val tenantId = tenantResolver.resolve()  // STAFF 以外で失敗
+    return settingsService.getByTenant(tenantId)
+}
+
+// OK - 認可制御でロールを保証
+@Authorized(roles = ["STAFF"])
+fun getSettings(): SettingsResponse {
+    val tenantId = tenantResolver.resolve()
+    return settingsService.getByTenant(tenantId)
+}
+```
+
 ロール分岐があるエンドポイントでは、全パスでテナント解決が成功するか検証する。
 
 ## OWASP Top 10 チェックリスト
