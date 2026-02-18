@@ -76,10 +76,6 @@ takt --pipeline --task "バグを修正して" --auto-pr
 
 ## 使い方
 
-## 実装メモ
-
-- failed タスクの retry とセッション再開: [`docs/implements/retry-and-session.ja.md`](./implements/retry-and-session.ja.md)
-
 ### 対話モード
 
 AI との会話でタスク内容を詰めてから実行するモード。タスクの要件が曖昧な場合や、AI と相談しながら内容を整理したい場合に便利です。
@@ -93,6 +89,8 @@ takt hello
 ```
 
 **注意:** `--task` オプションを指定すると対話モードをスキップして直接タスク実行されます。Issue 参照（`#6`、`--issue`）は対話モードの初期入力として使用されます。
+
+対話開始時には `takt list` の履歴を自動取得し、`failed` / `interrupted` / `completed` の実行結果を `pieceContext` に注入して会話要約へ反映します。要約では `Worktree ID`、`開始/終了時刻`、`最終結果`、`失敗要約`、`ログ参照キー` を参照できます。`takt list` の取得に失敗しても対話は継続されます。
 
 **フロー:**
 1. ピース選択
@@ -224,6 +222,8 @@ takt list --non-interactive --action diff --branch takt/my-branch
 takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
+
+対話モードでは、上記の実行履歴（`failed` / `interrupted` / `completed`）を起動時に再利用し、失敗事例や中断済み実行を再作業対象として特定しやすくします。
 
 #### タスクディレクトリ運用（作成・実行・確認）
 
@@ -449,7 +449,7 @@ movements:
 
 | 種類 | 構文 | 説明 |
 |------|------|------|
-| タグベース | `"条件テキスト"` | エージェントが `[STEP:N]` タグを出力し、インデックスでマッチ |
+| タグベース | `"条件テキスト"` | エージェントが `[MOVEMENTNAME:N]` タグを出力し、インデックスでマッチ |
 | AI判定 | `ai("条件テキスト")` | AIが条件をエージェント出力に対して評価 |
 | 集約 | `all("X")` / `any("X")` | パラレルサブムーブメントの結果を集約 |
 
@@ -941,6 +941,7 @@ export TAKT_OPENCODE_API_KEY=...
 - [Faceted Prompting](./faceted-prompting.ja.md) - AIプロンプトへの関心の分離（Persona, Policy, Instruction, Knowledge, Output Contract）
 - [Piece Guide](./pieces.md) - ピースの作成とカスタマイズ
 - [Agent Guide](./agents.md) - カスタムエージェントの設定
+- [Retry and Session](./implements/retry-and-session.ja.md) - failed タスクの retry とセッション再開
 - [Changelog](../CHANGELOG.md) ([日本語](./CHANGELOG.ja.md)) - バージョン履歴
 - [Security Policy](../SECURITY.md) - 脆弱性報告
 - [ブログ: TAKT - AIエージェントオーケストレーション](https://zenn.dev/nrs/articles/c6842288a526d7) - 設計思想と実践的な使い方ガイド

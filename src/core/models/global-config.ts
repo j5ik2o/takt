@@ -17,12 +17,6 @@ export interface CustomAgentConfig {
   model?: string;
 }
 
-/** Debug configuration for takt */
-export interface DebugConfig {
-  enabled: boolean;
-  logFile?: string;
-}
-
 /** Observability configuration for runtime event logs */
 export interface ObservabilityConfig {
   /** Enable provider stream event logging (default: false when undefined) */
@@ -63,7 +57,6 @@ export interface GlobalConfig {
   logLevel: 'debug' | 'info' | 'warn' | 'error';
   provider?: 'claude' | 'codex' | 'opencode' | 'mock';
   model?: string;
-  debug?: DebugConfig;
   observability?: ObservabilityConfig;
   /** Directory for shared clones (worktree_dir in config). If empty, uses ../{clone-name} relative to project */
   worktreeDir?: string;

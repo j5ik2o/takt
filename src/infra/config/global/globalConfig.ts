@@ -1,7 +1,7 @@
 /**
  * Global configuration loader
  *
- * Manages ~/.takt/config.yaml and project-level debug settings.
+ * Manages ~/.takt/config.yaml.
  * GlobalConfigManager encapsulates the config cache as a singleton.
  */
 
@@ -9,10 +9,10 @@ import { readFileSync, existsSync, writeFileSync, statSync, accessSync, constant
 import { isAbsolute } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { GlobalConfigSchema } from '../../../core/models/index.js';
-import type { GlobalConfig, DebugConfig, Language } from '../../../core/models/index.js';
+import type { GlobalConfig, Language } from '../../../core/models/index.js';
 import type { ProviderPermissionProfiles } from '../../../core/models/provider-profiles.js';
 import { normalizeProviderOptions } from '../loaders/pieceParser.js';
-import { getGlobalConfigPath, getProjectConfigPath } from '../paths.js';
+import { getGlobalConfigPath } from '../paths.js';
 import { DEFAULT_LANGUAGE } from '../../../shared/constants.js';
 import { parseProviderModel } from '../../../shared/utils/providerModel.js';
 
@@ -168,10 +168,6 @@ export class GlobalConfigManager {
       logLevel: parsed.log_level,
       provider: parsed.provider,
       model: parsed.model,
-      debug: parsed.debug ? {
-        enabled: parsed.debug.enabled,
-        logFile: parsed.debug.log_file,
-      } : undefined,
       observability: parsed.observability ? {
         providerEvents: parsed.observability.provider_events,
       } : undefined,
@@ -227,12 +223,6 @@ export class GlobalConfigManager {
     };
     if (config.model) {
       raw.model = config.model;
-    }
-    if (config.debug) {
-      raw.debug = {
-        enabled: config.debug.enabled,
-        log_file: config.debug.logFile,
-      };
     }
     if (config.observability && config.observability.providerEvents !== undefined) {
       raw.observability = {
@@ -458,41 +448,3 @@ export function resolveOpencodeApiKey(): string | undefined {
   }
 }
 
-/** Load project-level debug configuration (from .takt/config.yaml) */
-export function loadProjectDebugConfig(projectDir: string): DebugConfig | undefined {
-  const configPath = getProjectConfigPath(projectDir);
-  if (!existsSync(configPath)) {
-    return undefined;
-  }
-  try {
-    const content = readFileSync(configPath, 'utf-8');
-    const raw = parseYaml(content);
-    if (raw && typeof raw === 'object' && 'debug' in raw) {
-      const debug = raw.debug;
-      if (debug && typeof debug === 'object') {
-        return {
-          enabled: Boolean(debug.enabled),
-          logFile: typeof debug.log_file === 'string' ? debug.log_file : undefined,
-        };
-      }
-    }
-  } catch {
-    // Ignore parse errors
-  }
-  return undefined;
-}
-
-/** Get effective debug config (project overrides global) */
-export function getEffectiveDebugConfig(projectDir?: string): DebugConfig | undefined {
-  const globalConfig = loadGlobalConfig();
-  let debugConfig = globalConfig.debug;
-
-  if (projectDir) {
-    const projectDebugConfig = loadProjectDebugConfig(projectDir);
-    if (projectDebugConfig) {
-      debugConfig = projectDebugConfig;
-    }
-  }
-
-  return debugConfig;
-}
