@@ -29,6 +29,10 @@ concurrency: 2                  # Concurrent task execution for takt run (1-10)
 #   run_abort: true
 # observability:
 #   provider_events: false         # Persist provider stream events
+# analytics:
+#   enabled: true                  # Enable analytics metrics collection
+#   events_path: ~/.takt/analytics/events  # Analytics event directory
+#   retention_days: 30             # Analytics event retention (days)
 
 # Credentials (environment variables take priority)
 # anthropic_api_key: "sk-ant-..." # Claude API key

@@ -53,10 +53,29 @@ describe('config env overrides', () => {
 
   it('should apply project env overrides from generated env names', () => {
     process.env.TAKT_VERBOSE = 'true';
+    process.env.TAKT_ANALYTICS_EVENTS_PATH = '/tmp/project-analytics';
 
     const raw: Record<string, unknown> = {};
     applyProjectConfigEnvOverrides(raw);
 
     expect(raw.verbose).toBe(true);
+    expect(raw.analytics).toEqual({
+      events_path: '/tmp/project-analytics',
+    });
+  });
+
+  it('should apply analytics env overrides for global config', () => {
+    process.env.TAKT_ANALYTICS_ENABLED = 'true';
+    process.env.TAKT_ANALYTICS_EVENTS_PATH = '/tmp/global-analytics';
+    process.env.TAKT_ANALYTICS_RETENTION_DAYS = '14';
+
+    const raw: Record<string, unknown> = {};
+    applyGlobalConfigEnvOverrides(raw);
+
+    expect(raw.analytics).toEqual({
+      enabled: true,
+      events_path: '/tmp/global-analytics',
+      retention_days: 14,
+    });
   });
 });

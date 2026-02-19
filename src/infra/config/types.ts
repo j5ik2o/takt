@@ -4,6 +4,7 @@
 
 import type { MovementProviderOptions } from '../../core/models/piece-types.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
+import type { AnalyticsConfig } from '../../core/models/global-config.js';
 
 /** Project configuration stored in .takt/config.yaml */
 export interface ProjectLocalConfig {
@@ -17,6 +18,8 @@ export interface ProjectLocalConfig {
   draft_pr?: boolean;
   /** Verbose output mode */
   verbose?: boolean;
+  /** Project-level analytics overrides */
+  analytics?: AnalyticsConfig;
   /** Provider-specific options (overrides global, overridden by piece/movement) */
   provider_options?: MovementProviderOptions;
   /** Provider-specific options (camelCase alias) */

@@ -29,6 +29,10 @@ concurrency: 2               # takt run の同時実行数（1-10）
 #   run_abort: true
 # observability:
 #   provider_events: false         # providerイベントログを記録
+# analytics:
+#   enabled: true                  # 分析メトリクスの収集を有効化
+#   events_path: ~/.takt/analytics/events  # 分析イベント保存先
+#   retention_days: 30             # 分析イベント保持日数
 
 # 認証情報（環境変数優先）
 # anthropic_api_key: "sk-ant-..." # Claude APIキー

@@ -1,6 +1,7 @@
 import type { GlobalConfig } from '../../core/models/index.js';
 import type { MovementProviderOptions } from '../../core/models/piece-types.js';
 import type { ProviderPermissionProfiles } from '../../core/models/provider-profiles.js';
+import type { AnalyticsConfig } from '../../core/models/global-config.js';
 import { loadGlobalConfig } from './global/globalConfig.js';
 import { loadProjectConfig } from './project/projectConfig.js';
 import { envVarNameFromPath } from './env/config-env-overrides.js';
@@ -26,6 +27,7 @@ export function loadConfig(projectDir: string): LoadedConfig {
     draftPr: project.draft_pr ?? global.draftPr,
     model: resolveModel(global, provider),
     verbose: resolveVerbose(project.verbose, global.verbose),
+    analytics: mergeAnalytics(global.analytics, project.analytics),
     providerOptions: mergeProviderOptions(global.providerOptions, project.providerOptions),
     providerProfiles: mergeProviderProfiles(global.providerProfiles, project.providerProfiles),
   };
@@ -82,6 +84,24 @@ function mergeProviderOptions(
   }
 
   return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function mergeAnalytics(
+  globalAnalytics: AnalyticsConfig | undefined,
+  projectAnalytics: AnalyticsConfig | undefined,
+): AnalyticsConfig | undefined {
+  if (!globalAnalytics && !projectAnalytics) return undefined;
+
+  const merged: AnalyticsConfig = {
+    enabled: projectAnalytics?.enabled ?? globalAnalytics?.enabled,
+    eventsPath: projectAnalytics?.eventsPath ?? globalAnalytics?.eventsPath,
+    retentionDays: projectAnalytics?.retentionDays ?? globalAnalytics?.retentionDays,
+  };
+
+  if (merged.enabled === undefined && merged.eventsPath === undefined && merged.retentionDays === undefined) {
+    return undefined;
+  }
+  return merged;
 }
 
 function mergeProviderProfiles(
