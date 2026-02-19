@@ -22,6 +22,7 @@ import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { info, error, blankLine, StreamDisplay } from '../../shared/ui/index.js';
 import { getLabel, getLabelObject } from '../../shared/i18n/index.js';
 import { readMultilineInput } from './lineEditor.js';
+import { selectRecentSession } from './sessionSelector.js';
 import { EXIT_SIGINT } from '../../shared/exitCodes.js';
 import {
   type PieceContext,
@@ -55,7 +56,11 @@ export interface SessionContext {
 }
 
 /**
- * Initialize provider, session, and language for interactive conversation.
+ * Initialize provider and language for interactive conversation.
+ *
+ * Session ID is always undefined (new session).
+ * Callers that need session continuity pass sessionId explicitly
+ * (e.g., --continue flag or /resume command).
  */
 export function initializeSession(cwd: string, personaName: string): SessionContext {
   const globalConfig = resolveConfigValues(cwd, ['language', 'provider', 'model']);
@@ -66,10 +71,8 @@ export function initializeSession(cwd: string, personaName: string): SessionCont
   const providerType = globalConfig.provider as ProviderType;
   const provider = getProvider(providerType);
   const model = globalConfig.model as string | undefined;
-  const savedSessions = loadPersonaSessions(cwd, providerType);
-  const sessionId: string | undefined = savedSessions[personaName];
 
-  return { provider, providerType, model, lang, personaName, sessionId };
+  return { provider, providerType, model, lang, personaName, sessionId: undefined };
 }
 
 /**
@@ -303,6 +306,15 @@ export async function runConversationLoop(
     if (trimmed === '/cancel') {
       info(ui.cancelled);
       return { action: 'cancel', task: '' };
+    }
+
+    if (trimmed === '/resume') {
+      const selectedId = await selectRecentSession(cwd, ctx.lang);
+      if (selectedId) {
+        sessionId = selectedId;
+        info(getLabel('interactive.resumeSessionLoaded', ctx.lang));
+      }
+      continue;
     }
 
     history.push({ role: 'user', content: trimmed });
