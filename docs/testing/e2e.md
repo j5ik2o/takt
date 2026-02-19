@@ -168,3 +168,53 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
     - 出力に `ファイルをデプロイしました` を含むことを確認する。
     - `$HOME/.claude/skills/takt/SKILL.md` が存在することを確認する。
     - `$HOME/.claude/skills/takt/pieces/` および `$HOME/.claude/skills/takt/personas/` ディレクトリが存在し、それぞれ少なくとも1ファイルを含むことを確認する。
+
+## 追記シナリオ（2026-02-19）
+過去にドキュメント未反映だったシナリオを以下に追記する。
+
+- Config priority（`e2e/specs/config-priority.e2e.ts`）
+  - 目的: `piece` と `auto_pr` の優先順位（config/env/CLI）を検証。
+  - 手順（要約）:
+    - `--pipeline` で `--piece` 未指定時に設定値の `piece` が使われることを確認。
+    - `auto_pr` 未設定時は確認デフォルト `true` が反映されることを確認。
+    - `config` と `TAKT_AUTO_PR` の優先を確認。
+- Pipeline --skip-git on local/non-git directories（`e2e/specs/pipeline-local-repo.e2e.ts`）
+  - 目的: ローカルGitリポジトリおよび非Gitディレクトリで `--pipeline --skip-git` が動作することを確認。
+- Task content_file reference（`e2e/specs/task-content-file.e2e.ts`）
+  - 目的: `tasks.yaml` の `content_file` 参照が解決されること、および不正参照時エラーを確認。
+- Task status persistence（`e2e/specs/task-status-persistence.e2e.ts`）
+  - 目的: 成功時/失敗時の `tasks.yaml` 状態遷移（完了消込・失敗記録）を確認。
+- Run multiple tasks（`e2e/specs/run-multiple-tasks.e2e.ts`）
+  - 目的: 複数pendingタスクの連続実行、途中失敗時継続、タスク空時の終了挙動を確認。
+- Session NDJSON log output（`e2e/specs/session-log.e2e.ts`）
+  - 目的: NDJSONログの主要イベント（`piece_complete` / `piece_abort` 等）出力を確認。
+- Structured output rule matching（`e2e/specs/structured-output.e2e.ts`）
+  - 目的: structured output によるルール判定（Phase 3）を確認。
+- Piece error handling（`e2e/specs/piece-error-handling.e2e.ts`）
+  - 目的: エージェントエラー、最大反復到達、前回応答受け渡しの挙動を確認。
+- Multi-step with parallel movements（`e2e/specs/multi-step-parallel.e2e.ts`）
+  - 目的: 並列ムーブメントを含む複数ステップ遷移を確認。
+- Sequential multi-step session log transitions（`e2e/specs/multi-step-sequential.e2e.ts`）
+  - 目的: 逐次ステップでのセッションログ遷移を確認。
+- Cycle detection via loop_monitors（`e2e/specs/cycle-detection.e2e.ts`）
+  - 目的: ループ監視設定による abort/continue の境界を確認。
+- Provider error handling（`e2e/specs/provider-error.e2e.ts`）
+  - 目的: provider上書き、mockシナリオ不足時の挙動、シナリオ不在時エラーを確認。
+- Model override（`e2e/specs/model-override.e2e.ts`）
+  - 目的: `--model` オプションが通常実行/`--pipeline --skip-git` で反映されることを確認。
+- Error handling edge cases（`e2e/specs/error-handling.e2e.ts`）
+  - 目的: 不正引数・存在しないpiece・不正YAMLなど代表エラーケースを確認。
+- Quiet mode（`e2e/specs/quiet-mode.e2e.ts`）
+  - 目的: `--quiet` でAIストリーム出力が抑制されることを確認。
+- Catalog command（`e2e/specs/cli-catalog.e2e.ts`）
+  - 目的: `takt catalog` の一覧表示・型指定・不正型エラーを確認。
+- Prompt preview command（`e2e/specs/cli-prompt.e2e.ts`）
+  - 目的: `takt prompt` のプレビュー出力と不正piece時エラーを確認。
+- Switch piece command（`e2e/specs/cli-switch.e2e.ts`）
+  - 目的: `takt switch` の切替成功・不正piece時エラーを確認。
+- Clear sessions command（`e2e/specs/cli-clear.e2e.ts`）
+  - 目的: `takt clear` でセッション情報が削除されることを確認。
+- Help command（`e2e/specs/cli-help.e2e.ts`）
+  - 目的: `takt --help` と `takt run --help` の表示内容を確認。
+- Eject builtin pieces（`e2e/specs/eject.e2e.ts`）
+  - 目的: `takt eject` のproject/global出力、既存時スキップ、facet個別ejectを確認。
