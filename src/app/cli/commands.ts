@@ -7,7 +7,7 @@
 import { clearPersonaSessions, resolveConfigValue } from '../../infra/config/index.js';
 import { success } from '../../shared/ui/index.js';
 import { runAllTasks, addTask, watchTasks, listTasks } from '../../features/tasks/index.js';
-import { switchPiece, ejectBuiltin, ejectFacet, parseFacetType, VALID_FACET_TYPES, resetCategoriesToDefault, deploySkill } from '../../features/config/index.js';
+import { switchPiece, ejectBuiltin, ejectFacet, parseFacetType, VALID_FACET_TYPES, resetCategoriesToDefault, resetConfigToDefault, deploySkill } from '../../features/config/index.js';
 import { previewPrompts } from '../../features/prompt/index.js';
 import { showCatalog } from '../../features/catalog/index.js';
 import { program, resolvedCwd } from './program.js';
@@ -99,6 +99,13 @@ program
 const reset = program
   .command('reset')
   .description('Reset settings to defaults');
+
+reset
+  .command('config')
+  .description('Reset global config to builtin template (with backup)')
+  .action(async () => {
+    await resetConfigToDefault();
+  });
 
 reset
   .command('categories')

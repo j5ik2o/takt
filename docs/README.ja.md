@@ -294,6 +294,9 @@ takt prompt [piece]
 
 # ピースカテゴリをビルトインのデフォルトにリセット
 takt reset categories
+
+# グローバル config をテンプレートにリセット（旧設定は .old に退避）
+takt reset config
 ```
 
 ### おすすめピース

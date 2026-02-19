@@ -151,6 +151,15 @@ E2Eテストを追加・変更した場合は、このドキュメントも更�
     - `takt reset categories` を実行する。
     - 出力に `reset` を含むことを確認する。
     - `$TAKT_CONFIG_DIR/preferences/piece-categories.yaml` が存在し `piece_categories: {}` を含むことを確認する。
+- Reset config（`e2e/specs/cli-reset-config.e2e.ts`）
+  - 目的: `takt reset config` でグローバル設定をテンプレートへ戻し、旧設定をバックアップすることを確認。
+  - LLM: 呼び出さない（LLM不使用の操作のみ）
+  - 手順（ユーザー行動/コマンド）:
+    - `$TAKT_CONFIG_DIR/config.yaml` に任意の設定を書き込む（例: `language: ja`, `provider: mock`）。
+    - `takt reset config` を実行する。
+    - 出力に `reset` と `backup:` を含むことを確認する。
+    - `$TAKT_CONFIG_DIR/config.yaml` がテンプレート内容（例: `branch_name_strategy: ai`, `concurrency: 2`）に置き換わっていることを確認する。
+    - `$TAKT_CONFIG_DIR/` 直下に `config.yaml.YYYYMMDD-HHmmss.old` 形式のバックアップファイルが1件作成されることを確認する。
 - Export Claude Code Skill（`e2e/specs/cli-export-cc.e2e.ts`）
   - 目的: `takt export-cc` でClaude Code Skillのデプロイを確認。
   - LLM: 呼び出さない（LLM不使用の操作のみ）
