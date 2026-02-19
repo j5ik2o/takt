@@ -87,6 +87,7 @@ instruct:
       saveTask: "タスクにつむ"
       continue: "会話を続ける"
     cancelled: "キャンセルしました"
+    replayNoOrder: "前回の指示書（order.md）が見つかりません"
 
 run:
   notifyComplete: "run完了 ({total} tasks)"

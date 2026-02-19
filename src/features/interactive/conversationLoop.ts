@@ -186,6 +186,8 @@ export interface ConversationStrategy {
   introMessage: string;
   /** Custom action selector (optional). If not provided, uses default selectPostSummaryAction. */
   selectAction?: (task: string, lang: 'en' | 'ja') => Promise<PostSummaryAction | null>;
+  /** Previous order.md content for /replay command (retry/instruct only) */
+  previousOrderContent?: string;
 }
 
 /**
@@ -298,6 +300,16 @@ export async function runConversationLoop(
       }
       log.info('Conversation action selected', { action: selectedAction, messageCount: history.length });
       return { action: selectedAction, task };
+    }
+
+    if (trimmed === '/replay') {
+      if (!strategy.previousOrderContent) {
+        const replayNoOrder = getLabel('instruct.ui.replayNoOrder', ctx.lang);
+        info(replayNoOrder);
+        continue;
+      }
+      log.info('Replay command');
+      return { action: 'execute', task: strategy.previousOrderContent };
     }
 
     if (trimmed === '/cancel') {

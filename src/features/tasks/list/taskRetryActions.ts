@@ -20,6 +20,7 @@ import {
   getRunPaths,
   formatRunSessionForPrompt,
   runRetryMode,
+  findPreviousOrderContent,
   type RetryContext,
   type RetryFailureInfo,
   type RetryRunInfo,
@@ -156,6 +157,7 @@ export async function retryFailedTask(
   // Runs data lives in the worktree (written during previous execution)
   const matchedSlug = findRunForTask(worktreePath, task.content);
   const runInfo = matchedSlug ? buildRetryRunInfo(worktreePath, matchedSlug) : null;
+  const previousOrderContent = findPreviousOrderContent(worktreePath, matchedSlug);
 
   blankLine();
   const branchName = task.branch ?? task.name;
@@ -166,7 +168,7 @@ export async function retryFailedTask(
     run: runInfo,
   };
 
-  const retryResult = await runRetryMode(worktreePath, retryContext);
+  const retryResult = await runRetryMode(worktreePath, retryContext, previousOrderContent);
   if (retryResult.action === 'cancel') {
     return false;
   }

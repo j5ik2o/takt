@@ -73,6 +73,7 @@ vi.mock('../features/interactive/index.js', () => ({
     runTask: '', runPiece: '', runStatus: '', runMovementLogs: '', runReports: '',
   })),
   runRetryMode: (...args: unknown[]) => mockRunRetryMode(...args),
+  findPreviousOrderContent: vi.fn(() => null),
 }));
 
 vi.mock('../infra/task/index.js', () => ({
@@ -151,6 +152,7 @@ describe('retryFailedTask', () => {
       expect.objectContaining({
         failure: expect.objectContaining({ taskName: 'my-task', taskContent: 'Do something' }),
       }),
+      null,
     );
     expect(mockStartReExecution).toHaveBeenCalledWith('my-task', ['failed'], undefined, '追加指示A');
     expect(mockExecuteAndCompleteTask).toHaveBeenCalled();

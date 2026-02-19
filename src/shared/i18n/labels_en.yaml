@@ -87,6 +87,7 @@ instruct:
       saveTask: "Save as Task"
       continue: "Continue editing"
     cancelled: "Cancelled"
+    replayNoOrder: "Previous order (order.md) not found"
 
 run:
   notifyComplete: "Run complete ({total} tasks)"
