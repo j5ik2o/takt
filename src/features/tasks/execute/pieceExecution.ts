@@ -72,6 +72,14 @@ import { buildRunPaths } from '../../../core/piece/run/run-paths.js';
 import { resolveMovementProviderModel } from '../../../core/piece/provider-resolution.js';
 import { resolveRuntimeConfig } from '../../../core/runtime/runtime-environment.js';
 import { writeFileAtomic, ensureDir } from '../../../infra/config/index.js';
+import {
+  initTelemetry,
+  startPieceSpan,
+  startMovementSpan,
+  startPhaseSpan,
+  endSpan,
+} from '../../../infra/telemetry/index.js';
+import type { Span } from '@opentelemetry/api';
 
 const log = createLogger('piece');
 
@@ -333,6 +341,9 @@ export async function executePiece(
     enabled: isProviderEventsEnabled(globalConfig),
   });
 
+  // Initialize OpenTelemetry if configured
+  initTelemetry(globalConfig.observability?.otlp);
+
   // Prevent macOS idle sleep if configured
   if (globalConfig.preventSleep) {
     preventSleep();
@@ -428,7 +439,14 @@ export async function executePiece(
   let onEpipe: ((err: NodeJS.ErrnoException) => void) | undefined;
   const runAbortController = new AbortController();
 
+  // OpenTelemetry spans
+  let pieceSpan: Span | undefined;
+  let currentMovementSpan: Span | undefined;
+  const phaseSpans = new Map<string, Span>();
+
   try {
+    pieceSpan = startPieceSpan(pieceConfig.name, task);
+
     engine = new PieceEngine(effectivePieceConfig, cwd, task, {
       abortSignal: runAbortController.signal,
       onStream: providerEventLogger.wrapCallback(streamHandler),
@@ -470,6 +488,11 @@ export async function executePiece(
     if (isDebugEnabled()) {
       phasePrompts.set(`${step.name}:${phase}`, instruction);
     }
+
+    if (currentMovementSpan) {
+      const phaseSpan = startPhaseSpan(currentMovementSpan, step.name, phase, phaseName);
+      phaseSpans.set(`${step.name}:${phase}`, phaseSpan);
+    }
   });
 
     engine.on('phase:complete', (step, phase, phaseName, content, phaseStatus, phaseError) => {
@@ -502,6 +525,13 @@ export async function executePiece(
         };
         writePromptLog(promptRecord);
       }
+    }
+
+    const phaseSpan = phaseSpans.get(`${step.name}:${phase}`);
+    if (phaseSpan) {
+      phaseSpan.setAttribute('takt.phase.status', phaseStatus);
+      endSpan(phaseSpan, phaseError);
+      phaseSpans.delete(`${step.name}:${phase}`);
     }
   });
 
@@ -563,6 +593,9 @@ export async function executePiece(
     };
     appendNdjsonLine(ndjsonLogPath, record);
 
+    if (pieceSpan) {
+      currentMovementSpan = startMovementSpan(pieceSpan, step.name, iteration, movementProvider);
+    }
   });
 
     engine.on('movement:complete', (step, response, instruction) => {
@@ -623,6 +656,11 @@ export async function executePiece(
     };
     appendNdjsonLine(ndjsonLogPath, record);
 
+    if (currentMovementSpan) {
+      currentMovementSpan.setAttribute('takt.movement.status', response.status);
+      endSpan(currentMovementSpan, response.status === 'error' ? (response.error ?? response.status) : undefined);
+      currentMovementSpan = undefined;
+    }
 
     // Update in-memory log for pointer metadata (immutable)
     sessionLog = { ...sessionLog, iterations: sessionLog.iterations + 1 };
@@ -646,6 +684,12 @@ export async function executePiece(
     };
     appendNdjsonLine(ndjsonLogPath, record);
       finalizeRunMeta('completed', state.iteration);
+
+    if (pieceSpan) {
+      pieceSpan.setAttribute('takt.piece.iterations', state.iteration);
+      endSpan(pieceSpan);
+      pieceSpan = undefined;
+    }
 
     // Save session state for next interactive mode
     try {
@@ -694,6 +738,12 @@ export async function executePiece(
     };
     appendNdjsonLine(ndjsonLogPath, record);
       finalizeRunMeta('aborted', state.iteration);
+
+    if (pieceSpan) {
+      pieceSpan.setAttribute('takt.piece.iterations', state.iteration);
+      endSpan(pieceSpan, reason);
+      pieceSpan = undefined;
+    }
 
     // Save session state for next interactive mode
     try {

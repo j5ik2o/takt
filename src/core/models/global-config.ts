@@ -23,10 +23,20 @@ export interface DebugConfig {
   logFile?: string;
 }
 
+/** OTLP exporter configuration for OpenTelemetry */
+export interface OtlpConfig {
+  /** OTLP HTTP endpoint URL (e.g. http://localhost:4318). Also read from OTEL_EXPORTER_OTLP_ENDPOINT env var. */
+  endpoint?: string;
+  /** Service name reported to OTLP. Also read from OTEL_SERVICE_NAME env var. Defaults to 'takt'. */
+  serviceName?: string;
+}
+
 /** Observability configuration for runtime event logs */
 export interface ObservabilityConfig {
   /** Enable provider stream event logging (default: false when undefined) */
   providerEvents?: boolean;
+  /** OpenTelemetry OTLP exporter configuration */
+  otlp?: OtlpConfig;
 }
 
 /** Language setting for takt */

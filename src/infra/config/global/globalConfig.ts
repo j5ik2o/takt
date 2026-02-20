@@ -174,6 +174,10 @@ export class GlobalConfigManager {
       } : undefined,
       observability: parsed.observability ? {
         providerEvents: parsed.observability.provider_events,
+        otlp: parsed.observability.otlp ? {
+          endpoint: parsed.observability.otlp.endpoint,
+          serviceName: parsed.observability.otlp.service_name,
+        } : undefined,
       } : undefined,
       worktreeDir: parsed.worktree_dir,
       autoPr: parsed.auto_pr,
@@ -234,10 +238,18 @@ export class GlobalConfigManager {
         log_file: config.debug.logFile,
       };
     }
-    if (config.observability && config.observability.providerEvents !== undefined) {
-      raw.observability = {
-        provider_events: config.observability.providerEvents,
-      };
+    if (config.observability && (config.observability.providerEvents !== undefined || config.observability.otlp)) {
+      const obsRaw: Record<string, unknown> = {};
+      if (config.observability.providerEvents !== undefined) {
+        obsRaw.provider_events = config.observability.providerEvents;
+      }
+      if (config.observability.otlp) {
+        const otlpRaw: Record<string, unknown> = {};
+        if (config.observability.otlp.endpoint) otlpRaw.endpoint = config.observability.otlp.endpoint;
+        if (config.observability.otlp.serviceName) otlpRaw.service_name = config.observability.otlp.serviceName;
+        if (Object.keys(otlpRaw).length > 0) obsRaw.otlp = otlpRaw;
+      }
+      if (Object.keys(obsRaw).length > 0) raw.observability = obsRaw;
     }
     if (config.worktreeDir) {
       raw.worktree_dir = config.worktreeDir;
