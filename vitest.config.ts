@@ -2,6 +2,9 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    env: {
+      TAKT_CONFIG_DIR: '',
+    },
     include: ['src/__tests__/**/*.test.ts'],
     environment: 'node',
     globals: false,
