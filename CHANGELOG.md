@@ -6,6 +6,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.21.0] - 2026-02-20
+
+### Added
+
+- **Slack task notification enhancements**: Extended Slack webhook notifications with richer task context and formatting (#316)
+- **`takt list --delete-all` option**: Delete all tasks at once from the task list (#322)
+- **`--draft-pr` option**: Create pull requests as drafts via `--draft-pr` flag (#323)
+- **`--sync-with-root` option**: Sync worktree branch with root repository changes (#325)
+- **Model per persona-provider**: Allow specifying model overrides at the persona-provider level (#324)
+- **Analytics project config and env override**: Analytics settings can now be configured per-project and overridden via environment variables
+- **CI dependency health check**: Periodic CI check to detect broken dependency packages
+
+### Changed
+
+- **Config system overhaul**: Replaced `loadConfig()` bulk merge with per-key `resolveConfigValue()` resolution — global < piece < project < env priority with source tracking and `OptionsBuilder` merge direction control (#324)
+
+### Fixed
+
+- **Retry command scope and messaging**: Fixed retry command to show correct available range and guidance text
+- **Retry task `completed_at` leak**: Clear `completed_at` when moving a failed task back to running via `startReExecution`, preventing Zod validation errors
+- **OpenCode multi-turn hang**: Removed `streamAbortController.signal` from OpenCode server startup so subsequent turns no longer hang; restored `sessionId` carry-over for multi-turn conversations
+- **Romaji conversion stack overflow**: Prevented stack overflow on long task names during romaji conversion
+
 ## [0.20.1] - 2026-02-20
 
 ### Fixed

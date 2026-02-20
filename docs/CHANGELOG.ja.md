@@ -6,6 +6,29 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.21.0] - 2026-02-20
+
+### Added
+
+- **Slack タスク通知の拡張**: Slack Webhook 通知にリッチなタスクコンテキストとフォーマットを追加 (#316)
+- **`takt list --delete-all` オプション**: タスクリストから全タスクを一括削除 (#322)
+- **`--draft-pr` オプション**: `--draft-pr` フラグでドラフト PR を作成可能に (#323)
+- **`--sync-with-root` オプション**: ワークツリーブランチをルートリポジトリの変更と同期 (#325)
+- **ペルソナプロバイダーごとのモデル指定**: persona-provider レベルでモデルオーバーライドを指定可能に (#324)
+- **Analytics のプロジェクト設定・環境変数オーバーライド対応**: Analytics 設定をプロジェクトごとに設定し、環境変数で上書き可能に
+- **CI 依存パッケージヘルスチェック**: 依存パッケージの破損を検知する定期 CI チェックを追加
+
+### Changed
+
+- **設定システムの刷新**: `loadConfig()` による一括マージを廃止し、`resolveConfigValue()` によるキー単位解決に移行 — global < piece < project < env の優先順位でソーストラッキングと `OptionsBuilder` のマージ方向を制御 (#324)
+
+### Fixed
+
+- **retry コマンドの有効範囲と案内文を修正**: 正しい範囲と案内テキストを表示するよう修正
+- **retry タスクの `completed_at` クリア漏れ**: `startReExecution` で失敗タスクを running に戻す際、`completed_at` を null にリセットするよう修正（Zod バリデーションエラーを防止）
+- **OpenCode の2ターン目ハング修正**: `streamAbortController.signal` をサーバー起動から除外し、`sessionId` の引き継ぎを復元することで複数ターンの会話継続を実現
+- **ローマ字変換のスタックオーバーフロー防止**: 長いタスク名でのローマ字変換時にスタックオーバーフローが発生する問題を修正
+
 ## [0.20.1] - 2026-02-20
 
 ### Fixed

@@ -14,12 +14,33 @@ import type { SummarizeOptions } from './types.js';
 export type { SummarizeOptions };
 
 const log = createLogger('summarize');
+const MAX_ROMAJI_CHUNK_SIZE = 1024;
+
+function toRomajiSafely(text: string): string {
+  const romajiOptions = { customRomajiMapping: {} };
+  try {
+    if (text.length <= MAX_ROMAJI_CHUNK_SIZE) {
+      return wanakana.toRomaji(text, romajiOptions);
+    }
+    const convertedChunks: string[] = [];
+    for (let i = 0; i < text.length; i += MAX_ROMAJI_CHUNK_SIZE) {
+      convertedChunks.push(
+        wanakana.toRomaji(text.slice(i, i + MAX_ROMAJI_CHUNK_SIZE), romajiOptions),
+      );
+    }
+    return convertedChunks.join('');
+  } catch {
+    // Avoid blocking branch/task creation on rare parser edge cases or deep recursion
+    // with very long mixed/ASCII inputs.
+    return text;
+  }
+}
 
 /**
  * Convert Japanese text to romaji slug.
  */
 function toRomajiSlug(text: string): string {
-  const romaji = wanakana.toRomaji(text, { customRomajiMapping: {} });
+  const romaji = toRomajiSafely(text);
   return slugify(romaji);
 }
 

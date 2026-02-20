@@ -1,13 +1,3 @@
-/**
- * List tasks command — main entry point.
- *
- * Interactive UI for reviewing branch-based task results,
- * pending tasks (.takt/tasks.yaml), and failed tasks.
- * Individual actions (merge, delete, instruct, diff) are in taskActions.ts.
- * Task delete actions are in taskDeleteActions.ts.
- * Non-interactive mode is in listNonInteractive.ts.
- */
-
 import {
   TaskRunner,
 } from '../../../infra/task/index.js';
@@ -22,8 +12,9 @@ import {
   tryMergeBranch,
   mergeBranch,
   instructBranch,
+  syncBranchWithRoot,
 } from './taskActions.js';
-import { deletePendingTask, deleteFailedTask, deleteCompletedTask } from './taskDeleteActions.js';
+import { deletePendingTask, deleteFailedTask, deleteCompletedTask, deleteAllTasks } from './taskDeleteActions.js';
 import { retryFailedTask } from './taskRetryActions.js';
 import { listTasksNonInteractive, type ListNonInteractiveOptions } from './listNonInteractive.js';
 import { formatTaskStatusLabel, formatShortDate } from './taskStatusLabel.js';
@@ -46,17 +37,11 @@ export {
   runInstructMode,
 } from './instructMode.js';
 
-/** Task action type for pending task action selection menu */
 type PendingTaskAction = 'delete';
 
-/** Task action type for failed task action selection menu */
 type FailedTaskAction = 'retry' | 'delete';
 type CompletedTaskAction = ListAction;
 
-/**
- * Show pending task details and prompt for an action.
- * Returns the selected action, or null if cancelled.
- */
 async function showPendingTaskAndPromptAction(task: TaskListItem): Promise<PendingTaskAction | null> {
   header(formatTaskStatusLabel(task));
   info(`  Created: ${task.createdAt}`);
@@ -71,10 +56,6 @@ async function showPendingTaskAndPromptAction(task: TaskListItem): Promise<Pendi
   );
 }
 
-/**
- * Show failed task details and prompt for an action.
- * Returns the selected action, or null if cancelled.
- */
 async function showFailedTaskAndPromptAction(task: TaskListItem): Promise<FailedTaskAction | null> {
   header(formatTaskStatusLabel(task));
   info(`  Created: ${task.createdAt}`);
@@ -103,9 +84,6 @@ async function showCompletedTaskAndPromptAction(cwd: string, task: TaskListItem)
   return await showDiffAndPromptActionForTask(cwd, task);
 }
 
-/**
- * Main entry point: list branch-based tasks interactively.
- */
 export async function listTasks(
   cwd: string,
   options?: TaskExecutionOptions,
@@ -118,7 +96,6 @@ export async function listTasks(
 
   const runner = new TaskRunner(cwd);
 
-  // Interactive loop
   while (true) {
     const tasks = runner.listAllTaskItems();
 
@@ -127,11 +104,14 @@ export async function listTasks(
       return;
     }
 
-    const menuOptions = tasks.map((task, idx) => ({
-      label: formatTaskStatusLabel(task),
-      value: `${task.kind}:${idx}`,
-      description: `${task.summary ?? task.content} | ${formatShortDate(task.createdAt)}`,
-    }));
+    const menuOptions = [
+      ...tasks.map((task, idx) => ({
+        label: formatTaskStatusLabel(task),
+        value: `${task.kind}:${idx}`,
+        description: `${task.summary ?? task.content} | ${formatShortDate(task.createdAt)}`,
+      })),
+      { label: 'All Delete', value: '__all-delete__', description: 'Delete all tasks at once' },
+    ];
 
     const selected = await selectOption<string>(
       'List Tasks',
@@ -140,6 +120,11 @@ export async function listTasks(
 
     if (selected === null) {
       return;
+    }
+
+    if (selected === '__all-delete__') {
+      await deleteAllTasks(tasks);
+      continue;
     }
 
     const colonIdx = selected.indexOf(':');
@@ -182,6 +167,9 @@ export async function listTasks(
           break;
         case 'instruct':
           await instructBranch(cwd, task);
+          break;
+        case 'sync':
+          await syncBranchWithRoot(cwd, task, options);
           break;
         case 'try':
           tryMergeBranch(cwd, task);

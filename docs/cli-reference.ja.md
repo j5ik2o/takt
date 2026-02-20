@@ -14,6 +14,7 @@
 | `-w, --piece <name or path>` | Piece 名または piece YAML ファイルのパス |
 | `-b, --branch <name>` | ブランチ名を指定（省略時は自動生成） |
 | `--auto-pr` | PR を作成（インタラクティブ: 確認スキップ、pipeline: PR 有効化） |
+| `--draft-pr` | PR をドラフトとして作成 |
 | `--skip-git` | ブランチ作成、コミット、プッシュをスキップ（pipeline モード、piece のみ実行） |
 | `--repo <owner/repo>` | リポジトリを指定（PR 作成用） |
 | `--create-worktree <yes\|no>` | worktree 確認プロンプトをスキップ |
@@ -163,7 +164,7 @@ takt watch
 
 ### takt list
 
-タスクブランチの一覧表示と操作（マージ、削除など）を行います。
+タスクブランチの一覧表示と操作（マージ、削除、ルートとの同期など）を行います。
 
 ```bash
 # タスクブランチの一覧表示（マージ/削除）
@@ -175,6 +176,8 @@ takt list --non-interactive --action diff --branch takt/my-branch
 takt list --non-interactive --action delete --branch takt/my-branch --yes
 takt list --non-interactive --format json
 ```
+
+インタラクティブモードでは **Sync with root** を選択でき、ルートリポジトリの HEAD をワークツリーブランチにマージします。コンフリクト発生時は AI が自動解決を試みます。
 
 ### タスクディレクトリワークフロー（作成 / 実行 / 確認）
 
