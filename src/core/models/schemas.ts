@@ -382,6 +382,10 @@ export const DebugConfigSchema = z.object({
 
 export const ObservabilityConfigSchema = z.object({
   provider_events: z.boolean().optional(),
+  otlp: z.object({
+    endpoint: z.string().optional(),
+    service_name: z.string().optional(),
+  }).optional(),
 });
 
 /** Language setting schema */
