@@ -6,6 +6,12 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.20.1] - 2026-02-20
+
+### Fixed
+
+- `@opencode-ai/sdk` を `<1.2.7` にピン留め — v1.2.7 以降のビルド成果物で v2 exports が壊れており、`npm install -g takt` 時に `Cannot find module` エラーが発生する問題を修正 (#329)
+
 ## [0.20.0] - 2026-02-19
 
 ### Added

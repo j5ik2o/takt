@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.20.1] - 2026-02-20
+
+### Fixed
+
+- Pin `@opencode-ai/sdk` to `<1.2.7` to fix broken v2 exports that caused `Cannot find module` errors on `npm install -g takt` (#329)
+
 ## [0.20.0] - 2026-02-19
 
 ### Added
