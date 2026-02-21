@@ -10,6 +10,7 @@ import { mkdirSync, copyFileSync, existsSync, readFileSync, writeFileSync, rmSyn
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { stringify as stringifyYaml } from 'yaml';
 import { getEnsemblePackageDir } from '../../infra/config/paths.js';
 import { parseGithubSpec } from '../../features/ensemble/github-spec.js';
@@ -18,7 +19,7 @@ import {
   validateTaktPackPath,
   validateMinVersion,
   isVersionCompatible,
-  checkPackageHasContent,
+  checkPackageHasContentWithContext,
   validateRealpathInsideRoot,
   resolvePackConfigPath,
 } from '../../features/ensemble/takt-pack-config.js';
@@ -33,7 +34,7 @@ import { confirm } from '../../shared/prompt/index.js';
 import { info, success } from '../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+const require = createRequire(import.meta.url);
 const { version: TAKT_VERSION } = require('../../../package.json') as { version: string };
 
 const log = createLogger('ensemble-add');
@@ -63,16 +64,15 @@ export async function ensembleAddCommand(spec: string): Promise<void> {
     mkdirSync(tmpExtractDir, { recursive: true });
 
     info(`📦 ${owner}/${repo} @${ref} をダウンロード中...`);
-    execFileSync(
+    const tarballBuffer = execFileSync(
       'gh',
       [
         'api',
         `/repos/${owner}/${repo}/tarball/${ref}`,
-        '--header', 'Accept: application/octet-stream',
-        '--output', tmpTarPath,
       ],
       { stdio: ['inherit', 'pipe', 'pipe'] },
     );
+    writeFileSync(tmpTarPath, tarballBuffer);
 
     const tarVerboseList = execFileSync('tar', ['tvzf', tmpTarPath], {
       encoding: 'utf-8',
@@ -112,7 +112,10 @@ export async function ensembleAddCommand(spec: string): Promise<void> {
 
     validateRealpathInsideRoot(packageRoot, tmpExtractDir);
 
-    checkPackageHasContent(packageRoot);
+    checkPackageHasContentWithContext(packageRoot, {
+      manifestPath: packConfigPath,
+      configuredPath: config.path,
+    });
 
     const targets = collectCopyTargets(packageRoot);
     const facetFiles = targets.filter(t => t.relativePath.startsWith('faceted/'));

@@ -19,6 +19,7 @@ import {
   validateMinVersion,
   isVersionCompatible,
   checkPackageHasContent,
+  checkPackageHasContentWithContext,
   validateRealpathInsideRoot,
   resolvePackConfigPath,
 } from '../../features/ensemble/takt-pack-config.js';
@@ -245,6 +246,14 @@ describe('checkPackageHasContent', () => {
     // When: content check is performed
     // Then: throws an error (empty package not allowed)
     expect(() => checkPackageHasContent(tempDir)).toThrow();
+  });
+
+  it('should include manifest/path/hint details in contextual error', () => {
+    const manifestPath = join(tempDir, '.takt', 'takt-package.yaml');
+    expect(() => checkPackageHasContentWithContext(tempDir, {
+      manifestPath,
+      configuredPath: '.',
+    })).toThrow(/path: \.takt/);
   });
 
   it('should not throw when only faceted/ exists', () => {

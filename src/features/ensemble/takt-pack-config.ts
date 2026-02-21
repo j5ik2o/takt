@@ -23,6 +23,11 @@ export interface TaktPackConfig {
   };
 }
 
+interface PackageContentCheckContext {
+  manifestPath?: string;
+  configuredPath?: string;
+}
+
 const SEMVER_PATTERN = /^\d+\.\d+\.\d+$/;
 
 /**
@@ -111,6 +116,41 @@ export function checkPackageHasContent(packageRoot: string): void {
       `Package at "${packageRoot}" has neither faceted/ nor pieces/ directory — empty package rejected`,
     );
   }
+}
+
+/**
+ * Check package content and include user-facing diagnostics when empty.
+ *
+ * Adds manifest/configured-path details and a practical hint for nested layouts
+ * (e.g. when actual content is under ".takt/" but path remains ".").
+ */
+export function checkPackageHasContentWithContext(
+  packageRoot: string,
+  context: PackageContentCheckContext,
+): void {
+  const hasFaceted = existsSync(join(packageRoot, 'faceted'));
+  const hasPieces = existsSync(join(packageRoot, 'pieces'));
+  if (hasFaceted || hasPieces) return;
+
+  const checkedFaceted = join(packageRoot, 'faceted');
+  const checkedPieces = join(packageRoot, 'pieces');
+  const configuredPath = context.configuredPath ?? '.';
+  const manifestPath = context.manifestPath ?? '(unknown)';
+  const hint = configuredPath === '.'
+    ? `hint: If your package content is under ".takt/", set "path: .takt" in ${TAKT_PACKAGE_MANIFEST_FILENAME}.`
+    : `hint: Verify "path: ${configuredPath}" points to a directory containing faceted/ or pieces/.`;
+
+  throw new Error(
+    [
+      'Package content not found.',
+      `manifest: ${manifestPath}`,
+      `configured path: ${configuredPath}`,
+      `resolved package root: ${packageRoot}`,
+      `checked: ${checkedFaceted}`,
+      `checked: ${checkedPieces}`,
+      hint,
+    ].join('\n'),
+  );
 }
 
 /**
