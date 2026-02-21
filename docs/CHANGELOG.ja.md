@@ -6,6 +6,35 @@
 
 フォーマットは [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) に基づいています。
 
+## [0.22.0] - 2026-02-22
+
+### Added
+
+- **Ensemble パッケージシステム** (`takt ensemble add/remove/list`): GitHub から外部 TAKT パッケージをインポート・管理 — `takt ensemble add github:{owner}/{repo}@{ref}` でパッケージを `~/.takt/ensemble/` にダウンロード。アトミックなインストール、バージョン互換チェック、ロックファイル生成、確認前のパッケージ内容サマリ表示に対応
+- **@scope 参照**: piece YAML のファセット参照で `@{owner}/{repo}/{facet-name}` 構文をサポート — インストール済み ensemble パッケージのファセットを直接参照可能（例: `persona: @nrslib/takt-fullstack/expert-coder`）
+- **4層ファセット解決**: 3層（project → user → builtin）から4層（package-local → project → user → builtin）に拡張 — ensemble パッケージのピースは自パッケージ内のファセットを最優先で解決
+- **ピース選択に ensemble カテゴリ追加**: インストール済みの ensemble パッケージがピース選択 UI の「ensemble」カテゴリにサブカテゴリとして自動表示
+- **implement/fix インストラクションにビルドゲート追加**: `implement` と `fix` のビルトインインストラクションでテスト実行前にビルド（型チェック）の実行を必須化
+- **TAKT Pack 仕様** (`docs/takt-pack-spec.md`): TAKT パッケージマニフェストのフォーマット仕様ドキュメント
+
+### Changed
+
+- **BREAKING: ファセットディレクトリ構造の変更**: 全レイヤーでファセットディレクトリが `facets/` サブディレクトリ配下に移動 — `builtins/{lang}/{facetType}/` → `builtins/{lang}/facets/{facetType}/`、`~/.takt/{facetType}/` → `~/.takt/facets/{facetType}/`、`.takt/{facetType}/` → `.takt/facets/{facetType}/`。マイグレーション: カスタムファセットファイルを新しい `facets/` サブディレクトリに移動してください
+- 契約文字列のハードコード散在防止ルールをコーディングポリシーとアーキテクチャレビューインストラクションに追加
+
+### Fixed
+
+- オーバーライドピースの検証が ensemble スコープを含むリゾルバー経由で実行されるよう修正
+- イテレーション入力待ち中の `poll_tick` デバッグログ連続出力を抑制
+- ピースリゾルバーの `stat()` 呼び出しでアクセス不能エントリ時にクラッシュせずエラーハンドリング
+
+### Internal
+
+- Ensemble テストスイート: atomic-update, ensemble-paths, file-filter, github-ref-resolver, github-spec, list, lock-file, pack-summary, package-facet-resolution, remove-reference-check, remove, takt-pack-config, tar-parser, takt-pack-schema
+- `src/faceted-prompting/scope.ts` を追加（@scope 参照のパース・バリデーション・解決）
+- faceted-prompting モジュールの scope-ref テストを追加
+- `inputWait.ts` を追加（ワーカープールのログノイズ抑制のための入力待ち状態共有）
+
 ## [0.21.0] - 2026-02-20
 
 ### Added

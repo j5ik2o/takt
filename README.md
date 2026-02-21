@@ -145,6 +145,7 @@ See the [Builtin Catalog](./docs/builtin-catalog.md) for all pieces and personas
 | `takt #N` | Execute GitHub Issue as task |
 | `takt switch` | Switch active piece |
 | `takt eject` | Copy builtin pieces/personas for customization |
+| `takt ensemble add` | Install an ensemble package from GitHub |
 
 See the [CLI Reference](./docs/cli-reference.md) for all commands and options.
 
@@ -212,10 +213,12 @@ See the [CI/CD Guide](./docs/ci-cd.md) for full setup instructions.
 ~/.takt/                    # Global config
 ├── config.yaml             # Provider, model, language, etc.
 ├── pieces/                 # User piece definitions
-└── personas/               # User persona prompts
+├── facets/                 # User facets (personas, policies, knowledge, etc.)
+└── ensemble/               # Installed ensemble packages
 
 .takt/                      # Project-level
 ├── config.yaml             # Project config
+├── facets/                 # Project facets
 ├── tasks.yaml              # Pending tasks
 ├── tasks/                  # Task specifications
 └── runs/                   # Execution reports, logs, context
@@ -247,6 +250,7 @@ await engine.run();
 | [Agent Guide](./docs/agents.md) | Custom agent configuration |
 | [Builtin Catalog](./docs/builtin-catalog.md) | All builtin pieces and personas |
 | [Faceted Prompting](./docs/faceted-prompting.md) | Prompt design methodology |
+| [TAKT Pack Spec](./docs/takt-pack-spec.md) | Ensemble package format |
 | [Task Management](./docs/task-management.md) | Task queuing, execution, isolation |
 | [CI/CD Integration](./docs/ci-cd.md) | GitHub Actions and pipeline mode |
 | [Changelog](./CHANGELOG.md) ([日本語](./docs/CHANGELOG.ja.md)) | Version history |

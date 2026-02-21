@@ -300,6 +300,26 @@ takt metrics review
 takt metrics review --since 7d
 ```
 
+### takt ensemble
+
+Ensemble パッケージ（GitHub 上の外部 TAKT パッケージ）を管理します。
+
+```bash
+# GitHub からパッケージをインストール
+takt ensemble add github:{owner}/{repo}@{ref}
+
+# デフォルトブランチからインストール
+takt ensemble add github:{owner}/{repo}
+
+# インストール済みパッケージを一覧表示
+takt ensemble list
+
+# パッケージを削除
+takt ensemble remove @{owner}/{repo}
+```
+
+インストールされたパッケージは `~/.takt/ensemble/` に保存され、ピース選択やファセット解決で利用可能になります。
+
 ### takt purge
 
 古いアナリティクスイベントファイルを削除します。
