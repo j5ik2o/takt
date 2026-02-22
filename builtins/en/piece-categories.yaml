@@ -9,6 +9,7 @@ piece_categories:
   ⚡ Mini:
     pieces:
       - default-mini
+      - default-test-first-mini
       - frontend-mini
       - backend-mini
       - backend-cqrs-mini
@@ -41,6 +42,9 @@ piece_categories:
     pieces:
       - unit-test
       - e2e-test
+  ✅ Test First:
+    pieces:
+      - default-test-first-mini
   Others:
     pieces:
       - research
