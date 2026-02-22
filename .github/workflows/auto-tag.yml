@@ -25,9 +25,9 @@ jobs:
           VERSION=$(echo "${{ github.event.pull_request.title }}" | sed 's/^Release //')
           echo "tag=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Create and push tag
+      - name: Create and push tag on PR head commit
         run: |
-          git tag "${{ steps.version.outputs.tag }}"
+          git tag "${{ steps.version.outputs.tag }}" "${{ github.event.pull_request.head.sha }}"
           git push origin "${{ steps.version.outputs.tag }}"
 
   publish:
