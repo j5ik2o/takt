@@ -68,10 +68,6 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   notifySuccess: vi.fn(),
   notifyError: vi.fn(),
-}));
-
-vi.mock('../shared/utils/index.js', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
   generateSessionId: vi.fn().mockReturnValue('test-session-id'),
   createSessionLog: vi.fn().mockReturnValue({
     startTime: new Date().toISOString(),

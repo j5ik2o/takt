@@ -25,7 +25,7 @@
     "test:e2e:codex": "npm run test:e2e:provider:codex",
     "test:e2e:opencode": "npm run test:e2e:provider:opencode",
     "lint": "eslint src/",
-    "check:release": "npm run build && npm run lint && npm run test && npm run test:e2e",
+    "check:release": "npm run build && npm run lint && npm run test && npm run test:e2e; code=$?; if [ \"$code\" -eq 0 ]; then msg='check:release passed'; else msg=\"check:release failed (exit=$code)\"; fi; if command -v osascript >/dev/null 2>&1; then osascript -e \"display notification \\\"$msg\\\" with title \\\"takt\\\" subtitle \\\"Release Check\\\"\" >/dev/null 2>&1 || true; fi; echo \"[takt] $msg\"; exit $code",
     "prepublishOnly": "npm run lint && npm run build && npm run test"
   },
   "keywords": [

@@ -24,6 +24,9 @@ vi.mock('../core/piece/phase-runner.js', () => ({
 
 vi.mock('../shared/utils/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
+  notifySuccess: vi.fn(),
+  notifyError: vi.fn(),
+  playWarningSound: vi.fn(),
   generateReportDir: vi.fn().mockReturnValue('test-report-dir'),
 }));
 

@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     env: {
       TAKT_CONFIG_DIR: '',
+      TAKT_NOTIFY_WEBHOOK: '',
     },
     include: ['src/__tests__/**/*.test.ts'],
     environment: 'node',

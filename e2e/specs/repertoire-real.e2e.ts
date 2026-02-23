@@ -40,7 +40,7 @@ function fixtureHasManifest(repo: string, ref: string, filename: string): boolea
   try {
     const out = execFileSync(
       'gh',
-      ['api', `/repos/${repo}/git/trees/${ref}`, '--recursive'],
+      ['api', `/repos/${repo}/git/trees/${ref}?recursive=1`],
       { encoding: 'utf-8', stdio: 'pipe' },
     );
     const tree = JSON.parse(out) as { tree: { path: string }[] };
