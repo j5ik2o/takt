@@ -1,19 +1,18 @@
 /**
- * Tests: session loading behavior in executePiece().
+ * Tests: executePiece() wires a deny handler for AskUserQuestion
+ * to PieceEngine during piece execution.
  *
- * Normal runs pass empty sessions to PieceEngine;
- * retry runs (startMovement / retryNote) load persisted sessions.
+ * This ensures that the agent cannot prompt the user interactively
+ * during automated piece runs — AskUserQuestion is always blocked.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { PieceConfig } from '../core/models/index.js';
+import { AskUserQuestionDeniedError } from '../core/piece/ask-user-question-error.js';
 
-const { MockPieceEngine, mockLoadPersonaSessions, mockLoadWorktreeSessions } = vi.hoisted(() => {
+const { MockPieceEngine } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter: EE } = require('node:events') as typeof import('node:events');
-
-  const mockLoadPersonaSessions = vi.fn().mockReturnValue({ coder: 'saved-session-id' });
-  const mockLoadWorktreeSessions = vi.fn().mockReturnValue({ coder: 'worktree-session-id' });
 
   class MockPieceEngine extends EE {
     static lastInstance: MockPieceEngine;
@@ -39,7 +38,7 @@ const { MockPieceEngine, mockLoadPersonaSessions, mockLoadWorktreeSessions } = v
     }
   }
 
-  return { MockPieceEngine, mockLoadPersonaSessions, mockLoadWorktreeSessions };
+  return { MockPieceEngine };
 });
 
 vi.mock('../core/piece/index.js', async () => {
@@ -59,9 +58,9 @@ vi.mock('../agents/ai-judge.js', () => ({
 }));
 
 vi.mock('../infra/config/index.js', () => ({
-  loadPersonaSessions: mockLoadPersonaSessions,
+  loadPersonaSessions: vi.fn().mockReturnValue({}),
   updatePersonaSession: vi.fn(),
-  loadWorktreeSessions: mockLoadWorktreeSessions,
+  loadWorktreeSessions: vi.fn().mockReturnValue({}),
   updateWorktreeSession: vi.fn(),
   resolvePieceConfigValues: vi.fn().mockReturnValue({
     notificationSound: true,
@@ -141,7 +140,6 @@ vi.mock('../shared/exitCodes.js', () => ({
 }));
 
 import { executePiece } from '../features/tasks/execute/pieceExecution.js';
-import { info } from '../shared/ui/index.js';
 
 function makeConfig(): PieceConfig {
   return {
@@ -161,102 +159,42 @@ function makeConfig(): PieceConfig {
   };
 }
 
-describe('executePiece session loading', () => {
+describe('executePiece AskUserQuestion deny handler wiring', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockLoadPersonaSessions.mockReturnValue({ coder: 'saved-session-id' });
-    mockLoadWorktreeSessions.mockReturnValue({ coder: 'worktree-session-id' });
   });
 
-  it('should pass empty initialSessions on normal run', async () => {
-    // Given: normal execution (no startMovement, no retryNote)
+  it('should pass onAskUserQuestion handler to PieceEngine', async () => {
+    // Given: normal piece execution
     await executePiece(makeConfig(), 'task', '/tmp/project', {
       projectCwd: '/tmp/project',
     });
 
-    // Then: PieceEngine receives empty sessions
-    expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
-    expect(mockLoadWorktreeSessions).not.toHaveBeenCalled();
-    expect(MockPieceEngine.lastInstance.receivedOptions.initialSessions).toEqual({});
+    // Then: PieceEngine receives an onAskUserQuestion handler
+    const handler = MockPieceEngine.lastInstance.receivedOptions.onAskUserQuestion;
+    expect(typeof handler).toBe('function');
   });
 
-  it('should load persisted sessions when startMovement is set (retry)', async () => {
-    // Given: retry execution with startMovement
-    await executePiece(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
-      startMovement: 'implement',
-    });
-
-    // Then: loadPersonaSessions is called to load saved sessions
-    expect(mockLoadPersonaSessions).toHaveBeenCalledWith('/tmp/project', 'claude');
-  });
-
-  it('should load persisted sessions when retryNote is set (retry)', async () => {
-    // Given: retry execution with retryNote
-    await executePiece(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
-      retryNote: 'Fix the failing test',
-    });
-
-    // Then: loadPersonaSessions is called to load saved sessions
-    expect(mockLoadPersonaSessions).toHaveBeenCalledWith('/tmp/project', 'claude');
-  });
-
-  it('should load worktree sessions on retry when cwd differs from projectCwd', async () => {
-    // Given: retry execution in a worktree (cwd !== projectCwd)
-    await executePiece(makeConfig(), 'task', '/tmp/worktree', {
-      projectCwd: '/tmp/project',
-      startMovement: 'implement',
-    });
-
-    // Then: loadWorktreeSessions is called instead of loadPersonaSessions
-    expect(mockLoadWorktreeSessions).toHaveBeenCalledWith('/tmp/project', '/tmp/worktree', 'claude');
-    expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
-  });
-
-  it('should not load sessions for worktree normal run', async () => {
-    // Given: normal execution in a worktree (no retry)
-    await executePiece(makeConfig(), 'task', '/tmp/worktree', {
-      projectCwd: '/tmp/project',
-    });
-
-    // Then: neither session loader is called
-    expect(mockLoadPersonaSessions).not.toHaveBeenCalled();
-    expect(mockLoadWorktreeSessions).not.toHaveBeenCalled();
-  });
-
-  it('should load sessions when both startMovement and retryNote are set', async () => {
-    // Given: retry with both flags
-    await executePiece(makeConfig(), 'task', '/tmp/project', {
-      projectCwd: '/tmp/project',
-      startMovement: 'implement',
-      retryNote: 'Fix issue',
-    });
-
-    // Then: sessions are loaded
-    expect(mockLoadPersonaSessions).toHaveBeenCalledWith('/tmp/project', 'claude');
-  });
-
-  it('should log provider and model per movement with global defaults', async () => {
+  it('should provide a handler that throws AskUserQuestionDeniedError', async () => {
+    // Given: piece execution completed
     await executePiece(makeConfig(), 'task', '/tmp/project', {
       projectCwd: '/tmp/project',
     });
 
-    const mockInfo = vi.mocked(info);
-    expect(mockInfo).toHaveBeenCalledWith('Provider: claude');
-    expect(mockInfo).toHaveBeenCalledWith('Model: (default)');
+    // When: the handler is invoked (as PieceEngine would when agent calls AskUserQuestion)
+    const handler = MockPieceEngine.lastInstance.receivedOptions.onAskUserQuestion as () => never;
+
+    // Then: it throws AskUserQuestionDeniedError
+    expect(() => handler()).toThrow(AskUserQuestionDeniedError);
   });
 
-  it('should log provider and model per movement with overrides', async () => {
-    await executePiece(makeConfig(), 'task', '/tmp/project', {
+  it('should complete successfully despite deny handler being present', async () => {
+    // Given/When: normal piece execution with deny handler wired
+    const result = await executePiece(makeConfig(), 'task', '/tmp/project', {
       projectCwd: '/tmp/project',
-      provider: 'codex',
-      model: 'gpt-5',
-      personaProviders: { coder: { provider: 'opencode' } },
     });
 
-    const mockInfo = vi.mocked(info);
-    expect(mockInfo).toHaveBeenCalledWith('Provider: opencode');
-    expect(mockInfo).toHaveBeenCalledWith('Model: gpt-5');
+    // Then: piece completes successfully
+    expect(result.success).toBe(true);
   });
 });
