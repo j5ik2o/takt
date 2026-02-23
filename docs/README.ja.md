@@ -104,11 +104,6 @@ name: plan-implement-review
 initial_movement: plan
 max_movements: 10
 
-personas:
-  planner: ../facets/personas/planner.md
-  coder: ../facets/personas/coder.md
-  reviewer: ../facets/personas/architecture-reviewer.md
-
 movements:
   - name: plan
     persona: planner
