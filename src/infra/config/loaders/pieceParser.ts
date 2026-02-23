@@ -35,8 +35,17 @@ export function normalizeProviderOptions(
   if (!raw) return undefined;
 
   const result: MovementProviderOptions = {};
-  if (raw.codex?.network_access !== undefined) {
-    result.codex = { networkAccess: raw.codex.network_access };
+  if (raw.codex) {
+    const { network_access, sandbox_mode, approval_policy, additional_directories } = raw.codex;
+    const codexOptions = {
+      ...(network_access !== undefined ? { networkAccess: network_access } : {}),
+      ...(sandbox_mode !== undefined ? { sandboxMode: sandbox_mode } : {}),
+      ...(approval_policy !== undefined ? { approvalPolicy: approval_policy } : {}),
+      ...(additional_directories !== undefined ? { additionalDirectories: additional_directories } : {}),
+    };
+    if (Object.keys(codexOptions).length > 0) {
+      result.codex = codexOptions;
+    }
   }
   if (raw.opencode?.network_access !== undefined) {
     result.opencode = { networkAccess: raw.opencode.network_access };

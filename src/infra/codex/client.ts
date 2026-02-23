@@ -88,14 +88,17 @@ export class CodexClient {
     prompt: string,
     options: CodexCallOptions,
   ): Promise<AgentResponse> {
-    const sandboxMode = options.permissionMode
-      ? mapToCodexSandboxMode(options.permissionMode)
-      : 'workspace-write';
+    const sandboxMode = options.sandboxMode
+      ?? (options.permissionMode
+        ? mapToCodexSandboxMode(options.permissionMode)
+        : 'workspace-write');
     const threadOptions = {
       ...(options.model ? { model: options.model } : {}),
       workingDirectory: options.cwd,
       sandboxMode,
       ...(options.networkAccess === undefined ? {} : { networkAccessEnabled: options.networkAccess }),
+      ...(options.approvalPolicy !== undefined ? { approvalPolicy: options.approvalPolicy } : {}),
+      ...(options.additionalDirectories !== undefined ? { additionalDirectories: options.additionalDirectories } : {}),
     };
     let threadId = options.sessionId;
 

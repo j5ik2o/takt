@@ -69,6 +69,9 @@ export const ClaudeSandboxSchema = z.object({
 export const MovementProviderOptionsSchema = z.object({
   codex: z.object({
     network_access: z.boolean().optional(),
+    sandbox_mode: z.enum(['read-only', 'workspace-write', 'danger-full-access']).optional(),
+    approval_policy: z.enum(['never', 'on-request', 'on-failure', 'untrusted']).optional(),
+    additional_directories: z.array(z.string()).optional(),
   }).optional(),
   opencode: z.object({
     network_access: z.boolean().optional(),

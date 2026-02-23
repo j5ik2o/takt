@@ -27,8 +27,14 @@ export interface CodexCallOptions {
   systemPrompt?: string;
   /** Permission mode for sandbox configuration */
   permissionMode?: PermissionMode;
+  /** Explicit sandbox mode. Takes precedence over permissionMode-derived mode when set. */
+  sandboxMode?: CodexSandboxMode;
   /** Enable network access for workspace-write sandbox */
   networkAccess?: boolean;
+  /** Approval policy for sandbox command execution */
+  approvalPolicy?: 'never' | 'on-request' | 'on-failure' | 'untrusted';
+  /** Additional directories the sandbox can access beyond the working directory */
+  additionalDirectories?: string[];
   /** Enable streaming mode with callback (best-effort) */
   onStream?: StreamCallback;
   /** OpenAI API key (bypasses CLI auth) */
