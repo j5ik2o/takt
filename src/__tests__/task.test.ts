@@ -135,6 +135,42 @@ describe('TaskRunner (tasks.yaml)', () => {
     expect(tasks[0]?.content).toBe('Absolute task content');
   });
 
+  it('should accept with-submodules alias in tasks.yaml and normalize to with_submodules', () => {
+    writeTasksFile(testDir, [{
+      name: 'task-a',
+      status: 'pending',
+      content: 'Do work',
+      created_at: '2026-02-09T00:00:00.000Z',
+      started_at: null,
+      completed_at: null,
+      owner_pid: null,
+      'with-submodules': true,
+      submodules: ['libs/shared'],
+    }]);
+
+    const tasks = runner.listTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.data?.with_submodules).toBe(true);
+    expect(tasks[0]?.data?.submodules).toEqual(['libs/shared']);
+  });
+
+  it('should accept submodules all literal in any case and normalize to all', () => {
+    writeTasksFile(testDir, [{
+      name: 'task-a',
+      status: 'pending',
+      content: 'Do work',
+      created_at: '2026-02-09T00:00:00.000Z',
+      started_at: null,
+      completed_at: null,
+      owner_pid: null,
+      submodules: 'ALL',
+    }]);
+
+    const tasks = runner.listTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]?.data?.submodules).toBe('all');
+  });
+
   it('should build task instruction from task_dir and expose taskDir on TaskInfo', () => {
     mkdirSync(join(testDir, '.takt', 'tasks', '20260201-000000-demo'), { recursive: true });
     writeFileSync(

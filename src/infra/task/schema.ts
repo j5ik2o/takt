@@ -5,6 +5,20 @@
 import { z } from 'zod/v4';
 import { isValidTaskDir } from '../../shared/utils/taskPaths.js';
 
+const SubmodulesAllSchema = z.string()
+  .transform((value) => value.trim())
+  .refine((value) => value.toLowerCase() === 'all', {
+    message: 'submodules string value must be "all" (case-insensitive).',
+  })
+  .transform(() => 'all' as const);
+
+const SubmodulePathArraySchema = z.array(z.string()).refine(
+  (paths) => paths.every((path) => !path.includes('*')),
+  {
+    message: 'submodules wildcard patterns are not supported. Use "all" or explicit paths.',
+  },
+);
+
 /**
  * Per-task execution config schema.
  * Used by `takt add` input and in-memory TaskInfo.data.
@@ -14,6 +28,8 @@ export const TaskExecutionConfigSchema = z.object({
   branch: z.string().optional(),
   piece: z.string().optional(),
   issue: z.number().int().positive().optional(),
+  with_submodules: z.boolean().optional(),
+  submodules: z.union([SubmodulePathArraySchema, SubmodulesAllSchema]).optional(),
   start_movement: z.string().optional(),
   retry_note: z.string().optional(),
   auto_pr: z.boolean().optional(),

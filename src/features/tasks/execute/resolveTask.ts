@@ -148,6 +148,8 @@ export async function resolveTaskExecution(
           branch: data.branch,
           taskSlug,
           issueNumber: data.issue,
+          withSubmodules: data.with_submodules,
+          submodules: data.submodules,
         }),
       );
       throwIfAborted(abortSignal);

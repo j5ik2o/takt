@@ -42,6 +42,10 @@ export interface WorktreeOptions {
   taskSlug: string;
   /** GitHub Issue number (optional, for formatting branch/path) */
   issueNumber?: number;
+  /** Clone all submodules recursively when true */
+  withSubmodules?: boolean;
+  /** Initialize selected paths or all via 'all' (case-insensitive in YAML) */
+  submodules?: string[] | 'all';
 }
 
 export interface WorktreeResult {

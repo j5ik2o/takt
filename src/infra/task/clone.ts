@@ -2,7 +2,7 @@
  * Git clone lifecycle management
  *
  * Creates, removes, and tracks git clones for task isolation.
- * Uses `git clone --reference --dissociate` so each clone has a fully
+ * Uses `git clone --reference --dissociate` (and optional submodule sync) so each clone has a fully
  * independent .git directory, then removes the origin remote to prevent
  * Claude Code SDK from traversing back to the main repository.
  */
@@ -186,12 +186,21 @@ export class CloneManager {
    *  Without this, non-default branches are lost when `git remote remove origin`
    *  deletes the remote-tracking refs.
    */
-  private static cloneAndIsolate(projectDir: string, clonePath: string, branch?: string): void {
+  private static cloneAndIsolate(
+    projectDir: string,
+    clonePath: string,
+    branch?: string,
+    options?: Pick<WorktreeOptions, 'withSubmodules' | 'submodules'>,
+  ): void {
     const referenceRepo = CloneManager.resolveMainRepo(projectDir);
+    const { cloneAllSubmodules, selectedSubmodules } = CloneManager.resolveSubmoduleMode(options);
 
     fs.mkdirSync(path.dirname(clonePath), { recursive: true });
 
     const cloneArgs = ['clone', '--reference', referenceRepo, '--dissociate'];
+    if (cloneAllSubmodules) {
+      cloneArgs.push('--recurse-submodules');
+    }
     if (branch) {
       cloneArgs.push('--branch', branch);
     }
@@ -201,6 +210,13 @@ export class CloneManager {
       cwd: projectDir,
       stdio: 'pipe',
     });
+
+    if (selectedSubmodules.length > 0) {
+      execFileSync('git', ['submodule', 'update', '--init', '--recursive', '--', ...selectedSubmodules], {
+        cwd: clonePath,
+        stdio: 'pipe',
+      });
+    }
 
     execFileSync('git', ['remote', 'remove', 'origin'], {
       cwd: clonePath,
@@ -226,6 +242,43 @@ export class CloneManager {
     }
   }
 
+  private static normalizeSubmodulePaths(submodules: string[] | 'all' | undefined): string[] {
+    if (!submodules || submodules === 'all') {
+      return [];
+    }
+    return submodules
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  }
+
+  private static resolveSubmoduleMode(
+    options?: Pick<WorktreeOptions, 'withSubmodules' | 'submodules'>,
+  ): { cloneAllSubmodules: boolean; selectedSubmodules: string[] } {
+    if (typeof options?.submodules === 'string' && options.submodules.trim().toLowerCase() === 'all') {
+      return { cloneAllSubmodules: true, selectedSubmodules: [] };
+    }
+
+    if (Array.isArray(options?.submodules)) {
+      const selectedSubmodules = CloneManager.normalizeSubmodulePaths(options.submodules);
+
+      if (selectedSubmodules.some((path) => path.includes('*'))) {
+        throw new Error('submodules wildcard patterns are not supported. Use "all" or explicit paths.');
+      }
+
+      // `submodules` takes precedence over `with_submodules`.
+      // An empty array means "do not initialize any submodule".
+      return { cloneAllSubmodules: false, selectedSubmodules };
+    }
+
+    const selectedSubmodules = CloneManager.normalizeSubmodulePaths(options?.submodules);
+
+    if (selectedSubmodules.some((path) => path.includes('*'))) {
+      throw new Error('submodules wildcard patterns are not supported. Use "all" or explicit paths.');
+    }
+
+    return { cloneAllSubmodules: options?.withSubmodules === true, selectedSubmodules: [] };
+  }
+
   private static encodeBranchName(branch: string): string {
     return branch.replace(/\//g, '--');
   }
@@ -244,10 +297,10 @@ export class CloneManager {
     log.info('Creating shared clone', { path: clonePath, branch });
 
     if (CloneManager.branchExists(projectDir, branch)) {
-      CloneManager.cloneAndIsolate(projectDir, clonePath, branch);
+      CloneManager.cloneAndIsolate(projectDir, clonePath, branch, options);
     } else {
       // Clone from the base branch so the task starts from latest state
-      CloneManager.cloneAndIsolate(projectDir, clonePath, baseBranch);
+      CloneManager.cloneAndIsolate(projectDir, clonePath, baseBranch, options);
       // If we fetched a newer commit from remote, reset to it
       if (fetchedCommit) {
         execFileSync('git', ['reset', '--hard', fetchedCommit], { cwd: clonePath, stdio: 'pipe' });

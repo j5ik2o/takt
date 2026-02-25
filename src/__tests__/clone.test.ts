@@ -325,6 +325,120 @@ describe('branch and worktree path formatting with issue numbers', () => {
   });
 });
 
+describe('submodule clone options', () => {
+  function setupMockForSubmodules() {
+    const cloneCalls: string[][] = [];
+    const submoduleCalls: string[][] = [];
+
+    mockExecFileSync.mockImplementation((_cmd, args) => {
+      const argsArr = args as string[];
+
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--abbrev-ref' && argsArr[2] === 'HEAD') {
+        return 'main\n';
+      }
+      if (argsArr[0] === 'clone') {
+        cloneCalls.push(argsArr);
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'submodule') {
+        submoduleCalls.push(argsArr);
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'remote') return Buffer.from('');
+      if (argsArr[0] === 'config') {
+        if (argsArr[1] === '--local') throw new Error('not set');
+        return Buffer.from('');
+      }
+      if (argsArr[0] === 'rev-parse' && argsArr[1] === '--verify') {
+        throw new Error('branch not found');
+      }
+      if (argsArr[0] === 'checkout') return Buffer.from('');
+      return Buffer.from('');
+    });
+
+    return { cloneCalls, submoduleCalls };
+  }
+
+  it('should add --recurse-submodules when withSubmodules is true', () => {
+    const { cloneCalls, submoduleCalls } = setupMockForSubmodules();
+
+    createSharedClone('/project', {
+      worktree: true,
+      taskSlug: 'with-submodules',
+      withSubmodules: true,
+    });
+
+    expect(cloneCalls).toHaveLength(1);
+    expect(cloneCalls[0]).toContain('--recurse-submodules');
+    expect(submoduleCalls).toHaveLength(0);
+  });
+
+  it('should initialize only selected submodules when submodules are specified', () => {
+    const { cloneCalls, submoduleCalls } = setupMockForSubmodules();
+
+    createSharedClone('/project', {
+      worktree: true,
+      taskSlug: 'selected-submodules',
+      withSubmodules: true,
+      submodules: ['packages/core', ' packages/ui ', ''],
+    });
+
+    expect(cloneCalls).toHaveLength(1);
+    expect(cloneCalls[0]).not.toContain('--recurse-submodules');
+    expect(submoduleCalls).toEqual([
+      ['submodule', 'update', '--init', '--recursive', '--', 'packages/core', 'packages/ui'],
+    ]);
+  });
+
+  it('should not recurse submodules when submodules is an empty array (takes precedence)', () => {
+    const { cloneCalls, submoduleCalls } = setupMockForSubmodules();
+
+    createSharedClone('/project', {
+      worktree: true,
+      taskSlug: 'empty-submodules',
+      withSubmodules: true,
+      submodules: [],
+    });
+
+    expect(cloneCalls).toHaveLength(1);
+    expect(cloneCalls[0]).not.toContain('--recurse-submodules');
+    expect(submoduleCalls).toHaveLength(0);
+  });
+
+  it('should treat submodules:all as clone all submodules recursively', () => {
+    const { cloneCalls, submoduleCalls } = setupMockForSubmodules();
+
+    createSharedClone('/project', {
+      worktree: true,
+      taskSlug: 'all-submodules',
+      submodules: 'all',
+    });
+
+    expect(cloneCalls).toHaveLength(1);
+    expect(cloneCalls[0]).toContain('--recurse-submodules');
+    expect(submoduleCalls).toHaveLength(0);
+  });
+
+  it('should reject wildcard submodule patterns and require all literal or explicit paths', () => {
+    const { cloneCalls, submoduleCalls } = setupMockForSubmodules();
+
+    expect(() => createSharedClone('/project', {
+      worktree: true,
+      taskSlug: 'wildcard-submodules',
+      submodules: ['*'],
+    })).toThrow(/wildcard patterns are not supported/i);
+
+    expect(() => createSharedClone('/project', {
+      worktree: true,
+      taskSlug: 'wildcard-submodules-path',
+      submodules: ['packages/*'],
+    })).toThrow(/wildcard patterns are not supported/i);
+
+    expect(cloneCalls).toHaveLength(0);
+    expect(submoduleCalls).toHaveLength(0);
+  });
+});
+
 describe('resolveBaseBranch', () => {
   it('should not fetch when auto_fetch is disabled (default)', () => {
     // Given: auto_fetch is off (default), HEAD is on main

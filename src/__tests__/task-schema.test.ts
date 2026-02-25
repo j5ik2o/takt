@@ -63,6 +63,8 @@ describe('TaskExecutionConfigSchema', () => {
       branch: 'feature/test',
       piece: 'unit-test',
       issue: 42,
+      with_submodules: true,
+      submodules: ['libs/shared'],
       start_movement: 'plan',
       retry_note: 'retry after fix',
       auto_pr: true,
@@ -84,6 +86,23 @@ describe('TaskExecutionConfigSchema', () => {
 
   it('should reject non-integer issue number', () => {
     expect(() => TaskExecutionConfigSchema.parse({ issue: 1.5 })).toThrow();
+  });
+
+  it('should reject non-array submodules value', () => {
+    expect(() => TaskExecutionConfigSchema.parse({ submodules: 'libs/shared' })).toThrow();
+  });
+
+  it('should accept submodules as all literal (case-insensitive) and normalize to all', () => {
+    const lower = TaskExecutionConfigSchema.parse({ submodules: 'all' });
+    const upper = TaskExecutionConfigSchema.parse({ submodules: 'ALL' });
+
+    expect(lower.submodules).toBe('all');
+    expect(upper.submodules).toBe('all');
+  });
+
+  it('should reject wildcard patterns in submodules array', () => {
+    expect(() => TaskExecutionConfigSchema.parse({ submodules: ['*'] })).toThrow();
+    expect(() => TaskExecutionConfigSchema.parse({ submodules: ['libs/*'] })).toThrow();
   });
 });
 
