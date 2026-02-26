@@ -206,6 +206,12 @@ export class MovementExecutor {
     updatePersonaSession(sessionKey, response.sessionId);
     this.deps.onPhaseComplete?.(step, 1, 'execute', response.content, response.status, response.error);
 
+    if (response.status !== 'done') {
+      state.movementOutputs.set(step.name, response);
+      state.lastOutput = response;
+      return { response, instruction };
+    }
+
     const phaseCtx = this.deps.optionsBuilder.buildPhaseRunnerContext(state, response.content, updatePersonaSession, this.deps.onPhaseStart, this.deps.onPhaseComplete);
 
     // Phase 2: report output (resume same session, Write only)

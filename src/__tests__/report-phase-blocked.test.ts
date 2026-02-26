@@ -221,4 +221,35 @@ describe('PieceEngine Integration: Report Phase Blocked Handling', () => {
       expect.objectContaining({ status: 'blocked', content: blockedContent }),
     );
   });
+
+  it('should skip report phase when phase 1 returns error', async () => {
+    const config = buildConfigWithReport();
+    const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'plan', content: 'Plan done' }),
+      makeResponse({
+        persona: 'implement',
+        status: 'error',
+        content: 'Cursor Agent CLI exited with code 1: Workspace Trust Required',
+        error: 'Cursor Agent CLI exited with code 1: Workspace Trust Required',
+      }),
+    ]);
+
+    mockDetectMatchedRuleSequence([
+      { index: 0, method: 'phase1_tag' },
+    ]);
+
+    const abortFn = vi.fn();
+    engine.on('piece:abort', abortFn);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(runReportPhase).not.toHaveBeenCalled();
+    expect(abortFn).toHaveBeenCalledOnce();
+    const reason = abortFn.mock.calls[0]?.[1] as string;
+    expect(reason).toContain('Movement "implement" failed');
+    expect(reason).toContain('Workspace Trust Required');
+  });
 });
