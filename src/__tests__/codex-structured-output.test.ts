@@ -191,4 +191,73 @@ describe('CodexClient — structuredOutput 抽出', () => {
       codexPathOverride: '/opt/codex/bin/codex',
     });
   });
+
+  it('sandboxMode が ThreadOptions に反映される', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      sandboxMode: 'read-only',
+    });
+
+    expect(lastThreadOptions).toMatchObject({
+      sandboxMode: 'read-only',
+    });
+  });
+
+  it('sandboxMode が permissionMode より優先される', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      sandboxMode: 'danger-full-access',
+      permissionMode: 'readonly',
+    });
+
+    expect(lastThreadOptions).toMatchObject({
+      sandboxMode: 'danger-full-access',
+    });
+  });
+
+  it('approvalPolicy が ThreadOptions に反映される', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      approvalPolicy: 'never',
+    });
+
+    expect(lastThreadOptions).toMatchObject({
+      approvalPolicy: 'never',
+    });
+  });
+
+  it('additionalDirectories が ThreadOptions に反映される', async () => {
+    mockEvents = [
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.completed', usage: { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const client = new CodexClient();
+    await client.call('coder', 'prompt', {
+      cwd: '/tmp',
+      additionalDirectories: ['/shared/data', '/opt/resources'],
+    });
+
+    expect(lastThreadOptions).toMatchObject({
+      additionalDirectories: ['/shared/data', '/opt/resources'],
+    });
+  });
 });

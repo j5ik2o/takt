@@ -78,6 +78,12 @@ export type McpServerConfig = McpStdioServerConfig | McpSseServerConfig | McpHtt
 export interface CodexProviderOptions {
   /** Enable network access for Codex workspace-write sandbox */
   networkAccess?: boolean;
+  /** Sandbox isolation mode. Overrides permissionMode-derived sandbox mode when set. */
+  sandboxMode?: 'read-only' | 'workspace-write' | 'danger-full-access';
+  /** Approval policy for sandbox command execution */
+  approvalPolicy?: 'never' | 'on-request' | 'on-failure' | 'untrusted';
+  /** Additional directories the sandbox can access beyond the working directory */
+  additionalDirectories?: string[];
 }
 
 /** OpenCode provider-specific options */
