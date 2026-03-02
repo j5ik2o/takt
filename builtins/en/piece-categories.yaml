@@ -34,6 +34,7 @@ piece_categories:
   🔍 Review:
     pieces:
       - review
+      - review-fix
       - frontend-review
       - frontend-review-fix
       - backend-review
