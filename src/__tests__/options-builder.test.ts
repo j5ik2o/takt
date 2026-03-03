@@ -85,7 +85,7 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     });
   });
 
-  it('merges provider options with precedence: global < movement < project', () => {
+  it('merges provider options with precedence: global/project < movement', () => {
     const step = createMovement({
       providerOptions: {
         codex: { networkAccess: false },
@@ -104,12 +104,12 @@ describe('OptionsBuilder.buildBaseOptions', () => {
     const options = builder.buildBaseOptions(step);
 
     expect(options.providerOptions).toEqual({
-      codex: { networkAccess: true },
+      codex: { networkAccess: false },
       opencode: { networkAccess: true },
       claude: {
         sandbox: {
-          allowUnsandboxedCommands: true,
           excludedCommands: ['./gradlew'],
+          allowUnsandboxedCommands: true,
         },
       },
     });

@@ -36,26 +36,25 @@ export class AgentRunner {
   } {
     const localConfig = loadProjectConfig(cwd);
     const globalConfig = loadGlobalConfig();
-
-    const resolvedProviderModel = resolveAgentProviderModel({
-      personaDisplayName,
+    const resolved = resolveAgentProviderModel({
       cliProvider: options?.provider,
       cliModel: options?.model,
+      personaProviders: globalConfig.personaProviders,
+      personaDisplayName,
       stepProvider: options?.stepProvider,
       stepModel: options?.stepModel,
-      personaProviders: globalConfig.personaProviders,
       localProvider: localConfig.provider,
       localModel: localConfig.model,
       globalProvider: globalConfig.provider,
       globalModel: globalConfig.model,
     });
-    const resolvedProvider = resolvedProviderModel.provider;
+    const resolvedProvider = resolved.provider;
     if (!resolvedProvider) {
       throw new Error('No provider configured. Set "provider" in ~/.takt/config.yaml');
     }
     return {
       provider: resolvedProvider,
-      model: resolvedProviderModel.model,
+      model: resolved.model,
       localConfig,
       globalConfig,
     };
