@@ -164,6 +164,7 @@ export class InstructionBuilder {
     return loadTemplate('perform_phase1_message', language, {
       workingDirectory: this.context.cwd,
       editRule,
+      allowGitCommit: !!this.step.allowGitCommit,
       pieceName,
       pieceDescription,
       hasPieceDescription,

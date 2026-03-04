@@ -286,6 +286,7 @@ function normalizeStepFromRaw(
     requiredPermissionMode: step.required_permission_mode,
     providerOptions: mergeProviderOptions(inheritedProviderOptions, normalizedProvider.providerOptions),
     edit: step.edit,
+    allowGitCommit: step.allow_git_commit,
     instructionTemplate: (step.instruction_template
       ? resolveRefToContent(step.instruction_template, sections.resolvedInstructions, pieceDir, 'instructions', context)
       : undefined) || expandedInstruction || '{task}',

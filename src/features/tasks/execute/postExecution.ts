@@ -5,7 +5,7 @@
  * instructBranch (takt list).
  */
 
-import { autoCommitAndPush, pushBranch } from '../../../infra/task/index.js';
+import { autoCommitAndPush, pushBranch, hasCommitsAhead } from '../../../infra/task/index.js';
 import { info, error, success } from '../../../shared/ui/index.js';
 import { createLogger } from '../../../shared/utils/index.js';
 import { buildPrBody } from '../../../infra/github/index.js';
@@ -47,7 +47,14 @@ export async function postExecutionFlow(options: PostExecutionOptions): Promise<
     error(`Auto-commit failed: ${commitResult.message}`);
   }
 
-  if (commitResult.success && commitResult.commitHash && branch && shouldCreatePr) {
+  // Determine if there are commits to create a PR for:
+  // Either autoCommit created a new commit, or prior commits exist ahead of baseBranch
+  // (e.g. when allow_git_commit movement already committed during piece execution).
+  const hasNewCommit = commitResult.success && !!commitResult.commitHash;
+  const hasPriorCommits = !hasNewCommit && branch && baseBranch && hasCommitsAhead(execCwd, branch, baseBranch);
+  const canCreatePr = (hasNewCommit || hasPriorCommits) && branch && shouldCreatePr;
+
+  if (canCreatePr) {
     try {
       pushBranch(projectCwd, branch);
     } catch (pushError) {

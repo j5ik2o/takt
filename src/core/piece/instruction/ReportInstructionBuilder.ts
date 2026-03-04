@@ -92,6 +92,7 @@ export class ReportInstructionBuilder {
 
     return loadTemplate('perform_phase2_message', language, {
       workingDirectory: this.context.cwd,
+      allowGitCommit: !!this.step.allowGitCommit,
       reportContext,
       hasLastResponse: this.context.lastResponse != null && this.context.lastResponse.trim().length > 0,
       lastResponse: this.context.lastResponse ?? '',

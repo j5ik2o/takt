@@ -6,10 +6,11 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockAutoCommitAndPush, mockPushBranch, mockFindExistingPr, mockCommentOnPr, mockCreatePullRequest, mockBuildPrBody } =
+const { mockAutoCommitAndPush, mockPushBranch, mockHasCommitsAhead, mockFindExistingPr, mockCommentOnPr, mockCreatePullRequest, mockBuildPrBody } =
   vi.hoisted(() => ({
     mockAutoCommitAndPush: vi.fn(),
     mockPushBranch: vi.fn(),
+    mockHasCommitsAhead: vi.fn(),
     mockFindExistingPr: vi.fn(),
     mockCommentOnPr: vi.fn(),
     mockCreatePullRequest: vi.fn(),
@@ -19,6 +20,7 @@ const { mockAutoCommitAndPush, mockPushBranch, mockFindExistingPr, mockCommentOn
 vi.mock('../infra/task/index.js', () => ({
   autoCommitAndPush: (...args: unknown[]) => mockAutoCommitAndPush(...args),
   pushBranch: (...args: unknown[]) => mockPushBranch(...args),
+  hasCommitsAhead: (...args: unknown[]) => mockHasCommitsAhead(...args),
 }));
 
 vi.mock('../infra/git/index.js', () => ({
@@ -66,6 +68,7 @@ describe('postExecutionFlow', () => {
     vi.clearAllMocks();
     mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash: 'abc123' });
     mockPushBranch.mockReturnValue(undefined);
+    mockHasCommitsAhead.mockReturnValue(false);
     mockCommentOnPr.mockReturnValue({ success: true });
     mockCreatePullRequest.mockReturnValue({ success: true, url: 'https://github.com/org/repo/pull/1' });
   });
@@ -96,13 +99,26 @@ describe('postExecutionFlow', () => {
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
   });
 
-  it('commit がない場合は PR 関連処理をスキップする', async () => {
+  it('commit がなく先行コミットもない場合は PR 関連処理をスキップする', async () => {
     mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash: undefined });
+    mockHasCommitsAhead.mockReturnValue(false);
 
     await postExecutionFlow(baseOptions);
 
     expect(mockFindExistingPr).not.toHaveBeenCalled();
     expect(mockCreatePullRequest).not.toHaveBeenCalled();
+  });
+
+  it('autoCommit が空振りでも先行コミットがあれば PR を作成する', async () => {
+    mockAutoCommitAndPush.mockReturnValue({ success: true, commitHash: undefined });
+    mockHasCommitsAhead.mockReturnValue(true);
+    mockFindExistingPr.mockReturnValue(undefined);
+
+    const result = await postExecutionFlow(baseOptions);
+
+    expect(mockHasCommitsAhead).toHaveBeenCalledWith('/clone', 'task/fix-the-bug', 'main');
+    expect(mockCreatePullRequest).toHaveBeenCalledTimes(1);
+    expect(result.prUrl).toBe('https://github.com/org/repo/pull/1');
   });
 
   it('branch がない場合は PR 関連処理をスキップする', async () => {

@@ -59,3 +59,19 @@ export function pushBranch(cwd: string, branch: string): void {
     stdio: 'pipe',
   });
 }
+
+/**
+ * Returns true if `branch` has commits ahead of `baseBranch`.
+ */
+export function hasCommitsAhead(cwd: string, branch: string, baseBranch: string): boolean {
+  try {
+    const count = execFileSync('git', ['rev-list', '--count', `${baseBranch}..${branch}`], {
+      cwd,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    }).trim();
+    return Number.parseInt(count, 10) > 0;
+  } catch {
+    return false;
+  }
+}

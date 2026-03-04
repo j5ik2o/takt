@@ -312,6 +312,8 @@ export const ParallelSubMovementRawSchema = z.object({
   required_permission_mode: PermissionModeSchema.optional(),
   provider_options: MovementProviderOptionsSchema,
   edit: z.boolean().optional(),
+  /** Whether this movement is allowed to run git commit/add */
+  allow_git_commit: z.boolean().optional(),
   instruction: z.string().optional(),
   instruction_template: z.string().optional(),
   rules: z.array(PieceRuleSchema).optional(),
@@ -348,6 +350,8 @@ export const PieceMovementRawSchema = z.object({
   provider_options: MovementProviderOptionsSchema,
   /** Whether this movement is allowed to edit project files */
   edit: z.boolean().optional(),
+  /** Whether this movement is allowed to run git commit/add */
+  allow_git_commit: z.boolean().optional(),
   instruction: z.string().optional(),
   instruction_template: z.string().optional(),
   /** Rules for movement routing */

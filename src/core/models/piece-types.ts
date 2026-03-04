@@ -144,6 +144,8 @@ export interface PieceMovement {
   providerOptions?: MovementProviderOptions;
   /** Whether this movement is allowed to edit project files (true=allowed, false=prohibited, undefined=no prompt) */
   edit?: boolean;
+  /** Whether this movement is allowed to run git commit/add (default: false, system handles commits) */
+  allowGitCommit?: boolean;
   instructionTemplate: string;
   /** Rules for movement routing */
   rules?: PieceRule[];
