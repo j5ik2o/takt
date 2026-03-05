@@ -155,8 +155,8 @@ describe('PieceEngine Integration: Error Handling', () => {
   // =====================================================
   // 3. Interrupted status routing
   // =====================================================
-  describe('Interrupted status', () => {
-    it('should continue with normal rule routing and skip report phase when movement returns interrupted', async () => {
+  describe('Error status', () => {
+    it('should abort immediately and skip report phase when movement returns error', async () => {
       const config = buildDefaultPieceConfig({
         initialMovement: 'plan',
         movements: [
@@ -169,11 +169,12 @@ describe('PieceEngine Integration: Error Handling', () => {
       const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
 
       mockRunAgentSequence([
-        makeResponse({ persona: 'plan', status: 'interrupted', content: 'Partial response' }),
-      ]);
-
-      mockDetectMatchedRuleSequence([
-        { index: 0, method: 'phase1_tag' },
+        makeResponse({
+          persona: 'plan',
+          status: 'error',
+          content: 'Partial response',
+          error: 'interrupted by signal',
+        }),
       ]);
 
       const abortFn = vi.fn();
@@ -181,9 +182,106 @@ describe('PieceEngine Integration: Error Handling', () => {
 
       const state = await engine.run();
 
-      expect(state.status).toBe('completed');
-      expect(abortFn).not.toHaveBeenCalled();
+      expect(state.status).toBe('aborted');
+      expect(abortFn).toHaveBeenCalledOnce();
       expect(runReportPhase).not.toHaveBeenCalled();
+    });
+
+    it('should abort when movement returns an unhandled status and skip report phase', async () => {
+      const config = buildDefaultPieceConfig({
+        initialMovement: 'plan',
+        movements: [
+          makeMovement('plan', {
+            outputContracts: [{ name: '01-plan.md', format: '# Plan' }],
+            rules: [makeRule('continue', 'COMPLETE')],
+          }),
+        ],
+      });
+      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      mockRunAgentSequence([
+        makeResponse({
+          persona: 'plan',
+          status: 'pending' as never,
+          content: 'pending response',
+        }),
+      ]);
+
+      const abortFn = vi.fn();
+      engine.on('piece:abort', abortFn);
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      expect(abortFn).toHaveBeenCalledOnce();
+      const reason = abortFn.mock.calls[0]![1] as string;
+      expect(reason).toContain('Unhandled response status: pending');
+      expect(runReportPhase).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('runSingleIteration status routing', () => {
+    it('should abort without rule resolution when movement returns blocked', async () => {
+      const config = buildDefaultPieceConfig({
+        initialMovement: 'plan',
+        movements: [
+          makeMovement('plan', {
+            rules: [makeRule('continue', 'COMPLETE')],
+          }),
+        ],
+      });
+      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      mockRunAgentSequence([
+        makeResponse({
+          persona: 'plan',
+          status: 'blocked',
+          content: 'need input',
+        }),
+      ]);
+
+      const abortFn = vi.fn();
+      engine.on('piece:abort', abortFn);
+
+      const result = await engine.runSingleIteration();
+
+      expect(result.nextMovement).toBe('ABORT');
+      expect(result.isComplete).toBe(true);
+      expect(engine.getState().status).toBe('aborted');
+      expect(abortFn).toHaveBeenCalledOnce();
+    });
+
+    it('should abort without rule resolution when movement returns error', async () => {
+      const config = buildDefaultPieceConfig({
+        initialMovement: 'plan',
+        movements: [
+          makeMovement('plan', {
+            rules: [makeRule('continue', 'COMPLETE')],
+          }),
+        ],
+      });
+      const engine = new PieceEngine(config, tmpDir, 'test task', { projectCwd: tmpDir });
+
+      mockRunAgentSequence([
+        makeResponse({
+          persona: 'plan',
+          status: 'error',
+          content: 'failed',
+          error: 'request failed',
+        }),
+      ]);
+
+      const abortFn = vi.fn();
+      engine.on('piece:abort', abortFn);
+
+      const result = await engine.runSingleIteration();
+
+      expect(result.nextMovement).toBe('ABORT');
+      expect(result.isComplete).toBe(true);
+      expect(engine.getState().status).toBe('aborted');
+      expect(abortFn).toHaveBeenCalledOnce();
+      const reason = abortFn.mock.calls[0]![1] as string;
+      expect(reason).toContain('Movement "plan" failed: request failed');
     });
   });
 
