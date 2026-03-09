@@ -40,9 +40,21 @@ function writeTaskYaml(
 }
 
 function getDefaultBranch(repoPath: string): string {
-  return execFileSync('git', ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], {
+  // Use `git rev-parse --abbrev-ref origin/HEAD` first, fall back to
+  // listing remote HEAD via `git remote show origin` for environments
+  // where origin/HEAD symbolic ref is not set (e.g., bare-clone in CI).
+  try {
+    const ref = execFileSync('git', ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], {
+      cwd: repoPath, encoding: 'utf-8', stdio: 'pipe',
+    }).trim().replace('origin/', '');
+    if (ref) return ref;
+  } catch {
+    // symbolic-ref not available — fall back
+  }
+  // Fallback: the initial branch of the repo (works for bare-clone setups)
+  return execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
     cwd: repoPath, encoding: 'utf-8', stdio: 'pipe',
-  }).trim().replace('origin/', '');
+  }).trim();
 }
 
 /**
