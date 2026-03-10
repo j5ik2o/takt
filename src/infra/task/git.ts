@@ -15,28 +15,68 @@ export function getCurrentBranch(cwd: string): string {
   }).trim();
 }
 
+function getSafeGitEnv(cwd: string): NodeJS.ProcessEnv {
+  const configNames = getFilterConfigNames(cwd);
+  const configEntries = [['core.hooksPath', '/dev/null'] as const].concat(
+    configNames.map(configName => [configName, 'cat'] as const)
+  );
+
+  const safeEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    GIT_CONFIG_COUNT: String(configEntries.length),
+  };
+
+  configEntries.forEach(([key, value], index) => {
+    safeEnv[`GIT_CONFIG_KEY_${index}`] = key;
+    safeEnv[`GIT_CONFIG_VALUE_${index}`] = value;
+  });
+
+  return safeEnv;
+}
+
+function getFilterConfigNames(cwd: string): string[] {
+  try {
+    const output = execFileSync('git', ['config', '--local', '--name-only', '--get-regexp', '^filter\\..*\\.(clean|smudge|process)$'], {
+      cwd,
+      stdio: 'pipe',
+      encoding: 'utf-8',
+    });
+
+    return output
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Returns the short commit hash if changes were committed, undefined if no changes.
  */
 export function stageAndCommit(cwd: string, message: string): string | undefined {
-  execFileSync('git', ['add', '-A'], { cwd, stdio: 'pipe' });
+  const env = getSafeGitEnv(cwd);
+
+  execFileSync('git', ['add', '-A'], { cwd, stdio: 'pipe', env });
 
   const statusOutput = execFileSync('git', ['status', '--porcelain'], {
     cwd,
     stdio: 'pipe',
     encoding: 'utf-8',
+    env,
   });
 
   if (!statusOutput.trim()) {
     return undefined;
   }
 
-  execFileSync('git', ['commit', '-m', message], { cwd, stdio: 'pipe' });
+  execFileSync('git', ['commit', '-m', message], { cwd, stdio: 'pipe', env });
 
   return execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
     cwd,
     stdio: 'pipe',
     encoding: 'utf-8',
+    env,
   }).trim();
 }
 
