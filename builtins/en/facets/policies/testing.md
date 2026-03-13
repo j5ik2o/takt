@@ -29,7 +29,9 @@ Every behavior change requires a corresponding test, and every bug fix requires 
 |----------|--------|
 | High | Business logic, state transitions |
 | Medium | Edge cases, error handling |
-| Low | Simple CRUD, UI appearance |
+| Low | Simple CRUD |
+
+**Note:** When a design reference is provided, UI appearance verification is elevated to medium priority. Refer to the Design Fidelity Policy.
 
 ## Test Structure: Given-When-Then
 
