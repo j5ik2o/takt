@@ -123,6 +123,11 @@ export class GlobalConfigManager {
       providerOptions: normalizedProvider.providerOptions,
       providerProfiles: normalizeProviderProfiles(parsed.provider_profiles as Record<string, { default_permission_mode: unknown; movement_permission_overrides?: Record<string, unknown> }> | undefined),
       runtime: normalizeRuntime(parsed.runtime),
+      pieceMcpServers: parsed.piece_mcp_servers ? {
+        stdio: parsed.piece_mcp_servers.stdio,
+        sse: parsed.piece_mcp_servers.sse,
+        http: parsed.piece_mcp_servers.http,
+      } : undefined,
       preventSleep: parsed.prevent_sleep,
       notificationSound: parsed.notification_sound,
       notificationSoundEvents: parsed.notification_sound_events ? {

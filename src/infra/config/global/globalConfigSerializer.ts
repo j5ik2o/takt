@@ -116,6 +116,9 @@ export function serializeGlobalConfig(config: GlobalConfig): Record<string, unkn
       prepare: [...new Set(config.runtime.prepare)],
     };
   }
+  if (config.pieceMcpServers && Object.keys(config.pieceMcpServers).length > 0) {
+    raw.piece_mcp_servers = config.pieceMcpServers;
+  }
   if (config.preventSleep !== undefined) {
     raw.prevent_sleep = config.preventSleep;
   }

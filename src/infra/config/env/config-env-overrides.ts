@@ -139,6 +139,10 @@ const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'provider_profiles', type: 'json' },
   { path: 'runtime', type: 'json' },
   { path: 'runtime.prepare', type: 'json' },
+  { path: 'piece_mcp_servers', type: 'json' },
+  { path: 'piece_mcp_servers.stdio', type: 'boolean' },
+  { path: 'piece_mcp_servers.sse', type: 'boolean' },
+  { path: 'piece_mcp_servers.http', type: 'boolean' },
   { path: 'prevent_sleep', type: 'boolean' },
   { path: 'notification_sound', type: 'boolean' },
   { path: 'notification_sound_events', type: 'json' },
@@ -175,6 +179,10 @@ const PROJECT_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'provider_options.claude.sandbox.excluded_commands', type: 'json' },
   { path: 'provider_profiles', type: 'json' },
   { path: 'base_branch', type: 'string' },
+  { path: 'piece_mcp_servers', type: 'json' },
+  { path: 'piece_mcp_servers.stdio', type: 'boolean' },
+  { path: 'piece_mcp_servers.sse', type: 'boolean' },
+  { path: 'piece_mcp_servers.http', type: 'boolean' },
 ];
 
 export function applyGlobalConfigEnvOverrides(target: Record<string, unknown>): void {

@@ -27,7 +27,7 @@ import {
 type RawStep = z.output<typeof PieceMovementRawSchema>;
 import type { MovementProviderOptions } from '../../../core/models/piece-types.js';
 import { normalizeRuntime } from '../configNormalizers.js';
-import type { PieceOverrides } from '../../../core/models/config-types.js';
+import type { PieceMcpServersConfig, PieceOverrides } from '../../../core/models/config-types.js';
 import { applyQualityGateOverrides } from './qualityGateOverrides.js';
 import { loadProjectConfig } from '../project/projectConfig.js';
 import { loadGlobalConfig } from '../global/globalConfig.js';
@@ -241,6 +241,7 @@ function normalizeStepFromRaw(
   context?: FacetResolutionContext,
   projectOverrides?: PieceOverrides,
   globalOverrides?: PieceOverrides,
+  pieceMcpServersPolicy?: PieceMcpServersConfig,
 ): PieceMovement {
   const rules: PieceRule[] | undefined = step.rules?.map(normalizeRule);
 
@@ -278,6 +279,7 @@ function normalizeStepFromRaw(
   const expandedLegacyInstruction = step.instruction_template
     ? resolveRefToContent(step.instruction_template, sections.resolvedInstructions, pieceDir, 'instructions', context)
     : undefined;
+  validatePieceMcpServers(step.name, step.mcp_servers, pieceMcpServersPolicy);
 
   const result: PieceMovement = {
     name: step.name,
@@ -320,6 +322,7 @@ function normalizeStepFromRaw(
         context,
         projectOverrides,
         globalOverrides,
+        pieceMcpServersPolicy,
       ),
     );
   }
@@ -386,6 +389,7 @@ export function normalizePieceConfig(
   context?: FacetResolutionContext,
   projectOverrides?: PieceOverrides,
   globalOverrides?: PieceOverrides,
+  pieceMcpServersPolicy?: PieceMcpServersConfig,
 ): PieceConfig {
   const parsed = PieceConfigRawSchema.parse(raw);
 
@@ -413,7 +417,18 @@ export function normalizePieceConfig(
   const pieceRuntime = normalizeRuntime(parsed.piece_config?.runtime);
 
   const movements: PieceMovement[] = parsed.movements.map((step) =>
-    normalizeStepFromRaw(step, pieceDir, sections, pieceProvider, pieceModel, pieceProviderOptions, context, projectOverrides, globalOverrides),
+    normalizeStepFromRaw(
+      step,
+      pieceDir,
+      sections,
+      pieceProvider,
+      pieceModel,
+      pieceProviderOptions,
+      context,
+      projectOverrides,
+      globalOverrides,
+      pieceMcpServersPolicy,
+    ),
   );
 
   // Schema guarantees movements.min(1)
@@ -463,6 +478,45 @@ export function loadPieceFromFile(filePath: string, projectDir: string): PieceCo
   const globalConfig = loadGlobalConfig();
   const projectOverrides = projectConfig.pieceOverrides;
   const globalOverrides = globalConfig.pieceOverrides;
+  const pieceMcpServersPolicy = {
+    ...globalConfig.pieceMcpServers,
+    ...projectConfig.pieceMcpServers,
+  };
 
-  return normalizePieceConfig(raw, pieceDir, context, projectOverrides, globalOverrides);
+  return normalizePieceConfig(
+    raw,
+    pieceDir,
+    context,
+    projectOverrides,
+    globalOverrides,
+    pieceMcpServersPolicy,
+  );
+}
+
+function isPieceMcpTransportAllowed(
+  config: NonNullable<NonNullable<RawStep['mcp_servers']>[string]>,
+  policy: PieceMcpServersConfig | undefined,
+): boolean {
+  const transport = config.type ?? 'stdio';
+  if (transport === 'stdio') return policy?.stdio ?? false;
+  if (transport === 'sse') return policy?.sse ?? false;
+  return policy?.http ?? false;
+}
+
+function validatePieceMcpServers(
+  movementName: string,
+  mcpServers: RawStep['mcp_servers'],
+  policy: PieceMcpServersConfig | undefined,
+): void {
+  if (!mcpServers) return;
+
+  for (const [serverName, config] of Object.entries(mcpServers)) {
+    if (isPieceMcpTransportAllowed(config, policy)) continue;
+    const transport = config.type ?? 'stdio';
+    throw new Error(
+      `Movement "${movementName}" uses MCP server "${serverName}" with transport "${transport}", `
+      + 'which is disabled by default for pieces. '
+      + 'Configure piece_mcp_servers in project/global config to allow it.'
+    );
+  }
 }

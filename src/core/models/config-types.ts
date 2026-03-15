@@ -82,6 +82,16 @@ export interface PipelineConfig {
   prBodyTemplate?: string;
 }
 
+/** Piece-level MCP transport policy */
+export interface PieceMcpServersConfig {
+  /** Allow stdio MCP servers from piece YAML (default: false) */
+  stdio?: boolean;
+  /** Allow SSE MCP servers from piece YAML (default: false) */
+  sse?: boolean;
+  /** Allow HTTP MCP servers from piece YAML (default: false) */
+  http?: boolean;
+}
+
 /** Notification sound toggles per event timing */
 export interface NotificationSoundEventsConfig {
   /** Warning when iteration limit is reached */
@@ -142,6 +152,8 @@ export interface ProjectConfig {
   pieceOverrides?: PieceOverrides;
   /** Runtime environment configuration (project-level override) */
   runtime?: PieceRuntimeConfig;
+  /** Piece-level MCP transport policy */
+  pieceMcpServers?: PieceMcpServersConfig;
 }
 
 /**
