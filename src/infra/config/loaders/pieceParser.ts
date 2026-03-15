@@ -478,10 +478,7 @@ export function loadPieceFromFile(filePath: string, projectDir: string): PieceCo
   const globalConfig = loadGlobalConfig();
   const projectOverrides = projectConfig.pieceOverrides;
   const globalOverrides = globalConfig.pieceOverrides;
-  const pieceMcpServersPolicy = {
-    ...globalConfig.pieceMcpServers,
-    ...projectConfig.pieceMcpServers,
-  };
+  const pieceMcpServersPolicy = resolvePieceMcpServersPolicy(globalConfig.pieceMcpServers, projectConfig.pieceMcpServers);
 
   return normalizePieceConfig(
     raw,
@@ -491,6 +488,23 @@ export function loadPieceFromFile(filePath: string, projectDir: string): PieceCo
     globalOverrides,
     pieceMcpServersPolicy,
   );
+}
+
+function resolvePieceMcpServersPolicy(
+  globalPolicy: PieceMcpServersConfig | undefined,
+  projectPolicy: PieceMcpServersConfig | undefined,
+): PieceMcpServersConfig | undefined {
+  const policy: PieceMcpServersConfig = {};
+
+  if (globalPolicy?.stdio !== undefined) policy.stdio = globalPolicy.stdio;
+  if (globalPolicy?.sse !== undefined) policy.sse = globalPolicy.sse;
+  if (globalPolicy?.http !== undefined) policy.http = globalPolicy.http;
+
+  if (projectPolicy?.stdio !== undefined) policy.stdio = projectPolicy.stdio;
+  if (projectPolicy?.sse !== undefined) policy.sse = projectPolicy.sse;
+  if (projectPolicy?.http !== undefined) policy.http = projectPolicy.http;
+
+  return Object.keys(policy).length > 0 ? policy : undefined;
 }
 
 function isPieceMcpTransportAllowed(

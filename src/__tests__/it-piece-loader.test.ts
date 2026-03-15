@@ -42,6 +42,7 @@ vi.mock('../infra/config/resolveConfigValue.js', () => ({
 
 import { loadPiece } from '../infra/config/index.js';
 import { listBuiltinPieceNames } from '../infra/config/loaders/pieceResolver.js';
+import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 
 // --- Test helpers ---
 
@@ -547,9 +548,11 @@ movements:
 
 describe('Piece Loader IT: mcp_servers parsing', () => {
   let testDir: string;
+  const loadGlobalConfigMock = vi.mocked(loadGlobalConfig);
 
   beforeEach(() => {
     testDir = createTestDir();
+    loadGlobalConfigMock.mockReturnValue({});
   });
 
   afterEach(() => {
@@ -724,6 +727,51 @@ movements:
       playwright: {
         command: 'npx',
         args: ['-y', '@anthropic-ai/mcp-server-playwright'],
+      },
+    });
+  });
+
+  it('should preserve globally allowed transports when project config enables another transport', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+    loadGlobalConfigMock.mockReturnValue({
+      pieceMcpServers: { stdio: true },
+    });
+    writeFileSync(join(testDir, '.takt', 'config.yaml'), 'piece_mcp_servers:\n  sse: true\n');
+
+    writeFileSync(join(piecesDir, 'mixed-mcp.yaml'), `
+name: mixed-mcp
+description: Piece with stdio and sse MCP servers
+max_movements: 5
+initial_movement: test
+
+movements:
+  - name: test
+    persona: coder
+    mcp_servers:
+      playwright:
+        command: npx
+        args: ["-y", "@anthropic-ai/mcp-server-playwright"]
+      stream-api:
+        type: sse
+        url: https://example.com/sse
+    rules:
+      - condition: Done
+        next: COMPLETE
+    instruction: "Run tests"
+`);
+
+    const config = loadPiece('mixed-mcp', testDir);
+
+    expect(config).not.toBeNull();
+    expect(config!.movements.find((s) => s.name === 'test')?.mcpServers).toEqual({
+      playwright: {
+        command: 'npx',
+        args: ['-y', '@anthropic-ai/mcp-server-playwright'],
+      },
+      'stream-api': {
+        type: 'sse',
+        url: 'https://example.com/sse',
       },
     });
   });
