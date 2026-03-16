@@ -41,6 +41,7 @@ movements:
       - design-planning
     knowledge:
       - frontend
+      - react
       - architecture
     provider_options:
       claude:
@@ -69,6 +70,7 @@ movements:
       - testing
     knowledge:
       - frontend
+      - react
       - architecture
       - unit-testing
       - e2e-testing
@@ -112,6 +114,7 @@ movements:
     session: refresh
     knowledge:
       - frontend
+      - react
       - security
       - architecture
     provider_options:
@@ -177,6 +180,7 @@ movements:
     session: refresh
     knowledge:
       - frontend
+      - react
       - security
       - architecture
     provider_options:
@@ -224,6 +228,7 @@ movements:
         knowledge:
           - architecture
           - frontend
+          - react
         provider_options:
           claude:
             allowed_tools:
@@ -246,7 +251,9 @@ movements:
         policy:
           - review
           - design-fidelity
-        knowledge: frontend
+        knowledge:
+          - frontend
+          - react
         provider_options:
           claude:
             allowed_tools:
@@ -352,6 +359,7 @@ movements:
       - design-fidelity
     knowledge:
       - frontend
+      - react
       - security
       - architecture
     provider_options:
@@ -408,6 +416,7 @@ movements:
       - design-fidelity
     knowledge:
       - frontend
+      - react
       - security
       - architecture
     provider_options:
