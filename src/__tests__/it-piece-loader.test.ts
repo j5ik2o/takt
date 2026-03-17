@@ -42,6 +42,7 @@ vi.mock('../infra/config/resolveConfigValue.js', () => ({
 
 import { loadPiece } from '../infra/config/index.js';
 import { listBuiltinPieceNames } from '../infra/config/loaders/pieceResolver.js';
+import { loadGlobalConfig } from '../infra/config/global/globalConfig.js';
 
 // --- Test helpers ---
 
@@ -707,5 +708,83 @@ description: Missing movements
 `);
 
     expect(() => loadPiece('incomplete', testDir)).toThrow();
+  });
+});
+
+describe('Piece Loader IT: piece runtime.prepare policy', () => {
+  let testDir: string;
+  const loadGlobalConfigMock = vi.mocked(loadGlobalConfig);
+
+  beforeEach(() => {
+    testDir = createTestDir();
+    loadGlobalConfigMock.mockReturnValue({});
+  });
+
+  afterEach(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('rejects piece runtime.prepare custom scripts by default', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+
+    writeFileSync(join(piecesDir, 'runtime-custom.yaml'), `
+name: runtime-custom
+piece_config:
+  runtime:
+    prepare:
+      - ./setup.sh
+movements:
+  - name: implement
+    instruction: "Do the work"
+`);
+
+    expect(() => loadPiece('runtime-custom', testDir)).toThrow(/piece_runtime_prepare\.custom_scripts/);
+  });
+
+  it('allows piece runtime.prepare custom scripts when project config enables them', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+
+    writeFileSync(join(testDir, '.takt', 'config.yaml'), 'piece_runtime_prepare:\n  custom_scripts: true\n');
+    writeFileSync(join(piecesDir, 'runtime-custom.yaml'), `
+name: runtime-custom
+piece_config:
+  runtime:
+    prepare:
+      - ./setup.sh
+movements:
+  - name: implement
+    instruction: "Do the work"
+`);
+
+    const config = loadPiece('runtime-custom', testDir);
+
+    expect(config).not.toBeNull();
+    expect(config!.runtime).toEqual({ prepare: ['./setup.sh'] });
+  });
+
+  it('preserves globally allowed runtime.prepare custom scripts when project config sets the policy block', () => {
+    const piecesDir = join(testDir, '.takt', 'pieces');
+    mkdirSync(piecesDir, { recursive: true });
+    loadGlobalConfigMock.mockReturnValue({
+      pieceRuntimePrepare: { customScripts: true },
+    });
+    writeFileSync(join(testDir, '.takt', 'config.yaml'), 'piece_runtime_prepare: {}\n');
+    writeFileSync(join(piecesDir, 'runtime-custom.yaml'), `
+name: runtime-custom
+piece_config:
+  runtime:
+    prepare:
+      - ./setup.sh
+movements:
+  - name: implement
+    instruction: "Do the work"
+`);
+
+    const config = loadPiece('runtime-custom', testDir);
+
+    expect(config).not.toBeNull();
+    expect(config!.runtime).toEqual({ prepare: ['./setup.sh'] });
   });
 });
