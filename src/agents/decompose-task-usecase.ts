@@ -24,6 +24,8 @@ export interface MorePartsResponse {
   parts: PartDefinition[];
 }
 
+const TEAM_LEADER_MAX_TURNS = 5;
+
 function toPartDefinitions(raw: unknown, maxParts: number): PartDefinition[] {
   if (!Array.isArray(raw)) {
     throw new Error('Structured output "parts" must be an array');
@@ -166,7 +168,7 @@ export async function decomposeTask(
     provider: options.provider,
     allowedTools: [],
     permissionMode: 'readonly',
-    maxTurns: 4,
+    maxTurns: TEAM_LEADER_MAX_TURNS,
     outputSchema: loadDecompositionSchema(maxParts),
     onStream: options.onStream,
     onPromptResolved: options.onPromptResolved,
@@ -208,7 +210,7 @@ export async function requestMoreParts(
     provider: options.provider,
     allowedTools: [],
     permissionMode: 'readonly',
-    maxTurns: 4,
+    maxTurns: TEAM_LEADER_MAX_TURNS,
     outputSchema: loadMorePartsSchema(maxAdditionalParts),
     onStream: options.onStream,
   });
