@@ -22,9 +22,13 @@ Extract requirements from the task spec and verify each one individually against
 ## Validation Summary
 | Item | Status | Verification Method |
 |------|--------|-------------------|
-| Tests | ✅ | `npm test` (N passed) |
-| Build | ✅ | `npm run build` succeeded |
-| Functional check | ✅ | Main flow verified |
+| Tests | ✅ / ⚠️ / ❌ | {Execution log, report, CI result, or why unverified} |
+| Build | ✅ / ⚠️ / ❌ | {Execution log, report, CI result, or why unverified} |
+| Functional check | ✅ / ⚠️ / ❌ | {Evidence used, or state that it was not verified} |
+
+- Do not claim success/failure/not-runnable for commands that were never executed
+- When using `⚠️`, explain the missing evidence and the verified scope in the method column
+- If report text conflicts with execution evidence, treat that inconsistency itself as a finding
 
 ## Current Iteration Findings (new)
 | # | finding_id | Item | Evidence | Reason | Required Action |
