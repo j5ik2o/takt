@@ -248,6 +248,39 @@ describe('config env overrides', () => {
     }
   });
 
+  it('should apply TAKT_SYNC_CONFLICT_RESOLVER JSON override for global config', () => {
+    process.env.TAKT_SYNC_CONFLICT_RESOLVER = '{"auto_approve_tools":true}';
+
+    const raw: Record<string, unknown> = {};
+    applyGlobalConfigEnvOverrides(raw);
+
+    expect(raw.sync_conflict_resolver).toEqual({
+      auto_approve_tools: true,
+    });
+  });
+
+  it('should apply TAKT_SYNC_CONFLICT_RESOLVER_AUTO_APPROVE_TOOLS override for global config', () => {
+    process.env.TAKT_SYNC_CONFLICT_RESOLVER_AUTO_APPROVE_TOOLS = 'true';
+
+    const raw: Record<string, unknown> = {};
+    applyGlobalConfigEnvOverrides(raw);
+
+    expect(raw.sync_conflict_resolver).toEqual({
+      auto_approve_tools: true,
+    });
+  });
+
+  it('should apply TAKT_SYNC_CONFLICT_RESOLVER_AUTO_APPROVE_TOOLS override for project config', () => {
+    process.env.TAKT_SYNC_CONFLICT_RESOLVER_AUTO_APPROVE_TOOLS = 'false';
+
+    const raw: Record<string, unknown> = {};
+    applyProjectConfigEnvOverrides(raw);
+
+    expect(raw.sync_conflict_resolver).toEqual({
+      auto_approve_tools: false,
+    });
+  });
+
   it('should apply cursor API key override for global config', () => {
     process.env.TAKT_CURSOR_API_KEY = 'cursor-key-from-env';
     process.env.TAKT_GEMINI_API_KEY = 'gemini-key-from-env';

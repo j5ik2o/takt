@@ -885,6 +885,39 @@ describe('loadGlobalConfig', () => {
     });
   });
 
+  describe('sync_conflict_resolver global config', () => {
+    it('should load sync_conflict_resolver from config.yaml', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        [
+          'language: en',
+          'sync_conflict_resolver:',
+          '  auto_approve_tools: true',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      const config = loadGlobalConfig();
+      expect(config.syncConflictResolver).toEqual({ autoApproveTools: true });
+    });
+
+    it('should save and reload sync_conflict_resolver', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+      const config = loadGlobalConfig();
+      config.syncConflictResolver = { autoApproveTools: true };
+      saveGlobalConfig(config);
+      invalidateGlobalConfigCache();
+
+      const reloaded = loadGlobalConfig();
+      expect(reloaded.syncConflictResolver).toEqual({ autoApproveTools: true });
+    });
+  });
+
   describe('provider/model compatibility validation', () => {
     it('should throw when provider block uses claude with network_access', () => {
       const taktDir = join(testHomeDir, '.takt');

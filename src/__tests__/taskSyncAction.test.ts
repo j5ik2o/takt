@@ -188,6 +188,49 @@ describe('syncBranchWithRoot', () => {
     );
   });
 
+  it('does not pass auto-approve handler when sync_conflict_resolver is not configured', async () => {
+    const task = makeTask();
+    mockResolveConfigValues.mockReturnValue({
+      provider: 'claude',
+      model: 'sonnet',
+    } as never);
+    mockExecFileSync
+      .mockReturnValueOnce('' as never)
+      .mockImplementationOnce(() => { throw new Error('CONFLICT'); });
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(true);
+    expect(mockAgentCall).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        onPermissionRequest: undefined,
+      }),
+    );
+  });
+
+  it('does not pass auto-approve handler when autoApproveTools is false', async () => {
+    const task = makeTask();
+    mockResolveConfigValues.mockReturnValue({
+      provider: 'claude',
+      model: 'sonnet',
+      syncConflictResolver: { autoApproveTools: false },
+    } as never);
+    mockExecFileSync
+      .mockReturnValueOnce('' as never)
+      .mockImplementationOnce(() => { throw new Error('CONFLICT'); });
+
+    const result = await syncBranchWithRoot(PROJECT_DIR, task);
+
+    expect(result).toBe(true);
+    expect(mockAgentCall).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        onPermissionRequest: undefined,
+      }),
+    );
+  });
+
   it('passes auto-approve handler when sync_conflict_resolver config enables it', async () => {
     const task = makeTask();
     mockResolveConfigValues.mockReturnValue({
