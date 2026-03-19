@@ -957,6 +957,35 @@ describe('loadGlobalConfig', () => {
     });
   });
 
+  describe('piece_mcp_servers global config', () => {
+    it('should load piece_mcp_servers from config.yaml', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(
+        getGlobalConfigPath(),
+        ['language: en', 'piece_mcp_servers:', '  stdio: true', '  sse: false', '  http: true'].join('\n'),
+        'utf-8',
+      );
+
+      const config = loadGlobalConfig();
+      expect(config.pieceMcpServers).toEqual({ stdio: true, sse: false, http: true });
+    });
+
+    it('should save and reload piece_mcp_servers', () => {
+      const taktDir = join(testHomeDir, '.takt');
+      mkdirSync(taktDir, { recursive: true });
+      writeFileSync(getGlobalConfigPath(), 'language: en\n', 'utf-8');
+
+      const config = loadGlobalConfig();
+      config.pieceMcpServers = { stdio: true, sse: true };
+      saveGlobalConfig(config);
+      invalidateGlobalConfigCache();
+
+      const reloaded = loadGlobalConfig();
+      expect(reloaded.pieceMcpServers).toEqual({ stdio: true, sse: true });
+    });
+  });
+
   describe('provider/model compatibility validation', () => {
     it('should throw when provider block uses claude with network_access', () => {
       const taktDir = join(testHomeDir, '.takt');

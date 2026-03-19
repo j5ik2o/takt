@@ -337,6 +337,42 @@ describe('config env overrides', () => {
     });
   });
 
+  it('should apply TAKT_PIECE_MCP_SERVERS JSON override for global config', () => {
+    process.env.TAKT_PIECE_MCP_SERVERS = '{"stdio":true,"sse":false}';
+
+    const raw: Record<string, unknown> = {};
+    applyGlobalConfigEnvOverrides(raw);
+
+    expect(raw.piece_mcp_servers).toEqual({ stdio: true, sse: false });
+  });
+
+  it('should apply TAKT_PIECE_MCP_SERVERS_STDIO override for global config', () => {
+    process.env.TAKT_PIECE_MCP_SERVERS_STDIO = 'true';
+
+    const raw: Record<string, unknown> = {};
+    applyGlobalConfigEnvOverrides(raw);
+
+    expect(raw.piece_mcp_servers).toEqual({ stdio: true });
+  });
+
+  it('should apply TAKT_PIECE_MCP_SERVERS JSON override for project config', () => {
+    process.env.TAKT_PIECE_MCP_SERVERS = '{"stdio":true,"http":true}';
+
+    const raw: Record<string, unknown> = {};
+    applyProjectConfigEnvOverrides(raw);
+
+    expect(raw.piece_mcp_servers).toEqual({ stdio: true, http: true });
+  });
+
+  it('should apply TAKT_PIECE_MCP_SERVERS_HTTP override for project config', () => {
+    process.env.TAKT_PIECE_MCP_SERVERS_HTTP = 'true';
+
+    const raw: Record<string, unknown> = {};
+    applyProjectConfigEnvOverrides(raw);
+
+    expect(raw.piece_mcp_servers).toEqual({ http: true });
+  });
+
   it('should apply cursor API key override for global config', () => {
     process.env.TAKT_CURSOR_API_KEY = 'cursor-key-from-env';
     process.env.TAKT_GEMINI_API_KEY = 'gemini-key-from-env';

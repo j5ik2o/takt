@@ -1,4 +1,4 @@
-import type { AnalyticsConfig, PieceArpeggioConfig, PieceRuntimePrepareConfig, SubmoduleSelection, SyncConflictResolverConfig } from '../../../core/models/config-types.js';
+import type { AnalyticsConfig, PieceArpeggioConfig, PieceMcpServersConfig, PieceRuntimePrepareConfig, SubmoduleSelection, SyncConflictResolverConfig } from '../../../core/models/config-types.js';
 
 const SUBMODULES_ALL = 'all';
 
@@ -119,4 +119,17 @@ export function denormalizeSyncConflictResolver(
 ): Record<string, unknown> | undefined {
   if (!config) return undefined;
   return { auto_approve_tools: config.autoApproveTools };
+}
+
+export function normalizePieceMcpServers(
+  raw: { stdio?: boolean; sse?: boolean; http?: boolean } | undefined,
+): PieceMcpServersConfig | undefined {
+  return raw ? { stdio: raw.stdio, sse: raw.sse, http: raw.http } : undefined;
+}
+
+export function denormalizePieceMcpServers(
+  config: PieceMcpServersConfig | undefined,
+): Record<string, unknown> | undefined {
+  if (!config) return undefined;
+  return { stdio: config.stdio, sse: config.sse, http: config.http };
 }
