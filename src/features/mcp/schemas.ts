@@ -1,6 +1,6 @@
 import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
-import { GoalCreateInputSchema, GoalIdSchema, GoalQuestionInputSchema, GoalInquiryInputSchema, GoalQuestionSchema, GoalNotificationInputSchema, GoalWorkLogInputSchema } from '../../infra/goals/schema.js';
+import { GoalCreateInputSchema, GoalIdSchema, GoalQuestionInputSchema, GoalInquiryInputSchema, GoalQuestionSchema, GoalNotificationInputSchema, GoalWorkLogInputSchema, GoalAnswerInputSchema } from '../../infra/goals/schema.js';
 import { MCP_TEXT_PAGE_BYTES } from './response.js';
 import {
   isValidTaskContextBranchName,
@@ -134,6 +134,27 @@ export const listGoalQuestionsInputSchema = goalWriteInputSchema.extend({ limit:
 export const withdrawGoalQuestionInputSchema = goalWriteInputSchema.extend({
   questionId: z.uuid(), reason: GoalQuestionSchema.shape.withdrawalReason,
 });
+export const answerGoalQuestionInputSchema = goalWriteInputSchema.extend({
+  questionId: z.uuid(),
+  answer: GoalAnswerInputSchema
+    .describe('Answer content with the same structure as a human TUI or Slack answer: text, or report for operation requests, or decision with scope.'),
+});
+export type AnswerGoalQuestionInput = z.input<typeof answerGoalQuestionInputSchema>;
+const goalRegistrationProposalIdentityInputSchema = z.object({
+  cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager conversation holds its pending goal registration proposal.'),
+}).strict();
+export const listGoalRegistrationProposalsInputSchema = goalRegistrationProposalIdentityInputSchema;
+const goalRegistrationRevisionSchema = z.number().int().safe().positive()
+  .describe('Revision of the pending goal registration proposal returned by takt_list_goal_registration_proposals.');
+export const approveGoalRegistrationInputSchema = goalRegistrationProposalIdentityInputSchema.extend({
+  revision: goalRegistrationRevisionSchema,
+});
+export const rejectGoalRegistrationInputSchema = goalRegistrationProposalIdentityInputSchema.extend({
+  revision: goalRegistrationRevisionSchema,
+});
+export type ListGoalRegistrationProposalsInput = z.infer<typeof listGoalRegistrationProposalsInputSchema>;
+export type ApproveGoalRegistrationInput = z.infer<typeof approveGoalRegistrationInputSchema>;
+export type RejectGoalRegistrationInput = z.infer<typeof rejectGoalRegistrationInputSchema>;
 const standaloneInquiryIdentityInputSchema = z.object({
   cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager assignment selects the standalone inquiry owner.'),
 }).strict();
