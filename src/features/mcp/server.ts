@@ -28,6 +28,10 @@ import {
   askStandaloneQuestionInputSchema,
   getGoalQuestionInputSchema,
   listGoalQuestionsInputSchema,
+  answerGoalQuestionInputSchema,
+  listGoalRegistrationProposalsInputSchema,
+  approveGoalRegistrationInputSchema,
+  rejectGoalRegistrationInputSchema,
   listStandaloneInquiriesInputSchema,
   withdrawStandaloneInquiryInputSchema,
   notifyGoalInputSchema,
@@ -59,7 +63,8 @@ import { removeTaktGoalTask } from './goalTaskRemovalOperations.js';
 import { stopGoalTaskInputSchema } from './goalTaskStopSchemas.js';
 import { stopTaktGoalTask } from './goalTaskStopOperations.js';
 import { tellTaktGoalRun } from './goalTellOperations.js';
-import { askTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
+import { askTaktGoalQuestion, answerTaktGoalQuestion, listTaktGoalQuestions, getTaktGoalQuestion, withdrawTaktGoalQuestion } from './goalQuestionOperations.js';
+import { approveTaktGoalRegistration, listTaktGoalRegistrationProposals, rejectTaktGoalRegistration } from './goalRegistrationProposalOperations.js';
 import { askTaktStandaloneQuestion, listTaktStandaloneInquiries, withdrawTaktStandaloneInquiry } from './standaloneInquiryOperations.js';
 import type { ManagerAssignment } from '../manager/startupResolution.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
@@ -92,6 +97,7 @@ export const TAKT_MCP_READ_ONLY_TOOL_NAMES = [
   'takt_get_run',
   'takt_list_goals',
   'takt_get_goal',
+  'takt_list_goal_registration_proposals',
 ] as const;
 
 export const TAKT_MCP_MANAGER_TOOL_NAMES = [
@@ -398,6 +404,33 @@ export function createTaktMcpServer(
       },
       (input, extra) => operation(input.cwd, 'Goal creation failed', (deps) => createTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))),
     );
+    server.registerTool(
+      'takt_answer_goal_question',
+      {
+        title: 'Answer a goal question',
+        description: 'Answer a pending goal inquiry by goalId and questionId with the same saved answer and manager answer event as a person answering in the TUI; the answer source is recorded as mcp. Retired approval inquiries cannot be answered. Read the question first with takt_list_goal_questions or takt_get_goal_question. Returns the saved questionId and answer within 64 KiB.',
+        inputSchema: answerGoalQuestionInputSchema,
+      },
+      (input, extra) => operation(input.cwd, 'Goal question answer failed', (deps) => answerTaktGoalQuestion(projectInput(input, deps), deps, turnSignal(extra.signal))),
+    );
+    server.registerTool(
+      'takt_approve_goal_registration',
+      {
+        title: 'Approve a goal registration',
+        description: 'Approve the pending goal registration proposal selected by revision, with the same handling as choosing to register in the TUI registration dialog. Registers the goal and returns it. A changed proposal returns a stale error. Read pending proposals with takt_list_goal_registration_proposals.',
+        inputSchema: approveGoalRegistrationInputSchema,
+      },
+      (input, extra) => operation(input.cwd, 'Goal registration approval failed', (deps) => approveTaktGoalRegistration(projectInput(input, deps), deps, turnSignal(extra.signal)), false),
+    );
+    server.registerTool(
+      'takt_reject_goal_registration',
+      {
+        title: 'Reject a goal registration',
+        description: 'Dismiss the pending goal registration proposal selected by revision without registering the goal, with the same handling as dismissing the TUI registration dialog. Returns the dismissed revision. A changed proposal returns a stale error. Read pending proposals with takt_list_goal_registration_proposals.',
+        inputSchema: rejectGoalRegistrationInputSchema,
+      },
+      (input, extra) => operation(input.cwd, 'Goal registration rejection failed', (deps) => rejectTaktGoalRegistration(projectInput(input, deps), deps, turnSignal(extra.signal)), false),
+    );
   }
 
   server.registerTool(
@@ -443,6 +476,16 @@ export function createTaktMcpServer(
       inputSchema: getRunInputSchema,
     },
     (input) => operation(input.cwd, 'Run read failed', (deps) => getTaktRun(projectInput(input, deps), deps)),
+  );
+
+  server.registerTool(
+    TAKT_MCP_READ_ONLY_TOOL_NAMES[4],
+    {
+      title: 'List goal registration proposals',
+      description: 'Read the goal registration proposal currently pending registration approval in the manager conversation of this project, the same state as the TUI registration dialog. Returns at most one proposal with its revision, repositoryDirectory and summary, or an empty list when nothing is pending. Responses fit 64 KiB.',
+      inputSchema: listGoalRegistrationProposalsInputSchema,
+    },
+    (input) => operation(input.cwd, 'Goal registration proposal list failed', (deps) => listTaktGoalRegistrationProposals(projectInput(input, deps), deps), false),
   );
 
   if (options.toolSet === undefined || options.toolSet === 'all') {
