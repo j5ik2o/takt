@@ -58,6 +58,5 @@ manager:
 rate_limit_fallback:
   switch_chain:
     - provider: claude
-    # Ollama Cloud の Opus 級。Claude の週次制限に当たった run を止めずに続けるための受け皿
-    - provider: opencode
-      model: ollama/glm-5.3:cloud
+    # Ollama Cloud の受け皿（opencode / ollama/glm-5.3:cloud）は、月間利用上限の
+    # 到達（2026-11-14）に伴い外した。作業は DGX Spark へ寄せている
