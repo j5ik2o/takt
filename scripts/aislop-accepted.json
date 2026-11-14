@@ -1,0 +1,4882 @@
+{
+  "engines": [
+    "lint",
+    "code-quality",
+    "ai-slop",
+    "security"
+  ],
+  "missingToolsAllowed": {
+    "ruff": "Python の整形・検査に使う道具。このリポジトリに Python のファイルは無い。"
+  },
+  "accepted": [
+    {
+      "reason": "既存のコンソール出力の残り。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "eval/providers/manager-work-split-execution-worker.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "eval/providers/manager-work-split-execution-worker.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/features/catalog/catalogFacets.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/features/catalog/catalogFacets.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/features/exec/command.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/features/prompt/preview.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/features/prompt/preview.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/features/prompt/preview.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/features/prompt/preview.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/features/prompt/preview.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/features/prompt/preview.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/features/prompt/preview.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/features/prompt/preview.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/features/prompt/preview.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/features/prompt/preview.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/features/prompt/preview.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/features/prompt/preview.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/features/prompt/preview.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/features/prompt/preview.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/claude/ask-user-question-tty.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/claude/ask-user-question-tty.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/claude/ask-user-question-tty.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/claude/ask-user-question-tty.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/claude/ask-user-question-tty.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/claude/ask-user-question-tty.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/task/display.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/task/display.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/task/display.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/task/display.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/task/display.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/task/display.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/task/display.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/task/display.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/task/display.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/task/display.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/task/display.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/task/display.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/task/display.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/infra/task/display.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/prompt/select.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/prompt/select.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/prompt/select.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/prompt/select.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/prompt/select.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/prompt/select.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/LogManager.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/LogManager.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/LogManager.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/LogManager.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/LogManager.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/LogManager.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/LogManager.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/LogManager.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/LogManager.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/LogManager.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/LogManager.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/LogManager.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/LogManager.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/Spinner.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/StreamDisplay.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/StreamDisplay.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/StreamDisplay.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/StreamDisplay.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/StreamDisplay.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/StreamDisplay.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/StreamDisplay.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/StreamDisplay.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/StreamDisplay.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "src/shared/ui/StreamDisplay.ts",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/plugin-probe.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/plugin-probe.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/plugin-probe.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/plugin-probe.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/plugin-probe.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/plugin-probe.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/sdk-prompt-capture.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/sdk-prompt-capture.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/sdk-prompt-capture.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/sdk-prompt-capture.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/sdk-prompt-capture.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/sdk-tool-eval.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/sdk-tool-eval.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/sdk-tool-eval.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/summarize-probe.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/summarize-probe.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/summarize-probe.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/summarize-probe.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/summarize-probe.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/console-leftover",
+          "file": "tools/opencode-probe/v2-smoke.mjs",
+          "message": "console.log/debug/info statement left in production code"
+        }
+      ]
+    },
+    {
+      "reason": "既存の二重型アサーション。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/app/acp/index.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/app/acp/index.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/features/tasks/execute/workflowExecutionBundle.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/features/web-ui/instance-lock.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/features/web-ui/instance-lock.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/features/workflowAuthoring/inspect.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/claude/executor.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/claude/executor.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/claude/executor.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/codex/session-config.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/deepseek-harness/client.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/deepseek-harness/client.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/deepseek-harness/client.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/deepseek-harness/client.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/fs/session.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/opencode/attempt-runner.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/opencode/v1-transport.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/opencode/v1-transport.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/opencode/v1-transport.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/opencode/v1-transport.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/pi/client.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/pi/client.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/pi/client.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/task/centralStateRepository.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/double-type-assertion",
+          "file": "src/infra/task/centralStateRepository.ts",
+          "message": "Double type assertion (as unknown as X) bypasses type checking"
+        }
+      ]
+    },
+    {
+      "reason": "既存の重複 import。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "eval/asserts/fix-self-scan-dead-code.mjs",
+          "message": "\"node:path\" is also imported on line 32. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "eval/providers/manager-work-split-execution-worker.mjs",
+          "message": "\"node:crypto\" is also imported on line 1. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "eval/providers/manager-work-split-execution-worker.mjs",
+          "message": "\"node:child_process\" is also imported on line 2. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "eval/providers/manager-work-split-execution-worker.mjs",
+          "message": "\"../manager-work-split-prompt.mjs\" is also imported on line 15. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "eval/repair-strategy-cases.mjs",
+          "message": "\"node:fs\" is also imported on line 1. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "eval/scripts/development-implementation-actions.mjs",
+          "message": "\"node:fs\" is also imported on line 4. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "scripts/canary-coder.mjs",
+          "message": "\"node:url\" is also imported on line 16. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "scripts/global-install-smoke.mjs",
+          "message": "\"node:assert/strict\" is also imported on line 3. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/agents/agent-usecases.ts",
+          "message": "\"../core/models/types.js\" is also imported on line 1. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/agents/types.ts",
+          "message": "\"../core/workflow/types.js\" is also imported on line 6. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/core/workflow/arpeggio/merge.ts",
+          "message": "\"./types.js\" is also imported on line 11. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/core/workflow/engine/ParallelRunner.ts",
+          "message": "\"../types.js\" is also imported on line 28. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/core/workflow/engine/WorkflowEngine.ts",
+          "message": "\"../workflow-step-participation-index.js\" is also imported on line 28. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/core/workflow/engine/WorkflowEngine.ts",
+          "message": "\"../workflow-reference.js\" is also imported on line 32. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/core/workflow/engine/team-leader-part-runner.ts",
+          "message": "\"../types.js\" is also imported on line 4. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/features/daemon/slackPorts.ts",
+          "message": "\"../manager/conversationPort.js\" is also imported on line 3. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/features/interactive/assistantRetryCommand.ts",
+          "message": "\"./interactive-summary-types.js\" is also imported on line 22. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/features/manager/conversationTransferReceiver.ts",
+          "message": "\"./conversationPort.js\" is also imported on line 8. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/features/tasks/execute/loopAnalysisWorker.ts",
+          "message": "\"../../../shared/utils/private-file.js\" is also imported on line 7. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/features/tasks/execute/types.ts",
+          "message": "\"../../../core/models/index.js\" is also imported on line 6. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/features/tasks/execute/workflowExecutionBundle.ts",
+          "message": "\"../../../core/models/index.js\" is also imported on line 19. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/features/tasks/taskRetryPreparation.ts",
+          "message": "\"./execute/reusedWorktree.js\" is also imported on line 18. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/features/tui/runTuiTask.tsx",
+          "message": "\"../../shared/i18n/index.js\" is also imported on line 11. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/features/tui/runTuiTask.tsx",
+          "message": "\"../interactive/interactive.js\" is also imported on line 18. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/infra/codex/types.ts",
+          "message": "\"../../shared/types/provider.js\" is also imported on line 8. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/infra/config/loaders/facetPoolCompiler.ts",
+          "message": "\"./resource-resolver.js\" is also imported on line 2. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/infra/config/project/projectConfig.ts",
+          "message": "\"../resolutionCache.js\" is also imported on line 39. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/infra/config/resolveWorkflowConfigValue.ts",
+          "message": "\"./resolveConfigValue.js\" is also imported on line 1. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/infra/config/runtime-provider/execution-preparation.ts",
+          "message": "\"../../../core/workflow/types.js\" is also imported on line 4. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/infra/config/runtime-provider/execution-preparation.ts",
+          "message": "\"./provider-environment.js\" is also imported on line 11. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/infra/config/runtime-provider/legacy-signals.ts",
+          "message": "\"../../../core/models/index.js\" is also imported on line 16. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/infra/config/traced/tracedConfigRuntimeBridge.ts",
+          "message": "\"node:fs\" is also imported on line 1. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/infra/devin/types.ts",
+          "message": "\"../../shared/types/provider.js\" is also imported on line 2. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/infra/github/GitHubProvider.ts",
+          "message": "\"../git/types.js\" is also imported on line 15. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/infra/providers/opencode.ts",
+          "message": "\"../../core/models/index.js\" is also imported on line 18. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/infra/task/runner.ts",
+          "message": "\"./schema.js\" is also imported on line 1. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/infra/task/taskRetryService.ts",
+          "message": "\"./schema.js\" is also imported on line 3. Merge into a single import statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-import",
+          "file": "src/infra/task/types.ts",
+          "message": "\"./schema.js\" is also imported on line 1. Merge into a single import statement."
+        }
+      ]
+    },
+    {
+      "reason": "既存の重複した型宣言。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-type-declaration",
+          "file": "src/infra/claude/types.ts",
+          "message": "Exported type 'PermissionRequest' duplicates an existing declaration"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-type-declaration",
+          "file": "src/infra/claude/types.ts",
+          "message": "Exported type 'AskUserQuestionInput' duplicates an existing declaration"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/duplicate-type-declaration",
+          "file": "src/infra/claude/types.ts",
+          "message": "Exported type 'AskUserQuestionHandler' duplicates an existing declaration"
+        }
+      ]
+    },
+    {
+      "reason": "既存の解決不能 import の疑い。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/hallucinated-import",
+          "file": "src/infra/deepseek-harness/runtime-supervisor.mjs",
+          "message": "Imports \"@deepseek-ai/dsh\" but it's not declared in package.json"
+        }
+      ]
+    },
+    {
+      "reason": "既存のハードコード URL。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/hardcoded-url",
+          "file": "eval/asserts/fix-self-scan-source-label-ast.mjs",
+          "message": "Hardcoded environment URL in production code"
+        }
+      ]
+    },
+    {
+      "reason": "既存の暗黙フォールバック。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/hidden-fallback",
+          "file": "src/core/workflow/engine/WorkflowValidator.ts",
+          "message": "Fallback turns missing, failed, or impossible state into a safe-looking value"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/hidden-fallback",
+          "file": "src/core/workflow/run/workflow-results.ts",
+          "message": "Fallback turns missing, failed, or impossible state into a safe-looking value"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/hidden-fallback",
+          "file": "src/features/interactive/interactiveSessionRecords.ts",
+          "message": "Fallback turns missing, failed, or impossible state into a safe-looking value"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/hidden-fallback",
+          "file": "src/features/interactive/interactiveSessionRecords.ts",
+          "message": "Fallback turns missing, failed, or impossible state into a safe-looking value"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/hidden-fallback",
+          "file": "src/infra/providers/mcp/cursor-native-config.ts",
+          "message": "Catch returns a safe-looking fallback without surfacing the failure"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/hidden-fallback",
+          "file": "src/infra/workflow/system/system-pr-ci.ts",
+          "message": "Fallback turns missing, failed, or impossible state into a safe-looking value"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/hidden-fallback",
+          "file": "src/shared/utils/updateNotifierCache.ts",
+          "message": "Catch returns a safe-looking fallback without surfacing the failure"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/hidden-fallback",
+          "file": "web-ui/public/execution-model.js",
+          "message": "Fallback turns missing, failed, or impossible state into a safe-looking value"
+        }
+      ]
+    },
+    {
+      "reason": "既存のメタ的なコメント。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/meta-comment",
+          "file": "src/core/workflow/phase-runner.ts",
+          "message": "Meta/plan comment (plan/process reference)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/meta-comment",
+          "file": "src/core/workflow/report-phase-runner.ts",
+          "message": "Meta/plan comment (plan/process reference)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/meta-comment",
+          "file": "src/core/workflow/status-judgment-phase.ts",
+          "message": "Meta/plan comment (plan/process reference)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/meta-comment",
+          "file": "src/features/repertoire/github-spec.ts",
+          "message": "Meta/plan comment (plan/process reference)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/meta-comment",
+          "file": "src/infra/goals/branch-sync.ts",
+          "message": "Meta/plan comment (plan/process reference)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/meta-comment",
+          "file": "src/infra/managed-providers/definitions.ts",
+          "message": "Meta/plan comment (plan/process reference)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/meta-comment",
+          "file": "src/infra/task/centralStateRepository.ts",
+          "message": "Meta/plan comment (plan/process reference)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/meta-comment",
+          "file": "src/infra/task/centralStateRepository.ts",
+          "message": "Meta/plan comment (plan/process reference)"
+        }
+      ]
+    },
+    {
+      "reason": "既存の説明的コメント。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "eval/asserts/instruction-research-handoff-rubric.mjs",
+          "message": "Narrative comment block (JSDoc preamble with slop signal)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/core/models/vcs-types.ts",
+          "message": "Narrative comment block (JSDoc preamble with slop signal)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/core/workflow/constants.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/core/workflow/engine/ParallelRunner.ts",
+          "message": "Narrative comment block (phase/section header)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/core/workflow/engine/StepExecutor.ts",
+          "message": "Narrative comment block (phase/section header)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/core/workflow/engine/StepExecutor.ts",
+          "message": "Narrative comment block (phase/section header)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/core/workflow/engine/StepExecutor.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/core/workflow/instruction/InstructionBuilder.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/core/workflow/instruction/escape.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/core/workflow/instruction/instruction-context.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/core/workflow/phase-runner.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/core/workflow/phase-runner.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/core/workflow/run/run-paths.ts",
+          "message": "Narrative comment block (JSDoc preamble with slop signal)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/analytics/metrics.ts",
+          "message": "Narrative comment block (decorative separator)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/analytics/writer.ts",
+          "message": "Narrative comment block (decorative separator)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/interactive/conversationLoop.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/interactive/conversationSession.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/interactive/interactive-summary.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/interactive/providerSelection.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/interactive/taskActionConversationPlan.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/interactive/taskActionConversationPlan.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/interactive/taskActionConversationPlan.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/repertoire/atomic-update.ts",
+          "message": "Narrative comment block (phase/section header)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/repertoire/atomic-update.ts",
+          "message": "Narrative comment block (phase/section header)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/repertoire/atomic-update.ts",
+          "message": "Narrative comment block (phase/section header)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/repertoire/atomic-update.ts",
+          "message": "Narrative comment block (phase/section header)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/tasks/execute/postExecution.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/tasks/execute/types.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/tasks/execute/types.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/tasks/execute/workflowExecutionBundle.ts",
+          "message": "Narrative comment block (JSDoc preamble with slop signal)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/tasks/orderRevision.ts",
+          "message": "Narrative comment block (JSDoc preamble with slop signal)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/tasks/orderRevision.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/tui/conversationRunner.tsx",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/tui/editorState.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/features/tui/terminalColors.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/claude/client.ts",
+          "message": "Narrative comment block (decorative separator)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/claude/executor.ts",
+          "message": "Narrative comment block (JSDoc preamble with slop signal)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/claude/options-builder.ts",
+          "message": "Narrative comment block (JSDoc preamble with slop signal)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/claude/types.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/claude/types.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/codex/CodexStreamHandler.ts",
+          "message": "Narrative comment block (decorative separator)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/codex/client.ts",
+          "message": "Narrative comment block (JSDoc preamble with slop signal)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/config/project/sessionStore.ts",
+          "message": "Narrative comment block (decorative separator)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/config/project/sessionStore.ts",
+          "message": "Narrative comment block (decorative separator)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/config/project/sessionStore.ts",
+          "message": "Narrative comment block (decorative separator)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/config/runtime-provider/legacy-signals.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/config/runtime-provider/legacy-signals.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/config/runtime-provider/legacy-signals.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/config/runtime-provider/override.ts",
+          "message": "Narrative comment block (JSDoc preamble with slop signal)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/mock/scenario.ts",
+          "message": "Narrative comment block (decorative separator)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/opencode/OpenCodeStreamHandler.ts",
+          "message": "Narrative comment block (decorative separator)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/opencode/transport.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/task/autoCommit.ts",
+          "message": "Narrative comment block (decorative separator)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/task/branchList.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/task/branchList.ts",
+          "message": "Narrative comment block (decorative separator)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/task/summarize.ts",
+          "message": "Narrative comment block (decorative separator)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/task/types.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/infra/task/types.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/shared/context.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/shared/i18n/index.ts",
+          "message": "Narrative comment block (long narrative block)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/shared/types/provider.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/shared/utils/debug.ts",
+          "message": "Narrative comment block (decorative separator)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/shared/utils/types.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/shared/utils/types.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "src/shared/utils/types.ts",
+          "message": "Narrative comment block (decorative separator)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "web-ui/public/execution-map.js",
+          "message": "Narrative comment block (cross-reference commentary)"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/narrative-comment",
+          "file": "web-ui/public/execution-model.d.ts",
+          "message": "Narrative comment block (cross-reference commentary)"
+        }
+      ]
+    },
+    {
+      "reason": "Python 想定の print 検出が TypeScript のコードに当たっている。false positive として基準化する。",
+      "findings": [
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/python-print-debug",
+          "file": "eval/results/report-phase-handoff-v3/verification-r17-integrity.py",
+          "message": "`print()` in production code — usually a leftover debug statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/python-print-debug",
+          "file": "eval/results/report-phase-handoff-v3/verification-r17-integrity.py",
+          "message": "`print()` in production code — usually a leftover debug statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/python-print-debug",
+          "file": "eval/results/report-phase-handoff-v3/verification-r17-integrity.py",
+          "message": "`print()` in production code — usually a leftover debug statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/python-print-debug",
+          "file": "eval/results/report-phase-handoff-v3/verification-r17-integrity.py",
+          "message": "`print()` in production code — usually a leftover debug statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/python-print-debug",
+          "file": "eval/results/report-phase-handoff-v3/verification-r17-integrity.py",
+          "message": "`print()` in production code — usually a leftover debug statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/python-print-debug",
+          "file": "eval/results/report-phase-handoff-v3/verification-r17-integrity.py",
+          "message": "`print()` in production code — usually a leftover debug statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/python-print-debug",
+          "file": "eval/results/report-phase-handoff-v3/verification-r18-integrity.py",
+          "message": "`print()` in production code — usually a leftover debug statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/python-print-debug",
+          "file": "eval/results/report-phase-handoff-v3/verification-r18-integrity.py",
+          "message": "`print()` in production code — usually a leftover debug statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/python-print-debug",
+          "file": "eval/results/report-phase-handoff-v3/verification-r18-integrity.py",
+          "message": "`print()` in production code — usually a leftover debug statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/python-print-debug",
+          "file": "eval/results/report-phase-handoff-v3/verification-r18-integrity.py",
+          "message": "`print()` in production code — usually a leftover debug statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/python-print-debug",
+          "file": "eval/results/report-phase-handoff-v3/verification-r18-integrity.py",
+          "message": "`print()` in production code — usually a leftover debug statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/python-print-debug",
+          "file": "eval/results/report-phase-handoff-v3/verification-r18-integrity.py",
+          "message": "`print()` in production code — usually a leftover debug statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/python-print-debug",
+          "file": "eval/results/report-phase-handoff-v3/verification-r18-integrity.py",
+          "message": "`print()` in production code — usually a leftover debug statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/python-print-debug",
+          "file": "eval/results/report-phase-handoff-v3/verification-r18-integrity.py",
+          "message": "`print()` in production code — usually a leftover debug statement."
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/python-print-debug",
+          "file": "eval/results/report-phase-handoff-v3/verification-r18-integrity.py",
+          "message": "`print()` in production code — usually a leftover debug statement."
+        }
+      ]
+    },
+    {
+      "reason": "既存の暗黙の回復処理。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/silent-recovery",
+          "file": "src/infra/task/clone-exec.ts",
+          "message": "Catch logs without the caught error then continues; the failure cause is lost"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/silent-recovery",
+          "file": "src/infra/task/git.ts",
+          "message": "Catch logs without the caught error then continues; the failure cause is lost"
+        }
+      ]
+    },
+    {
+      "reason": "既存の薄いラッパー。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/agents/agent-usecases.ts",
+          "message": "Function 'executeAgent' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/agents/team-leader-structured-output.ts",
+          "message": "Function 'buildDecomposePrompt' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/app/acp/taskContext.ts",
+          "message": "Function 'isValidAcpBranchName' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/core/models/workflow-when-expression.ts",
+          "message": "Function 'isStaticallyNonNumericOperand' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/core/workflow/auto-routing/resolver.ts",
+          "message": "Function 'matchAutoRoutingRules' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/core/workflow/engine/SystemStepExecutor.ts",
+          "message": "Function 'resolveTemplateReference' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/core/workflow/engine/workflow-meta.ts",
+          "message": "Function 'buildPhase1WorkflowMeta' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/core/workflow/report-writer.ts",
+          "message": "Function 'reportPublicationStreamId' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/core/workflow/run/run-meta.ts",
+          "message": "Function 'parseRunMeta' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/core/workflow/step-kind.ts",
+          "message": "Function 'getWorkflowStepKind' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/features/interactive/imageAttachments.ts",
+          "message": "Function 'resolvePromptImageAttachments' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/features/interactive/tellCommand.ts",
+          "message": "Function 'safeTellContentDisplayText' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/features/tasks/execute/taskExecution.ts",
+          "message": "Function 'executeTaskWithResult' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/features/tasks/execute/traceReportParser.ts",
+          "message": "Function 'stepScopeKey' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/features/tasks/execute/workflowExecution.ts",
+          "message": "Function 'executeWorkflow' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/features/tasks/execute/workflowExecutionBundle.ts",
+          "message": "Function 'pathKey' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/features/web-ui/central-worker-spawn.ts",
+          "message": "Function 'onError' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/claude/process.ts",
+          "message": "Function 'executeClaudeCli' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/config/loaders/workflowPackageScope.ts",
+          "message": "Function 'getWorkflowBaseDir' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/config/loaders/workflowResolver.ts",
+          "message": "Function 'loadWorkflowByIdentifierForWorkflowCall' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/config/loaders/workflowSourceMetadata.ts",
+          "message": "Function 'attachWorkflowOpaqueRef' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/config/loaders/workflowSourceMetadata.ts",
+          "message": "Function 'attachWorkflowSourcePath' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/config/loaders/workflowSourceMetadata.ts",
+          "message": "Function 'attachWorkflowTrustInfo' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/config/loaders/workflowSourceMetadata.ts",
+          "message": "Function 'getAttachedWorkflowOpaqueRef' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/config/loaders/workflowSourceMetadata.ts",
+          "message": "Function 'getWorkflowSourcePath' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/config/paths.ts",
+          "message": "Function 'getBuiltinLanguageResourcesDir' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/config/paths.ts",
+          "message": "Function 'getProjectConfigDir' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/config/paths.ts",
+          "message": "Function 'getProjectConfigPath' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/config/project/resolvedSettings.ts",
+          "message": "Function 'isVerboseMode' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/config/resolutionCache.ts",
+          "message": "Function 'normalizeProjectDir' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/mock/client.ts",
+          "message": "Function 'callMockCustom' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/opencode/attempt-runner.ts",
+          "message": "Function 'sanitizeToolCallInputForLogging' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/opencode/attempt-runner.ts",
+          "message": "Function 'buildServerInvalidationResponse' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/opencode/structured-output-recovery.ts",
+          "message": "Function 'buildFormatlessStructuredPrompt' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/service/syncConflictFiles.ts",
+          "message": "Function 'readResolvedFile' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/workflow/operation-journal-store.ts",
+          "message": "Function 'cloneParent' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/workflow/operation-journal-store.ts",
+          "message": "Function 'cloneChild' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/infra/workflow/system/system-sync-effects.ts",
+          "message": "Function 'getPrSyncSession' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/shared/utils/grapheme.ts",
+          "message": "Function 'measureWidth' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "src/shared/utils/text.ts",
+          "message": "Function 'getDisplayWidth' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "tools/opencode-probe/process-tree.mjs",
+          "message": "Function 'startProcessTreeCleanup' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "web-ui/public/app.js",
+          "message": "Function 'actionNeedsConfirmation' is a thin wrapper that only calls another function"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/thin-wrapper",
+          "file": "web-ui/public/execution-map.js",
+          "message": "Function 'visibleTransitionRelations' is a thin wrapper that only calls another function"
+        }
+      ]
+    },
+    {
+      "reason": "既存の自明なコメント。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/trivial-comment",
+          "file": "src/core/workflow/engine/blocked-handler.ts",
+          "message": "Trivial comment that restates the code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/trivial-comment",
+          "file": "src/core/workflow/engine/blocked-handler.ts",
+          "message": "Trivial comment that restates the code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/trivial-comment",
+          "file": "src/core/workflow/instruction/status-rules.ts",
+          "message": "Trivial comment that restates the code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/trivial-comment",
+          "file": "src/core/workflow/instruction/status-rules.ts",
+          "message": "Trivial comment that restates the code"
+        },
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/trivial-comment",
+          "file": "src/core/workflow/instruction/status-rules.ts",
+          "message": "Trivial comment that restates the code"
+        }
+      ]
+    },
+    {
+      "reason": "既存の到達不能コード。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/unreachable-code",
+          "file": "src/infra/config/loaders/workflowRuleNormalizer.ts",
+          "message": "Code after return/throw statement is unreachable"
+        }
+      ]
+    },
+    {
+      "reason": "既存の未使用 import。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "ai-slop",
+          "rule": "ai-slop/unused-import",
+          "file": "eval/scripts/report-phase-handoff-eval.mjs",
+          "message": "Imported symbol 'existsSync' is never used"
+        }
+      ]
+    },
+    {
+      "reason": "既存の重複コード。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "eval/scripts/instruction-research-handoff-eval.mjs",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "eval/scripts/instruction-research-handoff-eval.mjs",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "eval/scripts/instruction-research-handoff-kimi-cli.mjs",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "eval/scripts/instruction-research-handoff-kimi-cli.mjs",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "eval/suite-registry.mjs",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "eval/suite-registry.mjs",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "eval/suite-registry.mjs",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "eval/suite-registry.mjs",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "eval/suite-registry.mjs",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "eval/suite-registry.mjs",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "eval/suite-registry.mjs",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "eval/suite-registry.mjs",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "eval/suite-registry.mjs",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "scripts/pi-sdk-cross-platform-smoke.mjs",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/agents/decompose-task-usecase.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/agents/decompose-task-usecase.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/agents/decompose-task-usecase.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/agents/judge-status-usecase.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/agents/judge-status-usecase.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/models/workflow-schemas.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/models/workflow-types.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/models/workflow-when-expression.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/completion-retry.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/ArpeggioRunner.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/ParallelRunner.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/ParallelRunner.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/StepExecutor.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/StepExecutor.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/StepExecutor.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/StepExecutor.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/TeamLeaderRunner.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/WorkflowEngine.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/WorkflowEngine.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/WorkflowEngine.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/WorkflowEngineSetup.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/WorkflowEngineSetup.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/WorkflowEngineStepCoordinator.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/WorkflowRunLoop.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/WorkflowRunLoop.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/WorkflowRunLoop.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/WorkflowRunLoop.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/WorkflowRunLoop.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/engine/WorkflowValidator.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/instruction/report-reference.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/report-phase-runner.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/core/workflow/report-writer.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/analytics/report-parser.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/exec/facetEditor.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/exec/setupMenu.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/exec/setupMenu.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/interactive/conversationLoop.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/interactive/conversationLoop.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/interactive/formalSpecPrompts.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/interactive/formalSpecVerifier.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/tasks/execute/taskWorkflowExecution.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/tasks/execute/types.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/tasks/execute/types.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/tasks/execute/types.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/tasks/execute/workflowExecutionEvents.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/tasks/execute/workflowExecutionEvents.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/tasks/execute/workflowExecutionEvents.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/tasks/execute/workflowExecutionEvents.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/tasks/execute/workflowExecutionEvents.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/tasks/execute/workflowExecutionEvents.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/tasks/execute/workflowExecutionEvents.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/tasks/execute/workflowExecutionReporting.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/tasks/list/index.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/tasks/list/taskInstructionActions.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/tui/tuiConversation.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/web-ui/chat.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/web-ui/launcher.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/features/web-ui/task-actions.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/claude-headless/headless-spawn.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/claude/client.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/claude/types.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/claude/types.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/codex/CodexStreamHandler.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/codex/client.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/codex/client.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/codex/compaction.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/config/loaders/facetPoolCompiler.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/config/loaders/providerOptionsLookupDirectories.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/config/loaders/workflowCallableArgResolver.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/config/loaders/workflowStepFragmentParams.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/config/loaders/workflowStepFragmentParams.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/config/workflowSelectorResolution.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/config/workflowSelectorResolution.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/copilot/client.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/deepseek-harness/runtime-state-lock.mjs",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/git/detect.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/github/pr.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/gitlab/pr.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/opencode/attempt-runner.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/opencode/attempt-runner.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/opencode/attempt-runner.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/opencode/types.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/opencode/types.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/pi/client.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/providers/deepseek-harness.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/providers/tokenCost.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/centralStateRepository.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/centralStateRepository.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/centralStateRepository.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/centralStateRepository.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/clone-exec.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/clone-exec.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/clone-exec.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/clone-exec.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/clone-exec.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/clone.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/clone.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/issueTask.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/selector-git-command-runner.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/selector-git-command-runner.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/taskLifecycleService.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/taskRecordSchemas.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/taskRecordSchemas.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/taskRecordSchemas.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/taskRecordSchemas.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/taskRecordSchemas.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/taskRecordSchemas.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/taskRecordSchemas.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/task/types.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "src/infra/workflow/structured-output/followup-task-normalizer.ts",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "web-ui/public/execution-view.js",
+          "message": "Duplicate code block — extract a shared helper"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/duplicate-block",
+          "file": "web-ui/public/execution-view.js",
+          "message": "Duplicate code block — extract a shared helper"
+        }
+      ]
+    },
+    {
+      "reason": "既存の連鎖呼び出しの繰り返し。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "code-quality",
+          "rule": "code-quality/repeated-chained-call",
+          "file": "src/app/cli/program.ts",
+          "message": "5 consecutive `.option()` calls that differ only in string literals. Extract a data table + loop."
+        }
+      ]
+    },
+    {
+      "reason": "既存の深いネスト。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "code-quality",
+          "rule": "complexity/deep-nesting",
+          "file": "eval/asserts/measure-pagination.mjs",
+          "message": "Function nested too deeply (max: 5)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/deep-nesting",
+          "file": "eval/providers/manager-work-split-execution-worker.mjs",
+          "message": "Function nested too deeply (max: 5)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/deep-nesting",
+          "file": "eval/providers/phase-events.mjs",
+          "message": "Function nested too deeply (max: 5)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/deep-nesting",
+          "file": "eval/scenarios/report-history-inputs/isolated-run.mjs",
+          "message": "Function nested too deeply (max: 5)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/deep-nesting",
+          "file": "eval/scripts/prepare-repair-strategy.mjs",
+          "message": "Function nested too deeply (max: 5)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/deep-nesting",
+          "file": "scripts/teed-command.mjs",
+          "message": "Function nested too deeply (max: 5)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/deep-nesting",
+          "file": "src/core/workflow/engine/WorkflowValidator.ts",
+          "message": "Function nested too deeply (max: 5)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/deep-nesting",
+          "file": "src/features/manager/turnExecutor.ts",
+          "message": "Function nested too deeply (max: 5)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/deep-nesting",
+          "file": "src/features/tui/runTui.tsx",
+          "message": "Function nested too deeply (max: 5)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/deep-nesting",
+          "file": "src/shared/prompt/confirm.ts",
+          "message": "Function nested too deeply (max: 5)"
+        }
+      ]
+    },
+    {
+      "reason": "既存の巨大ファイル。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "eval/scripts/instruction-research-handoff-eval.mjs",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "eval/scripts/instruction-research-handoff-kimi-cli.mjs",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "eval/scripts/prepare.mjs",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "eval/suite-registry.mjs",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/agents/judge-status-usecase.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/agents/runner.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/app/cli/commands.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/app/cli/routing.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/models/config-types.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/models/schema-base.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/models/workflow-schemas.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/models/workflow-types.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/companion/step-runtime.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/completion-retry-evidence.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/engine/ArpeggioRunner.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/engine/OptionsBuilder.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/engine/ParallelRunner.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/engine/StepExecutor.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/engine/TeamLeaderRunner.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/engine/WorkflowCallExecutor.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/engine/WorkflowCallRunner.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/engine/WorkflowEngine.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/engine/WorkflowEngineSetup.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/engine/WorkflowEngineStepCoordinator.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/engine/WorkflowRunLoop.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/engine/WorkflowValidator.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/engine/structured-output-schema-validator.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/engine/team-leader-execution.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/instruction/report-reference-validation.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/observability/workflowSpans.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/provider-resolution.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/report-phase-runner.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/review-report-discovery.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/review-scope.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/run/resume-report-snapshot.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/run/run-meta.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/types.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/core/workflow/workflow-call-invocation-index.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/caccia/index.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/daemon/dispatcher.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/daemon/windowsWaitCommand.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/exec/setupMenu.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/interactive/aiCaller.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/interactive/assistantRetryCommand.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/interactive/conversationLoop.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/interactive/conversationSession.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/interactive/formalSpecVerifier.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/interactive/runSessionReader.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/mcp/server.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/merge/index.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/pipeline/steps.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/tasks/execute/parallelExecution.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/tasks/execute/resolveTask.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/tasks/execute/sessionLogger.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/tasks/execute/sessionLoggerRecordFactory.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/tasks/execute/taskExecution.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/tasks/execute/types.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/tasks/execute/workflowExecution.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/tasks/execute/workflowExecutionBootstrap.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/tasks/execute/workflowExecutionBundle.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/tasks/execute/workflowExecutionEvents.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/tasks/execute/workflowTerminalPayload.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/tasks/resume/index.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/tui/ConversationView.tsx",
+          "message": "File too large (limit: 600, flagged above 660 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/tui/terminalColors.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/tui/tuiConversation.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/web-ui/chat.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/web-ui/run-log-cache.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/web-ui/run-store.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/web-ui/server.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/web-ui/task-actions.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/workflowAuthoring/inspect.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/features/workflowMaker/artifact.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/claude-terminal/transcript-reader.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/claude/executor.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/codex/client.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/config/configNormalizers.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/config/loaders/resource-resolver.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/config/loaders/workflowCallableArgResolver.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/config/loaders/workflowDoctorRefValidator.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/config/loaders/workflowPreview.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/config/loaders/workflowResolver.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/config/loaders/workflowStepFragmentParams.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/config/loaders/workflowStepFragmentResolver.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/config/loaders/workflowStepNormalizer.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/config/providerOptions.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/config/resolveConfigValue.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/config/runtime-provider/environment.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/config/runtime-provider/provider-environment.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/copilot/client.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/cursor/client.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/deepseek-harness/client.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/deepseek-harness/managed-package.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/deepseek-harness/runtime-state-lock.mjs",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/devin/acp.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/fs/session.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/github/pr.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/kiro/client.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/mock/client.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/opencode/OpenCodeStreamHandler.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/opencode/attempt-runner.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/opencode/types.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/pi/client.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/task/centralStateRepository.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/task/clone-exec.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/task/clone.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/task/companion-git-diff-reader.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/task/taskLifecycleService.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/infra/workflow/operation-journal-store.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "src/shared/prompt/select.ts",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "web-ui/public/app.js",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "web-ui/public/execution-map.js",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "web-ui/public/execution-model.js",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/file-too-large",
+          "file": "web-ui/public/execution-view.js",
+          "message": "File too large (limit: 400, flagged above 441 lines)"
+        }
+      ]
+    },
+    {
+      "reason": "既存の長い関数。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "eval/providers/cli-review.mjs",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "eval/providers/manager-work-split-execution-worker.mjs",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "eval/providers/phase-session-worker.mjs",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "eval/scripts/compare-facets.mjs",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "eval/scripts/instruction-research-handoff-kimi-cli.mjs",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "eval/scripts/prepare-repair-strategy.mjs",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "eval/scripts/prepare-review-artifact-input-handoff.mjs",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "eval/scripts/prepare.mjs",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "eval/scripts/report-phase-handoff-eval.mjs",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "scripts/daemon-reachability.mjs",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "scripts/teed-command.mjs",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "scripts/test-notification-silence.cjs",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/app/acp/agent.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/app/cli/routing.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/commands/repertoire/add.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/core/models/workflow-schemas.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/core/workflow/engine/WorkflowEngineSetup.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/core/workflow/engine/WorkflowRunLoop.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/core/workflow/engine/WorkflowRunLoop.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/core/workflow/engine/WorkflowValidator.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/core/workflow/engine/team-leader-execution.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/core/workflow/provider-resolution.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/config/deploySkillInternal.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/exec/tuiConversation.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/interactive/conversationLoop.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/interactive/conversationSession.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/interactive/runSessionReader.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/interactive/runSessionReader.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/interactive/tellCommand.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/manager/conversationService.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/mcp/localConnection.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/pipeline/execute.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/tasks/execute/loopAnalysisJob.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/tasks/execute/postExecution.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/tui/runTui.tsx",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/tui/runTui.tsx",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/tui/terminalColors.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/tui/terminalOwnership.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/tui/tuiConversation.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/web-ui/chat.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/features/workflowMaker/tui.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/infra/codex/codex-spawn-guard.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/infra/config/global/globalConfigSerializer.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/infra/config/loaders/workflowTrustSource.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/infra/config/project/projectConfig.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/infra/config/project/projectConfig.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/infra/cursor/client.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/infra/devin/process.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/infra/opencode/v1-transport.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/infra/opencode/v2-events.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/infra/opencode/v2-transport.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/infra/pi/client.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/infra/service/syncConflictFiles.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/infra/task/centralStateRepository.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "src/shared/prompt/confirm.ts",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "tools/opencode-probe/probe-process.mjs",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "tools/opencode-probe/run-smoke.mjs",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "tools/opencode-probe/smoke-process.mjs",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "tools/opencode-probe/v2-smoke.mjs",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "web-ui/public/app.js",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "web-ui/public/app.js",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "web-ui/public/app.js",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "web-ui/public/execution-map.js",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "web-ui/public/execution-map.js",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "web-ui/public/execution-map.js",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "web-ui/public/execution-map.js",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "web-ui/public/execution-model.js",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "web-ui/public/execution-view.js",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "web-ui/public/execution-view.js",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/function-too-long",
+          "file": "web-ui/public/execution-view.js",
+          "message": "Function too long (limit: 80, flagged above 88 lines)"
+        }
+      ]
+    },
+    {
+      "reason": "既存の引数過多。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "code-quality",
+          "rule": "complexity/too-many-params",
+          "file": "eval/providers/phase-session-worker.mjs",
+          "message": "Function has too many parameters (max: 6)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/too-many-params",
+          "file": "eval/scripts/prepare-review-artifact-input-handoff.mjs",
+          "message": "Function has too many parameters (max: 6)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/too-many-params",
+          "file": "src/features/tasks/execute/providerPreflight.ts",
+          "message": "Function has too many parameters (max: 6)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/too-many-params",
+          "file": "src/features/tasks/execute/providerPreflight.ts",
+          "message": "Function has too many parameters (max: 6)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/too-many-params",
+          "file": "src/infra/config/runtime-provider/execution-preparation.ts",
+          "message": "Function has too many parameters (max: 6)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/too-many-params",
+          "file": "web-ui/public/execution-map.js",
+          "message": "Function has too many parameters (max: 6)"
+        },
+        {
+          "engine": "code-quality",
+          "rule": "complexity/too-many-params",
+          "file": "web-ui/public/execution-model.js",
+          "message": "Function has too many parameters (max: 6)"
+        }
+      ]
+    },
+    {
+      "reason": "既存の到達不能コード。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "lint",
+          "rule": "eslint/no-unreachable",
+          "file": "src/infra/codex/client.ts",
+          "message": "Unreachable code."
+        }
+      ]
+    },
+    {
+      "reason": "既存の安全でない optional chaining。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "lint",
+          "rule": "eslint/no-unsafe-optional-chaining",
+          "file": "src/infra/managed-providers/package.ts",
+          "message": "Unsafe usage of optional chaining"
+        }
+      ]
+    },
+    {
+      "reason": "既存の未使用変数。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "lint",
+          "rule": "eslint/no-unused-vars",
+          "file": "eval/scripts/report-phase-handoff-eval.mjs",
+          "message": "Identifier 'existsSync' is imported but never used."
+        },
+        {
+          "engine": "lint",
+          "rule": "eslint/no-unused-vars",
+          "file": "eval/scripts/report-phase-handoff-v3.mjs",
+          "message": "Variable 'frozen' is declared but never used. Unused variables should start with a '_'."
+        },
+        {
+          "engine": "lint",
+          "rule": "eslint/no-unused-vars",
+          "file": "web-ui/public/execution-model.js",
+          "message": "Variable 'MAX_GRAPH_OCCURRENCES' is declared but never used. Unused variables should start with a '_'."
+        },
+        {
+          "engine": "lint",
+          "rule": "eslint/no-unused-vars",
+          "file": "web-ui/public/execution-model.js",
+          "message": "Parameter 'meta' is declared but never used. Unused parameters should start with a '_'."
+        }
+      ]
+    },
+    {
+      "reason": "既存の無意味なエスケープ。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "lint",
+          "rule": "eslint/no-useless-escape",
+          "file": "eval/providers/report-phase-handoff-audit-v3.mjs",
+          "message": "Unnecessary escape character '['"
+        },
+        {
+          "engine": "lint",
+          "rule": "eslint/no-useless-escape",
+          "file": "eval/providers/report-phase-handoff-audit-v3.mjs",
+          "message": "Unnecessary escape character '['"
+        }
+      ]
+    },
+    {
+      "reason": "既存の無意味なリネーム。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "lint",
+          "rule": "eslint/no-useless-rename",
+          "file": "src/index.ts",
+          "message": "Do not rename import, export, or destructured assignments to the same name"
+        },
+        {
+          "engine": "lint",
+          "rule": "eslint/no-useless-rename",
+          "file": "src/index.ts",
+          "message": "Do not rename import, export, or destructured assignments to the same name"
+        },
+        {
+          "engine": "lint",
+          "rule": "eslint/no-useless-rename",
+          "file": "src/index.ts",
+          "message": "Do not rename import, export, or destructured assignments to the same name"
+        },
+        {
+          "engine": "lint",
+          "rule": "eslint/no-useless-rename",
+          "file": "src/index.ts",
+          "message": "Do not rename import, export, or destructured assignments to the same name"
+        }
+      ]
+    },
+    {
+      "reason": "既存の重複 import。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/core/workflow/engine/WorkflowEngineStepCoordinator.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/infra/config/runtime-provider/execution-preparation.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/infra/config/runtime-provider/execution-preparation.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/features/interactive/taskActionConversationPlan.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/features/tasks/execute/types.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/agents/types.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/agents/types.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/features/tasks/execute/workflowExecutionBundle.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/infra/config/runtime-provider/legacy-signals.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/agents/agent-usecases.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/infra/config/runtime-provider/environment.ts",
+          "message": "Module './schema.js' is imported more than once in this file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "eval/providers/manager-work-split-execution-worker.mjs",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/infra/config/resolveWorkflowConfigValue.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/features/interactive/runSessionReader.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/infra/config/project/projectConfig.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/infra/config/loaders/facetPoolCompiler.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/infra/task/runner.ts",
+          "message": "Module './schema.js' is imported more than once in this file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/infra/github/GitHubProvider.ts",
+          "message": "Module '../git/types.js' is imported more than once in this file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/infra/task/types.ts",
+          "message": "Module './schema.js' is imported more than once in this file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/infra/task/taskRetryService.ts",
+          "message": "Module './schema.js' is imported more than once in this file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/infra/providers/types.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/infra/config/loaders/workflowParser.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/features/interactive/assistantRetryCommand.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/infra/providers/opencode.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/features/mcp/server.ts",
+          "message": "Module './operations.js' is imported more than once in this file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/infra/config/loaders/workflowStepNormalizer.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/features/tasks/taskRetryPreparation.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/core/workflow/engine/WorkflowEngine.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/core/workflow/engine/WorkflowEngine.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/core/workflow/engine/TeamLeaderRunner.ts",
+          "message": "Module '../types.js' is imported more than once in this file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/core/workflow/arpeggio/merge.ts",
+          "message": "Module './types.js' is imported more than once in this file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/core/workflow/engine/WorkflowValidator.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/core/workflow/engine/WorkflowEngineSetup.ts",
+          "message": "Module '../types.js' is imported more than once in this file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/core/workflow/engine/team-leader-part-runner.ts",
+          "message": "Module '../types.js' is imported more than once in this file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/infra/codex/types.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/infra/devin/types.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/core/workflow/engine/ParallelRunner.ts",
+          "message": "Module '../types.js' is imported more than once in this file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/features/tasks/execute/loopAnalysisWorker.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/features/manager/conversationTransferReceiver.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/features/daemonTurn/processRuntime.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/features/web-ui/central-worker.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/features/daemon/slackPorts.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/features/tui/runTuiTask.tsx",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/features/tui/runTuiTask.tsx",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/features/tui/runTuiTask.tsx",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "src/features/web-ui/run-store.ts",
+          "message": "Modules should not be imported multiple times in the same file"
+        },
+        {
+          "engine": "lint",
+          "rule": "import/no-duplicates",
+          "file": "scripts/canary-coder.mjs",
+          "message": "Module 'node:url' is imported more than once in this file"
+        }
+      ]
+    },
+    {
+      "reason": "既存の effect 依存配列の不足。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "lint",
+          "rule": "react-hooks/exhaustive-deps",
+          "file": "src/features/tui/ConversationView.tsx",
+          "message": "React Hook useCallback has a missing dependency: 'isFinalExit'"
+        },
+        {
+          "engine": "lint",
+          "rule": "react-hooks/exhaustive-deps",
+          "file": "src/features/tui/ConversationView.tsx",
+          "message": "React Hook useCallback has a missing dependency: 'finishRun'"
+        },
+        {
+          "engine": "lint",
+          "rule": "react-hooks/exhaustive-deps",
+          "file": "src/features/tui/ConversationView.tsx",
+          "message": "React Hook useCallback has missing dependencies: 'conversation', and 'conversation.tracksResultSource'"
+        },
+        {
+          "engine": "lint",
+          "rule": "react-hooks/exhaustive-deps",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "React Hook useEffect has a missing dependency: 'running'"
+        },
+        {
+          "engine": "lint",
+          "rule": "react-hooks/exhaustive-deps",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "React Hook useEffect has missing dependencies: 'questions', 'answerTarget.pending.question.id', 'clearAnswer', and 'answerTarget'"
+        },
+        {
+          "engine": "lint",
+          "rule": "react-hooks/exhaustive-deps",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "React Hook useEffect has a missing dependency: 'setPending'"
+        },
+        {
+          "engine": "lint",
+          "rule": "react-hooks/exhaustive-deps",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "React Hook useEffect has missing dependencies: 'display', and 'selection'"
+        },
+        {
+          "engine": "lint",
+          "rule": "react-hooks/exhaustive-deps",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "React Hook useEffect has a missing dependency: 'showResult'"
+        },
+        {
+          "engine": "lint",
+          "rule": "react-hooks/exhaustive-deps",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "React Hook useMemo has a missing dependency: 'running'"
+        }
+      ]
+    },
+    {
+      "reason": "既存の不変性違反。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "lint",
+          "rule": "react/immutability",
+          "file": "src/features/manager/useManagerAbortConfirmation.ts",
+          "message": "This value cannot be modified"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/immutability",
+          "file": "src/features/manager/useManagerSummaryApproval.ts",
+          "message": "This value cannot be modified"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/immutability",
+          "file": "src/features/manager/useManagerInput.ts",
+          "message": "This value cannot be modified"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/immutability",
+          "file": "src/features/manager/useManagerInput.ts",
+          "message": "Cannot modify local variables after render completes"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/immutability",
+          "file": "src/features/tui/ConversationView.tsx",
+          "message": "Cannot access variable while it is being initialized"
+        }
+      ]
+    },
+    {
+      "reason": "既存の手動 memo 化の保持。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "lint",
+          "rule": "react/preserve-manual-memoization",
+          "file": "src/features/tui/ConversationView.tsx",
+          "message": "Existing memoization could not be preserved"
+        }
+      ]
+    },
+    {
+      "reason": "既存の純粋性違反。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "lint",
+          "rule": "react/purity",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot call impure function during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/purity",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot call impure function during render"
+        }
+      ]
+    },
+    {
+      "reason": "既存の ref 使用。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/useManagerQuestionAnswer.ts",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/tui/PromptScreen.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/tui/ConversationView.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot access refs during render"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/refs",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Cannot access refs during render"
+        }
+      ]
+    },
+    {
+      "reason": "既存の effect 内 setState。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "lint",
+          "rule": "react/set-state-in-effect",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Calling setState synchronously within an effect can trigger cascading renders"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/set-state-in-effect",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Calling setState synchronously within an effect can trigger cascading renders"
+        },
+        {
+          "engine": "lint",
+          "rule": "react/set-state-in-effect",
+          "file": "src/features/manager/ManagerView.tsx",
+          "message": "Calling setState synchronously within an effect can trigger cascading renders"
+        }
+      ]
+    },
+    {
+      "reason": "既存の new Array。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-new-array",
+          "file": "src/shared/utils/sensitive-value.ts",
+          "message": "Do not use `new Array(singleArgument)`."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-new-array",
+          "file": "src/core/workflow/auto-routing/resolver.ts",
+          "message": "Do not use `new Array(singleArgument)`."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-new-array",
+          "file": "tools/opencode-probe/smoke-process.mjs",
+          "message": "Do not use `new Array(singleArgument)`."
+        }
+      ]
+    },
+    {
+      "reason": "既存の無意味なフォールバック付きスプレッド。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-fallback-in-spread",
+          "file": "src/infra/config/loaders/workflowMcpReferenceResolver.ts",
+          "message": "Empty fallbacks in spreads are unnecessary"
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-fallback-in-spread",
+          "file": "eval/scripts/instruction-research-handoff-kimi-cli.mjs",
+          "message": "Empty fallbacks in spreads are unnecessary"
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-fallback-in-spread",
+          "file": "eval/scripts/instruction-research-handoff-kimi-cli.mjs",
+          "message": "Empty fallbacks in spreads are unnecessary"
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-fallback-in-spread",
+          "file": "src/infra/config/runtime-provider/loader.ts",
+          "message": "Empty fallbacks in spreads are unnecessary"
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-fallback-in-spread",
+          "file": "src/infra/config/runtime-provider/loader.ts",
+          "message": "Empty fallbacks in spreads are unnecessary"
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-fallback-in-spread",
+          "file": "src/infra/task/clone.ts",
+          "message": "Empty fallbacks in spreads are unnecessary"
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-fallback-in-spread",
+          "file": "src/core/workflow/permission-profile-resolution.ts",
+          "message": "Empty fallbacks in spreads are unnecessary"
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-fallback-in-spread",
+          "file": "src/infra/config/configNormalizers.ts",
+          "message": "Empty fallbacks in spreads are unnecessary"
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-fallback-in-spread",
+          "file": "src/infra/config/loaders/workflowCategoryParser.ts",
+          "message": "Empty fallbacks in spreads are unnecessary"
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-fallback-in-spread",
+          "file": "src/infra/config/loaders/workflowCategoryParser.ts",
+          "message": "Empty fallbacks in spreads are unnecessary"
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-fallback-in-spread",
+          "file": "src/infra/codex/session-config.ts",
+          "message": "Empty fallbacks in spreads are unnecessary"
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-fallback-in-spread",
+          "file": "src/infra/codex/session-config.ts",
+          "message": "Empty fallbacks in spreads are unnecessary"
+        }
+      ]
+    },
+    {
+      "reason": "既存の無意味なスプレッド。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/core/workflow/review-report-discovery.ts",
+          "message": "Using a spread operator here creates a new array unnecessarily."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/infra/config/providerOptions.ts",
+          "message": "Using a spread operator here creates a new object unnecessarily."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/infra/config/providerOptions.ts",
+          "message": "Using a spread operator here creates a new object unnecessarily."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/infra/opencode/server-pool.ts",
+          "message": "`Promise.allSettled` accepts an iterable, so it's unnecessary to convert the iterable to an array."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/features/interactive/runSessionReader.ts",
+          "message": "Using a spread operator here creates a new array unnecessarily."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/features/interactive/conversationLoop.ts",
+          "message": "Using a spread operator here creates a new object unnecessarily."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/infra/config/global/globalConfigSerializer.ts",
+          "message": "Using a spread operator here creates a new object unnecessarily."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/features/interactive/operationFeedback.ts",
+          "message": "Using a spread operator here creates a new object unnecessarily."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/infra/config/configNormalizers.ts",
+          "message": "Using a spread operator here creates a new object unnecessarily."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/infra/config/configNormalizers.ts",
+          "message": "Using a spread operator here creates a new object unnecessarily."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/infra/providers/mcp/adapter.ts",
+          "message": "Using a spread operator here creates a new object unnecessarily."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/infra/opencode/allowedTools.ts",
+          "message": "`Set` accepts an iterable, so it's unnecessary to convert the iterable to an array."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/features/mcp/operations.ts",
+          "message": "Using a spread operator here creates a new object unnecessarily."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/features/mcp/goalTaskRetryOperations.ts",
+          "message": "Using a spread operator here creates a new object unnecessarily."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/features/daemonTurn/toolScope.ts",
+          "message": "`Promise.allSettled` accepts an iterable, so it's unnecessary to convert the iterable to an array."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/features/tasks/taskStateWorktreeOwnership.ts",
+          "message": "Using a spread operator here creates a new object unnecessarily."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/infra/codex/client.ts",
+          "message": "Using a spread operator here creates a new object unnecessarily."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/features/caccia/index.ts",
+          "message": "Using a spread operator here creates a new array unnecessarily."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/features/director/slackConversationPort.ts",
+          "message": "`Promise.allSettled` accepts an iterable, so it's unnecessary to convert the iterable to an array."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/features/director/slackConversationPort.ts",
+          "message": "`Promise.allSettled` accepts an iterable, so it's unnecessary to convert the iterable to an array."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/features/tasks/execute/parallelExecution.ts",
+          "message": "`Promise.allSettled` accepts an iterable, so it's unnecessary to convert the iterable to an array."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/features/daemon/conversationState.ts",
+          "message": "`Promise.all` accepts an iterable, so it's unnecessary to convert the iterable to an array."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/features/daemon/turnProcessHost.ts",
+          "message": "`Promise.allSettled` accepts an iterable, so it's unnecessary to convert the iterable to an array."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/features/daemon/turnProcessHost.ts",
+          "message": "`Promise.allSettled` accepts an iterable, so it's unnecessary to convert the iterable to an array."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/infra/daemon/logger.ts",
+          "message": "`Promise.allSettled` accepts an iterable, so it's unnecessary to convert the iterable to an array."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/no-useless-spread",
+          "file": "src/features/tui/runTui.tsx",
+          "message": "Using a spread operator here creates a new object unnecessarily."
+        }
+      ]
+    },
+    {
+      "reason": "既存の文字列前方/後方一致の書き方。基準化して受け入れ、issue #19 の範囲では直さない。",
+      "findings": [
+        {
+          "engine": "lint",
+          "rule": "unicorn/prefer-string-starts-ends-with",
+          "file": "scripts/daemon-reachability.mjs",
+          "message": "Prefer String#endsWith over a regex with a dollar sign."
+        },
+        {
+          "engine": "lint",
+          "rule": "unicorn/prefer-string-starts-ends-with",
+          "file": "scripts/sync-nix-deps.mjs",
+          "message": "Prefer String#startsWith over a regex with a caret."
+        }
+      ]
+    },
+    {
+      "reason": "既存のハードコード秘密の疑い。issue #19 の範囲外のため直さず、報告に列挙する。",
+      "findings": [
+        {
+          "engine": "security",
+          "rule": "security/hardcoded-secret",
+          "file": "eval/asserts/merge-ci-recovery.mjs",
+          "message": "Possible Hardcoded password/secret detected in source code"
+        }
+      ]
+    },
+    {
+      "reason": "既存の new Function 使用。issue #19 の範囲外のため直さず、報告に列挙する。",
+      "findings": [
+        {
+          "engine": "security",
+          "rule": "security/new-function",
+          "file": "src/core/workflow/arpeggio/merge.ts",
+          "message": "Use of new Function() is similar to eval and can be a security risk"
+        }
+      ]
+    }
+  ]
+}
