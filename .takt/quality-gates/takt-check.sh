@@ -6,3 +6,4 @@ npm run lint
 npm test
 npm run test:it
 npm run test:e2e:mock
+npm run check:aislop
