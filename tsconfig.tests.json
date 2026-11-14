@@ -46,6 +46,7 @@
     "src/__tests__/agent-usecases.test.ts",
     "src/__tests__/ai-caller-output-mode.test.ts",
     "src/__tests__/aiCaller-session-continuation.test.ts",
+    "src/__tests__/aislop-accepted-contract.test.ts",
     "src/__tests__/allowed-tool-edit-policy.test.ts",
     "src/__tests__/analytics-cli-commands.test.ts",
     "src/__tests__/analytics-workflowExecution.test.ts",

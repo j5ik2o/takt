@@ -382,6 +382,7 @@ export const publicContractIntegrationTestFiles = Object.freeze([
 // These compose multiple production components or a real local runtime, but
 // remain bounded and quick enough for the normal post-implementation IT gate.
 export const lightContractIntegrationTestFiles = Object.freeze([
+  'src/__tests__/aislop-accepted-contract.test.ts',
   'src/__tests__/analytics-workflowExecution.test.ts',
   'src/__tests__/cancellable-prompt-pipe.test.ts',
   'src/__tests__/daemon-dispatcher.integration.test.ts',
