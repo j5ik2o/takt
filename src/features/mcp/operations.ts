@@ -123,6 +123,9 @@ function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItem
     ...(task.mergeTask === undefined ? {} : { mergeTask: task.mergeTask, prNumber: task.prNumber }),
     ...(task.mergeTask !== true || task.completion === undefined ? {} : { completion: task.completion }),
     ...(task.startedAt === undefined ? {} : { startedAt: task.startedAt }),
+    ...(task.createdAt === undefined ? {} : { createdAt: task.createdAt }),
+    ...(task.completedAt === undefined ? {} : { completedAt: task.completedAt }),
+    ...(task.sourceRunSlug === undefined ? {} : { sourceRunSlug: task.sourceRunSlug }),
     ...(task.workflow === undefined ? {} : { workflow: task.workflow }),
   };
   if (task.runSlug !== undefined) {
