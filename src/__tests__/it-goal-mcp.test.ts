@@ -2726,6 +2726,23 @@ describe('goal creation through the standalone MCP', () => {
     await expect(new GoalStore(cwd).get(createdId)).resolves.toMatchObject({ id: createdId, status: 'created' });
   });
 
+  it.each([undefined, 'all'] as const)('rejects a subdirectory without creating a goal with tool set %s', async (toolSet) => {
+    const subdirectory = join(cwd, 'sub');
+    mkdirSync(subdirectory);
+
+    await withServer(cwd, toolSet, async (client) => {
+      const result = await client.callTool({ name: createGoalTool, arguments: {
+        ...createArguments(), cwd: subdirectory,
+      } });
+
+      expect(result.isError).toBe(true);
+      expect(existsSync(join(cwd, '.takt', 'goals'))).toBe(false);
+      expect(existsSync(join(subdirectory, '.takt', 'goals'))).toBe(false);
+      expect(goalBranches()).toEqual([]);
+      expect(readManagerEvents(cwd)).toEqual([]);
+    });
+  });
+
   it('rejects a duplicate id with the existing creation error and keeps the saved goal', async () => {
     await withServer(cwd, 'all', async (client) => {
       expect((await createGoalThroughMcp(client)).isError).toBeUndefined();

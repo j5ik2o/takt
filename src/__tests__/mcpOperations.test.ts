@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fsPromises from 'node:fs/promises';
 import { getTaktGoal, listTaktGoals, listTaktTasks, enqueueTaktTask, type McpOperationDependencies } from '../features/mcp/operations.js';
 import { createTaktGoal } from '../features/mcp/goalOperations.js';
 import { TaskRunner, type TaskState } from '../infra/task/index.js';
 import * as goalGit from '../infra/goals/git-command.js';
+import * as repositoryDirectory from '../infra/task/repositoryDirectory.js';
 import * as runMeta from '../core/workflow/run/run-meta.js';
 import { listGoalsInputSchema, type EnqueueTaskInput } from '../features/mcp/schemas.js';
 import { firstTextContent } from './helpers/mcp-content.js';
@@ -10,6 +12,10 @@ import { goalId, goalInput, goalRecord } from './helpers/goal-fixtures.js';
 import { goalSummary, goalWriteSummary } from '../features/mcp/goalResponse.js';
 import { MCP_RESPONSE_MAX_BYTES, responseBytes } from '../features/mcp/response.js';
 import type { Goal, GoalCreateInput } from '../infra/goals/schema.js';
+
+vi.mock('node:fs/promises', async (original) => ({
+  ...await original<typeof import('node:fs/promises')>(),
+}));
 
 const goalDoubles = vi.hoisted(() => ({ list: vi.fn(), get: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({
@@ -697,7 +703,11 @@ describe('MCP create goal operation', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    vi.spyOn(repositoryDirectory, 'resolveGitRepositoryDirectory').mockResolvedValue(input.cwd);
+    vi.spyOn(fsPromises, 'realpath').mockResolvedValue(input.cwd);
   });
+
+  afterEach(() => { vi.restoreAllMocks(); });
 
   it('returns the saved goal summary and forwards the input and signal to the service', async () => {
     const controller = new AbortController();
@@ -709,6 +719,35 @@ describe('MCP create goal operation', () => {
     expect(result.isError).toBeUndefined();
     expect(JSON.parse(firstTextContent(result.content))).toEqual({ goal: goalWriteSummary(goal) });
     expect(goalServiceDoubles.createGoal).toHaveBeenCalledWith(input, controller.signal);
+  });
+
+  it('forwards the checked Git root when cwd resolves to the root through a symlink and parent segment', async () => {
+    const controller = new AbortController();
+    goalServiceDoubles.createGoal.mockResolvedValue(goalRecord());
+
+    const result = await createTaktGoal({ ...input, cwd: '/repo/sub/link/..' }, {}, controller.signal);
+
+    expect(result.isError).toBeUndefined();
+    expect(goalServiceDoubles.createGoal).toHaveBeenCalledWith(input, controller.signal);
+  });
+
+  it('rejects a subdirectory without calling the creation service', async () => {
+    vi.mocked(fsPromises.realpath).mockResolvedValue('/repo/sub');
+    goalServiceDoubles.createGoal.mockResolvedValue(goalRecord());
+
+    const result = await createTaktGoal({ ...input, cwd: '/repo/sub' }, {}, new AbortController().signal);
+
+    expect(result.isError).toBe(true);
+    expect(goalServiceDoubles.createGoal).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-Git directory without calling the creation service', async () => {
+    vi.mocked(repositoryDirectory.resolveGitRepositoryDirectory).mockRejectedValue(new Error('Not a Git repository'));
+
+    const result = await createTaktGoal(input, {}, new AbortController().signal);
+
+    expect(result.isError).toBe(true);
+    expect(goalServiceDoubles.createGoal).not.toHaveBeenCalled();
   });
 
   it('converts service failures to sanitized MCP errors', async () => {

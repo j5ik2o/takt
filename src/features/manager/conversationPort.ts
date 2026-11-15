@@ -3,6 +3,7 @@ import type { InquiryOwner } from '../../infra/goals/standalone-inquiries.js';
 import type { ConversationActor, ConversationAssignment, ConversationRecord, PortBinding } from '../../infra/conversations/schema.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { ManagerAssignment } from './startupResolution.js';
+import type { EpicSnapshot } from '../../infra/epics/projection.js';
 import type { ManagerDisplayEvent } from './savedEvents.js';
 import type { ConversationActivity, ConversationText } from '../../shared/types/conversation-activity.js';
 import type { ToolActivityTurnState } from '../../shared/tool-activity/types.js';
@@ -10,7 +11,7 @@ import type { ToolActivityTurnState } from '../../shared/tool-activity/types.js'
 export type ConversationDisplayAssignment = ManagerAssignment | { readonly kind: 'daemon'; readonly repositoryDirectories: readonly string[] };
 
 export type ConversationCommand =
-  | { kind: 'message'; text: string; display?: boolean }
+  | { kind: 'message'; text: string; display?: boolean; requestProposal?: boolean }
   | { kind: 'approve_summary'; revision: number; requirePending?: boolean }
   | { kind: 'dismiss_summary'; revision: number }
   | { kind: 'answer_question'; target: QuestionTarget; questionId: string; answer: GoalAnswerInput;
@@ -29,6 +30,7 @@ export interface ConversationState {
   queuedMessageCount?: number;
 }
 export type SnapshotValue =
+  | EpicSnapshot
   | { kind: 'state'; state: ConversationState }
   | { kind: 'tool_history'; history: ToolActivityTurnState }
   | { kind: 'assignment'; assignment: ConversationDisplayAssignment }

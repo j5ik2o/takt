@@ -1,6 +1,7 @@
 import { WaitCommandInputSchema } from '../../core/daemon/waitCommand.js';
 import type { DaemonStateReply, DaemonStateRequest } from '../../core/daemon/processProtocol.js';
 import { jsonResult } from './response.js';
+import { EPIC_TOOL_NAMES, registerEpicTools } from './epicOperations.js';
 import * as fs from 'node:fs';
 import * as process from 'node:process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -101,6 +102,7 @@ export const TAKT_MCP_READ_ONLY_TOOL_NAMES = [
 ] as const;
 
 export const TAKT_MCP_MANAGER_TOOL_NAMES = [
+  ...EPIC_TOOL_NAMES,
   ...TAKT_MCP_READ_ONLY_TOOL_NAMES,
   'takt_add_workspace_repository', 'takt_remove_workspace_repository', 'takt_rename_workspace',
   'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_get_workflow',
@@ -218,6 +220,12 @@ export function createTaktMcpServer(
     }, false));
   }
   if (options.toolSet === 'manager') {
+    registerEpicTools(server, { globalConfigDirectory, currentAssignment, withTurn, turnSignal,
+      changed: options.requestDaemon === undefined ? undefined : async (workspaceId, epicId, reason) => {
+        const reply = await options.requestDaemon!({ kind: 'publish_epic_events', workspaceId, epicId, reason });
+        if (reply.kind === 'error') throw new Error(reply.message);
+        if (reply.kind !== 'epic_events_published') throw new Error('Unexpected Epic event reply');
+      } });
     const connection = options.goalExecutionConnection;
     if (connection !== undefined) {
       const goalOperation = (cwd: string, errorContext: string, action: (deps: McpOperationDependencies) => Promise<CallToolResult>) =>
@@ -352,7 +360,7 @@ export function createTaktMcpServer(
     }, (input, extra) => operation(input.cwd, 'Goal completion failed', (deps) => completeTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal)), true));
     server.registerTool('takt_merge_goal_pr', {
       title: 'Prepare or merge a goal PR',
-      description: 'Enqueue a pending PR merge task belonging to the goal and return its task name immediately. Enqueue it while CI is still running; there is no need to wait for CI to finish beforehand. All arguments are required. Use until: prepare for the configured merge.prepare_workflow (default merge-prepare) without merging; use until: merge for the configured merge.workflow (default merge-review-fix-simple). The default merge-prepare workflow handles preparation through review, CodeRabbit and CI; custom workflows follow their defined steps. TAKT selects the workflow. Rejects duplicate active targets, goals not awaiting merge, mismatched PRs, paused and aborted goals. Read the task completion event; when merged, call takt_check_goal_completion.',
+      description: 'Enqueue a pending PR merge task belonging to the goal and return its task name immediately. Enqueue it while CI is still running; there is no need to wait for CI to finish beforehand. All arguments are required. Use until: prepare for the configured merge.prepare_workflow (default merge-prepare) without merging; use until: merge for the configured merge.workflow (default merge-review-fix-simple). The default merge-prepare and merge-review-fix-simple workflows handle target-branch integration, CodeRabbit feedback, and CI waiting. For both initial synchronization and resynchronization, a clean base sync skips the full review; after AI conflict resolution, review and fixes run before push. Custom workflows follow their defined steps. TAKT selects the workflow. Rejects duplicate active targets, goals not awaiting merge, mismatched PRs, paused and aborted goals. Read the task completion event; when merged, call takt_check_goal_completion.',
       inputSchema: mergeGoalPrInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal PR merge failed', (deps) => mergeTaktGoalPr(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
     server.registerTool('takt_reopen_goal', {
@@ -399,7 +407,7 @@ export function createTaktMcpServer(
       'takt_create_goal',
       {
         title: 'Create TAKT goal',
-        description: 'Register a new goal through the existing creation flow. The id must be an unused UUID and cwd an absolute path. objective, outOfScope, acceptanceCriteria and constraints are saved as given; specifications, startBranch and integrationBranch are optional. The same id cannot be registered twice. Responses fit 64 KiB, with explicit truncation. Read the saved goal with takt_get_goal and list registered goals with takt_list_goals.',
+        description: 'Register a new goal through the existing creation flow. The id must be an unused UUID and cwd the absolute path to the Git repository root. objective, outOfScope, acceptanceCriteria and constraints are saved as given; specifications, startBranch and integrationBranch are optional. The same id cannot be registered twice. Responses fit 64 KiB, with explicit truncation. Read the saved goal with takt_get_goal and list registered goals with takt_list_goals.',
         inputSchema: createGoalInputSchema,
       },
       (input, extra) => operation(input.cwd, 'Goal creation failed', (deps) => createTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))),

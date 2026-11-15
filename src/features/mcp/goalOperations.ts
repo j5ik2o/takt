@@ -6,11 +6,13 @@ import type { GoalCreateInput } from '../../infra/goals/schema.js';
 import { ensureManagerRun } from '../manager/autoRun.js';
 import { enqueueTask } from '../../infra/task/enqueueService.js';
 import { saveEnqueuedTaskFile } from '../../infra/task/enqueuedTaskFile.js';
+import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirectory.js';
 import { listWorkflows, loadWorkflowByIdentifier } from '../../infra/config/index.js';
 import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDependencies } from './operations.js';
 import type { EnqueueGoalTaskInput, ListGoalsInput } from './schemas.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import { join } from 'node:path';
+import { realpath } from 'node:fs/promises';
 import { goalWrite } from './goalWrite.js';
 import { goalWriteSummary } from './goalResponse.js';
 import { pagedResult } from './response.js';
@@ -70,7 +72,11 @@ export async function createTaktGoal(input: GoalCreateInput, deps: McpOperationD
   try {
     assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
     signal.throwIfAborted();
-    const goal = await createGoal(input, signal);
+    const root = await resolveGitRepositoryDirectory(input.cwd);
+    if (await realpath(input.cwd) !== root) {
+      throw new Error(`cwd must be the Git repository root: ${root}`);
+    }
+    const goal = await createGoal({ ...input, cwd: root }, signal);
     return jsonResult({ goal: goalWriteSummary(goal) });
   } catch (error) { return errorResult('Goal creation failed', error); }
 }
