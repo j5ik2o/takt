@@ -10,7 +10,7 @@ import { render as renderInk } from 'ink';
 import { Terminal } from '@xterm/headless';
 import stringWidth from 'string-width';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ManagerView } from '../features/manager/ManagerView.js';
+import { MANAGER_REFRESH_INTERVAL_MS, ManagerView } from '../features/manager/ManagerView.js';
 import { ManagerServiceClient, spyConversationCommand } from './helpers/manager-service-client.js';
 import { MockProvider } from '../infra/providers/mock.js';
 import * as repositories from '../infra/task/repositoryDirectory.js';
@@ -547,8 +547,16 @@ describe('manager polling and answer cancellation', () => {
   let cwd: string;
   let store: GoalStore;
   let app: ReturnType<typeof render> | undefined;
+  // 描画、ファイルのロック、ヘルパーの時間切れは実時間で動くため、周期タイマだけを偽物にする。
+  const POLL_TIMERS = ['setInterval', 'clearInterval'] as const;
+  // 読み取り中に来た周期は何もしないため、確かめるたびに 1 周期ずつ進める。
+  const waitFor = (assertions: () => void | Promise<void>): Promise<void> => vi.waitFor(async () => {
+    await vi.advanceTimersByTimeAsync(MANAGER_REFRESH_INTERVAL_MS);
+    await assertions();
+  }, { timeout: 4000 });
 
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: [...POLL_TIMERS] });
     const root = join(process.cwd(), '.tmp');
     mkdirSync(root, { recursive: true });
     cwd = realpathSync(mkdtempSync(join(root, 'manager-compact-')));
@@ -561,6 +569,7 @@ describe('manager polling and answer cancellation', () => {
   const clients: ManagerServiceClient[] = [];
   afterEach(async () => {
     app?.unmount();
+    vi.useRealTimers();
     await Promise.all(clients.splice(0).map((client) => client.dispose()));
     app = undefined;
     invalidateResolvedConfigCache(cwd);
@@ -667,7 +676,7 @@ describe('manager polling and answer cancellation', () => {
   }
 
   it.each(['repository', 'goal'] as const)('keeps startup history suppressed after a %s diagnostic recovers', async (failure) => {
-    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.useFakeTimers({ toFake: [...POLL_TIMERS, 'Date'] });
     vi.setSystemTime(new Date('2026-10-21T10:00:00.000Z'));
     const goals = await createGoalsWithHistory();
     const goalFile = join(cwd, '.takt', 'goals', goals[1]!.id, 'goal.json');
@@ -700,7 +709,7 @@ describe('manager polling and answer cancellation', () => {
     const goals = await createGoalsWithHistory();
     const goalId = goals[0]!.id;
     const summary = '作業報告\n詳細';
-    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.useFakeTimers({ toFake: [...POLL_TIMERS, 'Date'] });
     vi.setSystemTime(new Date('2026-10-21T09:59:59Z'));
     const notification = { id: randomUUID(), kind: 'progress' as const, body: '人向けの進捗通知' };
     const save = () => store.update(goalId, (goal) => ({ ...appendGoalWorkLog(goal, { summary }),
