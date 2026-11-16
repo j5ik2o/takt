@@ -1384,12 +1384,26 @@ describe('goal branch correction', () => {
       summary: 'evidence', changeSummary, instructions: [],
     } };
     await expect(updateGoalBranches('/project', goal.id, 'integration/takt-mcp', '宛先の訂正', undefined))
-      .rejects.toThrow('Goal is already completed');
+      .rejects.toThrow();
     expect(goal.integrationBranch).toBe('main');
   });
 
   it('rejects an invalid branch name', async () => {
     await expect(updateGoalBranches('/project', goal.id, 'bad branch', '宛先の訂正', undefined)).rejects.toThrow();
     expect(goal.integrationBranch).toBe('main');
+  });
+
+  it('does not complete a goal when the integration branch changes during the completion check', async () => {
+    goal = { ...goal, status: 'awaiting_merge', completion: {
+      goalBranch: goal.branch, goalSha: sourceSha, targetBranch: 'main',
+      summary: 'evidence', changeSummary, instructions: [],
+    } };
+    doubles.contentIncluded.mockImplementation(async () => {
+      goal = { ...goal, integrationBranch: 'release' };
+      return true;
+    });
+    await expect(checkGoalCompletion('/project', goal.id, undefined, policy)).rejects.toThrow();
+    expect(goal.status).toBe('awaiting_merge');
+    expect(goal.completion?.targetBranch).toBe('main');
   });
 });

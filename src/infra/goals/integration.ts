@@ -343,6 +343,9 @@ export async function checkGoalCompletion(
   const saved = await store.update(goalId, (current) => {
     signal?.throwIfAborted();
     assertCompletionAllowed(current, goal);
+    if (current.integrationBranch !== goal.integrationBranch) {
+      throw new Error('Goal integration branch changed during the completion check. Use takt_check_goal_completion.');
+    }
     if (mergedPr !== undefined && (current.branch !== goal.branch || current.integrationBranch !== goal.integrationBranch
       || current.pullRequest?.number !== goal.pullRequest?.number || current.pullRequest?.url !== goal.pullRequest?.url)) {
       throw new Error('Goal PR changed during the completion check. Use takt_check_goal_completion.');
