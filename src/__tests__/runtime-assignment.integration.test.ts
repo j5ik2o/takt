@@ -700,4 +700,57 @@ describe('runtime assignment invocation', () => {
 
     expect(existsSync(join(projectDir, 'tasks.yaml'))).toBe(false);
   });
+
+  it('raises a dedicated error type with unchanged message for an unknown assignment', async () => {
+    writeSingleAssignmentRuntime();
+    const { initializeRuntimeAssignmentInvocation, resolveInvocationRuntimeProviderFileWithOrigins, withTaskRuntimeAssignment } =
+      await taskAssignmentResolver();
+    const { RuntimeAssignmentSelectionError } = await import('../infra/config/runtime-provider/loader.js');
+    const { getGlobalConfigDir, getProjectConfigDir } = await import('../infra/config/paths.js');
+    const paths = { globalConfigDir: getGlobalConfigDir(), projectConfigDir: getProjectConfigDir(projectCwd) };
+    initializeRuntimeAssignmentInvocation(projectCwd, undefined);
+
+    let captured: unknown;
+    try {
+      withTaskRuntimeAssignment('missing', () => resolveInvocationRuntimeProviderFileWithOrigins(paths));
+    } catch (error) {
+      captured = error;
+    }
+
+    expect(captured).toBeInstanceOf(RuntimeAssignmentSelectionError);
+    expect((captured as InstanceType<typeof RuntimeAssignmentSelectionError>).assignmentName).toBe('missing');
+    expect((captured as Error).message).toBe('Cannot select runtime assignment "missing". Available assignments: a.');
+
+    initializeRuntimeAssignmentInvocation(projectCwd, undefined);
+  });
+
+  it.each([
+    ['provider.defaults.assignment', (fixture: ReturnType<typeof runtimeFixture>) => ({ ...fixture, provider: {
+      ...fixture.provider, directories: {}, defaults: { assignment: 'missing' },
+    } })],
+    ['provider.directories', (fixture: ReturnType<typeof runtimeFixture>) => ({ ...fixture, provider: {
+      ...fixture.provider, defaults: { profile: 'base' }, directories: { [projectCwd]: 'missing' },
+    } })],
+  ])('keeps a non-assignment configuration error for %s as a plain Error', async (_label, build) => {
+    writeRuntime(projectDir, build(runtimeFixture()));
+    const { initializeRuntimeAssignmentInvocation, resolveInvocationRuntimeProviderFileWithOrigins, withTaskRuntimeAssignment } =
+      await taskAssignmentResolver();
+    const { RuntimeAssignmentSelectionError } = await import('../infra/config/runtime-provider/loader.js');
+    const { getGlobalConfigDir, getProjectConfigDir } = await import('../infra/config/paths.js');
+    const paths = { globalConfigDir: getGlobalConfigDir(), projectConfigDir: getProjectConfigDir(projectCwd) };
+    initializeRuntimeAssignmentInvocation(projectCwd, undefined);
+
+    let captured: unknown;
+    try {
+      withTaskRuntimeAssignment('missing', () => resolveInvocationRuntimeProviderFileWithOrigins(paths));
+    } catch (error) {
+      captured = error;
+    }
+
+    expect(captured).toBeInstanceOf(Error);
+    expect(captured).not.toBeInstanceOf(RuntimeAssignmentSelectionError);
+    expect((captured as Error).message).toMatch(/references unknown assignment/u);
+
+    initializeRuntimeAssignmentInvocation(projectCwd, undefined);
+  });
 });
