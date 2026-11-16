@@ -270,6 +270,24 @@ describe('saveTaskFile', () => {
   });
 
   it('should persist runtime_assignment when runtimeAssignment is provided', async () => {
+    fs.mkdirSync(path.join(testDir, '.takt'), { recursive: true });
+    fs.writeFileSync(path.join(testDir, '.takt', 'runtime.yaml'), [
+      'version: 1',
+      'companion:',
+      '  enabled: false',
+      'provider:',
+      '  defaults:',
+      '    profile: base',
+      '  profiles:',
+      '    base:',
+      '      provider: mock',
+      '      model: base-model',
+      '  assignments:',
+      '    slow:',
+      '      defaults:',
+      '        profile: base',
+      '',
+    ].join('\n'));
     await saveTaskFile(testDir, 'Task', {
       workflow: 'review',
       runtimeAssignment: 'slow',
