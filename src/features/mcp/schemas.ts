@@ -138,6 +138,21 @@ export const answerGoalQuestionInputSchema = goalWriteInputSchema.extend({
   questionId: z.uuid(), answer: GoalAnswerInputSchema.pick({ text: true, report: true }),
 });
 export type AnswerGoalQuestionInput = z.input<typeof answerGoalQuestionInputSchema>;
+const goalRegistrationProposalIdentityInputSchema = z.object({
+  cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager conversation holds its pending goal registration proposal.'),
+}).strict();
+export const listGoalRegistrationProposalsInputSchema = goalRegistrationProposalIdentityInputSchema;
+const goalRegistrationRevisionSchema = z.number().int().safe().positive()
+  .describe('Revision of the pending goal registration proposal returned by takt_list_goal_registration_proposals.');
+export const approveGoalRegistrationInputSchema = goalRegistrationProposalIdentityInputSchema.extend({
+  revision: goalRegistrationRevisionSchema,
+});
+export const rejectGoalRegistrationInputSchema = goalRegistrationProposalIdentityInputSchema.extend({
+  revision: goalRegistrationRevisionSchema,
+});
+export type ListGoalRegistrationProposalsInput = z.infer<typeof listGoalRegistrationProposalsInputSchema>;
+export type ApproveGoalRegistrationInput = z.infer<typeof approveGoalRegistrationInputSchema>;
+export type RejectGoalRegistrationInput = z.infer<typeof rejectGoalRegistrationInputSchema>;
 const standaloneInquiryIdentityInputSchema = z.object({
   cwd: absolutePathSchema.describe('Absolute project path within the MCP scope. The current manager assignment selects the standalone inquiry owner.'),
 }).strict();
