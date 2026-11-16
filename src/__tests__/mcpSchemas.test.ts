@@ -5,6 +5,7 @@ import {
   listStandaloneInquiriesInputSchema, withdrawStandaloneInquiryInputSchema,
   answerGoalQuestionInputSchema, listGoalRegistrationProposalsInputSchema,
   approveGoalRegistrationInputSchema, rejectGoalRegistrationInputSchema,
+  updateGoalBranchesInputSchema,
 } from '../features/mcp/schemas.js';
 import { goalId } from './helpers/goal-fixtures.js';
 
@@ -277,5 +278,30 @@ describe('workflow detail input', () => {
     for (const patch of [{ cwd: '.' }, { workflow: ' ' }, { limit: 51 }, { offset: -1 }, { callPath: [-1] }, { callPath: ['review'] }]) {
       expect(getWorkflowInputSchema.safeParse({ cwd: '/repo', workflow: 'parent', ...patch }).success).toBe(false);
     }
+  });
+});
+
+describe('MCP goal branch correction inputs', () => {
+  const goalId = '550e8400-e29b-41d4-a716-446655440000';
+
+  it('corrects goal branches with a project path, goal, branch and reason', () => {
+    expect(updateGoalBranchesInputSchema.parse({
+      cwd: '/repo', goalId, integrationBranch: 'integration/takt-mcp', reason: '宛先が変わったため',
+    })).toEqual({ cwd: '/repo', goalId, integrationBranch: 'integration/takt-mcp', reason: '宛先が変わったため' });
+  });
+
+  it('requires the correction reason', () => {
+    expect(updateGoalBranchesInputSchema.safeParse({
+      cwd: '/repo', goalId, integrationBranch: 'integration/takt-mcp',
+    }).success).toBe(false);
+  });
+
+  it('rejects an invalid branch name and unknown fields', () => {
+    expect(updateGoalBranchesInputSchema.safeParse({
+      cwd: '/repo', goalId, integrationBranch: 'bad branch', reason: '理由',
+    }).success).toBe(false);
+    expect(updateGoalBranchesInputSchema.safeParse({
+      cwd: '/repo', goalId, integrationBranch: 'integration/takt-mcp', reason: '理由', targetBranch: 'main',
+    }).success).toBe(false);
   });
 });
