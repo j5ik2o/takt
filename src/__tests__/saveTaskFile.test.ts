@@ -269,6 +269,25 @@ describe('saveTaskFile', () => {
     expect(task.workflow).toBe('review');
   });
 
+  it('should persist runtime_assignment when runtimeAssignment is provided', async () => {
+    await saveTaskFile(testDir, 'Task', {
+      workflow: 'review',
+      runtimeAssignment: 'slow',
+    });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task.runtime_assignment).toBe('slow');
+  });
+
+  it('should not write runtime_assignment when runtimeAssignment is omitted', async () => {
+    await saveTaskFile(testDir, 'Task', {
+      workflow: 'review',
+    });
+
+    const task = loadTasks(testDir).tasks[0]!;
+    expect(task).not.toHaveProperty('runtime_assignment');
+  });
+
   it('should persist base_branch when it is provided', async () => {
     await saveTaskFile(testDir, 'Task', {
       workflow: 'review',

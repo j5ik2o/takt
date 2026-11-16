@@ -27,6 +27,7 @@ function buildValidatedTaskConfig(options?: SaveEnqueuedTaskFileOptions): Omit<T
     ...(options?.branch && { branch: options.branch }),
     ...(options?.baseBranch && { base_branch: options.baseBranch }),
     ...(resolvedWorkflow && { workflow: resolvedWorkflow }),
+    ...(options?.runtimeAssignment !== undefined && { runtime_assignment: options.runtimeAssignment }),
     ...(options?.issue !== undefined && { issue: options.issue }),
     ...(options?.autoPr !== undefined && { auto_pr: options.autoPr }),
     ...(options?.draftPr !== undefined && { draft_pr: options.draftPr }),
