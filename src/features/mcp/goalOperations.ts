@@ -38,9 +38,14 @@ export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: Mcp
         throw new Error(`Workflow "${input.workflow}" is not allowed for manager tasks. Allowed workflows: ${deps.managerWorkflows.map(({ name }) => name).join(', ') || '(none)'}. Configure manager.workflows in project .takt/config.yaml or global .takt/config.yaml under your home directory (or config.yaml in TAKT_CONFIG_DIR).`);
       }
       if (loadWorkflowByIdentifier(input.workflow, input.cwd) === null) throw new Error(`Workflow not found: ${input.workflow}`);
+      if (input.runtimeAssignment !== undefined && deps.managerRuntimeAssignments !== undefined
+        && !deps.managerRuntimeAssignments.some(({ name }) => name === input.runtimeAssignment)) {
+        throw new Error(`Runtime assignment "${input.runtimeAssignment}" is not allowed for manager tasks. Allowed runtime assignments: ${deps.managerRuntimeAssignments.map(({ name }) => name).join(', ') || '(none)'}. Configure manager.runtime_assignments in project .takt/config.yaml or global .takt/config.yaml under your home directory (or config.yaml in TAKT_CONFIG_DIR).`);
+      }
       signal.throwIfAborted();
       const created = await enqueueTask({
         cwd: input.cwd, task: input.task, workflow: input.workflow,
+        ...(input.runtimeAssignment === undefined ? {} : { runtimeAssignment: input.runtimeAssignment }),
         goalId: goal.id, goalPurpose: input.purpose,
         ...(input.workKey === undefined ? {} : { goalWorkKey: input.workKey }),
         worktree: true, autoPr: input.autoPr ?? false, shouldPublishBranchToOrigin: input.shouldPublishBranchToOrigin ?? false,
@@ -66,6 +71,15 @@ export function listTaktWorkflows(input: ListGoalsInput, deps: McpOperationDepen
     const offset = input.offset ?? 0;
     return pagedResult('workflows', workflows.slice(offset, offset + (input.limit ?? 50)), workflows.length, offset);
   } catch (error) { return errorResult('Workflow list failed', error); }
+}
+
+export function listTaktRuntimeAssignments(input: ListGoalsInput, deps: McpOperationDependencies) {
+  try {
+    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
+    const runtimeAssignments = deps.managerRuntimeAssignments ?? [];
+    const offset = input.offset ?? 0;
+    return pagedResult('runtimeAssignments', runtimeAssignments.slice(offset, offset + (input.limit ?? 50)), runtimeAssignments.length, offset);
+  } catch (error) { return errorResult('Runtime assignment list failed', error); }
 }
 
 export async function createTaktGoal(input: GoalCreateInput, deps: McpOperationDependencies, signal: AbortSignal) {
