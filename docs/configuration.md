@@ -531,6 +531,23 @@ When `manager.workflows` is omitted at both project and global scopes, the candi
 
 Manager's `takt_list_workflows` returns only allowed candidates, with the workflow's own `description` and an optional configured `usageDescription`. New submissions through `takt_enqueue_goal_task` are rejected by the tool if the workflow is outside this selection; the error lists allowed candidates and configuration paths. Existing tasks can still resume, requeue or retry with their saved workflow. PR finishing through `takt_merge_goal_pr` (`merge.prepare_workflow` or `merge.workflow`) is outside this restriction, as are child `workflow_call` targets, non-manager MCP servers and manual CLI use. Workspace managers apply each assigned repository's selection when listing or submitting its tasks.
 
+## Manager runtime assignments
+
+Set `manager.runtime_assignments` in global `~/.takt/config.yaml` or project `.takt/config.yaml` to list the runtime assignments manager may choose for each task. A project value replaces the entire global list. Each entry is a name or a single `{ name: usage description }` pair; `all` is not supported.
+
+```yaml
+manager:
+  runtime_assignments:
+    - slow: Tasks of a goal that is not urgent and may take longer to finish.
+    - fast
+```
+
+When `manager.runtime_assignments` is omitted at both project and global scopes, the candidates are empty and manager cannot specify a runtime assignment. Names refer to assignments defined in `provider.assignments` of `runtime.yaml`. A name that is not defined produces a warning when the manager conversation plan is created and is ignored.
+
+Manager reads the candidates and their usage descriptions with `takt_list_runtime_assignments` and passes a name as `runtimeAssignment` to `takt_enqueue_goal_task`. A name outside the candidates is rejected by the tool with an error. The specified name is saved on the task as `runtime_assignment`, and requeue and retry use the saved value. When a run is started with `--runtime-assignment`, the command-line selection takes precedence over the task's saved `runtime_assignment`.
+
+If a name is removed from `provider.assignments` in `runtime.yaml`, a task that saved that name can no longer run. While that task remains pending, `takt run`'s pre-run provider check stops before any task starts, so the other pending tasks in the project are not executed either. To recover it, restore the name in `runtime.yaml`, or remove the pending task with `takt_remove_goal_task` and then have manager enqueue the task again with a valid name through `takt_enqueue_goal_task` (`runtimeAssignment`). The saved `runtime_assignment` is not repaired by requeue, retry, or additional instructions, so re-enqueueing after removal is required. Confirm the currently available candidates with `takt_list_runtime_assignments`.
+
 ## Manager tool permissions
 
 Set these in project `.takt/config.yaml` or global `~/.takt/config.yaml`:
@@ -1144,9 +1161,11 @@ In this example, `cost` uses low effort by default and medium effort for the rev
 
 The option applies to interactive startup, direct execution, pipeline, `run`, `watch`, and
 other subcommands. All tasks in one `run`, tasks added later to the same `watch`, internal
-agents, and loop-analysis use the same selection. Selection does not write configuration
-files or add a field to task records; requeue, retry, and instruct do not restore a past
-invocation's choice. Ordinary task execution still updates task status. Without the option,
+agents, and loop-analysis use the same selection. The `--runtime-assignment` selection is not written
+to configuration files or to task records; this does not change. A task carries `runtime_assignment`
+only when manager specified it through `takt_enqueue_goal_task`. When a run is started with
+`--runtime-assignment`, that selection takes precedence over the task's saved `runtime_assignment`.
+Ordinary task execution still updates task status. Without the option,
 existing directory matching and top-level resolution are unchanged.
 
 An unknown name, missing assignments, or no active runtime provider section stops before
