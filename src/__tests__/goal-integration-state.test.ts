@@ -5,7 +5,7 @@ import { synchronizeGoalBranch } from '../infra/goals/branch-sync.js';
 import { projectManagerDisplayEvents } from '../features/manager/savedEvents.js';
 import { GoalPullRequestUnavailableError, prepareGoalPullRequest } from '../infra/goals/pull-request.js';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
-import { checkGoalCompletion,completeGoal,integrateGoalTask,reopenGoal } from '../infra/goals/integration.js';
+import { checkGoalCompletion,completeGoal,integrateGoalTask,reopenGoal,updateGoalBranches } from '../infra/goals/integration.js';
 import type { Goal,GoalQuestion } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 const doubles = vi.hoisted(() => ({ get: vi.fn(), getSync: vi.fn(), list: vi.fn(), update: vi.fn(), tasks: vi.fn(), merge: vi.fn(), sha: vi.fn(), remoteSha: vi.fn(), included: vi.fn(), contentIncluded: vi.fn(), worktrees: vi.fn(), diff: vi.fn(), environment: vi.fn(), gitSync: vi.fn() }));
@@ -1352,4 +1352,58 @@ it.each(['integrate', 'complete'] as const)('stops %s before changing or publish
   expect(doubles.merge).not.toHaveBeenCalled();
   expect(prepareGoalPullRequest).not.toHaveBeenCalled();
   expect(doubles.update).not.toHaveBeenCalled();
+});
+
+describe('goal branch correction', () => {
+  const changeSummary = { filesChanged: 1, additions: 2, deletions: 1, files: [], truncated: false, totalsTruncated: false };
+
+  it('corrects the integration branch of a created goal and saves the reason in the work log', async () => {
+    const result = await updateGoalBranches('/project', goal.id, 'integration/takt-mcp', 'プルリクエストの宛先が変わったため', undefined);
+    expect(goal.integrationBranch).toBe('integration/takt-mcp');
+    expect(goal.workLog).toHaveLength(1);
+    expect(goal.workLog.at(-1)?.summary).toBe('プルリクエストの宛先が変わったため');
+    expect(result).toMatchObject({ goal: { integrationBranch: 'integration/takt-mcp' }, workLogEntryId: goal.workLog.at(-1)?.id });
+  });
+
+  it('corrects the completion target branch and clears the saved target SHA', async () => {
+    goal = { ...goal, status: 'awaiting_merge', completion: {
+      goalBranch: goal.branch, goalSha: sourceSha, targetBranch: 'main', targetSha,
+      summary: 'evidence', changeSummary, instructions: [],
+    } };
+    await updateGoalBranches('/project', goal.id, 'integration/takt-mcp', '宛先の訂正', undefined);
+    expect(goal.integrationBranch).toBe('integration/takt-mcp');
+    expect(goal.completion?.targetBranch).toBe('integration/takt-mcp');
+    expect(goal.completion?.targetSha).toBeUndefined();
+    expect(goal.completion?.goalSha).toBe(sourceSha);
+    expect(goal.completion?.summary).toBe('evidence');
+  });
+
+  it('rejects a completed goal', async () => {
+    goal = { ...goal, status: 'completed', completion: {
+      goalBranch: goal.branch, goalSha: sourceSha, targetBranch: 'main', targetSha,
+      summary: 'evidence', changeSummary, instructions: [],
+    } };
+    await expect(updateGoalBranches('/project', goal.id, 'integration/takt-mcp', '宛先の訂正', undefined))
+      .rejects.toThrow();
+    expect(goal.integrationBranch).toBe('main');
+  });
+
+  it('rejects an invalid branch name', async () => {
+    await expect(updateGoalBranches('/project', goal.id, 'bad branch', '宛先の訂正', undefined)).rejects.toThrow();
+    expect(goal.integrationBranch).toBe('main');
+  });
+
+  it('does not complete a goal when the integration branch changes during the completion check', async () => {
+    goal = { ...goal, status: 'awaiting_merge', completion: {
+      goalBranch: goal.branch, goalSha: sourceSha, targetBranch: 'main',
+      summary: 'evidence', changeSummary, instructions: [],
+    } };
+    doubles.contentIncluded.mockImplementation(async () => {
+      goal = { ...goal, integrationBranch: 'release' };
+      return true;
+    });
+    await expect(checkGoalCompletion('/project', goal.id, undefined, policy)).rejects.toThrow();
+    expect(goal.status).toBe('awaiting_merge');
+    expect(goal.completion?.targetBranch).toBe('main');
+  });
 });
