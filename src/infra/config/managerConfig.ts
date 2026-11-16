@@ -1,6 +1,6 @@
 import { loadProjectConfig } from './project/projectConfig.js';
 import { loadGlobalConfig } from './global/globalConfig.js';
-import type { ManagerNotificationKind, ManagerPermission, ManagerWorkflowsConfig } from '../../core/models/config-types.js';
+import type { ManagerNotificationKind, ManagerPermission, ManagerRuntimeAssignmentsConfig, ManagerWorkflowsConfig } from '../../core/models/config-types.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 
 function providerPermission(permissions: Record<string, ManagerPermission> | undefined, provider: ProviderType | undefined): ManagerPermission | undefined {
@@ -16,6 +16,7 @@ export function resolveManagerConfig(cwd: string, provider?: ProviderType): {
   permission: ManagerPermission;
   autoRun: boolean; preserveGoalWorktree: boolean; mainMerge: 'auto' | 'approve';
   workflows?: ManagerWorkflowsConfig;
+  runtimeAssignments?: ManagerRuntimeAssignmentsConfig;
   notifications: Record<ManagerNotificationKind, boolean>;
 } {
   const project = loadProjectConfig(cwd).manager;
@@ -27,6 +28,7 @@ export function resolveManagerConfig(cwd: string, provider?: ProviderType): {
     autoRun: project?.autoRun ?? global?.autoRun ?? true,
     preserveGoalWorktree: project?.preserveGoalWorktree ?? global?.preserveGoalWorktree ?? false,
     workflows: project?.workflows ?? global?.workflows,
+    runtimeAssignments: project?.runtimeAssignments ?? global?.runtimeAssignments,
     mainMerge: project?.mainMerge ?? 'approve',
     notifications: {
       question: project?.notifications?.question ?? global?.notifications?.question ?? true,
