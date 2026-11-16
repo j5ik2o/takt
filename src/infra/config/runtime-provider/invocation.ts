@@ -65,6 +65,11 @@ export function getInvocationRuntimeAssignment(): string | undefined {
   return invocation?.runtimeAssignment ?? taskRuntimeAssignments.getStore();
 }
 
+/** `--runtime-assignment` で起動時に指定された assignment。タスクごとの値は含まない。 */
+export function getInvocationRuntimeAssignmentOverride(): string | undefined {
+  return invocation?.runtimeAssignment;
+}
+
 export function getInvocationRuntimeFilePath(): string | undefined {
   return invocation?.runtimeFilePath;
 }
