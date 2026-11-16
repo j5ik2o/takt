@@ -148,6 +148,16 @@ describe('runtime assignment invocation', () => {
     } });
   }
 
+  function writeSingleAssignmentRuntime(): void {
+    const fixture = runtimeFixture();
+    writeRuntime(projectDir, { ...fixture, provider: {
+      ...fixture.provider,
+      defaults: { assignment: 'a' },
+      directories: {},
+      assignments: { a: { defaults: { profile: 'base' } } },
+    } });
+  }
+
   async function taskAssignmentResolver() {
     const { getGlobalConfigDir, getProjectConfigDir } = await import('../infra/config/paths.js');
     const invocation = await import('../infra/config/runtime-provider/invocation.js');
@@ -678,5 +688,16 @@ describe('runtime assignment invocation', () => {
     expect(withTaskRuntimeAssignment('a', resolvedProfile)).toBe('cost');
 
     initializeRuntimeAssignmentInvocation(projectCwd, undefined);
+  });
+
+  it('rejects an unknown task runtime assignment at save time without adding the task', async () => {
+    writeSingleAssignmentRuntime();
+    const { saveEnqueuedTaskFile } = await import('../infra/task/enqueuedTaskFile.js');
+
+    await expect(saveEnqueuedTaskFile(projectCwd, 'Task: unknown runtime assignment', {
+      runtimeAssignment: 'missing',
+    })).rejects.toThrow('Cannot select runtime assignment "missing"');
+
+    expect(existsSync(join(projectDir, 'tasks.yaml'))).toBe(false);
   });
 });
