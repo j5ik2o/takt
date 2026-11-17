@@ -32,16 +32,16 @@ export async function enqueueTaktGoalTask(input: EnqueueGoalTaskInput, deps: Mcp
         const saved = allTasks.find((item) => item.name === task.name);
         return saved !== undefined && resolveTaskOrderContent(input.cwd, saved.taskDir, saved.content) === input.task.trim();
       });
+      if (input.runtimeAssignment !== undefined && deps.managerRuntimeAssignments !== undefined
+        && !deps.managerRuntimeAssignments.some(({ name }) => name === input.runtimeAssignment)) {
+        throw new Error(`Runtime assignment "${input.runtimeAssignment}" is not allowed for manager tasks. Allowed runtime assignments: ${deps.managerRuntimeAssignments.map(({ name }) => name).join(', ') || '(none)'}. Configure manager.runtime_assignments in project .takt/config.yaml or global .takt/config.yaml under your home directory (or config.yaml in TAKT_CONFIG_DIR).`);
+      }
       if (existing !== undefined) return { taskName: existing.name, tasksFile: join(input.cwd, '.takt', 'tasks.yaml'), workflow: existing.workflow };
       if (goal.status !== 'created') throw new Error('Goal cannot accept work');
       if (deps.managerWorkflows !== undefined && !deps.managerWorkflows.some(({ name }) => name === input.workflow)) {
         throw new Error(`Workflow "${input.workflow}" is not allowed for manager tasks. Allowed workflows: ${deps.managerWorkflows.map(({ name }) => name).join(', ') || '(none)'}. Configure manager.workflows in project .takt/config.yaml or global .takt/config.yaml under your home directory (or config.yaml in TAKT_CONFIG_DIR).`);
       }
       if (loadWorkflowByIdentifier(input.workflow, input.cwd) === null) throw new Error(`Workflow not found: ${input.workflow}`);
-      if (input.runtimeAssignment !== undefined && deps.managerRuntimeAssignments !== undefined
-        && !deps.managerRuntimeAssignments.some(({ name }) => name === input.runtimeAssignment)) {
-        throw new Error(`Runtime assignment "${input.runtimeAssignment}" is not allowed for manager tasks. Allowed runtime assignments: ${deps.managerRuntimeAssignments.map(({ name }) => name).join(', ') || '(none)'}. Configure manager.runtime_assignments in project .takt/config.yaml or global .takt/config.yaml under your home directory (or config.yaml in TAKT_CONFIG_DIR).`);
-      }
       signal.throwIfAborted();
       const created = await enqueueTask({
         cwd: input.cwd, task: input.task, workflow: input.workflow,

@@ -178,13 +178,18 @@ export function createTaktMcpServer(
       assertCwdAllowedByMcpRoot(cwd, currentDeps.allowedProjectRoot);
       const projectCwd = projectInput({ cwd }, currentDeps).cwd;
       const useWorkflowConfig = configScope === 'workflow' && options.toolSet === 'manager';
+      const useRuntimeAssignmentConfig = configScope === 'workflow';
       const execute = async (): Promise<CallToolResult> => {
         try {
-          const deps = useWorkflowConfig ? {
+          const deps = {
             ...currentDeps,
-            managerWorkflows: resolveManagerWorkflowSelection(projectCwd, resolveManagerConfig(projectCwd), resolveConfigValue(projectCwd, 'language')).workflows,
-            managerRuntimeAssignments: resolveManagerRuntimeAssignmentSelection(projectCwd, resolveManagerConfig(projectCwd)).runtimeAssignments,
-          } : currentDeps;
+            ...(useWorkflowConfig ? {
+              managerWorkflows: resolveManagerWorkflowSelection(projectCwd, resolveManagerConfig(projectCwd), resolveConfigValue(projectCwd, 'language')).workflows,
+            } : {}),
+            ...(useRuntimeAssignmentConfig ? {
+              managerRuntimeAssignments: resolveManagerRuntimeAssignmentSelection(projectCwd, resolveManagerConfig(projectCwd)).runtimeAssignments,
+            } : {}),
+          };
           return await action(deps, assignment);
         }
         finally {

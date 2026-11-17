@@ -645,6 +645,43 @@ describe('manager goal task enqueue', () => {
     });
   });
 
+  it('rejects an out-of-candidate runtime assignment resubmitted with an existing work key', async () => {
+    writeRuntimeAssignments(['local-fast', 'local-slow']);
+    configureManagerRuntimeAssignments(['local-fast']);
+    await withEnqueue(async (client) => {
+      const created = await enqueue(client, { workKey: 'repeated', runtimeAssignment: 'local-fast' });
+      expect(created.isError, firstTextContent(created.content)).toBeUndefined();
+      const createdName = (JSON.parse(firstTextContent(created.content)) as { taskName: string }).taskName;
+      expect(pendingTasks().map(({ name }) => name)).toEqual([createdName]);
+
+      const repeated = await enqueue(client, { workKey: 'repeated', runtimeAssignment: 'local-slow' });
+
+      expect(repeated.isError).toBe(true);
+      const reason = firstTextContent(repeated.content);
+      expect(reason).toContain('is not allowed for manager tasks');
+      expect(reason).toContain('local-fast');
+      expect(pendingTasks().map(({ name }) => name)).toEqual([createdName]);
+      expect(savedGoalWork()).toEqual([{ taskName: createdName, purpose }]);
+    });
+  });
+
+  it('returns the existing task on a resubmission with an allowed runtime assignment without creating a duplicate', async () => {
+    writeRuntimeAssignments(['local-fast']);
+    configureManagerRuntimeAssignments(['local-fast']);
+    await withEnqueue(async (client) => {
+      const created = await enqueue(client, { workKey: 'allowed-repeated', runtimeAssignment: 'local-fast' });
+      expect(created.isError, firstTextContent(created.content)).toBeUndefined();
+      const createdName = (JSON.parse(firstTextContent(created.content)) as { taskName: string }).taskName;
+
+      const repeated = await enqueue(client, { workKey: 'allowed-repeated', runtimeAssignment: 'local-fast' });
+
+      expect(repeated.isError, firstTextContent(repeated.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(repeated.content))).toMatchObject({ taskName: createdName, workflow: 'safe' });
+      expect(pendingTasks().map(({ name }) => name)).toEqual([createdName]);
+      expect(savedGoalWork()).toEqual([{ taskName: createdName, purpose }]);
+    });
+  });
+
   it('rejects any runtime assignment with an explicit empty-candidate message when none are configured', async () => {
     writeRuntimeAssignments(['local-fast']);
     configureManagerRuntimeAssignments([]);
