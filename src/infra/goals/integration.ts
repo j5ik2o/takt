@@ -17,6 +17,7 @@ import { withdrawPendingGoalQuestions } from './questions.js';
 import type { Language } from '../../core/models/types.js';
 import { GoalPullRequestUnavailableError, prepareGoalPullRequest } from './pull-request.js';
 import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
+import { assertValidLocalBranchName } from '../../shared/utils/gitBranchValidation.js';
 import { saveManagerEvent } from './events.js';
 import { synchronizeGoalBranch } from './branch-sync.js';
 import { getLabel } from '../../shared/i18n/index.js';
@@ -286,6 +287,32 @@ export async function reopenGoal(
   return { goal: saved, workLogEntryId: saved.workLog.at(-1)!.id };
 }
 
+export async function updateGoalBranches(
+  cwd: string, goalId: string, integrationBranch: string, reason: string, signal: AbortSignal | undefined,
+): Promise<Record<string, unknown>> {
+  assertValidLocalBranchName(integrationBranch);
+  const store = new GoalStore(cwd);
+  const goal = await store.get(goalId);
+  if (goal.status === 'completed') throw new Error('Goal is already completed. Its saved branches cannot be corrected.');
+  signal?.throwIfAborted();
+  const saved = await store.update(goalId, (current) => {
+    signal?.throwIfAborted();
+    if (current.status === 'completed') throw new Error('Goal is already completed. Its saved branches cannot be corrected.');
+    const corrected = current.completion === undefined ? current
+      : { ...current, completion: correctCompletionTargetBranch(current.completion, integrationBranch) };
+    return appendGoalWorkLog({ ...corrected, integrationBranch }, { summary: reason });
+  });
+  return { goal: saved, workLogEntryId: saved.workLog.at(-1)!.id };
+}
+
+function correctCompletionTargetBranch(
+  completion: NonNullable<Goal['completion']>, integrationBranch: string,
+): NonNullable<Goal['completion']> {
+  const corrected = { ...completion, targetBranch: integrationBranch };
+  delete corrected.targetSha;
+  return corrected;
+}
+
 export async function checkGoalCompletion(
   cwd: string, goalId: string, signal: AbortSignal | undefined, notifications: GoalNotificationPolicy,
 ): Promise<Record<string, unknown>> {
@@ -316,6 +343,9 @@ export async function checkGoalCompletion(
   const saved = await store.update(goalId, (current) => {
     signal?.throwIfAborted();
     assertCompletionAllowed(current, goal);
+    if (current.integrationBranch !== goal.integrationBranch) {
+      throw new Error('Goal integration branch changed during the completion check. Use takt_check_goal_completion.');
+    }
     if (mergedPr !== undefined && (current.branch !== goal.branch || current.integrationBranch !== goal.integrationBranch
       || current.pullRequest?.number !== goal.pullRequest?.number || current.pullRequest?.url !== goal.pullRequest?.url)) {
       throw new Error('Goal PR changed during the completion check. Use takt_check_goal_completion.');

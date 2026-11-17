@@ -42,6 +42,8 @@ import { createToolActivityViewState, excludeToolActivityTranscript, mergeToolAc
 const MANAGER_COMMANDS = [{ command: MAKE_GOAL_COMMAND, labelKey: 'manager.makeGoalDescription' },
   { command: '/verify', labelKey: 'interactive.commands.verify' }];
 const MIN_STATUS_HEADING_WIDTH = 12;
+/** 接続中の定期 refresh の間隔。操作直後の refresh は待たずに即時に行う。 */
+export const MANAGER_REFRESH_INTERVAL_MS = 2_000;
 
 export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, assignment }: {
   assignment: ManagerExecutionContext['assignment'];
@@ -273,7 +275,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       if (latest.current.connection === 'connected' && latest.current.readStatus !== 'reading') {
         void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
       }
-    }, 500);
+    }, MANAGER_REFRESH_INTERVAL_MS);
     return () => { mounted.current = false; clearInterval(timer); unsubscribeState(); unsubscribe(); client.close(); };
   }, [client]);
   const register = async (revision: number): Promise<void> => {

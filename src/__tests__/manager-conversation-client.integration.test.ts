@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import * as net from 'node:net';
 import { createElement } from 'react';
 import { cleanup, render } from 'ink-testing-library';
-import { ManagerView } from '../features/manager/ManagerView.js';
+import { MANAGER_REFRESH_INTERVAL_MS, ManagerView } from '../features/manager/ManagerView.js';
 import * as selectionDialog from '../features/manager/ManagerSelectionDialog.js';
 import * as transcriptView from '../features/tui/TranscriptEntryView.js';
 import * as toolActivityView from '../features/tui/ToolActivityView.js';
@@ -1533,12 +1533,36 @@ function heldRead(read: SnapshotRead, entered: ReturnType<typeof gate>, released
 function captureAndStopPolling() {
   const intervals = vi.spyOn(globalThis, 'setInterval');
   return async () => {
-    await vi.waitFor(() => expect(intervals.mock.calls.some(([, milliseconds]) => milliseconds === 500)).toBe(true));
+    await vi.waitFor(() => expect(intervals.mock.calls.some(([, milliseconds]) => milliseconds === MANAGER_REFRESH_INTERVAL_MS)).toBe(true));
     for (const [index, [, milliseconds]] of intervals.mock.calls.entries()) {
-      if (milliseconds === 500) clearInterval(intervals.mock.results[index]!.value as ReturnType<typeof setInterval>);
+      if (milliseconds === MANAGER_REFRESH_INTERVAL_MS) clearInterval(intervals.mock.results[index]!.value as ReturnType<typeof setInterval>);
     }
   };
 }
+
+it('requests a periodic snapshot only after the manager refresh interval', async () => {
+  await client.connect(); await complete();
+  // vi.waitFor は偽の時計を進めるため、時計を偽にした後は実時間で待つ。
+  const until = async (condition: () => boolean): Promise<void> => {
+    for (const started = Date.now(); !condition(); await new Promise((resolve) => setTimeout(resolve, 10))) {
+      if (Date.now() - started > 5_000) throw new Error('Condition was not met');
+    }
+  };
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  let app: ReturnType<typeof render> | undefined;
+  try {
+    const intervals = vi.spyOn(globalThis, 'setInterval');
+    app = render(createElement(ManagerView, { cwd: repository, lang: 'en', client, assignment, initialDiagnostics: [], onExit() {} }));
+    await until(() => intervals.mock.calls.some(([, milliseconds]) => milliseconds === MANAGER_REFRESH_INTERVAL_MS));
+    const snapshots = vi.spyOn(service, 'snapshot');
+
+    await vi.advanceTimersByTimeAsync(MANAGER_REFRESH_INTERVAL_MS - 1);
+    expect(snapshots).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await until(() => snapshots.mock.calls.length > 0 && client.getSnapshot().readStatus === 'complete');
+    expect(snapshots).toHaveBeenCalledTimes(1);
+  } finally { app?.unmount(); vi.useRealTimers(); }
+});
 
 it('connects to the current daemon when the previous daemon stops during assignment resolution', async () => {
   client.close();
@@ -1829,7 +1853,7 @@ it.each([
     await waitFor(() => expect(app!.lastFrame()).toContain('CSV出力'));
     // この競合は明示 refresh だけを入力とし、定期 refresh は停止して比較する。
     for (const [index, [, milliseconds]] of intervals.mock.calls.entries()) {
-      if (milliseconds === 500) clearInterval(intervals.mock.results[index]!.value as ReturnType<typeof setInterval>);
+      if (milliseconds === MANAGER_REFRESH_INTERVAL_MS) clearInterval(intervals.mock.results[index]!.value as ReturnType<typeof setInterval>);
     }
     const selected = await createTuiConversationPort(directory, { deliver: async () => ({ kind: 'delivered' }) }).resolve(assignment);
     const other = await open(selected, { deliver: async () => ({ kind: 'delivered' }) });
