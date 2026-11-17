@@ -11,11 +11,13 @@ import { TurnConversationState } from '../daemonTurn/conversationState.js';
 import { buildTurnBusinessContext } from '../daemonTurn/turnContext.js';
 import type { ConversationRuntime } from './conversationRuntime.js';
 import type { ManagerTurnInput } from './turnExecutor.js';
+import type { IdentifiedToolActivityEvent } from '../../shared/tool-activity/types.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { resolveCurrentManagerAssignment, resolveAssignedProjectRoot, findAssignedGoalRepository } from './assignment.js';
 import { validateManagerSummary } from './turnResponse.js';
 import { ConversationError, conversationErrorResult } from './conversationErrors.js';
 import { answerConversationInquiry } from './conversationAnswers.js';
+import { CLEAR_COMMAND } from './conversationCommands.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import { hasGoalRegistrationArtifacts, registerReservedGoal } from '../../infra/goals/service.js';
 import { validateGoalBranchReferences } from '../../infra/goals/git.js';
@@ -62,6 +64,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       const command = human || event.kind === 'inquiry_answer' ? event.command
         : { kind: 'message' as const, text: directorMessage ? event.text : '' };
       const verify = human && command.kind === 'message' && command.text.trim() === '/verify' && assignment.kind !== 'daemon';
+      const clear = human && command.kind === 'message' && command.text.trim() === CLEAR_COMMAND;
       let result: OperationResult;
       let reference: ReturnType<typeof eventGoalReference>;
       let interruptedMessageDelivered = false;
@@ -121,6 +124,10 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         if (identity.kind === 'daemon' && command.kind !== 'message') throw new ConversationError('invalid_input');
         if (state.current.approval?.state === 'reserved'
           && (command.kind !== 'approve_summary' || command.revision !== state.current.approval.revision)) throw new ConversationError('registration_recovery');
+        if (clear) {
+          return { kind: 'completed', result: { kind: 'notice', message: getLabel('manager.conversation.cleared', language) },
+            change: state.change({ session: { ...state.current.session, sessionId: null }, interruptedMessage: null }) };
+        }
         let verification: ManagerTurnInput['verify'];
         if (verify) {
           const verificationRepository = priorPending?.repositoryDirectory
@@ -213,10 +220,10 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               onActivity: (activity) => io.progress(activity),
               onText: (message) => io.progress({ kind: 'turn_text', message }),
               onToolEvent: (event) => {
-                if (event.toolActivity === undefined) throw new Error('Missing tool call identity');
-                io.progress({ kind: 'tool_event', eventId: randomUUID(), event: {
+                if (event.toolActivity === undefined || event.data.id === undefined || event.data.id === '') throw new Error('Missing tool call identity');
+                return io.progress({ kind: 'tool_event', eventId: randomUUID(), event: {
                   ...event, toolActivity: { ...event.toolActivity, operationId: input.turn.operationId, generation: input.turn.generation },
-                } });
+                } as IdentifiedToolActivityEvent });
               },
               patrol,
               recovery: { context: businessContext, invalidateSession: () => state.save({ session: { ...state.current.session, sessionId: null } }) },

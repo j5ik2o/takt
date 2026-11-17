@@ -223,12 +223,12 @@ describe('MCP goal answer and registration proposal inputs', () => {
     expect(answerGoalQuestionInputSchema.parse({ ...answerIdentity, answer: { text: 'CSV' } }))
       .toEqual({ ...answerIdentity, answer: { text: 'CSV' } });
     expect(answerGoalQuestionInputSchema.safeParse({ ...answerIdentity, answer: { report: 'completed' } }).success).toBe(true);
-    expect(answerGoalQuestionInputSchema.safeParse({ ...answerIdentity, answer: { decision: 'allow', scope: 'workspace' } }).success).toBe(true);
   });
 
   it.each([
     { answer: { unknown: true } },
     { answer: { decision: 'sometimes' } },
+    { answer: { decision: 'allow', scope: 'workspace' } },
     { answer: 'CSV' },
     { answer: undefined },
     { questionId: 'missing-question' },

@@ -4,16 +4,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DaemonNotifications } from '../infra/daemon/notifications.js';
-import { readPrivateFile } from '../infra/daemon/privateFile.js';
+import { readEntirePrivateFile } from '../infra/daemon/privateFile.js';
 
 vi.mock('../infra/daemon/privateFile.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../infra/daemon/privateFile.js')>();
-  return { ...actual, readPrivateFile: vi.fn(actual.readPrivateFile) };
+  return { ...actual, readEntirePrivateFile: vi.fn(actual.readEntirePrivateFile) };
 });
 
 const signal = new AbortController().signal;
 const fileName = (id: string): string => `${createHash('sha256').update(id).digest('hex')}.json`;
-const readNames = (): string[] => vi.mocked(readPrivateFile).mock.calls.map(([path]) => path.split('/').at(-1) ?? '');
+const readNames = (): string[] => vi.mocked(readEntirePrivateFile).mock.calls.map(([path]) => path.split('/').at(-1) ?? '');
 
 async function collect(notifications: DaemonNotifications) {
   const values = [];
@@ -28,7 +28,7 @@ describe('DaemonNotifications', () => {
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'takt-notifications-'));
     directory = join(root, 'director-notifications');
-    vi.mocked(readPrivateFile).mockClear();
+    vi.mocked(readEntirePrivateFile).mockClear();
   });
 
   afterEach(async () => {
@@ -40,13 +40,13 @@ describe('DaemonNotifications', () => {
     await notifications.save({ id: 'first', message: 'one' }, signal);
     await notifications.save({ id: 'second', message: 'two' }, signal);
     const first = await collect(notifications);
-    vi.mocked(readPrivateFile).mockClear();
+    vi.mocked(readEntirePrivateFile).mockClear();
 
     const second = await collect(notifications);
 
     expect(second).toEqual(first);
     expect(second.map((value) => value.id).sort()).toEqual(['first', 'second']);
-    expect(readPrivateFile).not.toHaveBeenCalled();
+    expect(readEntirePrivateFile).not.toHaveBeenCalled();
   });
 
   it('reads only the newly saved file after save()', async () => {
@@ -54,7 +54,7 @@ describe('DaemonNotifications', () => {
     await notifications.save({ id: 'first', message: 'one' }, signal);
     await collect(notifications);
     await notifications.save({ id: 'second', message: 'two' }, signal);
-    vi.mocked(readPrivateFile).mockClear();
+    vi.mocked(readEntirePrivateFile).mockClear();
 
     const values = await collect(notifications);
 
@@ -70,7 +70,7 @@ describe('DaemonNotifications', () => {
 
     await writeFile(join(directory, fileName('third')), JSON.stringify({ id: 'third', message: 'three' }), { mode: 0o600 });
     await unlink(join(directory, fileName('first')));
-    vi.mocked(readPrivateFile).mockClear();
+    vi.mocked(readEntirePrivateFile).mockClear();
 
     const values = await collect(notifications);
 
