@@ -1387,7 +1387,7 @@ describe('default stdio manager runtime assignment candidates', () => {
       '  - name: work', '    instruction: "{task}"', '    rules:',
       '      - condition: when(true)', '        next: COMPLETE',
     ].join('\n'));
-    const sha = git(['commit-tree', 'HEAD^{tree}', '-m', 'stdio runtime fixture base']);
+    const sha = git(['-c', 'user.name=TAKT test', '-c', 'user.email=takt-test@example.invalid', 'commit-tree', 'HEAD^{tree}', '-m', 'stdio runtime fixture base']);
     git(['branch', '-f', goalRecord().branch, sha]);
     await new GoalStore(cwd).create(goalRecord());
   });
@@ -1465,5 +1465,18 @@ describe('default stdio manager runtime assignment candidates', () => {
     expect(repeated.isError, firstTextContent(repeated.content)).toBeUndefined();
     expect(JSON.parse(firstTextContent(repeated.content))).toMatchObject({ taskName: createdName, workflow: 'safe' });
     expect(pendingTaskNames()).toEqual([createdName]);
+  });
+
+  it('lists workflows through the default stdio launch even when runtime.yaml is malformed', async () => {
+    writeProjectRuntimeAssignments(['local-fast']);
+    writeFileSync(join(cwd, '.takt', 'runtime.yaml'), 'provider: [unterminated\n');
+    invalidateResolvedConfigCache(cwd);
+    process.chdir(cwd);
+    process.argv = originalArgv.slice(0, 2);
+    const reader = await connectThroughDefaultStdio();
+    const result = await reader.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
+    expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+    expect(JSON.parse(firstTextContent(result.content)).workflows.map((workflow: { name: string }) => workflow.name)).toContain('safe');
+    expect(pendingTaskNames()).toEqual([]);
   });
 });

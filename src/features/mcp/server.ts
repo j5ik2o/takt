@@ -168,7 +168,7 @@ export function createTaktMcpServer(
   const withTurn = (action: () => Promise<CallToolResult>): Promise<CallToolResult> => options.turnScope === undefined
     ? action() : options.turnScope.run(action);
   const turnSignal = (signal: AbortSignal): AbortSignal => options.turnScope === undefined ? signal : options.turnScope.signal(signal);
-  const operation = async (cwd: string, errorContext: string, action: (deps: McpOperationDependencies, assignment: ManagerAssignment | undefined) => CallToolResult | Promise<CallToolResult>, launchAfterOperation = true, configScope?: 'workflow'): Promise<CallToolResult> => {
+  const operation = async (cwd: string, errorContext: string, action: (deps: McpOperationDependencies, assignment: ManagerAssignment | undefined) => CallToolResult | Promise<CallToolResult>, launchAfterOperation = true, configScopes: readonly ('workflow' | 'runtimeAssignments')[] = []): Promise<CallToolResult> => {
     try { return await withTurn(async () => {
       const assignment = options.toolSet === 'manager' ? await currentAssignment() : undefined;
       const scopedDeps = { ...operationDeps, turnOperationId: options.turnScope?.operationId };
@@ -177,8 +177,8 @@ export function createTaktMcpServer(
         : scopedDeps;
       assertCwdAllowedByMcpRoot(cwd, currentDeps.allowedProjectRoot);
       const projectCwd = projectInput({ cwd }, currentDeps).cwd;
-      const useWorkflowConfig = configScope === 'workflow' && options.toolSet === 'manager';
-      const useRuntimeAssignmentConfig = configScope === 'workflow';
+      const useWorkflowConfig = configScopes.includes('workflow') && options.toolSet === 'manager';
+      const useRuntimeAssignmentConfig = configScopes.includes('runtimeAssignments');
       const execute = async (): Promise<CallToolResult> => {
         try {
           const deps = {
@@ -281,10 +281,10 @@ export function createTaktMcpServer(
   }
   if (options.toolSet !== 'read-only') server.registerTool('takt_list_workflows', {
     title: 'List workflows', description: 'Read workflow names and descriptions. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation.', inputSchema: listGoalsInputSchema.omit({ errorOffset: true }),
-  }, (input) => operation(input.cwd, 'Workflow list failed', (deps) => listTaktWorkflows(projectInput(input, deps), deps), true, 'workflow'));
+  }, (input) => operation(input.cwd, 'Workflow list failed', (deps) => listTaktWorkflows(projectInput(input, deps), deps), true, ['workflow']));
   if (options.toolSet !== 'read-only') server.registerTool('takt_list_runtime_assignments', {
     title: 'List runtime assignments', description: 'Read the runtime assignment names and usage descriptions that manager tasks may use. An empty list means no runtime assignment may be specified. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation.', inputSchema: listGoalsInputSchema.omit({ errorOffset: true }),
-  }, (input) => operation(input.cwd, 'Runtime assignment list failed', (deps) => listTaktRuntimeAssignments(projectInput(input, deps), deps), true, 'workflow'));
+  }, (input) => operation(input.cwd, 'Runtime assignment list failed', (deps) => listTaktRuntimeAssignments(projectInput(input, deps), deps), true, ['runtimeAssignments']));
   if (options.toolSet !== 'read-only') server.registerTool('takt_get_workflow', {
     title: 'Read a workflow',
     description: 'Choose a candidate with takt_list_workflows, then read its steps here to confirm what the task will do. Accepts a workflow name, scope reference or path. Returns description, step names, descriptions, kinds, wait, system_inputs, effects, rules and resolved workflow_call targets. Follow a target with its getInput to preserve parent context and arguments. Responses fit 64 KiB, with explicit truncation; use offset/limit for steps.',
@@ -342,7 +342,7 @@ export function createTaktMcpServer(
     server.registerTool('takt_enqueue_goal_task', {
       title: 'Enqueue goal work', description: 'Enqueue ready work locally from the goal branch. Instructions must be self-contained. Workflow names, scope references and paths are accepted. runtimeAssignment is optional and must be a name from takt_list_runtime_assignments. autoPr and shouldPublishBranchToOrigin default to false and may be specified on submission. Responses fit 64 KiB, with explicit truncation. Read saved work with takt_list_tasks offset/limit.',
       inputSchema: enqueueGoalTaskInputSchema,
-    }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', (deps) => enqueueTaktGoalTask(projectInput(input, deps), deps, turnSignal(extra.signal)), false, 'workflow'));
+    }, (input, extra) => operation(input.cwd, 'Goal task enqueue failed', (deps) => enqueueTaktGoalTask(projectInput(input, deps), deps, turnSignal(extra.signal)), false, ['workflow', 'runtimeAssignments']));
     server.registerTool('takt_requeue_goal_task', {
       title: 'Requeue stopped goal work', description: 'Resume the same failed or exceeded goal task from its saved stopping position, with an optional additional note. A failed task may instead restart from startStep; if the saved position cannot be used, the call fails with the reason and the accepted startStep values. Responses fit 64 KiB, with explicit truncation. Read task state with takt_list_tasks offset/limit and saved records with takt_list_goal_work_log offset/limit. Read record text with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes.',
       inputSchema: requeueGoalTaskInputSchema,

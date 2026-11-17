@@ -80,9 +80,9 @@ manager:
 
 `manager.runtime_assignments` が project と global のどちらにも設定されていない場合、候補は空で、manager は runtime assignment を指定できません。名前は `runtime.yaml` の `provider.assignments` に定義した名前です。定義されていない名前は、manager の会話の plan を作るときに警告して無視します。
 
-manager は `takt_list_runtime_assignments` で候補と使い分けの説明を読み、合う名前を `takt_enqueue_goal_task` の `runtimeAssignment` に渡します。候補に無い名前を渡すと、道具がエラーで断ります。指定した名前はタスクに `runtime_assignment` として保存され、requeue と retry は保存された値を使います。`--runtime-assignment` を指定した起動では、コマンドラインの指定がタスクに保存された `runtime_assignment` より優先されます。
+manager は `takt_list_runtime_assignments` で候補と使い分けの説明を読み、合う名前を `takt_enqueue_goal_task` の `runtimeAssignment` に渡します。候補に無い名前を渡すと、道具がエラーで断ります。指定した名前はタスクに `runtime_assignment` として保存され、requeue と retry は保存された値を使います。`--runtime-assignment` を指定した起動では、コマンドラインの指定がタスクに保存された `runtime_assignment` より優先されます。既存タスクを別の有効な名前で再送しても保存済みの `runtime_assignment` は変わりません。道具は名前を検証したうえで、新しいタスクを作らず既存タスクを返します。
 
-`runtime.yaml` の `provider.assignments` から名前を消すと、その名前を保存済みのタスクは実行できなくなります。そのタスクが pending に残っている間は、`takt run` の実行前の provider 確認がどのタスクも始める前に止まるため、プロジェクトのほかの pending タスクも実行されません。復旧の経路は、`runtime.yaml` に名前を戻すか、`takt_remove_goal_task` で pending タスクを取り除いてから、manager が有効な名前を指定して `takt_enqueue_goal_task`（`runtimeAssignment`）でタスクを積み直すことです。`takt_remove_goal_task` で pending タスクを取り除けるのは goal の状態が `created` のときだけで、PR の merge タスクは `awaiting_merge` のときにも取り除けます。running のタスクは取り除けません。保存済みの `runtime_assignment` は requeue、retry、追加指示では修復されません。requeue と retry は pending のタスクをそのまま返し、追加指示（`takt_tell_run`）は running のタスクにだけ使えます。そのため、取り除いたうえでの積み直しが必要です。現在有効な候補は `takt_list_runtime_assignments` で確認できます。
+`runtime.yaml` の `provider.assignments` から名前を消すと、その名前を保存済みのタスクはその保存値では実行できません。そのタスクが pending に残っている間は、`takt run` の実行前の provider 確認がどのタスクも始める前に止まるため、プロジェクトのほかの pending タスクも実行されません。復旧の経路は 3 つあります。`runtime.yaml` に名前を戻す。`--runtime-assignment` で有効な候補名を指定して起動する（この指定はその起動にだけ適用され、保存済みの `runtime_assignment` は修復されません）。`takt_remove_goal_task` で pending タスクを取り除いてから、manager が有効な名前を指定して `takt_enqueue_goal_task`（`runtimeAssignment`）でタスクを積み直す。`takt_remove_goal_task` は、merge タスクと未取り込みの完了成果の経路を除き、worktree の未保存の変更を確認せずに worktree を削除します。取り除く前に worktree を確認し、必要な変更を退避してください。再投入しても削除した変更は戻りません。`takt_remove_goal_task` で pending タスクを取り除けるのは goal の状態が `created` のときだけで、PR の merge タスクは `awaiting_merge` のときにも取り除けます。running のタスクは取り除けません。保存済みの `runtime_assignment` は requeue、retry、追加指示では修復されません。requeue と retry は pending のタスクをそのまま返し、追加指示（`takt_tell_run`）は running のタスクにだけ使えます。保存値を変えるには、タスクを取り除いてから積み直します。現在有効な候補は `takt_list_runtime_assignments` で確認できます。
 
 manager は Claude、Codex、OpenCode に対応します。道具は TAKT にある投入、再開、やり直し、削除、run の参照、差分と履歴、取り込み、完成確認の機能を使います。作業前にタスク、run の記録とレポート、git を確認し、済んだ操作は繰り返しません。
 
@@ -265,7 +265,7 @@ manager はレポートと作業場所を確認し、既存タスクの再開、
 
 workflow は名前・scope reference・ファイルパスで指定できます。merge_pr / close_pr を含む workflow も投入でき、`autoPr` と `shouldPublishBranchToOrigin` は投入時に指定します。省略時は false のまま、worktree とゴールブランチ基点を維持します。
 
-`takt_remove_goal_task` は一時停止中の pending も取り消せます。未取り込みの完了成果を破棄するときは `discardUnmerged: true` と理由を渡します。実行中の拒否・所属・cleanup 成功の検査は残ります。
+`takt_remove_goal_task` は一時停止中の pending も取り消せます。未取り込みの完了成果を破棄するときは `discardUnmerged: true` と理由を渡します。実行中の拒否・所属・cleanup 成功の検査は残ります。merge タスクと未取り込みの完了成果の経路を除き、worktree の未保存の変更を確認せずに worktree を削除するため、取り除く前に worktree を確認し、必要な変更を退避してください。再投入しても削除した変更は戻りません。
 
 `takt_merge_goal_pr` は必須の `cwd`、`goalId`、保存 PR と一致する `prNumber`、`until` を使い、会話 ID や director 限定の認可はありません。停止状態・保存 PR・head/base の検査は維持します。push や PR 作成の失敗は manager 自身が調べて復旧でき、`awaiting_merge` で PR 未保存なら `takt_complete_goal` の呼び直しで準備をやり直せます。最終確認の実行は委任できますが、対象 SHA・方法・結果の証拠は manager が確認します。
 
