@@ -2,13 +2,14 @@ import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { withInquiryLock } from '../../infra/goals/inquiry-lock.js';
 import { resolveConfigValue } from '../../infra/config/resolveConfigValue.js';
 import { GoalStore } from '../../infra/goals/store.js';
-import { addGoalQuestion, answerGoalQuestion, withdrawGoalQuestion } from '../../infra/goals/questions.js';
-import { saveManagerEvent } from '../../infra/goals/events.js';
+import { addGoalQuestion, withdrawGoalQuestion } from '../../infra/goals/questions.js';
 import { appendGoalNotification, formatGoalQuestionNotification } from '../../infra/goals/notifications.js';
+import { answerGoalQuestionForPublication } from '../../infra/goals/answer-publication.js';
+import { safeExternalErrorMessage } from '../../shared/utils/safeExternalErrorMessage.js';
+import { answerGoalQuestionInputSchema, type AnswerGoalQuestionInput } from './schemas.js';
 import { assertCwdAllowedByMcpRoot, errorResult, jsonResult, type McpOperationDependencies } from './operations.js';
 import { goalWrite } from './goalWrite.js';
-import { answerGoalQuestionInputSchema } from './schemas.js';
-import type { AnswerGoalQuestionInput, AskGoalQuestionInput, GetGoalQuestionInput, listGoalQuestionsInputSchema, withdrawGoalQuestionInputSchema } from './schemas.js';
+import type { AskGoalQuestionInput, GetGoalQuestionInput, listGoalQuestionsInputSchema, withdrawGoalQuestionInputSchema } from './schemas.js';
 import type { z } from 'zod/v4';
 import { goalValuePage, selectGoalValue } from './goalResponse.js';
 import { pagedResult } from './response.js';
@@ -66,21 +67,26 @@ export function withdrawTaktGoalQuestion(input: z.infer<typeof withdrawGoalQuest
   }, 'Goal question withdrawal failed', 'withdraw_question');
 }
 
+// errorResult は permission denied を含む文言を丸ごと置き換えるため、回答済みの説明が消えないよう言い換える。
+function publicationError(error: unknown): Error {
+  const cause = safeExternalErrorMessage(error);
+  const detail = cause === 'permission denied' ? 'permission error' : cause;
+  return new Error(`The answer was saved, but delivery to the manager is pending (${detail}); the TAKT daemon will deliver it. Do not answer again.`);
+}
+
 export async function answerTaktGoalQuestion(input: AnswerGoalQuestionInput, deps: McpOperationDependencies, signal: AbortSignal) {
+  let answerSaved = false;
   try {
     const parsed = answerGoalQuestionInputSchema.parse(input);
     assertCwdAllowedByMcpRoot(parsed.cwd, deps.allowedProjectRoot);
-    const store = new GoalStore(parsed.cwd);
-    const question = (await store.get(parsed.goalId)).questions?.find((saved) => saved.id === parsed.questionId);
+    const question = (await new GoalStore(parsed.cwd).get(parsed.goalId)).questions?.find((saved) => saved.id === parsed.questionId);
     if (question === undefined) throw new Error('Question does not exist');
     if ((question.kind ?? 'question') === 'approval') {
       throw new Error('Approval inquiries are retired and cannot be answered; answer a question or operation_request instead');
     }
     signal.throwIfAborted();
-    const saved = await store.update(parsed.goalId,
-      (goal) => answerGoalQuestion(goal, parsed.questionId, parsed.answer, 'mcp'));
-    const answer = saved.questions!.find((savedQuestion) => savedQuestion.id === parsed.questionId)!.answer!;
-    saveManagerEvent(parsed.cwd, { kind: 'answer', goalId: parsed.goalId, questionId: parsed.questionId, answer });
+    const answer = await answerGoalQuestionForPublication(parsed.cwd, parsed.goalId, parsed.questionId, parsed.answer, 'mcp',
+      () => { answerSaved = true; });
     return jsonResult({ questionId: parsed.questionId, answer });
-  } catch (error) { return errorResult('Goal question answer failed', error); }
+  } catch (error) { return errorResult('Goal question answer failed', answerSaved ? publicationError(error) : error); }
 }

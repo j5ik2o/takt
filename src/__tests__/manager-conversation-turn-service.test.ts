@@ -77,7 +77,7 @@ it('uses the daemon turn identity for tool events while preserving call and prov
     toolActivity: { callId: 'provider-call', operationId: 'ignored-upstream-operation', generation: 900 } };
   f.execute.mockImplementationOnce(async (input) => {
     input.onToolEvent!(event);
-    input.onToolEvent!({ type: 'tool_result', data: { completedToolIds: ['provider-tool'], content: 'done', isError: false },
+    input.onToolEvent!({ type: 'tool_result', data: { id: 'provider-tool', completedToolIds: ['provider-tool'], content: 'done', isError: false },
       toolActivity: event.toolActivity });
     return { message: 'reply', summary: null, sessionId: 'session-after', assignment: undefined };
   });
@@ -408,6 +408,39 @@ it('returns a system notice after dismissing a registration proposal without inv
   } });
   expect(f.request).toHaveBeenCalledWith(expect.objectContaining({ change: expect.objectContaining({ proposal: { revision: 2, pending: null } }) }));
   expect(f.execute).not.toHaveBeenCalled();
+});
+
+it('clears only the session ID and interrupted message on /clear without invoking AI', async () => {
+  const f = fixture();
+  f.input.state.pending = { revision: 1, repositoryDirectory: '/repository',
+    summary: { objective: 'kept goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [] } };
+  f.input.state.session = { ...f.input.state.session, agentOverrides: { provider: 'codex' } };
+  f.input.state.interruptedMessage = 'undelivered request';
+  f.input.event.event = humanMessage(' /clear ');
+
+  const outcome = await f.service.execute(f.input, f.io);
+
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'notice', message: getLabel('manager.conversation.cleared', 'en') } });
+  expect(outcome.change).toEqual({ operationId: expect.any(String), expectedVersion: f.input.state.version,
+    session: { ...f.input.state.session, sessionId: null }, interruptedMessage: null });
+  expect(f.request).not.toHaveBeenCalled();
+  expect(f.resolve).not.toHaveBeenCalled();
+  expect(f.execute).not.toHaveBeenCalled();
+});
+
+it('starts the next message in a new session without the interrupted message after /clear', async () => {
+  const f = conversationFixture();
+  await f.run(humanMessage('before clear'));
+  const controller = new AbortController(); f.interruptNext(controller);
+  await f.run(humanMessage('undelivered request'), controller);
+  expect(f.state()).toMatchObject({ session: { sessionId: 'session-after' }, interruptedMessage: 'undelivered request' });
+
+  await f.run(humanMessage('/clear'));
+  await f.run(humanMessage('after clear'));
+
+  expect(f.execute).toHaveBeenCalledTimes(3);
+  expect(f.execute.mock.calls[2]![0].sessionId).toBeUndefined();
+  expect(f.execute.mock.calls[2]![0].prompt).not.toContain('undelivered request');
 });
 
 it.each([
