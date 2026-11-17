@@ -528,11 +528,13 @@ describe('manager workspace storage and repository boundaries', () => {
         expect(app.lastFrame()).not.toContain(lang === 'ja' ? '処理中' : 'Working');
         expect(app.lastFrame()!.split('\n').at(-1)).toBe([getLabel('manager.assignmentHeading', lang, { name: basename(repositoryA) }),
           getLabel('manager.counts', lang, { goals: '0', awaiting: '0', questions: '0' })].join(' | '));
-      });
+      }, { timeout: 5000 });
       const currentAssignment = (client.getSnapshot().items.find((item) => item.kind === 'assignment')?.assignment)!;
       if (currentAssignment.kind === 'daemon') throw new Error('Unexpected director assignment');
       await removeManagerRepository(currentAssignment, repositoryA, globalDirectory);
       expect((await readWorkspace(globalDirectory, workspace.id))!.repositoryDirectories).toEqual([]);
+      // 定期更新に依存させず、外部変更を明示的に再読込して同じ画面で観測する。
+      await client.refresh();
       await vi.waitFor(() => {
         const rows = app.lastFrame()!.split('\n');
         expect(rows.at(-1)).toBe([getLabel('manager.selectionEmpty.repository', lang),

@@ -593,6 +593,20 @@ describe('manager goal task enqueue', () => {
     } });
   }
 
+  it('lists workflows even when runtime.yaml is malformed while listing runtime assignments fails', async () => {
+    writeRuntimeAssignments(['local-fast']);
+    configureManagerRuntimeAssignments(['local-fast']);
+    writeFileSync(join(cwd, '.takt', 'runtime.yaml'), 'provider: [unterminated\n');
+    invalidateResolvedConfigCache(cwd);
+    await withServer(cwd, 'manager', async (client) => {
+      const listed = await client.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
+      expect(listed.isError, firstTextContent(listed.content)).toBeUndefined();
+      expect(JSON.parse(firstTextContent(listed.content)).workflows.map((workflow: { name: string }) => workflow.name)).toContain('safe');
+      const assignments = await client.callTool({ name: 'takt_list_runtime_assignments', arguments: { cwd } });
+      expect(assignments.isError).toBe(true);
+    });
+  });
+
   it('lists only the runtime assignments configured for manager tasks with their usage descriptions', async () => {
     writeRuntimeAssignments(['local-fast', 'local-slow']);
     configureManagerRuntimeAssignments([{ 'local-fast': 'Fast local model' }]);
