@@ -542,7 +542,7 @@ manager:
 
 manager は `takt_list_runtime_assignments` で候補と使い分けの説明を読み、合う名前を `takt_enqueue_goal_task` の `runtimeAssignment` に渡します。候補に無い名前を渡すと、道具がエラーで断ります。指定した名前はタスクに `runtime_assignment` として保存され、requeue と retry は保存された値を使います。`--runtime-assignment` を指定した起動では、コマンドラインの指定がタスクに保存された `runtime_assignment` より優先されます。
 
-`runtime.yaml` の `provider.assignments` から名前を消すと、その名前を保存済みのタスクは実行できなくなります。そのタスクが pending に残っている間は、`takt run` の実行前の provider 確認がどのタスクも始める前に止まるため、プロジェクトのほかの pending タスクも実行されません。復旧の経路は、`runtime.yaml` に名前を戻すか、`takt_remove_goal_task` で pending タスクを取り除いてから、manager が有効な名前を指定して `takt_enqueue_goal_task`（`runtimeAssignment`）でタスクを積み直すことです。保存済みの `runtime_assignment` は requeue、retry、追加指示では修復されないため、取り除いたうえでの積み直しが必要です。現在有効な候補は `takt_list_runtime_assignments` で確認できます。
+`runtime.yaml` の `provider.assignments` から名前を消すと、その名前を保存済みのタスクは実行できなくなります。そのタスクが pending に残っている間は、`takt run` の実行前の provider 確認がどのタスクも始める前に止まるため、プロジェクトのほかの pending タスクも実行されません。復旧の経路は、`runtime.yaml` に名前を戻すか、`takt_remove_goal_task` で pending タスクを取り除いてから、manager が有効な名前を指定して `takt_enqueue_goal_task`（`runtimeAssignment`）でタスクを積み直すことです。`takt_remove_goal_task` で pending タスクを取り除けるのは goal の状態が `created` のときだけで、PR の merge タスクは `awaiting_merge` のときにも取り除けます。running のタスクは取り除けません。保存済みの `runtime_assignment` は requeue、retry、追加指示では修復されません。requeue と retry は pending のタスクをそのまま返し、追加指示（`takt_tell_run`）は running のタスクにだけ使えます。そのため、取り除いたうえでの積み直しが必要です。現在有効な候補は `takt_list_runtime_assignments` で確認できます。
 
 ## manager のツール権限
 
