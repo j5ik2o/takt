@@ -16,7 +16,10 @@ const key = (value: string): string => createHash('sha256').update(value).digest
 export class DaemonNotifications {
   private readonly directory: string;
   private readonly lock = new FileAsyncLock();
-  /** ディレクトリの stamp が変わらない間は、読み込み済みの通知を使い回す。 */
+  /**
+   * ディレクトリの stamp が変わらない間は、読み込み済みの通知を使い回す。stamp が変わったときは、
+   * まだ保持していないファイル名だけを読む。既存ファイルの内容の変化は stamp 以外では検知しない。
+   */
   private readonly index: { stamp: string | undefined; values: Map<string, Notification> } = { stamp: undefined, values: new Map() };
   private prepared: Promise<void> | undefined;
   constructor(directory: string) { this.directory = join(directory, 'director-notifications'); }
@@ -60,7 +63,7 @@ export class DaemonNotifications {
     for await (const entry of await opendir(this.directory)) {
       if (!entry.name.endsWith('.json')) continue;
       names.add(entry.name);
-      // 変更検知はディレクトリの stamp だけでなく、ファイル単位の指紋でも行う。既存でも内容が変わっていれば読み直す。
+      // 保持していないファイル名だけを読む。保持済みのファイルは内容が変わっていても読み直さない。
       if (this.index.values.has(entry.name)) continue;
       const content = await readEntirePrivateFile(join(this.directory, entry.name));
       if (content === undefined) throw new Error('Notification disappeared during read');

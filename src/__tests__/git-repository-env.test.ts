@@ -316,6 +316,22 @@ describe('resolveRepositoryIdentityEnv', () => {
     expect(mockResolveConfigValue).toHaveBeenCalledWith('/project', 'vcsProvider');
   });
 
+  it.each([
+    'git@github.com:owner/repo.git',
+    'github.com:owner/repo.git',
+  ])('detects github from the parsed origin %s without vcs_provider', (url) => {
+    mockExecFileSync.mockReturnValue(`${url}\n`);
+
+    expect(resolveRepositoryIdentityEnv('/project', {})).toEqual({ GH_REPO: 'github.com/owner/repo' });
+  });
+
+  it('detects gitlab from a parsed origin without a user', () => {
+    mockExecFileSync.mockReturnValue('gitlab.com:group/project.git\n');
+
+    expect(resolveRepositoryIdentityEnv('/project', {}))
+      .toEqual({ GITLAB_REPO: 'https://gitlab.com/group/project' });
+  });
+
   it('lets vcs_provider override a detected provider', () => {
     mockExecFileSync.mockReturnValue('https://gitlab.com/owner/repo.git\n');
     mockResolveConfigValue.mockReturnValue('github');

@@ -161,18 +161,18 @@ PR #58 の差分は `src/infra/daemon/notifications.ts` を変更します。本
 
 **(a) 索引による読み取りの使い回し相当**
 
-次のいずれかを `src/infra/daemon/notifications.ts` で確認する。
+メソッドや定数の存在だけでは成立としません。`src/infra/daemon/notifications.ts` で、**ディレクトリが変わらない間は通知ファイルを実際に読み直さない**ことを、コードの経路とテストの両方で確認します。
 
-- `DaemonNotifications` に `refresh` メソッドがある、または `index` / `prepared` に相当する読み込み済みの保持がある。
-- ディレクトリの状態（`stat` の `mtimeMs` など）を比較して、変化がなければ再読み込みを省く分岐がある。
+- `refresh` や `index` / `prepared` に相当する読み込み済みの保持がある。同じディレクトリ状態で `iterate` を繰り返したとき、通知ファイルの読み取り（`readEntirePrivateFile` など）が再度呼ばれないことを、テストの観測（読み取り呼び出しの記録やモック）で確かめられる。
+- ディレクトリの状態（`stat` の `mtimeMs` など）を比較して、変化がなければ再読み込みを省く分岐がある。この分岐が実際の読み取り経路（`iterate` から到達する `refresh`、または同等の処理）にあり、単に存在するだけの未使用メソッドではない。
 - `src/__tests__/daemon-notifications.test.ts` が存在し、§3.3 の「ディレクトリが変わらなければ再度読まない」に相当するテストを含む。
 
 **(b) 周期の変更相当**
 
-次のいずれかを確認する。
+間隔の定数が存在するだけでは成立としません。次の両方を `src/features/manager/ManagerView.tsx` で確認します。
 
-- `src/features/manager/ManagerView.tsx` の、接続中の定期更新を行う `setInterval` の間隔が `500` より長くなっている（PR #58 の意図は 2 秒）。
-- その間隔を定数として一元化した定義がある（PR #58 では `MANAGER_REFRESH_INTERVAL_MS`）。
+- 接続中の定期更新を行う `setInterval` が、その間隔の定数（または `500` より長い数値）を実際の第 2 引数に使っている。
+- その第 2 引数の値が `500` より長い（PR #58 の意図は 2 秒）。定数だけを追加して `setInterval` が `500` のままの場合は成立しません。
 
 ### 4.1.1 現時点の実測結果
 
@@ -191,13 +191,18 @@ PR #58 のマージを取り消すのではありません。**以降の取り�
 
 打ち消しの対象は、前提ツリーの判定（§2）で決まります。
 
-1. 本家 main を取り込み、`src/infra/daemon/notifications.ts` は本家側の実装を採用する。
-2. フォーク固有の差分（索引と、周期を変更していればその差分）を打ち消すコミットを作る。マージコミット自体の取り消し（`git revert -m 1 <merge>`）はしない。
-3. 打ち消しの対象は次のとおり。**索引を持たないツリー（現行 HEAD など）では、下の最初の項目（索引）は対象外です。** 打ち消す索引が存在しないため、この場合は残りの項目だけを扱います。
-   - `src/infra/daemon/notifications.ts` の索引（`index`・`prepared`・`refresh()`）。索引が存在するツリーでのみ対象。
+1. 本家 main を取り込み、`src/infra/daemon/notifications.ts` は、**§4.1 の (a) が成立した場合に限り** 本家側の実装を採用する。(a) が成立していない場合（本家が索引を持たない）は本家の実装で置き換えず、フォークの索引を保持する。置き換えると全件の再読み取りが復活するため。
+2. フォーク固有の差分（(a) が成立していればその索引の差分と、周期を変更していればその差分）を打ち消すコミットを作る。マージコミット自体の取り消し（`git revert -m 1 <merge>`）はしない。
+3. 打ち消しの対象は、(a) と (b) のどちらが成立したかで決まります。
+   - **両方成立**（(a) かつ (b)）: 下の全項目を対象にする。
+   - **(a) のみ成立**: 索引の差分と、索引を使うテストを打ち消す。`ManagerView.tsx` の周期の差分は打ち消さない（(b) が偽のため）。
+   - **(b) のみ成立**: 索引のある `src/infra/daemon/notifications.ts` には手を加えない。`MANAGER_REFRESH_INTERVAL_MS` と、それを `setInterval` に使う差分だけを打ち消す。
+   - **どちらも不成立**: 何も打ち消さない。
+4. 打ち消しの対象の詳細は次のとおり。**索引を持たないツリー（現行 HEAD など）では、下の最初の項目（索引）は対象外です。** 打ち消す索引が存在しないため、この場合は該当する残りの項目だけを扱います。
+   - `src/infra/daemon/notifications.ts` の索引（`index`・`prepared`・`refresh()`）。(a) が成立した場合に限って対象。索引が存在するツリーでのみ対象。
    - `src/features/manager/ManagerView.tsx` の `MANAGER_REFRESH_INTERVAL_MS` と、それを `setInterval` に使う差分。本家が同等の周期変更を入れた場合はそちらを優先し、フォーク側の定数と使用箇所を打ち消す。本家が 2 秒化を入れていない場合は打ち消さない（(b) が偽のため）。
    - `src/__tests__/daemon-notifications.test.ts`（本家に同等のテストが入っていれば削除、入っていなければ本家のテストへ統合）。ファイルが存在する場合のみ対象。
    - `src/__tests__/helpers/manager-tui-startup.ts`・`src/__tests__/it-manager-compact-display.test.ts`・`src/__tests__/manager-conversation-client.integration.test.ts` の、`MANAGER_REFRESH_INTERVAL_MS` を参照する差分。`MANAGER_REFRESH_INTERVAL_MS` を打ち消す場合は同じ変更で戻す。
    - `scripts/test-classification.mjs` と `tsconfig.tests.json` の、削除したテストに対応する 1 行。`tsconfig.tests.json` は「載せたファイルが実在する」ことを検証するため、テストファイルを消す場合は同じ変更でこの行も消す。該当行が存在する場合のみ対象。
-4. 打ち消し後に `npm test -- src/__tests__/releaseVerificationWiring.test.ts` を単独実行し、分類リストと型チェック対象の整合が崩れていないことを確認する。
-5. 打ち消し後に、本家側の挙動が成立していることを確認する（§3.3 のテスト単独実行と索引・周期の確認が、本家側のテスト名で通ること）。
+5. 打ち消し後に `npm test -- src/__tests__/releaseVerificationWiring.test.ts` を単独実行し、分類リストと型チェック対象の整合が崩れていないことを確認する。
+6. 打ち消し後に、本家側の挙動が成立していることを確認する（§3.3 のテスト単独実行と索引・周期の確認が、本家側のテスト名で通ること）。

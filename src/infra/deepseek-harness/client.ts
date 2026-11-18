@@ -422,11 +422,12 @@ function getAmbientEnvironment(): Record<string, string> {
 function getProcessNestedObservabilityFingerprint(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
 ): string {
-  const environment = observabilitySnapshotOf(childProcessEnv) ?? getAmbientEnvironment();
-  return getNestedObservabilityEnvFingerprint({
-    ...environment,
-    ...pickRepositoryIdentityEnv(childProcessEnv),
-  });
+  const environment = observabilitySnapshotOf(childProcessEnv);
+  // The ambient environment may carry repository identity keys; those reach the run only through
+  // childProcessEnv, the workflow-level opt-in, so the ambient fallback contributes observability keys only.
+  return getNestedObservabilityEnvFingerprint(
+    environment === undefined ? undefined : { ...environment, ...pickRepositoryIdentityEnv(childProcessEnv) },
+  );
 }
 
 /** Separate credential source from runtime home and disable unsafe SDK logs. */
@@ -443,9 +444,14 @@ function resolveProcessEnvironment(
       env[name] = value;
     }
   }
+  const observabilitySnapshot = observabilitySnapshotOf(childProcessEnv);
   Object.assign(
     env,
-    pickNestedObservabilityEnv(observabilitySnapshotOf(childProcessEnv) ?? getAmbientEnvironment()),
+    // Observability may fall back to the ambient environment; repository identity may not, because the
+    // ambient fallback does not pass the workflow's repository_identity opt-in.
+    observabilitySnapshot === undefined
+      ? pickNestedObservabilityEnv(getAmbientEnvironment())
+      : pickNestedObservabilityEnv(observabilitySnapshot),
     pickRepositoryIdentityEnv(childProcessEnv),
   );
 

@@ -10,7 +10,7 @@
 import { resolveConfigValue } from '../config/resolveConfigValue.js';
 import { REPOSITORY_IDENTITY_ENV_KEYS } from '../../shared/utils/repository-identity-env.js';
 import {
-  detectVcsProvider,
+  detectVcsProviderForHostname,
   getOriginRemoteUrl,
   parseRemoteRepositoryUrl,
   type RemoteRepository,
@@ -128,7 +128,8 @@ export function buildRepositoryIdentityEnv(
  * Resolve repository identity variables from the project root's `origin`.
  *
  * The provider is `vcs_provider` from config (project, then global) when set,
- * otherwise `detectVcsProvider`, the same detection as the rest of takt.
+ * otherwise detected from the hostname of the parsed origin, the same host
+ * table as the rest of takt.
  */
 export function resolveRepositoryIdentityEnv(
   projectCwd: string,
@@ -137,7 +138,7 @@ export function resolveRepositoryIdentityEnv(
   const url = getOriginRemoteUrl(projectCwd);
   const remote = url === undefined ? undefined : parseRemoteRepositoryUrl(url);
   if (remote === undefined) return {};
-  const provider = resolveConfigValue(projectCwd, 'vcsProvider') ?? detectVcsProvider(projectCwd);
+  const provider = resolveConfigValue(projectCwd, 'vcsProvider') ?? detectVcsProviderForHostname(remote.hostname);
   return buildRepositoryIdentityEnv(remote, provider, ambientEnv);
 }
 

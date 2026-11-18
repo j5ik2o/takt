@@ -185,5 +185,16 @@ export function detectVcsProvider(cwd?: string): VcsProviderType | undefined {
     return undefined;
   }
 
-  return HOST_MAP.get(hostname);
+  return detectVcsProviderForHostname(hostname);
+}
+
+/**
+ * Map a parsed remote hostname to a VCS provider.
+ *
+ * Uses the same host table as `detectVcsProvider`, for callers that already parsed the remote URL
+ * (so that a host parsed from the scp-like form without a user, such as `github.com:owner/repo`,
+ * is recognized as well).
+ */
+export function detectVcsProviderForHostname(hostname: string): VcsProviderType | undefined {
+  return HOST_MAP.get(hostname.toLowerCase());
 }

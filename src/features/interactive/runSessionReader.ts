@@ -1413,6 +1413,8 @@ export function loadRunSessionContext(
     const sessionLog = readSelectedSessionLog(logSelection, logSelection.path);
     if (sessionLog) {
       stepLogs = buildStepLogs(sessionLog);
+      // The tracker keeps the latest start of a position and applies a completion only to that start, which is why
+      // the passes below observe every start before any completion.
       for (const start of sessionLog.stepStarts ?? []) currentStepTracker.observeStart(start);
       for (const complete of sessionLog.history) currentStepTracker.observeStepComplete(complete);
       for (const complete of sessionLog.workflowCallCompletions ?? []) currentStepTracker.observeWorkflowCallComplete(complete);
