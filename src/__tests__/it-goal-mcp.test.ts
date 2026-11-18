@@ -28,7 +28,7 @@ import { loadWorkflowByIdentifier,resolveWorkflowCallTarget } from '../infra/con
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMetadata.js';
 import { getGlobalConfigDir, getRepertoireDir } from '../infra/config/paths.js';
-import { saveGlobalConfig } from '../infra/config/global/globalConfig.js';
+import { invalidateGlobalConfigCache, saveGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { GoalStore } from '../infra/goals/store.js';
 import * as goalBranchSync from '../infra/goals/branch-sync.js';
 import { isGoalContentIncluded } from '../infra/goals/git-command.js';
@@ -629,6 +629,35 @@ describe('manager goal task enqueue', () => {
       expect(result.isError, firstTextContent(result.content)).toBeUndefined();
       const body = JSON.parse(firstTextContent(result.content)) as { runtimeAssignments: unknown[] };
       expect(body.runtimeAssignments).toEqual([]);
+    });
+  });
+
+  it('resolves runtime assignment candidates from the current global configuration after its cache is built', async () => {
+    writeRuntimeAssignments(['local-fast', 'local-slow']);
+    saveProjectConfig(cwd, { ...loadProjectConfig(cwd), manager: { autoRun: false, workflows: ['safe'] } });
+    const globalConfigPath = join(getGlobalConfigDir(), 'config.yaml');
+    const writeGlobalRuntimeAssignments = (runtimeAssignments: ManagerRuntimeAssignmentsConfig): void => {
+      writeFileSync(globalConfigPath, stringifyYaml({ manager: { runtime_assignments: runtimeAssignments } }));
+    };
+    writeGlobalRuntimeAssignments(['local-fast']);
+    invalidateGlobalConfigCache();
+    await withServer(cwd, 'manager', async (client) => {
+      const list = async () => {
+        const result = await client.callTool({ name: 'takt_list_runtime_assignments', arguments: { cwd } });
+        expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+        return (JSON.parse(firstTextContent(result.content)) as { runtimeAssignments: Array<{ name: string }> })
+          .runtimeAssignments.map(({ name }) => name);
+      };
+      expect(await list()).toEqual(['local-fast']);
+
+      writeGlobalRuntimeAssignments(['local-slow']);
+      expect(await list()).toEqual(['local-slow']);
+
+      const rejected = await enqueue(client, { workKey: 'stale', runtimeAssignment: 'local-fast' });
+      expect(rejected.isError).toBe(true);
+      expect(firstTextContent(rejected.content)).toContain('is not allowed for manager tasks');
+      expect((await enqueue(client, { workKey: 'fresh', runtimeAssignment: 'local-slow' })).isError).toBeUndefined();
+      expect(pendingTasks().map(({ data }) => data?.runtime_assignment)).toEqual(['local-slow']);
     });
   });
 
