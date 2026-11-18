@@ -371,7 +371,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/workflow-init.test.ts',
   'src/__tests__/workflow-inspect.test.ts',
   'src/__tests__/workflowExecution-ask-user-question.test.ts',
-  'src/__tests__/workflowExecution-session-loading.test.ts',
   'src/__tests__/workflowExecution-structured-caller.test.ts',
   'src/__tests__/workflowExecutionEvents.test.ts',
 ]);
@@ -387,6 +386,7 @@ export const publicContractIntegrationTestFiles = Object.freeze([
 export const lightContractIntegrationTestFiles = Object.freeze([
   'src/__tests__/analytics-workflowExecution.test.ts',
   'src/__tests__/cancellable-prompt-pipe.test.ts',
+  'src/__tests__/compaction-recovery-progress.test.ts',
   'src/__tests__/daemon-conversation-delivery.integration.test.ts',
   'src/__tests__/daemon-dispatcher.integration.test.ts',
   'src/__tests__/daemon-manager-patrol.integration.test.ts',
@@ -485,6 +485,8 @@ export const heavyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-daemon-worktree-run-log.test.ts',
   ...legacyParallelIntegrationTestFiles,
   ...auditedIntegrationBoundaryTestFiles,
+  // Runs real `git init` / `git remote` processes for repository identity.
+  'src/__tests__/workflowExecution-session-loading.test.ts',
   // Measured slow suites dominate the serial light gate; CI shards this gate.
   'src/__tests__/deepseek-harness-error-mapping.test.ts',
   'src/__tests__/it-issue-dispatch-notification.test.ts',

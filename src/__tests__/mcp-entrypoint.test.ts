@@ -778,6 +778,26 @@ describe('MCP package entrypoint', () => {
     } finally { await client.close(); await server.close(); }
   });
 
+  it('advertises the runtime assignment list tool and the enqueue runtimeAssignment contract through listTools', async () => {
+    const server = createTaktMcpServer();
+    const client = new Client({ name: 'runtime-assignment-tools', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      expect(TAKT_MCP_MANAGER_TOOL_NAMES).toContain('takt_list_runtime_assignments');
+      const { tools } = await client.listTools();
+      const list = tools.find(({ name }) => name === 'takt_list_runtime_assignments')!;
+      expect(list.description).toMatch(/runtime assignment names and usage descriptions/iu);
+      expect(list.description).toMatch(/An empty list means no runtime assignment may be specified/iu);
+      expect(list.inputSchema.required).toEqual(['cwd']);
+      expect(list.inputSchema.properties).not.toHaveProperty('errorOffset');
+      const enqueue = tools.find(({ name }) => name === 'takt_enqueue_goal_task')!;
+      expect(enqueue.description).toContain('runtimeAssignment is optional and must be a name from takt_list_runtime_assignments.');
+      expect(enqueue.inputSchema.properties).toHaveProperty('runtimeAssignment');
+    } finally { await client.close(); await server.close(); }
+  });
+
   it('advertises the inquiry input contract and retrieval fields through listTools', async () => {
     const server = createTaktMcpServer();
     const client = new Client({ name: 'inquiry-tools', version: '1' });
@@ -1197,6 +1217,9 @@ describe('MCP package entrypoint', () => {
         currentIteration: 2,
         currentStepStartedAt: '2026-09-09T00:02:00.000Z',
         currentStepExecutionCount: 1,
+        currentStepPath: [{
+          workflow: 'review-fix', step: 'implement', startedAt: '2026-09-09T00:02:00.000Z', executionCount: 1,
+        }],
         phase: 2,
         stepLogs: expect.arrayContaining([
           expect.objectContaining({ step: 'plan', persona: 'planner', status: 'done', iteration: 1, timestamp: '2026-09-09T00:01:00.000Z' }),
