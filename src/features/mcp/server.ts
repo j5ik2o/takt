@@ -179,6 +179,7 @@ export function createTaktMcpServer(
       const projectCwd = projectInput({ cwd }, currentDeps).cwd;
       const useWorkflowConfig = configScopes.includes('workflow') && options.toolSet === 'manager';
       const useRuntimeAssignmentConfig = configScopes.includes('runtimeAssignments');
+      const useConfigSnapshot = configScopes.length > 0 && options.toolSet === 'manager';
       const execute = async (): Promise<CallToolResult> => {
         try {
           const deps = {
@@ -199,7 +200,7 @@ export function createTaktMcpServer(
           }
         }
       };
-      return useWorkflowConfig ? withWorkflowConfig(projectCwd, execute) : execute();
+      return useConfigSnapshot ? withWorkflowConfig(projectCwd, execute) : execute();
     }); } catch (error) { return errorResult(errorContext, error); }
   };
   const server = new McpServer({
