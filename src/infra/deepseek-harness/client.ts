@@ -452,7 +452,7 @@ function resolveProcessEnvironment(
     // Observability may fall back to the ambient environment; repository identity may not, because the
     // ambient fallback does not pass the workflow's repository_identity opt-in.
     observabilitySnapshot === undefined
-      ? pickNestedObservabilityEnv(getAmbientEnvironment())
+      ? pickNestedObservabilityEnv(omitRepositoryIdentityEnv(getAmbientEnvironment()))
       : pickNestedObservabilityEnv(observabilitySnapshot),
     pickRepositoryIdentityEnv(childProcessEnv),
   );
