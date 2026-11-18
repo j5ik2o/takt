@@ -1135,9 +1135,10 @@ describe('WorkflowEngine rate limit fallback', () => {
     expect(state.stepIterations.has('arch-review')).toBe(false);
     expect(state.stepIterations.has('security-review')).toBe(false);
     const providersByPersona = providerCallsByPersona();
-    expect([...(providersByPersona.get('../personas/arch-review.md') ?? [])].sort())
-      .toEqual(['claude', 'codex']);
-    expect(providersByPersona.get('../personas/security-review.md')).toEqual(['claude', 'claude']);
+    expect(providersByPersona).toEqual(new Map([
+      ['../personas/arch-review.md', ['claude', 'codex']],
+      ['../personas/security-review.md', ['claude', 'claude']],
+    ]));
     expect(runReportPhase).toHaveBeenCalledTimes(4);
     expect(mockRuleEvaluation).toHaveBeenCalledTimes(4);
   });

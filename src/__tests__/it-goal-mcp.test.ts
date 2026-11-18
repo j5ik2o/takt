@@ -233,6 +233,10 @@ describe('manager goal task enqueue', () => {
     return new TaskRunner(cwd).listTaskStateItems().filter((task) => task.goalId === goalId).map((task) => ({ taskName: task.name, purpose: task.goalPurpose! }));
   }
 
+  async function savedWorkLog(): Promise<string> {
+    return JSON.stringify((await new GoalStore(cwd).get(goalId)).workLog);
+  }
+
   it('rejects a missing goal without saving a task', async () => {
     await withEnqueue(async (client) => {
       const result = await enqueue(client, { goalId: '550e8400-e29b-41d4-a716-446655440001' });
@@ -605,6 +609,7 @@ describe('manager goal task enqueue', () => {
       expect(JSON.parse(firstTextContent(listed.content)).workflows.map((workflow: { name: string }) => workflow.name)).toContain('safe');
       const assignments = await client.callTool({ name: 'takt_list_runtime_assignments', arguments: { cwd } });
       expect(assignments.isError).toBe(true);
+      expect(firstTextContent(assignments.content)).toContain('Runtime assignment list failed:');
     });
   });
 
@@ -649,16 +654,19 @@ describe('manager goal task enqueue', () => {
         return (JSON.parse(firstTextContent(result.content)) as { runtimeAssignments: Array<{ name: string }> })
           .runtimeAssignments.map(({ name }) => name);
       };
-      expect(await list()).toEqual(['local-fast']);
+      expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_list_runtime_assignments');
+      expect((await enqueue(client, { workKey: 'stale', runtimeAssignment: 'local-fast' })).isError).toBeUndefined();
+      expect(pendingTasks().map(({ data }) => data?.runtime_assignment)).toEqual(['local-fast']);
 
       writeGlobalRuntimeAssignments(['local-slow']);
-      expect(await list()).toEqual(['local-slow']);
-
-      const rejected = await enqueue(client, { workKey: 'stale', runtimeAssignment: 'local-fast' });
+      const rejected = await enqueue(client, { workKey: 'updated', runtimeAssignment: 'local-fast' });
       expect(rejected.isError).toBe(true);
       expect(firstTextContent(rejected.content)).toContain('is not allowed for manager tasks');
-      expect((await enqueue(client, { workKey: 'fresh', runtimeAssignment: 'local-slow' })).isError).toBeUndefined();
-      expect(pendingTasks().map(({ data }) => data?.runtime_assignment)).toEqual(['local-slow']);
+      expect((await enqueue(client, { workKey: 'updated', runtimeAssignment: 'local-slow' })).isError).toBeUndefined();
+      expect(pendingTasks().map(({ data }) => data?.runtime_assignment).sort()).toEqual(['local-fast', 'local-slow']);
+
+      writeGlobalRuntimeAssignments(['local-fast']);
+      expect(await list()).toEqual(['local-fast']);
     });
   });
 
@@ -679,6 +687,7 @@ describe('manager goal task enqueue', () => {
     writeRuntimeAssignments(['local-fast', 'local-slow']);
     configureManagerRuntimeAssignments(['local-fast']);
     await withEnqueue(async (client) => {
+      const before = await savedWorkLog();
       const result = await enqueue(client, { workKey: 'outside', runtimeAssignment: 'local-slow' });
       expect(result.isError).toBe(true);
       const reason = firstTextContent(result.content);
@@ -686,6 +695,7 @@ describe('manager goal task enqueue', () => {
       expect(reason).toContain('local-fast');
       expect(pendingTasks()).toEqual([]);
       expect(savedGoalWork()).toEqual([]);
+      expect(await savedWorkLog()).toEqual(before);
     });
   });
 
@@ -698,6 +708,7 @@ describe('manager goal task enqueue', () => {
       const createdName = (JSON.parse(firstTextContent(created.content)) as { taskName: string }).taskName;
       expect(pendingTasks().map(({ name }) => name)).toEqual([createdName]);
 
+      const before = await savedWorkLog();
       const repeated = await enqueue(client, { workKey: 'repeated', runtimeAssignment: 'local-slow' });
 
       expect(repeated.isError).toBe(true);
@@ -706,23 +717,27 @@ describe('manager goal task enqueue', () => {
       expect(reason).toContain('local-fast');
       expect(pendingTasks().map(({ name }) => name)).toEqual([createdName]);
       expect(savedGoalWork()).toEqual([{ taskName: createdName, purpose }]);
+      expect(await savedWorkLog()).toEqual(before);
     });
   });
 
   it('returns the existing task on a resubmission with an allowed runtime assignment without creating a duplicate', async () => {
-    writeRuntimeAssignments(['local-fast']);
-    configureManagerRuntimeAssignments(['local-fast']);
+    writeRuntimeAssignments(['local-fast', 'local-slow']);
+    configureManagerRuntimeAssignments(['local-fast', 'local-slow']);
     await withEnqueue(async (client) => {
       const created = await enqueue(client, { workKey: 'allowed-repeated', runtimeAssignment: 'local-fast' });
       expect(created.isError, firstTextContent(created.content)).toBeUndefined();
       const createdName = (JSON.parse(firstTextContent(created.content)) as { taskName: string }).taskName;
 
-      const repeated = await enqueue(client, { workKey: 'allowed-repeated', runtimeAssignment: 'local-fast' });
+      const before = await savedWorkLog();
+      const repeated = await enqueue(client, { workKey: 'allowed-repeated', runtimeAssignment: 'local-slow' });
 
       expect(repeated.isError, firstTextContent(repeated.content)).toBeUndefined();
       expect(JSON.parse(firstTextContent(repeated.content))).toMatchObject({ taskName: createdName, workflow: 'safe' });
       expect(pendingTasks().map(({ name }) => name)).toEqual([createdName]);
+      expect(pendingTasks()[0]!.data).toMatchObject({ runtime_assignment: 'local-fast' });
       expect(savedGoalWork()).toEqual([{ taskName: createdName, purpose }]);
+      expect(await savedWorkLog()).toEqual(before);
     });
   });
 
