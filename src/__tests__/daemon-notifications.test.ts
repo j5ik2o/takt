@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readdir, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,10 +8,15 @@ import { readEntirePrivateFile } from '../infra/daemon/privateFile.js';
 
 vi.mock('../infra/daemon/privateFile.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../infra/daemon/privateFile.js')>();
-  return { ...actual, readEntirePrivateFile: vi.fn(actual.readEntirePrivateFile) };
+  return { ...actual, readEntirePrivateFile: vi.fn(async (path: string) => {
+    const hold = gate.hold;
+    if (hold !== undefined) await hold();
+    return actual.readEntirePrivateFile(path);
+  }) };
 });
 
 const signal = new AbortController().signal;
+const gate = vi.hoisted(() => ({ hold: undefined as undefined | (() => Promise<void>) }));
 const fileName = (id: string): string => `${createHash('sha256').update(id).digest('hex')}.json`;
 const readNames = (): string[] => vi.mocked(readEntirePrivateFile).mock.calls.map(([path]) => path.split('/').at(-1) ?? '');
 

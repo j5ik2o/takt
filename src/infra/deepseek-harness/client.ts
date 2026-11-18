@@ -9,8 +9,10 @@ import type { DeepSeekHarness, HarnessNotification } from './sdk-types.js';
 import type { AgentResponse } from '../../core/models/index.js';
 import {
   getNestedObservabilityEnvFingerprint,
+  observabilitySnapshotOf,
   pickNestedObservabilityEnv,
 } from '../../shared/telemetry/index.js';
+import { omitRepositoryIdentityEnv, pickRepositoryIdentityEnv } from '../../shared/utils/repository-identity-env.js';
 import {
   AGENT_FAILURE_CATEGORIES,
   classifyAbortSignalReason,
@@ -420,7 +422,14 @@ function getAmbientEnvironment(): Record<string, string> {
 function getProcessNestedObservabilityFingerprint(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
 ): string {
-  return getNestedObservabilityEnvFingerprint(childProcessEnv ?? getAmbientEnvironment());
+  // Observability falls back to the ambient environment; repository identity does not, because it
+  // reaches the run only through childProcessEnv, the workflow-level opt-in. The ambient fallback
+  // therefore contributes observability keys only, with identity keys stripped.
+  const environment = observabilitySnapshotOf(childProcessEnv) ?? omitRepositoryIdentityEnv(getAmbientEnvironment());
+  return getNestedObservabilityEnvFingerprint({
+    ...environment,
+    ...pickRepositoryIdentityEnv(childProcessEnv),
+  });
 }
 
 /** Separate credential source from runtime home and disable unsafe SDK logs. */
@@ -437,7 +446,16 @@ function resolveProcessEnvironment(
       env[name] = value;
     }
   }
-  Object.assign(env, pickNestedObservabilityEnv(childProcessEnv ?? getAmbientEnvironment()));
+  const observabilitySnapshot = observabilitySnapshotOf(childProcessEnv);
+  Object.assign(
+    env,
+    // Observability may fall back to the ambient environment; repository identity may not, because the
+    // ambient fallback does not pass the workflow's repository_identity opt-in.
+    observabilitySnapshot === undefined
+      ? pickNestedObservabilityEnv(omitRepositoryIdentityEnv(getAmbientEnvironment()))
+      : pickNestedObservabilityEnv(observabilitySnapshot),
+    pickRepositoryIdentityEnv(childProcessEnv),
+  );
 
   // Only the selected reference is propagated: an unselected credential variable must
   // never stand in for the reference the settings selector chose.
