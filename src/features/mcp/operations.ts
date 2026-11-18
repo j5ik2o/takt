@@ -9,6 +9,7 @@ import { loadRunSessionPage } from '../interactive/runSessionReader.js';
 import { jsonResult, textResult, pagedResult, MCP_TEXT_PAGE_BYTES } from './response.js';
 import { goalSummary, goalValuePage, selectGoalValue } from './goalResponse.js';
 import type { ManagerWorkflow } from '../manager/workflowSelection.js';
+import type { ManagerRuntimeAssignment } from '../manager/runtimeAssignmentSelection.js';
 import { getTaskGoalIntegrations } from './goalTaskIntegration.js';
 export { jsonResult } from './response.js';
 import {
@@ -41,6 +42,7 @@ type CreateIssueFromTaskResult = typeof defaultCreateIssueFromTaskResult;
 
 export interface McpOperationDependencies {
   managerWorkflows?: readonly ManagerWorkflow[];
+  managerRuntimeAssignments?: readonly ManagerRuntimeAssignment[];
   turnOperationId?: string;
   readOnly?: boolean;
   saveTaskFile?: SaveTaskFile;
@@ -123,7 +125,11 @@ function taskSummary(cwd: string, task: ReturnType<TaskRunner['listTaskStateItem
     ...(task.mergeTask === undefined ? {} : { mergeTask: task.mergeTask, prNumber: task.prNumber }),
     ...(task.mergeTask !== true || task.completion === undefined ? {} : { completion: task.completion }),
     ...(task.startedAt === undefined ? {} : { startedAt: task.startedAt }),
+    ...(task.createdAt === undefined ? {} : { createdAt: task.createdAt }),
+    ...(task.completedAt === undefined ? {} : { completedAt: task.completedAt }),
+    ...(task.sourceRunSlug === undefined ? {} : { sourceRunSlug: task.sourceRunSlug }),
     ...(task.workflow === undefined ? {} : { workflow: task.workflow }),
+    ...(task.runtimeAssignment === undefined ? {} : { runtimeAssignment: task.runtimeAssignment }),
   };
   if (task.runSlug !== undefined) {
     summary.runSlug = task.runSlug;

@@ -52,3 +52,11 @@ manager:
   workflows:
     - takt-default: TAKT本体の通常の機能追加や不具合修正。TAKT固有の計画・テスト・レビューを行う
     - simple: 1〜2ファイルで済む小さな修正。軽い流れで進める
+
+# provider が rate limit に達したときの切替先（順に試す）。同格のクラウド provider に
+# 限る（2026-11-13 の窓口決定。fraktor-ng-rs の設定と同じ型）
+rate_limit_fallback:
+  switch_chain:
+    - provider: claude
+    # Ollama Cloud の受け皿（opencode / ollama/glm-5.3:cloud）は、月間利用上限の
+    # 到達（2026-11-14）に伴い外した。作業は DGX Spark へ寄せている

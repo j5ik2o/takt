@@ -5,7 +5,7 @@ import type { Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 
-const doubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), allowed: vi.fn(), event: vi.fn() }));
+const doubles = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), allowed: vi.fn(), event: vi.fn(), run: vi.fn() }));
 vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
   constructor(private readonly directory: string) {}
   get(id: string) { return doubles.get(this.directory, id); }
@@ -14,6 +14,7 @@ vi.mock('../infra/goals/store.js', () => ({ GoalStore: class {
 vi.mock('../infra/goals/events.js', async (original) => ({
   ...await original<typeof import('../infra/goals/events.js')>(), saveManagerEvent: doubles.event,
 }));
+vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.run }));
 vi.mock('../features/mcp/operations.js', async (original) => ({
   ...await original<typeof import('../features/mcp/operations.js')>(), assertCwdAllowedByMcpRoot: doubles.allowed,
 }));
@@ -51,6 +52,7 @@ it('saves a human answer with source mcp and records the manager event', async (
     kind: 'answer', goalId, questionId, answer: saved.answer,
   }));
   expect(saved.answerPublicationPending).toBeUndefined();
+  expect(doubles.run).not.toHaveBeenCalled();
   expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ questionId, answer: saved.answer });
 });
 
@@ -80,6 +82,7 @@ it.each(['answered', 'withdrawn'] as const)('rejects answering a %s question wit
   expect(firstTextContent(result.content)).toMatch(/not awaiting|pending/iu);
   expect(goal).toEqual(before);
   expect(doubles.event).not.toHaveBeenCalled();
+  expect(doubles.run).not.toHaveBeenCalled();
 });
 
 it('rejects an answer for a missing question without saving an event', async () => {
@@ -137,6 +140,7 @@ it('reports a persistence failure without saving a manager event', async () => {
 
   expect(result.isError).toBe(true);
   expect(doubles.event).not.toHaveBeenCalled();
+  expect(doubles.run).not.toHaveBeenCalled();
 });
 
 it('rejects decision and scope fields that this tool cannot record', async () => {

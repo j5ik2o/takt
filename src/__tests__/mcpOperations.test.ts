@@ -266,11 +266,36 @@ describe('MCP task goal integration', () => {
   it('keeps the existing summary and omits integration fields for tasks without a goal', async () => {
     vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([task({ goalId: undefined, summary: 'ordinary task' })]);
     const output = await list();
-    expect(output.tasks).toEqual([{ name: 'completed-task', summary: 'ordinary task', status: 'completed' }]);
+    expect(output.tasks).toEqual([{ name: 'completed-task', createdAt: '2026-10-30T00:00:00Z', summary: 'ordinary task', status: 'completed' }]);
     expect(goalDoubles.get).not.toHaveBeenCalled();
     expect(goalGit.resolveGoalBranchSha).not.toHaveBeenCalled();
     expect(goalGit.isGoalCommitIncluded).not.toHaveBeenCalled();
     expect(goalGit.runGoalGit).not.toHaveBeenCalled();
+  });
+
+  it('omits completedAt and sourceRunSlug from the summary when the task has no values', async () => {
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([task({ goalId: undefined })]);
+    const output = await list();
+    expect(output.tasks[0]).not.toHaveProperty('completedAt');
+    expect(output.tasks[0]).not.toHaveProperty('sourceRunSlug');
+    expect(output.tasks[0]?.createdAt).toBe('2026-10-30T00:00:00Z');
+  });
+
+  it('projects createdAt, completedAt, and sourceRunSlug from the task state', async () => {
+    vi.mocked(TaskRunner.prototype.listTaskStateItems).mockReturnValue([task({
+      createdAt: '2026-11-01T12:00:00Z',
+      completedAt: '2026-11-02T08:30:00Z',
+      sourceRunSlug: 'retry-source-run',
+    })]);
+    const output = await list();
+    expect(output.tasks[0]).toMatchObject({
+      createdAt: '2026-11-01T12:00:00Z',
+      completedAt: '2026-11-02T08:30:00Z',
+      sourceRunSlug: 'retry-source-run',
+    });
+    expect(output.tasks[0]?.createdAt).toBe('2026-11-01T12:00:00Z');
+    expect(output.tasks[0]?.completedAt).toBe('2026-11-02T08:30:00Z');
+    expect(output.tasks[0]?.sourceRunSlug).toBe('retry-source-run');
   });
 
   it('checks only the selected page and resolves each goal tip once per call', async () => {

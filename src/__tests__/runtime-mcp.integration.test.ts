@@ -301,6 +301,7 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
 
       expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
         'takt_list_workflows',
+        'takt_list_runtime_assignments',
         'takt_get_workflow',
         'takt_enqueue_goal_task',
         'takt_merge_goal_task',
@@ -311,6 +312,7 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
         'takt_complete_goal',
         'takt_merge_goal_pr',
         'takt_reopen_goal',
+        'takt_update_goal_branches',
         'takt_check_goal_completion',
         'takt_get_goal_diff',
         'takt_get_goal_history',
@@ -328,6 +330,9 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
         'takt_enqueue_task',
         'takt_create_goal',
         'takt_answer_goal_question',
+        'takt_approve_goal_registration',
+        'takt_reject_goal_registration',
+        'takt_list_goal_registration_proposals',
         'takt_list_goals',
         'takt_get_goal',
         'takt_list_tasks',

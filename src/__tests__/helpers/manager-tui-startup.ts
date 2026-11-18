@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { conversationId } from '../../infra/conversations/identity.js';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import stringWidth from 'string-width';
 import { ManagerClientDouble, mount, showProposal, waitFor, summaryA, approveSummary, promptFrame } from './manager-tui-fixtures.js';
 import { getLabel } from '../../shared/i18n/index.js';
+import { MANAGER_REFRESH_INTERVAL_MS } from '../../features/manager/ManagerView.js';
 
 it.each(['ja', 'en'] as const)('shows the status line and assignment without sending a provider request in %s', async (lang) => {
   const context = mount(lang);
@@ -194,10 +195,9 @@ it.each(['ja', 'en'] as const)('projects new notices once while preserving assig
   ] });
   await waitFor(() => expect(context.app.lastFrame()).toContain('New work record'));
   context.client.change({ items: [...context.client.getSnapshot().items] });
-  await new Promise((resolve) => setTimeout(resolve, 550));
+  await vi.waitFor(() => expect(context.client.refresh).toHaveBeenCalled(), { timeout: MANAGER_REFRESH_INTERVAL_MS + 2_000 });
   expect(context.app.lastFrame()).not.toContain('Historical record');
   expect(context.app.lastFrame()!.match(/New work record/gu)).toHaveLength(1);
-  expect(context.client.refresh).toHaveBeenCalled();
   const rows = context.app.lastFrame()!.split('\n');
   expect(rows.at(-1)).toBe([getLabel('manager.assignmentHeading', lang, { name: 'manager-repository' }),
     getLabel('manager.counts', lang, { goals: '0', awaiting: '0', questions: '0' })].join(' | '));
