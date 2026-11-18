@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { answerTaktGoalQuestion } from '../features/mcp/goalQuestionOperations.js';
+import type { AnswerGoalQuestionInput } from '../features/mcp/schemas.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
@@ -35,7 +36,7 @@ beforeEach(() => {
   });
 });
 
-it('saves a human answer with source mcp and the same manager event as the TUI flow', async () => {
+it('saves a human answer with source mcp and records the manager event', async () => {
   goal.questions = [{ id: questionId, body: '出力形式はどれですか', recipient: 'human', status: 'pending' }];
   const before = Date.now();
 
@@ -50,6 +51,7 @@ it('saves a human answer with source mcp and the same manager event as the TUI f
   expect(doubles.event).toHaveBeenCalledExactlyOnceWith(cwd, expect.objectContaining({
     kind: 'answer', goalId, questionId, answer: saved.answer,
   }));
+  expect(saved.answerPublicationPending).toBeUndefined();
   expect(doubles.run).not.toHaveBeenCalled();
   expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ questionId, answer: saved.answer });
 });
@@ -102,7 +104,7 @@ it('rejects answering a retired approval inquiry instead of recording a decision
     operation: { toolName: 'Bash', args: 'ls', cwd, argsDigest: 'a'.repeat(64) },
   }];
 
-  const result = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer: { decision: 'allow' } }, {}, signal);
+  const result = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer: { text: '許可します' } }, {}, signal);
 
   expect(result.isError).toBe(true);
   expect(firstTextContent(result.content)).toMatch(/approval|承認/iu);
@@ -139,4 +141,40 @@ it('reports a persistence failure without saving a manager event', async () => {
   expect(result.isError).toBe(true);
   expect(doubles.event).not.toHaveBeenCalled();
   expect(doubles.run).not.toHaveBeenCalled();
+});
+
+it('rejects decision and scope fields that this tool cannot record', async () => {
+  goal.questions = [{ id: questionId, body: '出力形式はどれですか', recipient: 'human', status: 'pending' }];
+  const answer = { decision: 'allow', scope: 'global' } as unknown as AnswerGoalQuestionInput['answer'];
+
+  const result = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer }, {}, signal);
+
+  expect(result.isError).toBe(true);
+  expect(goal.questions![0]!.status).toBe('pending');
+  expect(doubles.event).not.toHaveBeenCalled();
+});
+
+it('reports that the answer was saved when recording the manager event fails', async () => {
+  goal.questions = [{ id: questionId, body: '出力形式はどれですか', recipient: 'human', status: 'pending' }];
+  doubles.event.mockImplementation(() => { throw new Error('event store unavailable'); });
+
+  const result = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer: { text: 'CSV' } }, {}, signal);
+
+  expect(result.isError).toBe(true);
+  expect(firstTextContent(result.content)).toMatch(/answer was saved/iu);
+  expect(firstTextContent(result.content)).toMatch(/delivery to the manager is pending.*do not answer again/iu);
+  expect(goal.questions![0]!.status).toBe('answered');
+  expect(goal.questions![0]!.answerPublicationPending).toBe(true);
+});
+
+it('keeps the saved-and-pending explanation when the event failure is a permission error', async () => {
+  goal.questions = [{ id: questionId, body: '出力形式はどれですか', recipient: 'human', status: 'pending' }];
+  doubles.event.mockImplementation(() => { throw new Error("EACCES: permission denied, open '/config/manager-inbox/x.json'"); });
+
+  const result = await answerTaktGoalQuestion({ cwd, goalId, questionId, answer: { text: 'CSV' } }, {}, signal);
+
+  expect(result.isError).toBe(true);
+  expect(firstTextContent(result.content)).toMatch(/answer was saved/iu);
+  expect(firstTextContent(result.content)).toMatch(/delivery to the manager is pending.*do not answer again/iu);
+  expect(goal.questions![0]!.answerPublicationPending).toBe(true);
 });

@@ -143,9 +143,7 @@ export const withdrawGoalQuestionInputSchema = goalWriteInputSchema.extend({
   questionId: z.uuid(), reason: GoalQuestionSchema.shape.withdrawalReason,
 });
 export const answerGoalQuestionInputSchema = goalWriteInputSchema.extend({
-  questionId: z.uuid(),
-  answer: GoalAnswerInputSchema
-    .describe('Answer content with the same structure as a human TUI or Slack answer: text, or report for operation requests, or decision with scope.'),
+  questionId: z.uuid(), answer: GoalAnswerInputSchema.pick({ text: true, report: true }),
 });
 export type AnswerGoalQuestionInput = z.input<typeof answerGoalQuestionInputSchema>;
 const goalRegistrationProposalIdentityInputSchema = z.object({

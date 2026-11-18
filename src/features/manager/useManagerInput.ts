@@ -7,6 +7,7 @@ import type { ManagerAbortTarget, useManagerAbortConfirmation } from './useManag
 import type { SaveManagerAnswer, useManagerQuestionAnswer } from './useManagerQuestionAnswer.js';
 import type { useManagerSummaryApproval } from './useManagerSummaryApproval.js';
 import type { ManagerSelectedTarget, ManagerSelectionCommand, useManagerSelection } from './useManagerSelection.js';
+import { CLEAR_COMMAND } from './conversationCommands.js';
 
 export const MAKE_GOAL_COMMAND = '/make-goal';
 
@@ -49,7 +50,7 @@ export function useManagerInput({
     if (!registering.current && pending !== null
       && answerTarget === null && selection.selection === null && abortTarget === null
       && next.text !== editorRef.current.text
-      && !(next.text.trim() !== '' && [MAKE_GOAL_COMMAND, '/verify'].some((command) => command.startsWith(next.text.trim())))) {
+      && !(next.text.trim() !== '' && [MAKE_GOAL_COMMAND, '/verify', CLEAR_COMMAND].some((command) => command.startsWith(next.text.trim())))) {
       summaryApproval.dismiss(pending);
     }
     edit(next);
@@ -71,7 +72,7 @@ export function useManagerInput({
       return;
     }
     if (savingAnswer.current) return;
-    if (key.ctrl && input === 'o') {
+    if (key.ctrl && input === 't') {
       openEpics();
       return;
     }
@@ -90,7 +91,7 @@ export function useManagerInput({
     if (questionAnswer.handleNavigation(key, editorRef)) {
       return;
     }
-    if (abortTarget === null && (key.ctrl && input === 't' || key.pageUp || key.pageDown)) {
+    if (abortTarget === null && (key.ctrl && input === 'o' || key.pageUp || key.pageDown)) {
       browseTools(key.ctrl ? 'toggle' : key.pageUp ? 'previous' : 'next');
       return;
     }

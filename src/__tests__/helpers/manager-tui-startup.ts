@@ -45,7 +45,7 @@ it.each(['ja', 'en'] as const)('shows key guidance followed by one status line a
     ]);
     expect(rows.slice(0, end + 1).join('\n')).not.toContain('manager-repository');
     expect(rows.join('\n')).not.toContain('/make-goal');
-    expect(rows.join('\n')).toContain(lang === 'ja' ? '^O Epic' : '^O Epics');
+    expect(rows.join('\n')).toContain(lang === 'ja' ? '^T Epic' : '^T Epics');
     for (const row of rows) expect(row).not.toMatch(/\^[NP]|Ctrl\+[NP]/iu);
   });
 });
@@ -67,8 +67,8 @@ it.each(['ja', 'en'] as const)('wraps guidance only between whole key items at w
   Object.defineProperty(context.app.stdout, 'columns', { configurable: true, value: 80 });
   context.app.stdout.emit('resize');
   const items = lang === 'ja'
-    ? ['Enter 送信', 'Shift+Enter 改行', 'Esc 中断', '^R 問い合わせ', '^G ゴール', '^O Epic', '^C 終了']
-    : ['Enter Send', 'Shift+Enter Newline', 'Esc Interrupt', '^R Inquiries', '^G Goals', '^O Epics', '^C Exit'];
+    ? ['Enter 送信', 'Shift+Enter 改行', 'Esc 中断', '^R 問い合わせ', '^G ゴール', '^T Epic', '^C 終了']
+    : ['Enter Send', 'Shift+Enter Newline', 'Esc Interrupt', '^R Inquiries', '^G Goals', '^T Epics', '^C Exit'];
   await waitFor(() => {
     const rows = context.app.lastFrame()!.split('\n');
     const end = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
@@ -82,7 +82,7 @@ it.each(['ja', 'en'] as const)('wraps guidance only between whole key items at w
 
 const completionRows = (frame: string): string[] => frame.split('\n').filter((row) => /^(?:❯| ) \/\S+/u.test(row));
 
-it.each(['ja', 'en'] as const)('offers /make-goal and /verify with their descriptions below the input at width 80 in %s', async (lang) => {
+it.each(['ja', 'en'] as const)('offers /make-goal, /verify and /clear with their descriptions below the input at width 80 in %s', async (lang) => {
   const context = mount(lang);
   Object.defineProperty(context.app.stdout, 'columns', { configurable: true, value: 80 });
   context.app.stdout.emit('resize');
@@ -93,13 +93,15 @@ it.each(['ja', 'en'] as const)('offers /make-goal and /verify with their descrip
     expect(candidates).toEqual([
       `❯ /make-goal  ${getLabel('manager.makeGoalDescription', lang)}`,
       `  /verify  ${getLabel('interactive.commands.verify', lang)}`,
+      `  /clear  ${getLabel('manager.clearDescription', lang)}`,
     ]);
     const rows = frame.split('\n');
     const promptEnd = rows.map((row) => row.startsWith('╰')).lastIndexOf(true);
     const candidate = rows.indexOf(candidates[0]!);
     expect(candidate).toBe(promptEnd + 1);
     expect(rows[candidate + 1]).toBe(candidates[1]);
-    expect(rows[candidate + 2]).toContain('Enter');
+    expect(rows[candidate + 2]).toBe(candidates[2]);
+    expect(rows[candidate + 3]).toContain('Enter');
     for (const row of promptFrame(context).split('\n')) expect(stringWidth(row)).toBeLessThanOrEqual(80);
   });
   expect(context.client.submit).not.toHaveBeenCalled();
@@ -128,11 +130,11 @@ it.each(['/xyz', 'こんにちは', '説明 /ma', '> /ma', '`/ma`', '~~~\n/ma\n~
   expect(context.client.submit).not.toHaveBeenCalled();
 });
 
-it('hides both /make-goal and /verify with Escape and restores /make-goal after narrowing the same draft', async () => {
+it('hides /make-goal, /verify and /clear with Escape and restores /make-goal after narrowing the same draft', async () => {
   const context = mount();
   context.app.stdin.write('/');
   await waitFor(() => expect(completionRows(context.app.lastFrame()!).map((row) => row.match(/\/\S+/u)?.[0]))
-    .toEqual(['/make-goal', '/verify']));
+    .toEqual(['/make-goal', '/verify', '/clear']));
   context.app.stdin.write('\x1b[27u');
   await waitFor(() => expect(completionRows(context.app.lastFrame()!)).toEqual([]));
   context.app.stdin.write('m');

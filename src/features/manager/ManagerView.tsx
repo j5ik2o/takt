@@ -1,6 +1,6 @@
 import { basename } from 'node:path';
 import { Box, Text, useStdout } from 'ink';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
 import { useManagerAbortConfirmation, type ManagerAbortTarget } from './useManagerAbortConfirmation.js';
 import { useManagerQuestionAnswer, type SaveManagerAnswer } from './useManagerQuestionAnswer.js';
 import type { PendingQuestion } from './inquiryAnswer.js';
@@ -19,6 +19,7 @@ import { formatGoalName } from './goalDisplay.js';
 import type { ManagerExecutionContext } from './startupResolution.js';
 import type { ConversationIpcClient } from './conversationIpcClient.js';
 import type { ConversationCommand, OperationResult } from './conversationPort.js';
+import { CLEAR_COMMAND } from './conversationCommands.js';
 import type { ConversationActivity } from '../../shared/types/conversation-activity.js';
 import { MAX_VISIBLE_ROWS, PromptInput } from '../tui/PromptInput.js';
 import { layoutPromptRows } from '../tui/promptLayout.js';
@@ -34,16 +35,21 @@ import { getLabel } from '../../shared/i18n/index.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { measureWidth } from '../../shared/utils/grapheme.js';
 import { formatElapsedTime, truncateStatusText } from '../tui/statusText.js';
-import { ToolActivityDisplay } from '../../shared/ui/ToolActivityDisplay.js';
 import { ToolActivityView } from '../tui/ToolActivityView.js';
-import { createToolActivityViewState, excludeToolActivityTranscript, mergeToolActivityTranscript, moveToolActivityView, toggleToolActivityView, toolActivityViewPage,
-  type ToolActivityTranscriptRange } from '../tui/toolActivityViewState.js';
+import { MAX_QUEUE_ROWS, QueueView } from '../tui/QueueView.js';
+import { MARKER_WIDTH } from '../tui/transcriptOutput.js';
+import { ToolActivityDisplayStore, toolTurnKey } from './toolActivityDisplayStore.js';
+import { completedToolTranscript, createToolActivityViewState, moveToolActivityView, toggleToolActivityView, toolActivityViewPage } from '../tui/toolActivityViewState.js';
+import type { ToolActivityEntry } from '../../shared/tool-activity/types.js';
+import { toolActivityGroupSummary } from '../../shared/tool-activity/presentation.js';
 
 const MANAGER_COMMANDS = [{ command: MAKE_GOAL_COMMAND, labelKey: 'manager.makeGoalDescription' },
-  { command: '/verify', labelKey: 'interactive.commands.verify' }];
+  { command: '/verify', labelKey: 'interactive.commands.verify' }, { command: CLEAR_COMMAND, labelKey: 'manager.clearDescription' }];
 const MIN_STATUS_HEADING_WIDTH = 12;
 /** 接続中の定期 refresh の間隔。操作直後の refresh は待たずに即時に行う。 */
 export const MANAGER_REFRESH_INTERVAL_MS = 2_000;
+/** 画面とスクロールバックを消し、カーソルを左上へ戻す。 */
+const CLEAR_TERMINAL = '\x1b[2J\x1b[3J\x1b[H';
 
 export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, assignment }: {
   assignment: ManagerExecutionContext['assignment'];
@@ -52,6 +58,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   onExit: () => void; initialDiagnostics: readonly string[];
 }): ReactElement {
   const snapshot = useSyncExternalStore(client.subscribe, client.getSnapshot);
+  const [toolDisplays] = useState(() => new ToolActivityDisplayStore(client));
+  const { display: toolDisplay, ready: toolReady } = useSyncExternalStore(toolDisplays.subscribe, toolDisplays.getSnapshot);
   const latest = useRef(snapshot);
   latest.current = snapshot;
   const editorRef = useRef(createEditorState(''));
@@ -59,16 +67,16 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const answerEditorRef = useRef(createEditorState(''));
   const [answerEditor, setAnswerEditor] = useState(answerEditorRef.current);
   const [entries, setEntries] = useState<TranscriptEntry[]>(() => initialDiagnostics.map((content) => ({ role: 'system', content: toDisplayText(content) })));
+  const [transcriptGeneration, setTranscriptGeneration] = useState(0);
   const [approve, setApprove] = useState(false);
   const [sending, setSending] = useState(false);
   const [activity, setActivity] = useState<{ operationId: string; generation: number; value: ConversationActivity } | null>(null);
   const [toolView, setToolView] = useState(createToolActivityViewState);
-  const displayedTools = useRef<{ turn: string | undefined; rows: ToolActivityTranscriptRange[]; committed: ToolActivityTranscriptRange[] }>(
-    { turn: undefined, rows: [], committed: [] });
   const toolViewTurn = useRef<string | undefined>(undefined);
   const submitting = useRef(0);
   const [summarizing, setSummarizing] = useState(false);
   const summaryOperation = useRef<string | null>(null);
+  const clearOperation = useRef<string | null>(null);
   const active = useRef(false);
   const registering = useRef(false);
   const selected = useRef(false);
@@ -77,6 +85,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const displayed = useRef(new Set<string>());
   const displayedMessages = useRef(new Set<string>());
   const displayedResults = useRef(new Set<string>());
+  const handledResults = useRef(new Set<string>());
   const displayedSummaries = useRef(new Set<string>());
   const interruptedTurn = useRef<{ operationId: string; generation?: number } | null>(null);
   const clock = useRef<{ operationId: string; generation?: number; startedAt: number } | null>(null);
@@ -85,9 +94,11 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const pendingAnswers = useRef(new Map<string, { text: string; questionId: string }>());
   const savingAnswer = useRef<{ operationId: string | null } | null>(null);
   const goalOperations = useRef(new Map<string, { kind: 'pause' | 'resume' | 'abort'; goal: ManagerAbortTarget['goal'] }>());
-  const { stdout } = useStdout();
+  const { stdout, write } = useStdout();
   const [columns, setColumns] = useState(() => stdout.columns);
   const [rows, setRows] = useState(() => stdout.rows);
+  const toolColumns = useRef(columns);
+  toolColumns.current = columns;
   useEffect(() => {
     const handleResize = (): void => { setColumns(stdout.columns); setRows(stdout.rows); };
     stdout.on('resize', handleResize);
@@ -130,19 +141,39 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const append = (content: string, role: TranscriptEntry['role'] = 'system'): void => {
     if (mounted.current) setEntries((previous) => [...previous, { role, content: toDisplayText(sanitizeSensitiveText(content)) }]);
   };
+  const appendUserMessage = (message: { operationId: string; message: string }): void => {
+    if (displayedMessages.current.has(message.operationId)) return;
+    displayedMessages.current.add(message.operationId);
+    append(message.message, 'user');
+  };
+  const committedTools = useRef(new Set<string>());
+  const appendTool = (entry: ToolActivityEntry): void => {
+    const key = JSON.stringify([entry.context?.operationId, entry.context?.generation, entry.key]);
+    if (committedTools.current.has(key) || entry.status === 'running') return;
+    committedTools.current.add(key);
+    const content = completedToolTranscript(entry, toolColumns.current ?? 80, {
+      compact: '', expanded: '', more: getLabel('tui.ui.toolHistoryMore', lang), end: '', completion: getLabel('tui.ui.toolHistoryCompletion', lang),
+      running: getLabel('tui.ui.toolHistoryRunning', lang),
+    });
+    if (mounted.current) setEntries((previous) => [...previous, { role: 'tool', content: toDisplayText(content) }]);
+  };
   const send = async (command: ConversationCommand, onAccepted?: (id: string) => void): Promise<string | null> => {
     submitting.current++;
     setSending(true);
     try {
       const result = await client.submit(command, onAccepted);
-      if (result.kind === 'accepted') {
-        if (result.queuedMessageCount !== undefined) append(getLabel('manager.conversation.queued', lang, { count: String(result.queuedMessageCount) }));
-        return result.operationId;
-      }
+      // A queued message waits in the queue area above the input, not in the log:
+      // a line here would land in the middle of the turn that is still running.
+      if (result.kind === 'accepted') return result.operationId;
+      if (command.kind === 'message' && command.display !== false) append(command.text, 'user');
       append(result.kind === 'error' ? result.message : getLabel('manager.conversation.busy', lang));
       if (result.kind === 'error') void client.refresh().catch((error: unknown) => append(getErrorMessage(error)));
       return null;
-    } catch (error) { append(getErrorMessage(error)); return null; }
+    } catch (error) {
+      // Acceptance may have succeeded before the connection failed. The next
+      // snapshot supplies its operationId; an anonymous local echo would duplicate it.
+      append(getErrorMessage(error)); return null;
+    }
     finally { submitting.current--; if (mounted.current) setSending(submitting.current > 0); }
   };
   const summaryApproval = useManagerSummaryApproval({ selected, setApprove, resetChoice,
@@ -202,19 +233,36 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     }
     if (snapshot.readStatus === 'complete') selection.refresh(display);
   }, [snapshot.items, snapshot.readStatus, snapshot.error]);
-  const showResult = (result: OperationResult, operationId: string): void => {
+  /** 結果を会話ログへ一度だけ積む。ライブの配送とスナップショットからの復元で同じ表示にする。 */
+  const appendResult = (result: OperationResult, operationId: string, goal?: ManagerAbortTarget['goal']): void => {
     if (displayedResults.current.has(operationId)) return;
     displayedResults.current.add(operationId);
-    const goalOperation = goalOperations.current.get(operationId);
-    goalOperations.current.delete(operationId);
+    // 保存済みの結果がライブより先に届いても消すように、表示の入口で判定する。
+    if (clearOperation.current === operationId && result.kind === 'notice' && mounted.current) {
+      // Static は書き出した行を端末に残し、何件目まで書いたかも覚えている。配列を空にするだけでは
+      // 前の会話が画面に残り、続く通知も書かれないため、端末を消してから Static を作り直す。
+      // 消去は新しい Static が書き出す前に済ませる必要があるので、描画後の Effect ではなくここで行う。
+      if (stdout.isTTY) write(CLEAR_TERMINAL);
+      setEntries([]);
+      setTranscriptGeneration((generation) => generation + 1);
+    }
     if (result.kind === 'goal_registered') append(getLabel('manager.goalRegistered', lang, {
       name: formatGoalName(result.goal.objective), id: result.goal.id, branch: result.goal.branch,
     }));
     else {
-      const message = goalOperation !== undefined && result.kind === 'notice'
-        ? formatGoalName(goalOperation.goal.objective) + '\n' + result.message : result.message;
+      const message = goal !== undefined && result.kind === 'notice'
+        ? formatGoalName(goal.objective) + '\n' + result.message : result.message;
       append(message, result.kind === 'reply' ? 'assistant' : 'system');
     }
+    if (result.kind === 'error' && result.answerSaved) append(getLabel('manager.conversation.answer_saved', lang));
+  };
+  const showResult = (result: OperationResult, operationId: string): void => {
+    // 保存済みの結果がスナップショットから先に表示されていても、ライブの結果を受けた後処理は省かない。
+    if (handledResults.current.has(operationId)) return;
+    handledResults.current.add(operationId);
+    const goalOperation = goalOperations.current.get(operationId);
+    appendResult(result, operationId, goalOperation?.goal);
+    goalOperations.current.delete(operationId);
     if (goalOperation?.kind === 'abort') setAbortTarget(result.kind === 'error'
       ? { goal: goalOperation.goal, retry: true } : null);
     if (summaryOperation.current === operationId) {
@@ -222,7 +270,6 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       summaryOperation.current = null;
       setSummarizing(false);
     }
-    if (result.kind === 'error' && result.answerSaved) append(getLabel('manager.conversation.answer_saved', lang));
     const answer = pendingAnswers.current.get(operationId);
     pendingAnswers.current.delete(operationId);
     if (savingAnswer.current?.operationId === operationId) savingAnswer.current = null;
@@ -236,19 +283,30 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   useEffect(() => {
     mounted.current = true;
     let observedRunning = client.getSnapshot().state?.running;
-    const unsubscribeState = client.subscribe(() => {
-      const state = client.getSnapshot().state;
+    const observeState = (): void => {
+      const current = client.getSnapshot();
+      if (current.connection === 'connected' && current.readStatus === 'complete') {
+        for (const item of current.items) {
+          if (item.kind === 'user_message') {
+            if (!item.pending || current.state?.running?.operationId === item.operationId) appendUserMessage(item);
+          } else if (item.kind === 'tool_history') {
+            for (const entry of item.history.history.entries) appendTool(entry);
+          } else if (item.kind === 'turn_result') appendResult(item.result, item.operationId);
+        }
+      }
+      const state = current.state;
       if (state?.interrupted && state.running === null && observedRunning != null) {
         interruptedTurn.current = { operationId: observedRunning.operationId, generation: observedRunning.generation };
       }
       observedRunning = state?.running;
-    });
+    };
+    observeState();
+    const unsubscribeState = client.subscribe(observeState);
     const unsubscribe = client.onOutput((output) => {
       if (output.kind === 'user_message') {
-        if (!displayedMessages.current.has(output.operationId)) {
-          displayedMessages.current.add(output.operationId);
-          append(output.message, 'user');
-        }
+        appendUserMessage(output);
+      } else if (output.kind === 'tool_completed') {
+        if (toolDisplays.getSnapshot().ready) appendTool(output.entry);
       } else if (output.kind === 'result') {
         setActivity((current) => current?.operationId === output.operationId ? null : current);
         showResult(output.result, output.operationId);
@@ -288,20 +346,13 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   };
   const submit = (text: string): void => {
     const summaryRequest = text.trim() === MAKE_GOAL_COMMAND;
-    if (!summaryRequest) {
-      const content = displayedTools.current.rows.map((range) => range.text.replace(/\n$/u, '') + (range.omitted ? '…' : '')).join('\n');
-      if (content !== '') append(content);
-      displayedTools.current.committed = mergeToolActivityTranscript(displayedTools.current.committed, displayedTools.current.rows);
-      displayedTools.current.rows = [];
-      append(text, 'user');
-    }
-    else setSummarizing(true);
+    if (summaryRequest) setSummarizing(true);
     resetChoice();
     void send({ kind: 'message', text: summaryRequest ? getLabel('manager.goSummaryRequest', lang) : text,
       ...(summaryRequest ? { display: false, requestProposal: true } : {}) },
       (id) => {
         if (summaryRequest) summaryOperation.current = id;
-        else displayedMessages.current.add(id);
+        if (text.trim() === CLEAR_COMMAND) clearOperation.current = id;
       })
       .then((id) => { if (id === null && summaryRequest) setSummarizing(false); });
   };
@@ -408,25 +459,28 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     epicsOpen ? layoutPromptRows(visibleEditor.text, visibleEditor.cursor, contentWidth).rows.length : MAX_VISIBLE_ROWS,
     (rows ?? 24) - epicChromeRows - minimumEpicRows));
   const epicPageRows = Math.max(minimumEpicRows, (rows ?? 24) - epicChromeRows - epicPromptRows);
-  const toolHistory = snapshot.items.find((item) => item.kind === 'tool_history')?.history;
-  const toolTurn = running != null ? JSON.stringify([running.operationId, running.generation])
-    : toolHistory === undefined ? undefined : JSON.stringify([toolHistory.operationId, toolHistory.generation]);
+  const toolContext = toolDisplay.history.entries().at(-1)?.context;
+  const toolTurn = running != null ? toolTurnKey(running) : toolContext?.operationId === undefined ? undefined
+    : toolTurnKey({ operationId: toolContext.operationId, generation: toolContext.generation });
   const currentToolView = toolViewTurn.current === toolTurn ? toolView : createToolActivityViewState();
-  const toolDisplay = useMemo(() => {
-    const display = new ToolActivityDisplay('silent', false, () => {}, false);
-    if (toolHistory !== undefined && (running == null
-      || toolHistory.operationId === running.operationId && toolHistory.generation === running.generation)) {
-      display.restore({ ...toolHistory.history, entries: toolHistory.history.entries.filter((entry) =>
-        entry.status !== 'running' || !toolHistory.finished && running != null) });
-    }
-    return display;
-  }, [toolHistory, running?.operationId, running?.generation]);
-  const toolGroups = toolDisplay.groups();
+  const allToolGroups = toolReady ? toolDisplay.groups() : [];
+  const toolGroups = currentToolView.expanded ? allToolGroups : allToolGroups.flatMap((group) => {
+    const entries = group.entries.filter((entry) => entry.status === 'running');
+    return entries.length === 0 ? [] : [{ ...group, summary: toolActivityGroupSummary(entries[0]!, entries.length), entries }];
+  });
   const toolLabels = {
     compact: getLabel('manager.toolHistoryCompact', lang), expanded: getLabel('manager.toolHistoryExpanded', lang),
     more: getLabel('tui.ui.toolHistoryMore', lang), end: getLabel('tui.ui.toolHistoryEnd', lang),
-    completion: getLabel('tui.ui.toolHistoryCompletion', lang),
+    completion: getLabel('tui.ui.toolHistoryCompletion', lang), running: getLabel('tui.ui.toolHistoryRunning', lang),
   };
+  const toolPageColumns = (columns ?? 80) - MARKER_WIDTH;
+  const queuedMessages = snapshot.items.flatMap((item) => item.kind === 'user_message' && item.pending
+    && item.operationId !== running?.operationId ? [item.message] : []);
+  const queueRows = conversationInput && queuedMessages.length > 0
+    ? 1 + Math.min(MAX_QUEUE_ROWS, queuedMessages.length) : 0;
+  const hiddenQueued = queuedMessages.length - Math.max(0, queueRows - 1);
+  const queueHeading = [getLabel('tui.ui.queuedCount', lang, { count: String(queuedMessages.length) }),
+    ...(hiddenQueued > 0 ? [getLabel('tui.ui.queuedMore', lang, { count: String(hiddenQueued) })] : [])].join('  ');
   const promptRows = Math.min(MAX_VISIBLE_ROWS, layoutPromptRows(visibleEditor.text, visibleEditor.cursor, contentWidth).rows.length);
   const completionRows = conversationInput ? Math.min(3, slashCompletion.completions.length) : 0;
   let hintRows = 1;
@@ -439,23 +493,19 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     }
     hintRowWidth += width;
   }
-  const toolHeight = epicsOpen || selection.selection !== null || answerTarget !== null || abortTarget !== null || toolGroups.length === 0 ? 0
-    : Math.max(0, (rows ?? 24) - promptRows - 2 - completionRows - 1 - hintRows
+  const toolContentHeight = epicsOpen || selection.selection !== null || answerTarget !== null || abortTarget !== null ? 0
+    : Math.max(0, (rows ?? 24) - promptRows - 2 - completionRows - 1 - hintRows - queueRows
       - (splitStatus ? 2 : 1) - (summaryVisible ? 6 : 0)
       - Number(snapshot.connection !== 'connected') - Number(snapshot.readStatus !== 'complete') - Number(state?.interrupted === true));
-  const toolPage = toolActivityViewPage(toolDisplay, toolGroups, currentToolView, columns ?? 80,
+  const toolHeight = !toolReady || allToolGroups.length === 0 ? 0
+    : toolGroups.length === 0 ? Math.min(1, toolContentHeight) : toolContentHeight;
+  const toolPage = toolActivityViewPage(toolDisplay, toolGroups, currentToolView, toolPageColumns,
     Math.max(0, toolHeight - 1), toolLabels);
   useEffect(() => {
-    if (displayedTools.current.turn !== toolTurn) {
-      const content = displayedTools.current.rows.map((range) => range.text.replace(/\n$/u, '') + (range.omitted ? '…' : '')).join('\n');
-      if (content !== '') append(content);
-      displayedTools.current = { turn: toolTurn, rows: [], committed: [] };
-      toolViewTurn.current = toolTurn;
-      setToolView(createToolActivityViewState());
-    }
-    displayedTools.current.rows = mergeToolActivityTranscript(displayedTools.current.rows,
-      excludeToolActivityTranscript(toolPage.transcript ?? [], displayedTools.current.committed));
-  }, [toolTurn, toolPage]);
+    if (toolViewTurn.current === toolTurn) return;
+    toolViewTurn.current = toolTurn;
+    setToolView(createToolActivityViewState());
+  }, [toolTurn]);
   useManagerInput({
     exiting, active, registering, savingAnswer, editorRef: answerTarget === null ? editorRef : answerEditorRef,
     edit: answerTarget === null ? edit : editAnswer, submit, onExit, contentWidth, canApprove,
@@ -474,7 +524,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
       if (toolHeight <= 0) return;
       setToolView((current) => direction === 'toggle' ? toggleToolActivityView(current)
         : moveToolActivityView(current,
-          toolActivityViewPage(toolDisplay, toolGroups, current, columns ?? 80, Math.max(0, toolHeight - 1), toolLabels), direction));
+          toolActivityViewPage(toolDisplay, toolGroups, current, toolPageColumns, Math.max(0, toolHeight - 1), toolLabels), direction));
     },
     onInputUnavailable: () => append(getLabel('manager.inputUnavailableDuringAbort', lang)),
   });
@@ -489,7 +539,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const statusLabel = elapsed === undefined ? displayedActivity
     : displayedActivity === '' ? elapsed : `${displayedActivity} ${elapsed}`;
   return <Box flexDirection="column">
-    <TranscriptView entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
+    <TranscriptView key={transcriptGeneration} entries={entries} userMessageColors={FALLBACK_USER_MESSAGE_COLORS}
       startupNotice={getLabel('manager.experimentalNotice', lang)} />
     {epicsOpen ? epicNoticeLines.length > 0 && <Text wrap="truncate-end">{epicNoticeLines.join('\n')}</Text>
       : noticeMessages.map((text) => <Text key={text}>{text}</Text>)}
@@ -502,6 +552,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} />}
     {!epicsOpen && toolHeight > 0 && <ToolActivityView page={toolPage} state={currentToolView} labels={toolLabels} height={toolHeight} />}
     <StatusLine busy={busy} label={statusLabel} streamed="" />
+    {queueRows > 0 && <QueueView heading={queueHeading}
+      lines={queuedMessages.slice(0, queueRows - 1).map((message) => sanitizeSensitiveText(message))} />}
     <PromptInput text={visibleEditor.text} cursor={visibleEditor.cursor} contentWidth={contentWidth}
       placeholder={answerTarget === null ? (ja ? 'ゴールを相談してください' : 'Discuss your goal') : (ja ? '回答を入力してください' : 'Enter your answer')}
       hint={inputHint} showHint={false}

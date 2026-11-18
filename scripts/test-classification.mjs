@@ -387,6 +387,7 @@ export const publicContractIntegrationTestFiles = Object.freeze([
 export const lightContractIntegrationTestFiles = Object.freeze([
   'src/__tests__/analytics-workflowExecution.test.ts',
   'src/__tests__/cancellable-prompt-pipe.test.ts',
+  'src/__tests__/daemon-conversation-delivery.integration.test.ts',
   'src/__tests__/daemon-dispatcher.integration.test.ts',
   'src/__tests__/daemon-manager-patrol.integration.test.ts',
   'src/__tests__/daemon-reachability.integration.test.ts',
@@ -457,6 +458,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/pi-sdk-compat.integration.test.ts',
   'src/__tests__/repertoire/add-integration.test.ts',
   'src/__tests__/repertoire/remove-integration.test.ts',
+  'src/__tests__/runtime-assignment-missing-goal-task.integration.test.ts',
   'src/__tests__/runtime-assignment.integration.test.ts',
   'src/__tests__/runtime-provider-aux-entry.integration.test.ts',
   'src/__tests__/runtime-provider-internal-agents.integration.test.ts',
