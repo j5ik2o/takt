@@ -12,7 +12,7 @@ import {
   observabilitySnapshotOf,
   pickNestedObservabilityEnv,
 } from '../../shared/telemetry/index.js';
-import { pickRepositoryIdentityEnv } from '../../shared/utils/repository-identity-env.js';
+import { omitRepositoryIdentityEnv, pickRepositoryIdentityEnv } from '../../shared/utils/repository-identity-env.js';
 import {
   AGENT_FAILURE_CATEGORIES,
   classifyAbortSignalReason,
@@ -422,12 +422,14 @@ function getAmbientEnvironment(): Record<string, string> {
 function getProcessNestedObservabilityFingerprint(
   childProcessEnv: Readonly<Record<string, string>> | undefined,
 ): string {
-  const environment = observabilitySnapshotOf(childProcessEnv);
-  // The ambient environment may carry repository identity keys; those reach the run only through
-  // childProcessEnv, the workflow-level opt-in, so the ambient fallback contributes observability keys only.
-  return getNestedObservabilityEnvFingerprint(
-    environment === undefined ? undefined : { ...environment, ...pickRepositoryIdentityEnv(childProcessEnv) },
-  );
+  // Observability falls back to the ambient environment; repository identity does not, because it
+  // reaches the run only through childProcessEnv, the workflow-level opt-in. The ambient fallback
+  // therefore contributes observability keys only, with identity keys stripped.
+  const environment = observabilitySnapshotOf(childProcessEnv) ?? omitRepositoryIdentityEnv(getAmbientEnvironment());
+  return getNestedObservabilityEnvFingerprint({
+    ...environment,
+    ...pickRepositoryIdentityEnv(childProcessEnv),
+  });
 }
 
 /** Separate credential source from runtime home and disable unsafe SDK logs. */
