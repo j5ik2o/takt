@@ -17,16 +17,17 @@ function fixture() {
     questionAnswer: { answerTarget: null, bodyText: '', clearAnswer: vi.fn(() => true), beginAnswer: vi.fn(), switchToFreeText: vi.fn(),
       handleNavigation: vi.fn(() => false), handleInput: vi.fn(() => true) },
     summaryApproval: { pending: null, setPending: vi.fn(), dismiss: vi.fn(), handleInput: vi.fn(() => true) },
-    selection: { selection: null, open: vi.fn(() => true), refresh: vi.fn(), handleInput: vi.fn() },
+    selection: { selection: null, open: vi.fn(() => true), close: vi.fn(), refresh: vi.fn(), handleInput: vi.fn() },
     selectTarget: vi.fn(), abortGoal: vi.fn(async () => {}), saveAnswer: vi.fn(async () => {}), register: vi.fn(async () => {}),
     onInputUnavailable: vi.fn(), openMenu: vi.fn(), slashCompletion: { completions: [], completionIndex: 0, reset: vi.fn(), handleInput: vi.fn(() => false) },
+    epicsOpen: false, openEpics: vi.fn(), handleEpicInput: vi.fn(),
   };
   return { options, bind() {
     useManagerInput(options);
     return hooks.input.mock.calls.at(-1)![0] as (input: string, key: Key) => void;
   } };
 }
-it('routes history controls without changing the draft, completion selection or active turn', () => {
+it('routes Ctrl+O and history paging without changing the draft, completion selection or active turn', () => {
   const f = fixture(); const input = f.bind();
   f.options.editorRef.current = { ...createEditorState('日本語の下書き'), cursor: 3 };
   const editor = structuredClone(f.options.editorRef.current);
@@ -37,6 +38,7 @@ it('routes history controls without changing the draft, completion selection or 
   expect(f.options.editorRef.current).toEqual(editor);
   expect(f.options.edit).not.toHaveBeenCalled();
   expect(f.options.submit).not.toHaveBeenCalled();
+  expect(f.options.openEpics).not.toHaveBeenCalled();
   expect(f.options.abortTurn).not.toHaveBeenCalled();
   expect(f.options.slashCompletion.reset).not.toHaveBeenCalled();
   input('', { ...key, escape: true });
@@ -87,4 +89,20 @@ it('submits /verify from the TUI without dismissing the pending proposal while t
   f.options.editorRef.current = createEditorState('/verify');
   input('', { ...key, return: true });
   expect(f.options.submit).toHaveBeenCalledExactlyOnceWith('/verify');
+});
+
+it('routes Ctrl+T to Epics before turn interruption and blocks pasted conversation input while browsing', () => {
+  const f = fixture();
+  f.options.epicsOpen = true;
+  const input = f.bind();
+  input('', { ...key, escape: true });
+  expect(f.options.handleEpicInput).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ escape: true }));
+  expect(f.options.abortTurn).not.toHaveBeenCalled();
+  const paste = hooks.paste.mock.calls.at(-1)![0] as (text: string) => void;
+  paste('Do not modify the draft');
+  expect(f.options.edit).not.toHaveBeenCalled();
+  input('t', { ...key, ctrl: true });
+  expect(f.options.openEpics).toHaveBeenCalledOnce();
+  expect(f.options.browseTools).not.toHaveBeenCalled();
+  expect(f.options.submit).not.toHaveBeenCalled();
 });

@@ -1,4 +1,5 @@
 import { z } from 'zod/v4';
+import { EpicSnapshotSchema } from '../../infra/epics/projection.js';
 import { ConversationActivitySchema, ConversationTextSchema } from '../../shared/types/conversation-activity.js';
 import { isAbsolute } from 'node:path';
 import { conversationId } from '../../infra/conversations/identity.js';
@@ -7,7 +8,7 @@ import { ApprovalSchema, ConversationAssignmentSchema, ManagerConversationAssign
 import { GoalQuestionSchema, GoalRecordObjectSchema, GoalSchema } from '../../infra/goals/schema.js';
 import type { ConversationState, OutputVersion, PortOutput, SnapshotValue, SnapshotMode } from './conversationPort.js';
 import { snapshotItemKey } from './snapshotChanges.js';
-import { ToolActivityTurnStateSchema } from '../../shared/tool-activity/schema.js';
+import { ToolActivityTurnStateSchema, ManagerToolActivityEntrySchema } from '../../shared/tool-activity/schema.js';
 import type { ConversationDisplayAssignment } from './conversationPort.js';
 
 const sequence = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
@@ -47,8 +48,19 @@ const displayAssignmentSchema = z.union([
   z.object({ kind: z.literal('repository'), repositoryDirectory: repository, repositoryDirectories: z.array(repository) }).strict(),
   z.object({ kind: z.literal('workspace'), workspaceId: z.uuid(), name: z.string(), repositoryDirectories: z.array(repository) }).strict(),
 ]);
+const operationResultSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('reply'), message: z.string() }).strict(),
+  z.object({ kind: z.literal('notice'), message: z.string() }).strict(),
+  z.object({ kind: z.literal('goal_registered'), goal: GoalSchema }).strict(),
+  z.object({ kind: z.literal('answer_saved'), answerSaved: z.boolean(), message: z.string() }).strict(),
+  z.object({ kind: z.literal('error'), code: z.string(), message: z.string(), answerSaved: z.boolean().optional() }).strict(),
+]);
+const savedOperationId = z.string().min(1).max(128);
 const snapshotItemSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('tool_history'), history: ToolActivityTurnStateSchema }).strict(),
+  EpicSnapshotSchema,
+  z.object({ kind: z.literal('tool_history'), history: ToolActivityTurnStateSchema, acceptedSequence: sequence.optional() }).strict(),
+  z.object({ kind: z.literal('user_message'), operationId: savedOperationId, message: z.string(), acceptedSequence: sequence, pending: z.boolean() }).strict(),
+  z.object({ kind: z.literal('turn_result'), operationId: savedOperationId, acceptedSequence: sequence, result: operationResultSchema }).strict(),
   z.object({ kind: z.literal('state'), state: stateSchema }).strict(),
   z.object({ kind: z.literal('assignment'), assignment: displayAssignmentSchema }).strict(),
   z.object({ kind: z.literal('goal'), goal: GoalRecordObjectSchema.pick({ id: true, objective: true, status: true, executionStatus: true })
@@ -57,15 +69,10 @@ const snapshotItemSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('display_event'), event: z.object({ id: z.string(), message: z.string() }).strict() }).strict(),
   z.object({ kind: z.literal('remove'), key: z.string().min(1) }).strict(),
 ]);
-const operationResultSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('reply'), message: z.string() }).strict(),
-  z.object({ kind: z.literal('notice'), message: z.string() }).strict(),
-  z.object({ kind: z.literal('goal_registered'), goal: GoalSchema }).strict(),
-  z.object({ kind: z.literal('answer_saved'), answerSaved: z.boolean(), message: z.string() }).strict(),
-  z.object({ kind: z.literal('error'), code: z.string(), message: z.string(), answerSaved: z.boolean().optional() }).strict(),
-]);
 const outputItemSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('tool_history'), history: ToolActivityTurnStateSchema }).strict(),
+  z.object({ kind: z.literal('tool_started'), entry: ManagerToolActivityEntrySchema }).strict(),
+  z.object({ kind: z.literal('tool_output'), key: z.string().min(1), text: z.string(), tail: z.string().optional() }).strict(),
+  z.object({ kind: z.literal('tool_completed'), entry: ManagerToolActivityEntrySchema }).strict(),
   ConversationTextSchema.extend({ operationId: z.uuid(), generation: sequence }).strict(),
   z.object({ kind: z.literal('activity'), operationId: z.uuid(), generation: sequence,
     activity: ConversationActivitySchema }).strict(),
@@ -231,6 +238,10 @@ export class ConversationTransferReceiver {
           if (directory !== undefined && (transfer.assignment === undefined || !transfer.assignment.repositoryDirectories.includes(directory))) {
             throw new Error('Display repository outside assignment');
           }
+          if (parsed.kind === 'epic' && (transfer.assignment?.kind !== 'workspace' || parsed.epic.workspaceId !== transfer.assignment.workspaceId
+            || parsed.memberProgress.some((member) => !transfer.assignment!.repositoryDirectories.includes(member.repositoryDirectory)))) {
+            throw new Error('Epic outside workspace assignment');
+          }
           this.observer.item(parsed, output.transferId, transfer.metadata);
         }
       } else {
@@ -238,7 +249,8 @@ export class ConversationTransferReceiver {
         const parsed = outputItemSchema.parse(item);
         if (parsed.kind === 'pending' || parsed.kind === 'running') this.applyState(parsed.state, transfer.metadata);
         else {
-          if (parsed.kind === 'tool_history' && parsed.history.operationId !== transfer.metadata.operationId) {
+          const toolOperation = parsed.kind === 'tool_started' || parsed.kind === 'tool_completed' ? parsed.entry.context?.operationId : undefined;
+          if ((parsed.kind === 'tool_started' || parsed.kind === 'tool_completed') && toolOperation !== transfer.metadata.operationId) {
             throw new Error('Tool history operation mismatch');
           }
           if ('operationId' in parsed && parsed.operationId !== transfer.metadata.operationId) throw new Error('Output operation mismatch');
