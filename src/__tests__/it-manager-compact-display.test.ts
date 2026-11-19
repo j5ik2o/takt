@@ -10,7 +10,7 @@ import { render as renderInk } from 'ink';
 import { Terminal } from '@xterm/headless';
 import stringWidth from 'string-width';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { MANAGER_REFRESH_INTERVAL_MS, ManagerView } from '../features/manager/ManagerView.js';
+import { ManagerView } from '../features/manager/ManagerView.js';
 import { ManagerServiceClient, spyConversationCommand } from './helpers/manager-service-client.js';
 import { MockProvider } from '../infra/providers/mock.js';
 import * as repositories from '../infra/task/repositoryDirectory.js';
@@ -37,6 +37,8 @@ import { EpicSnapshotSchema } from '../infra/epics/projection.js';
 import { epicView } from '../infra/epics/state.js';
 import { epicRecord, epicWorkspaceId } from './helpers/epic-fixtures.js';
 import { ToolActivityHistory } from '../shared/tool-activity/history.js';
+/** ManagerView の定期更新の既定間隔（ミリ秒）。設定 manager.refresh_interval_ms が無い場合の値で、ManagerView の既定値と一致させる。 */
+const MANAGER_REFRESH_INTERVAL_MS = 500;
 
 vi.mock('../features/tui/PromptInput.js', async (original) => {
   const actual = await original<typeof import('../features/tui/PromptInput.js')>();

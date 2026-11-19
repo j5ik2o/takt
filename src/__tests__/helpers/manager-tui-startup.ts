@@ -4,7 +4,8 @@ import { expect, it, vi } from 'vitest';
 import stringWidth from 'string-width';
 import { ManagerClientDouble, mount, showProposal, waitFor, summaryA, managerConversationId, approveSummary, promptFrame } from './manager-tui-fixtures.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { MANAGER_REFRESH_INTERVAL_MS } from '../../features/manager/ManagerView.js';
+/** ManagerView の定期更新の既定間隔（ミリ秒）。設定 manager.refresh_interval_ms が無い場合の値で、ManagerView の既定値と一致させる。 */
+const MANAGER_REFRESH_INTERVAL_MS = 500;
 
 it.each(['ja', 'en'] as const)('shows the status line and assignment without sending a provider request in %s', async (lang) => {
   const context = mount(lang);

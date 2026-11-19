@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import * as net from 'node:net';
 import { createElement } from 'react';
 import { cleanup, render } from 'ink-testing-library';
-import { MANAGER_REFRESH_INTERVAL_MS, ManagerView } from '../features/manager/ManagerView.js';
+import { ManagerView } from '../features/manager/ManagerView.js';
 import * as selectionDialog from '../features/manager/ManagerSelectionDialog.js';
 import * as transcriptView from '../features/tui/TranscriptEntryView.js';
 import * as toolActivityView from '../features/tui/ToolActivityView.js';
@@ -49,6 +49,8 @@ import { removeManagerRepository } from '../features/manager/workspaceOperations
 import { EpicStore } from '../infra/epics/store.js';
 import { applyEpicVerificationResult, beginEpicVerification, finishEpic } from '../infra/epics/state.js';
 import { completedEpicGoal, epicDefinition, epicRecord, verificationResultFor, verificationRunId, verificationStartedAt } from './helpers/epic-fixtures.js';
+/** ManagerView の定期更新の既定間隔（ミリ秒）。設定 manager.refresh_interval_ms が無い場合の値で、ManagerView の既定値と一致させる。 */
+const MANAGER_REFRESH_INTERVAL_MS = 500;
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn(), resolve: vi.fn(), ensure: vi.fn(), plan: vi.fn() }));
 vi.mock('node:net', async (original) => ({ ...await original<typeof import('node:net')>() }));
