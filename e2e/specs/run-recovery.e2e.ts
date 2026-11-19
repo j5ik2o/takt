@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   mkdtempSync,
   mkdirSync,
+  realpathSync,
   writeFileSync,
   readFileSync,
   rmSync,
@@ -170,7 +171,7 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
 
     const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-slow-multi-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/run-sigint-parallel.json');
-    const tasksFile = join(repo.path, '.takt', 'tasks.yaml');
+    const tasksFile = join(realpathSync(repo.path), '.takt', 'tasks.yaml');
 
     mkdirSync(join(repo.path, '.takt'), { recursive: true });
     writeFileSync(tasksFile, createPendingTasksYaml(2, workflowPath, 'recovery-target'), 'utf-8');
@@ -207,7 +208,7 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
       env: {
         ...isolatedEnv.env,
         TAKT_MOCK_SCENARIO: scenarioPath,
-        NODE_OPTIONS: `${isolatedEnv.env.NODE_OPTIONS ?? ''} --require=${preloadPath}`,
+        NODE_OPTIONS: `${isolatedEnv.env.NODE_OPTIONS ?? ''} --require="${preloadPath.replace(/"/g, '\\"')}"`,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
