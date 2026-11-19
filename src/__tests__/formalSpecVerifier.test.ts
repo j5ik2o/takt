@@ -579,8 +579,9 @@ describe('runFormalSpecVerification', () => {
     processResponses.push({}, {}, {}, { error: new Error('Java unavailable') });
     try {
       const result = await runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, { modelCheckTimeoutSeconds: 1 });
-      expect(result.verdict).toBe('passed');
+      expect(result.verdict).toBe('error');
       expect(result.quint.run?.status).toBe('passed');
+      expect(result.message).toContain('Java 17');
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -1156,6 +1157,19 @@ describe('runFormalSpecVerification', () => {
     }
   });
 
+  it.each(['run', 'verify'] as const)('classifies a successful Quint %s with a log close failure as error', async (stage) => {
+    const directory = createTestDirectory();
+    const failure = { code: 0, beforeExit: async () => { closeSyncControls.failNext = true; } };
+    processResponses.push({ code: 0 }, { code: 0 }, ...(stage === 'run' ? [failure] : [
+      { code: 0 }, { stderr: 'openjdk version "17.0.1"' }, failure,
+    ]));
+    try {
+      const result = await runFormalSpecVerification('```quint\nmodule verify {}\n```', directory, { modelCheckTimeoutSeconds: 300 });
+      expect(result.verdict).toBe('error');
+      expect(result.quint[stage]).toEqual({ status: 'error', message: 'artifact log close failed' });
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
   it('should retain a Java version artifact close error instead of skipping verification', async () => {
     const directory = createTestDirectory();
     processResponses.push(
@@ -1221,13 +1235,13 @@ describe('runFormalSpecVerification', () => {
     }
   });
 
-  it('should keep verification skipped when Java is unavailable and its diagnostic logs open', async () => {
+  it.each([undefined, 8, 16])('reports an overall error with skipped model checking when Java is %s', async (major) => {
     const directory = createTestDirectory();
     processResponses.push(
       { code: 0 },
       { code: 0 },
       { code: 0 },
-      { error: new Error('spawn java ENOENT') },
+      major === undefined ? { error: new Error('spawn java ENOENT') } : { stderr: `openjdk version "${major}.0.1"` },
     );
 
     try {
@@ -1241,6 +1255,8 @@ describe('runFormalSpecVerification', () => {
         status: 'skipped',
         message: 'Java 17 or later was not detected; Quint verification was skipped.',
       });
+      expect(result.verdict).toBe('error');
+      expect(result.message).toContain('Java 17 or later was not detected');
       expect(spawnedProcesses.at(-1)).toMatchObject({ command: 'java', args: ['-version'] });
     } finally {
       rmSync(directory, { recursive: true, force: true });
@@ -1621,7 +1637,7 @@ describe('runFormalSpecVerification', () => {
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 
-  it.each(['cancel', 'timeout', 'http'] as const)('preserves registration and records only ordinary Alloy preparation errors: %s', async (failure) => {
+  it.each(['cancel', 'timeout', 'http', 'java'] as const)('preserves registration and records preparation errors: %s', async (failure) => {
     vi.useFakeTimers();
     const directory = createTestDirectory();
     const controller = new AbortController();
@@ -1662,12 +1678,15 @@ describe('runFormalSpecVerification', () => {
       if (failure === 'cancel') controller.abort(reason);
       return waiting;
     }));
-    processResponses.push({ code: 0, stderr: 'openjdk version "17.0.1"' });
+    if (failure === 'java') processResponses.push({}, {}, {}, { error: new Error('spawn java ENOENT') });
+    else processResponses.push({ code: 0, stderr: 'openjdk version "17.0.1"' });
     try {
-      const registration = createGoal({ cwd: directory, id: goalRecord().id, ...goalInput(), specifications: { alloy: 'sig A {}' } }, controller.signal);
+      const specifications = failure === 'java' ? { quint: 'module verify {}' } : { alloy: 'sig A {}' };
+      const registration = createGoal({ cwd: directory, id: goalRecord().id, ...goalInput(), specifications }, controller.signal);
       const outcome = registration.then((goal) => ({ goal }), (error: unknown) => ({ error }));
       await vi.advanceTimersByTimeAsync(5_000);
       const result = await outcome;
+      expect(fetch).toHaveBeenCalledTimes(failure === 'java' ? 0 : 1);
       expect(registered).toHaveBeenCalledOnce();
       expect(remove).not.toHaveBeenCalled();
       expect(saved!.status).toBe('created');
@@ -1679,6 +1698,8 @@ describe('runFormalSpecVerification', () => {
         expect(result).toHaveProperty('goal');
         expect(saved!.workLog).toHaveLength(1);
         expect(saved!.workLog[0]!.summary).toContain('error');
+        expect(saved!.workLog[0]!.summary).toMatch(failure === 'java' ? /Java 17 or later was not detected/iu
+          : failure === 'http' ? /Alloy: error:.*503/iu : /Alloy: error:.*timeout|Alloy: error:.*timed out/iu);
         expect(saved!.registrationVerification?.status).toBe('completed');
       }
     } finally {
@@ -2523,8 +2544,8 @@ describe('Quint run declaration verification', () => {
 
     const result = await verify();
 
-    expect(result.quint).toMatchObject({ test: { message: expect.stringContaining('artifact log close failed') } });
-    expect(result.verdict).not.toBe('passed');
+    expect(result.quint).toMatchObject({ test: { status: 'error', message: expect.stringContaining('artifact log close failed') } });
+    expect(result.verdict).toBe('error');
     expect(spawnedProcesses.some(({ args }) => args[1] === 'verify')).toBe(false);
   });
 

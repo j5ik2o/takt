@@ -672,6 +672,7 @@ function verificationProcessStage(
     return passedStage();
   }
   const message = backend === 'tlc' ? tlcFailureMessage(result) : processFailureMessage(result);
+  if (result.artifactWriteError !== undefined) return errorStage(message);
   return result.outcome === 'exit' && result.status !== null
     ? { status: 'failed', message }
     : errorStage(message);
@@ -1461,6 +1462,7 @@ export async function runFormalSpecVerification(
       quintStageSet = { ...quintStageSet, verify: skippedStage(message) };
       quint = quintResultFromStages(quintStageSet, targets);
     }
+    if (javaDetectionRan && !hasJava17) stages.push(errorStage(javaSkipMessage));
     if (quintSpecificationPath) {
       stages.push(
         ...[quintStageSet.parse, quintStageSet.typecheck, quintStageSet.run, quintStageSet.test, quintStageSet.verify]

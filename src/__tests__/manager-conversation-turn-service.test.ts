@@ -732,7 +732,7 @@ it('keeps the reservation when registration fails after leaving a goal or branch
     .toEqual([expect.objectContaining({ state: 'reserved' })]);
   expect(doubles.artifacts).toHaveBeenCalledWith('/repository', expect.any(String));
 });
-it.each(['result save failure', 'caller cancellation'])('retains the same proposal and reservation when retrying after %s', async (failure) => {
+it.each(['result save failure', 'caller cancellation'])('completes approval with the same reservation when retrying after %s', async (failure) => {
   const f = conversationFixture();
   f.execute.mockResolvedValueOnce({ message: 'proposal', sessionId: 'session-after', assignment: undefined, summary: {
     objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [],
@@ -751,10 +751,11 @@ it.each(['result save failure', 'caller cancellation'])('retains the same propos
   const reservation = f.state().approval;
   expect(reservation).toMatchObject({ state: 'reserved', revision: pending.revision });
   f.restore();
-  doubles.register.mockRejectedValueOnce(new Error('Registration verification completion cannot be confirmed'));
+  const goal = { ...goalRecord(), id: reservation!.goalId };
+  doubles.register.mockResolvedValueOnce(goal);
   const outcome = await f.run(command);
-  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'error' } });
-  expect(f.state()).toMatchObject({ approval: reservation, pending });
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'goal_registered', goal } });
+  expect(f.state()).toMatchObject({ approval: { ...reservation, state: 'registered' }, pending: null });
   expect(doubles.register.mock.calls[1]![0]).toMatchObject({ id: reservation!.goalId });
 });
 

@@ -11,6 +11,12 @@ import { GoalStore } from './store.js';
 import { appendGoalWorkLog } from './workLog.js';
 import type { Goal } from './schema.js';
 
+export function initialRegistrationVerification(cwd: string, specifications: Goal['specifications']): Goal['registrationVerification'] {
+  if (specifications?.quint === undefined && specifications?.alloy === undefined) return undefined;
+  return { status: resolveManagerConfig(cwd).verifyOnRegister && resolveFormalSpecConfigurationWithoutPrompt(cwd).mode
+    ? 'pending' : 'not_required' };
+}
+
 function stageSummary(language: string, result: FormalSpecStageResult): string {
   const message = result.message === undefined ? '' : `: ${truncateUtf8(result.message, 1_024).value}`;
   return `${language}: ${result.status}${message}`;
@@ -19,6 +25,7 @@ function stageSummary(language: string, result: FormalSpecStageResult): string {
 export async function verifyRegisteredGoal(cwd: string, goal: Goal, signal: AbortSignal | undefined): Promise<Goal> {
   const specifications = goal.specifications;
   if (specifications?.quint === undefined && specifications?.alloy === undefined) return goal;
+  if (goal.registrationVerification?.status === 'not_required') return goal;
   const store = new GoalStore(cwd);
   const notRequired = () => store.update(goal.id, (current) => ({ ...current, registrationVerification: { status: 'not_required' } }));
   if (!resolveManagerConfig(cwd).verifyOnRegister) return notRequired();

@@ -141,6 +141,7 @@ async function submitRegistrationCommand(
         let reconnecting = false;
         let restoring = false;
         let waiting = true;
+        let connectionGeneration = 0;
         let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
         let refreshTimer: ReturnType<typeof setTimeout> | undefined;
         const failRecovery = (): void => {
@@ -157,12 +158,23 @@ async function submitRegistrationCommand(
             resolve(completed.result);
             return;
           }
+          if (restoring && snapshot.connection === 'connected' && snapshot.readStatus === 'complete') {
+            if (snapshot.state?.running?.operationId === operationId) {
+              clearTimeout(recoveryTimer);
+              recoveryTimer = undefined;
+            } else if (recoveryTimer === undefined) {
+              recoveryTimer = setTimeout(failRecovery, REGISTRATION_RESULT_WAIT_MS);
+            }
+          }
           if (restoring && snapshot.connection === 'connected' && snapshot.readStatus === 'complete' && refreshTimer === undefined) {
             // refresh() owns active transfers; only a completed history can trigger the next read.
             refreshTimer = setTimeout(() => {
               refreshTimer = undefined;
               if (!waiting || client.getSnapshot().connection !== 'connected') return;
-              void client.refresh().catch(() => { if (waiting) failRecovery(); });
+              const generation = connectionGeneration;
+              void client.refresh().catch(() => {
+                if (waiting && generation === connectionGeneration && client.getSnapshot().connection === 'connected') failRecovery();
+              });
             }, REGISTRATION_RECOVERY_REFRESH_MS);
           }
           if (restoring && snapshot.connection === 'connected' && snapshot.readStatus === 'incomplete') {
@@ -175,6 +187,8 @@ async function submitRegistrationCommand(
             });
           }
           if (snapshot.connection !== 'disconnected' || reconnecting) return;
+          connectionGeneration++;
+          if (command.kind !== 'approve_summary') return;
           restoring = command.kind === 'approve_summary';
           clearTimeout(refreshTimer);
           refreshTimer = undefined;
