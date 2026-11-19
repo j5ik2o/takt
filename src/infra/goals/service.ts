@@ -80,7 +80,7 @@ export async function registerReservedGoal(input: GoalCreateInput, signal?: Abor
     if (latest === undefined) throw new GoalRegistrationRecoveryError('Reserved goal no longer exists');
     assertMatchingReservation(latest);
     if (latest.registrationVerification?.status === 'pending') {
-      throw new GoalRegistrationRecoveryError('Reserved goal verification has not completed');
+      return verifyRegisteredGoal(input.cwd, latest, signal);
     }
     return latest;
   }
