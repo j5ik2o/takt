@@ -1007,6 +1007,29 @@ describe('MCP package entrypoint', () => {
     }
   });
 
+  it.each(['manager', 'all', 'read-only'] as const)('exposes goal branch correction with a required reason only to writable %s tools', async (toolSet) => {
+    const server = createTaktMcpServer({}, { toolSet });
+    const client = new Client({ name: 'takt-mcp-update-goal-branches-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      const tool = (await client.listTools()).tools.find(({ name }) => name === 'takt_update_goal_branches');
+      if (toolSet === 'read-only') {
+        expect(tool).toBeUndefined();
+      } else {
+        expect(tool?.inputSchema.required?.slice().sort()).toEqual(['cwd', 'goalId', 'integrationBranch', 'reason']);
+        expect(Object.keys(tool!.inputSchema.properties!).sort()).toEqual(['cwd', 'goalId', 'integrationBranch', 'reason']);
+        expect(tool?.inputSchema.properties?.reason).toMatchObject({ type: 'string', maxLength: 128 * 1024 });
+        for (const selector of ['takt_check_goal_completion', '64 KiB', 'truncation', 'takt_get_goal', 'workLog.summary', 'recordId', 'textOffset/maxBytes']) {
+          expect(tool?.description).toContain(selector);
+        }
+      }
+    } finally {
+      await client.close(); await server.close();
+    }
+  });
+
   it.each(['manager', 'all', 'read-only', undefined] as const)('exposes the appropriate tell schema for tool set %s', async (toolSet) => {
     const server = createTaktMcpServer({}, { toolSet });
     const client = new Client({ name: 'tell-schema-client', version: '1' });
@@ -1051,6 +1074,7 @@ describe('MCP package entrypoint', () => {
 
       expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
         'takt_get_goal',
+        'takt_get_goal_registration_proposal',
         'takt_get_run',
         'takt_list_goal_registration_proposals',
         'takt_list_goals',
