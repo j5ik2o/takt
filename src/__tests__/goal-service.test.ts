@@ -1,6 +1,6 @@
 vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: vi.fn(), readManagerEvents: vi.fn() }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createGoal, hasGoalRegistrationArtifacts, registerReservedGoal } from '../infra/goals/service.js';
+import { createGoal, GoalRegistrationRecoveryError, hasGoalRegistrationArtifacts, registerReservedGoal } from '../infra/goals/service.js';
 import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import type { prepareGoalBranch } from '../infra/goals/git.js';
@@ -305,9 +305,10 @@ describe('formal verification after goal registration', () => {
     expect(doubles.removeBranch).not.toHaveBeenCalled();
     expect(doubles.cleanup).toHaveBeenCalledOnce();
     saved = GoalSchema.parse(saved);
-    expect((await registerReservedGoal(input())).registrationVerification?.status).toBe('completed');
-    expect(doubles.verify).toHaveBeenCalledTimes(2);
-    expect(saved.workLog).toHaveLength(1);
+    await expect(registerReservedGoal(input())).rejects.toThrow(GoalRegistrationRecoveryError);
+    expect(doubles.verify).toHaveBeenCalledOnce();
+    expect(saved.registrationVerification?.status).toBe('pending');
+    expect(saved.workLog).toHaveLength(0);
   });
 
   it('appends verification to the latest goal without overwriting another work log entry', async () => {
@@ -335,12 +336,10 @@ describe('formal verification after goal registration', () => {
     saved = GoalSchema.parse(saved);
     doubles.verify.mockResolvedValue(result('passed'));
     doubles.verify.mockClear();
-    const recovered = await registerReservedGoal(input(), new AbortController().signal);
-    expect(recovered.registrationVerification?.status).toBe('completed');
-    expect(doubles.verify).toHaveBeenCalledOnce();
-    expect(saved.workLog).toHaveLength(1);
-    expect(await registerReservedGoal(input())).toEqual(recovered);
-    expect(doubles.verify).toHaveBeenCalledOnce();
+    await expect(registerReservedGoal(input(), new AbortController().signal)).rejects.toThrow(GoalRegistrationRecoveryError);
+    expect(doubles.verify).not.toHaveBeenCalled();
+    expect(saved.registrationVerification?.status).toBe('pending');
+    expect(saved.workLog).toHaveLength(0);
   });
 
   it('records bounded failure diagnostics and uses the existing artifact cleanup', async () => {
@@ -403,11 +402,12 @@ describe('formal verification after goal registration', () => {
     expect(saved.workLog).toHaveLength(0);
 
     saved = GoalSchema.parse({ ...original, registrationVerification: { status: 'pending' } });
-    expect((await registerReservedGoal({ ...input(), specifications })).registrationVerification?.status).toBe('completed');
+    await expect(registerReservedGoal({ ...input(), specifications })).rejects.toThrow(GoalRegistrationRecoveryError);
     expect(doubles.create).not.toHaveBeenCalled();
     expect(saveManagerEvent).not.toHaveBeenCalled();
-    expect(doubles.verify).toHaveBeenCalledOnce();
-    expect(saved.workLog).toHaveLength(1);
+    expect(doubles.verify).not.toHaveBeenCalled();
+    expect(doubles.update).not.toHaveBeenCalled();
+    expect(saved).toEqual({ ...original, registrationVerification: { status: 'pending' } });
   });
 });
 

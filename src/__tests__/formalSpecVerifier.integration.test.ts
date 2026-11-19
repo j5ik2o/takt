@@ -536,7 +536,9 @@ describe('bundled Quint CLI verification boundary', () => {
       const testCall = spawnedProcessCalls.find(({ args }) => args[1] === 'test');
 
       expect(result.quint).toMatchObject({ test: { status: 'passed' }, verify: { status: 'skipped' } });
-      expect(result.verdict).toBe('passed');
+      expect(result.verdict).toBe('error');
+      expect(result.quint.verify?.message).toContain('Java 17 or later was not detected');
+      expect(result.message).toContain('Java 17 or later was not detected');
       expect(testCall).toBeDefined();
       const limit = Number(argumentAfter(testCall!.args, '--max-samples'));
       expect(Number.isInteger(limit) && limit > 0 && limit < 10_000).toBe(true);
@@ -725,12 +727,13 @@ describe('bundled Quint CLI verification boundary', () => {
 
       const result = await runFormalSpecVerification(response, directory, { modelCheckTimeoutSeconds: 300 });
 
-      expect(result.verdict).toBe('passed');
+      expect(result.verdict).toBe('error');
       expect(result.quint.parse?.status).toBe('passed');
       expect(result.quint.typecheck?.status).toBe('passed');
       expect(result.quint.run?.status).toBe('passed');
-      expect(result.quint.verify?.status).toBe('skipped');
-      expect(result.alloy.status).toBe('skipped');
+      expect(result.quint.verify).toMatchObject({ status: 'skipped', message: expect.stringContaining('Java 17 or later was not detected') });
+      expect(result.alloy).toMatchObject({ status: 'skipped', message: expect.stringContaining('Java 17 or later was not detected') });
+      expect(result.message).toContain('Java 17 or later was not detected');
     } finally {
       if (originalPath === undefined) {
         delete process.env.PATH;
