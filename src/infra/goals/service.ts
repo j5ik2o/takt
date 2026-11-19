@@ -72,9 +72,7 @@ export async function registerReservedGoal(input: GoalCreateInput, signal?: Abor
       && !await new FileEventStore(getGlobalConfigDir()).hasGoalRegistration(input.cwd, input.id)) {
       throw new GoalRegistrationRecoveryError('Goal exists, but registration event delivery cannot be confirmed');
     }
-    if (existing.registrationVerification?.status === 'pending'
-      || existing.registrationVerification === undefined
-      && (existing.specifications?.quint !== undefined || existing.specifications?.alloy !== undefined)) {
+    if (existing.registrationVerification?.status === 'pending') {
       throw new GoalRegistrationRecoveryError('Registration verification completion cannot be confirmed');
     }
     return existing;

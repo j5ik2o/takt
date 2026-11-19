@@ -20,6 +20,7 @@ import type {
 } from './schemas.js';
 
 const REGISTRATION_RESULT_WAIT_MS = 120_000;
+const REGISTRATION_RECOVERY_REFRESH_MS = 1_000;
 
 interface RegistrationOwner {
   readonly identity: ManagerAssignmentIdentity;
@@ -140,10 +141,15 @@ async function submitRegistrationCommand(
         let reconnecting = false;
         let restoring = false;
         let waiting = true;
+        let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+        let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+        const failRecovery = (): void => {
+          stopWaiting();
+          reject(new Error('The approval command was accepted, but its result could not be confirmed after reconnecting'));
+        };
         const unsubscribeConnection = client.subscribe(() => {
           if (!waiting) return;
           const snapshot = client.getSnapshot();
-          if (snapshot.readStatus === 'complete') restoring = false;
           const completed = snapshot.readStatus === 'complete'
             ? snapshot.items.find((item) => item.kind === 'turn_result' && item.operationId === operationId) : undefined;
           if (completed?.kind === 'turn_result') {
@@ -151,18 +157,28 @@ async function submitRegistrationCommand(
             resolve(completed.result);
             return;
           }
+          if (restoring && snapshot.connection === 'connected' && snapshot.readStatus === 'complete' && refreshTimer === undefined) {
+            // refresh() owns active transfers; only a completed history can trigger the next read.
+            refreshTimer = setTimeout(() => {
+              refreshTimer = undefined;
+              if (!waiting || client.getSnapshot().connection !== 'connected') return;
+              void client.refresh().catch(() => { if (waiting) failRecovery(); });
+            }, REGISTRATION_RECOVERY_REFRESH_MS);
+          }
           if (restoring && snapshot.connection === 'connected' && snapshot.readStatus === 'incomplete') {
             // disconnect() can publish incomplete before publishing disconnected.
             queueMicrotask(() => {
               if (!waiting || !restoring) return;
               const latest = client.getSnapshot();
               if (latest.connection !== 'connected' || latest.readStatus !== 'incomplete') return;
-              stopWaiting();
-              reject(new Error('The approval command was accepted, but its result could not be confirmed after reconnecting'));
+              failRecovery();
             });
           }
           if (snapshot.connection !== 'disconnected' || reconnecting) return;
           restoring = command.kind === 'approve_summary';
+          clearTimeout(refreshTimer);
+          refreshTimer = undefined;
+          if (restoring && recoveryTimer === undefined) recoveryTimer = setTimeout(failRecovery, REGISTRATION_RESULT_WAIT_MS);
           reconnecting = true;
           void client.connect().catch((error: unknown) => {
             stopWaiting();
@@ -173,6 +189,8 @@ async function submitRegistrationCommand(
           stopWaiting = (): void => {};
           waiting = false;
           clearTimeout(timer);
+          clearTimeout(recoveryTimer);
+          clearTimeout(refreshTimer);
           signal.removeEventListener('abort', onAbort);
           unsubscribe();
           unsubscribeConnection();

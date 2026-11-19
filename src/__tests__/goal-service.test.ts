@@ -1,6 +1,6 @@
 vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: vi.fn(), readManagerEvents: vi.fn() }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createGoal, hasGoalRegistrationArtifacts, registerReservedGoal } from '../infra/goals/service.js';
+import { createGoal, GoalRegistrationRecoveryError, hasGoalRegistrationArtifacts, registerReservedGoal } from '../infra/goals/service.js';
 import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import type { prepareGoalBranch } from '../infra/goals/git.js';
@@ -364,9 +364,21 @@ describe('formal verification after goal registration', () => {
     expect(saved!.workLog).toHaveLength(1);
   });
 
-  it('does not assume an older saved registration with specifications has finished verification', async () => {
-    saved = GoalSchema.parse({ ...goalRecord(), specifications: input().specifications });
-    await expect(registerReservedGoal(input())).rejects.toThrow('completion cannot be confirmed');
+  it.each([{ quint: 'module csv {}' }, { alloy: 'sig CSV {}' }])('recovers an older saved registration without verification state: %j', async (specifications) => {
+    saved = GoalSchema.parse({ ...goalRecord(), specifications });
+    const original = structuredClone(saved);
+    expect(await registerReservedGoal({ ...input(), specifications })).toEqual(original);
+    expect(saved).toEqual(original);
+    expect(doubles.create).not.toHaveBeenCalled();
+    expect(saveManagerEvent).not.toHaveBeenCalled();
+    expect(doubles.update).not.toHaveBeenCalled();
+    expect(doubles.verify).not.toHaveBeenCalled();
+    expect(saved.workLog).toHaveLength(0);
+
+    saved = GoalSchema.parse({ ...original, registrationVerification: { status: 'pending' } });
+    await expect(registerReservedGoal({ ...input(), specifications })).rejects.toBeInstanceOf(GoalRegistrationRecoveryError);
+    expect(doubles.create).not.toHaveBeenCalled();
+    expect(saveManagerEvent).not.toHaveBeenCalled();
     expect(doubles.verify).not.toHaveBeenCalled();
     expect(saved.workLog).toHaveLength(0);
   });

@@ -17,7 +17,7 @@ const doubles = vi.hoisted(() => ({
   allowed: vi.fn(), withinRoot: vi.fn(), configDir: vi.fn(), daemonDir: vi.fn(), assignment: vi.fn(),
   constructStore: vi.fn(), read: vi.fn(),
   constructClient: vi.fn(), connect: vi.fn(), submit: vi.fn(), output: vi.fn(), close: vi.fn(),
-  repositoryDirectory: vi.fn(), subscribe: vi.fn(), snapshot: vi.fn(),
+  repositoryDirectory: vi.fn(), subscribe: vi.fn(), snapshot: vi.fn(), refresh: vi.fn(),
 }));
 vi.mock('../features/mcp/operations.js', async (original) => ({
   ...await original<typeof import('../features/mcp/operations.js')>(), assertCwdAllowedByMcpRoot: doubles.allowed,
@@ -46,6 +46,7 @@ vi.mock('../features/manager/conversationIpcClient.js', () => ({ ConversationIpc
   onOutput = doubles.output;
   subscribe = doubles.subscribe;
   getSnapshot = doubles.snapshot;
+  refresh = doubles.refresh;
   close = doubles.close;
 } }));
 
@@ -85,6 +86,7 @@ beforeEach(() => {
   doubles.repositoryDirectory.mockImplementation(async (directory: string) => directory);
   doubles.assignment.mockResolvedValue({ ...repositoryAssignment, repositoryDirectories: [cwd] });
   doubles.connect.mockResolvedValue(undefined);
+  doubles.refresh.mockResolvedValue(undefined);
   doubles.subscribe.mockReturnValue(vi.fn());
   doubles.snapshot.mockReturnValue({ connection: 'connected' });
   doubles.output.mockImplementation((listener: (output: PortOutput) => void) => {
@@ -376,6 +378,99 @@ it('returns the saved result when approval completes during a disconnection', as
   expect(emit).toBeUndefined();
   expect(doubles.close).toHaveBeenCalledOnce();
 });
+
+it.each(['before', 'after'] as const)('recovers without live replay when settlement is %s the first complete read', async (settlement) => {
+  vi.useFakeTimers();
+  acceptSubmission();
+  const controller = new AbortController();
+  let settled = false;
+  const pending = approveTaktGoalRegistration({ cwd, revision, conversationId: ownerConversationId }, {}, controller.signal)
+    .then((result) => { settled = true; return result; });
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    const notify = doubles.subscribe.mock.calls[0]![0] as () => void;
+    const goal = goalRecord();
+    const items = [{ kind: 'turn_result', operationId, acceptedSequence: 1, result: { kind: 'goal_registered', goal } }];
+    doubles.snapshot.mockReturnValue({ connection: 'disconnected', readStatus: 'incomplete', items: [] });
+    notify();
+    await vi.advanceTimersByTimeAsync(0);
+    // The open response can finish before its history transfer.
+    doubles.snapshot.mockReturnValue({ connection: 'connected', readStatus: 'reading', items: [] });
+    notify();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(doubles.refresh).not.toHaveBeenCalled();
+    doubles.snapshot.mockReturnValue({ connection: 'connected', readStatus: 'complete', items: settlement === 'before' ? items : [] });
+    notify();
+    await vi.advanceTimersByTimeAsync(0);
+    if (settlement === 'after') {
+      expect(settled).toBe(false);
+      doubles.refresh.mockImplementation(async () => {
+        // A refresh response also precedes transfer completion. Its old view remains complete.
+        setTimeout(() => {
+          doubles.snapshot.mockReturnValue({ connection: 'connected', readStatus: 'complete', items });
+          notify();
+        }, 2_000);
+      });
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(doubles.refresh).toHaveBeenCalledOnce();
+    }
+    expect(settled).toBe(true);
+    expect(JSON.parse(firstTextContent((await pending).content))).toEqual({ revision, goal });
+    const reads = doubles.refresh.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(doubles.refresh).toHaveBeenCalledTimes(reads);
+    expect(doubles.submit).toHaveBeenCalledOnce();
+    expect(emit).toBeUndefined();
+    expect(doubles.subscribe.mock.results[0]!.value).toHaveBeenCalledOnce();
+    expect(doubles.close).toHaveBeenCalledOnce();
+  } finally {
+    controller.abort();
+    await pending;
+    vi.useRealTimers();
+  }
+});
+
+it.each(['empty history', 'different operation', 'read failure', 'transfer failure', 'cancel'] as const)(
+  'ends recovery and releases resources after %s', async (failure) => {
+    vi.useFakeTimers();
+    acceptSubmission();
+    const controller = new AbortController();
+    const pending = approveTaktGoalRegistration({ cwd, revision, conversationId: ownerConversationId }, {}, controller.signal);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const notify = doubles.subscribe.mock.calls[0]![0] as () => void;
+      doubles.snapshot.mockReturnValue({ connection: 'disconnected', readStatus: 'incomplete', items: [] });
+      notify();
+      await vi.advanceTimersByTimeAsync(0);
+      const items = failure === 'different operation' ? [{ kind: 'turn_result', operationId: 'another-operation',
+        acceptedSequence: 1, result: { kind: 'goal_registered', goal: goalRecord() } }] : [];
+      const complete = { connection: 'connected', readStatus: 'complete', items };
+      doubles.snapshot.mockReturnValue(complete);
+      notify();
+      doubles.refresh.mockImplementation(async () => {
+        if (failure === 'read failure') throw new Error('read unavailable');
+        doubles.snapshot.mockReturnValue(failure === 'transfer failure'
+          ? { connection: 'connected', readStatus: 'incomplete', items: [] } : complete);
+        notify();
+      });
+      if (failure === 'cancel') controller.abort(new Error('caller cancelled recovery'));
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect((await pending).isError).toBe(true);
+      expect(doubles.submit).toHaveBeenCalledOnce();
+      expect(emit).toBeUndefined();
+      expect(doubles.subscribe.mock.results[0]!.value).toHaveBeenCalledOnce();
+      expect(doubles.close).toHaveBeenCalledOnce();
+      const reads = doubles.refresh.mock.calls.length;
+      notify();
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(doubles.refresh).toHaveBeenCalledTimes(reads);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      controller.abort();
+      await pending;
+      vi.useRealTimers();
+    }
+  });
 
 it('returns a goal verified and recorded once when registration takes 121 seconds', async () => {
   vi.useFakeTimers();
