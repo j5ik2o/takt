@@ -209,6 +209,21 @@ describe('durable daemon event storage', () => {
     expect((await restarted.readTurns(first.conversationId)).filter((turn) => turn.message !== undefined)).toEqual(settled);
   });
 
+  it('readTurns does not read event files of other conversations', async () => {
+    const directory = await root();
+    const store = new FileEventStore(directory);
+    const own = event('own message', 1);
+    const other = { ...event('other message', 2), conversationId: 'another' };
+    await store.accept(own); await store.accept(other);
+    // Damage the other conversation's stored event after both events have
+    // been indexed. Reading one conversation's turns must not depend on the
+    // files of other conversations.
+    const otherFile = join(directory, 'daemon-events', `${createHash('sha256').update(other.eventId).digest('hex')}.json`);
+    await writeFile(otherFile, 'not json');
+    const turns = await store.readTurns(own.conversationId);
+    expect(turns.filter((turn) => turn.message !== undefined).map((turn) => turn.message)).toEqual(['own message']);
+  });
+
   it('indexes retired PR retry observations and restores only unfinished settlement', async () => {
     const directory = await root();
     const store = new FileEventStore(directory);
