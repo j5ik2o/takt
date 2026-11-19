@@ -166,7 +166,7 @@ def test_zero_unresolved_merge_allowed() -> None:
                     cursor = next((t.split("=", 1)[1] for t in command if t.startswith("cursor=")), None)
                     return gh_ok(json.dumps(ZERO_2 if cursor == "z2" else ZERO_1))
                 if command[1:3] == ["pr", "list"]:
-                    return gh_ok(json.dumps([{"number": 42, "headRefOid": HEAD_SHA}]))
+                    return gh_ok(json.dumps([{"number": 42, "headRefOid": HEAD_SHA, "headRepositoryOwner": {"login": "example"}}]))
             return super().dispatch(command, cwd)
 
     stub = Fake()
@@ -205,7 +205,7 @@ def test_unresolved_aborts_with_count_and_urls() -> None:
                     assert cursor in pages, f"unexpected cursor {cursor!r} in {command}"
                     return gh_ok(json.dumps(pages[cursor]))
                 if command[1:3] == ["pr", "list"]:
-                    return gh_ok(json.dumps([{"number": 42, "headRefOid": HEAD_SHA}]))
+                    return gh_ok(json.dumps([{"number": 42, "headRefOid": HEAD_SHA, "headRepositoryOwner": {"login": "example"}}]))
             return super().dispatch(command, cwd)
 
     stub = Fake()
@@ -265,7 +265,7 @@ def test_unknown_count_aborts() -> None:
                     if command[1:2] == ["api"]:
                         return response
                     if command[1:3] == ["pr", "list"]:
-                        return gh_ok(json.dumps([{"number": 42, "headRefOid": HEAD_SHA}]))
+                        return gh_ok(json.dumps([{"number": 42, "headRefOid": HEAD_SHA, "headRepositoryOwner": {"login": "example"}}]))
                 return super().dispatch(command, cwd)
 
         stub = Fake()
@@ -293,7 +293,7 @@ def test_repeated_end_cursor_aborts() -> None:
                 if command[1:2] == ["api"]:
                     return gh_ok(json.dumps(stuck))
                 if command[1:3] == ["pr", "list"]:
-                    return gh_ok(json.dumps([{"number": 42, "headRefOid": HEAD_SHA}]))
+                    return gh_ok(json.dumps([{"number": 42, "headRefOid": HEAD_SHA, "headRepositoryOwner": {"login": "example"}}]))
             return super().dispatch(command, cwd)
 
     stub = Fake()
@@ -325,7 +325,7 @@ def test_fork_pr_resolves_against_base_repository() -> None:
                 if command[1:2] == ["api"]:
                     return gh_ok(json.dumps(ZERO_2))
                 if command[1:3] == ["pr", "list"]:
-                    return gh_ok(json.dumps([{"number": 42, "headRefOid": HEAD_SHA}]))
+                    return gh_ok(json.dumps([{"number": 42, "headRefOid": HEAD_SHA, "headRepositoryOwner": {"login": "alice"}}]))
             return super().dispatch(command, cwd)
 
     stub = Fake()
@@ -340,7 +340,7 @@ def test_fork_pr_resolves_against_base_repository() -> None:
     assert len(list_calls) == 1, f"fork case: expected one pr list call, got {list_calls}"
     args = list_calls[0]
     assert args[args.index("--repo") + 1] == "example/owner", f"fork case: must query the base repository, got {args}"
-    assert args[args.index("--head") + 1] == f"alice:{HEAD_BRANCH}", f"fork case: head must be owner-prefixed, got {args}"
+    assert args[args.index("--head") + 1] == HEAD_BRANCH, f"fork case: --head takes the plain branch name, got {args}"
     api_calls = [c[0] for c in stub.calls if c[0][1:2] == ["api"]]
     assert any("owner=example" in token for call in api_calls for token in call), (
         f"fork case: GraphQL must target the base repository, got {api_calls}"
@@ -351,7 +351,7 @@ def test_pr_cannot_be_identified() -> None:
     """PR を 1 件に特定できなければ、取得失敗として止める（取り違えない）。"""
     for label, listed in {
         "no match": [],
-        "two matches": [{"number": 42, "headRefOid": HEAD_SHA}, {"number": 43, "headRefOid": HEAD_SHA}],
+        "two matches": [{"number": 42, "headRefOid": HEAD_SHA, "headRepositoryOwner": {"login": "example"}}, {"number": 43, "headRefOid": HEAD_SHA, "headRepositoryOwner": {"login": "example"}}],
         # head が clone の HEAD と違う PR だけが返る。HEAD を照合せず先頭を採る誤実装は、
         # ここで別の PR を数えて merge に進む/別 PR を数える。照合する実装は 0 件一致で止まる。
         "head oid mismatch": [{"number": 99, "headRefOid": "f" * 40}],

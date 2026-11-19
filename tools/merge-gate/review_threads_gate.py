@@ -111,10 +111,11 @@ def resolve_target(argv: list[str]) -> tuple[str, str, int]:
         owner, name = head_owner, head_name
     branch = _git("symbolic-ref", "--short", "HEAD")
     head_oid = _git("rev-parse", "HEAD")
-    head_filter = branch if (owner, name) == (head_owner, head_name) else f"{head_owner}:{branch}"
+    # gh pr list の --head はブランチ名だけを受け付ける（"<owner>:<branch>" 形式は
+    # 非対応）。fork 由来かどうかは、返ってきた head の所有者で別に確かめる。
     listing = run_command(
-        ["gh", "pr", "list", "--repo", f"{owner}/{name}", "--head", head_filter, "--state", "open",
-         "--json", "number,headRefOid"]
+        ["gh", "pr", "list", "--repo", f"{owner}/{name}", "--head", branch, "--state", "open",
+         "--json", "number,headRefOid,headRepositoryOwner"]
     )
     if listing["status"] != 0:
         raise GateError(f"gh pr list が失敗しました: {listing['stderr'].strip()}")
@@ -122,7 +123,12 @@ def resolve_target(argv: list[str]) -> tuple[str, str, int]:
         candidates = json.loads(listing["stdout"])
     except ValueError as error:
         raise GateError(f"gh pr list の出力が JSON ではありません: {error}")
-    matches = [candidate for candidate in candidates if candidate.get("headRefOid") == head_oid]
+    matches = [
+        candidate
+        for candidate in candidates
+        if candidate.get("headRefOid") == head_oid
+        and (candidate.get("headRepositoryOwner") or {}).get("login") == head_owner
+    ]
     if len(matches) != 1:
         raise GateError(
             f"HEAD {head_oid} に対応する open PR を 1 件に特定できません（{len(matches)} 件）"
