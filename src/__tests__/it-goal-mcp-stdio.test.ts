@@ -450,7 +450,7 @@ describe('standalone inquiries through manager MCP tools', () => {
 });
 
 describe('manager goal execution tools through MCP', () => {
-  const names = ['takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal'];
+  const names = ['takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal', 'takt_finish_goal'];
   let cwd: string;
   let store: GoalStore;
   let client: Client;
@@ -490,7 +490,7 @@ describe('manager goal execution tools through MCP', () => {
     }
   });
 
-  it('exposes all three state operations to the manager without adding approval passthroughs', async () => {
+  it('exposes all four state operations to the manager without adding approval passthroughs', async () => {
     const tools = (await client.listTools()).tools;
     expect(tools.map(({ name }) => name)).toEqual(expect.arrayContaining(names));
     for (const name of names) expect(TAKT_MCP_MANAGER_TOOL_NAMES.some((allowed) => allowed === name)).toBe(false);
@@ -514,6 +514,7 @@ describe('manager goal execution tools through MCP', () => {
     { name: 'takt_pause_goal', executionStatus: 'active' },
     { name: 'takt_resume_goal', executionStatus: 'paused' },
     { name: 'takt_abort_goal', executionStatus: 'active' },
+    { name: 'takt_finish_goal', executionStatus: 'aborted' },
   ] as const)('rejects $name through the public entrypoint despite the former enable flag', async ({ name, executionStatus }) => {
     await store.update(goalId, (goal) => ({ ...goal, executionStatus }));
     vi.stubEnv(MANAGER_ASSIGNMENT_ENV, JSON.stringify({ kind: 'repository', repositoryDirectory: cwd }));
@@ -533,7 +534,7 @@ describe('manager goal execution tools through MCP', () => {
       expect(goals.isError).not.toBe(true);
       for (const operation of names) expect(tools).not.toContain(operation);
       const result = await reader.callTool({ name, arguments: {
-        cwd, goalId, ...(name === 'takt_abort_goal' ? { reason: '作業を取りやめます' } : {}),
+        cwd, goalId, ...(['takt_abort_goal', 'takt_finish_goal'].includes(name) ? { reason: '作業を取りやめます' } : {}),
       } });
       expect(result.isError).toBe(true);
       expect((await store.get(goalId)).executionStatus).toBe(executionStatus);
@@ -639,7 +640,7 @@ describe('manager goal execution tools through MCP', () => {
       expect((await client.listTools()).tools.map(({ name }) => name)).toEqual(expect.arrayContaining(names));
       for (const name of names) {
         const result = await client.callTool({ name, arguments: {
-          cwd: outside, goalId, ...(name === 'takt_abort_goal' ? { reason: '中止します' } : {}),
+          cwd: outside, goalId, ...(['takt_abort_goal', 'takt_finish_goal'].includes(name) ? { reason: '中止します' } : {}),
         } });
         expect(result.isError).toBe(true);
       }
@@ -648,6 +649,67 @@ describe('manager goal execution tools through MCP', () => {
       expect(ensureDaemon).not.toHaveBeenCalled();
       expect(autoRun.ensureManagerRun).not.toHaveBeenCalled();
     } finally { rmSync(outside, { recursive: true, force: true }); }
+  });
+
+  it('finishes an aborted created goal with its reason in the work log without starting daemon or manager work', async () => {
+    await store.update(goalId, (goal) => ({ ...goal, executionStatus: 'aborted' }));
+    const branchSha = execFileSync('git', ['rev-parse', goalRecord().branch], { cwd, encoding: 'utf8' }).trim();
+    const reason = '成果は上流 PR で確定したため終了する';
+
+    const result = await client.callTool({ name: 'takt_finish_goal', arguments: { cwd, goalId, reason } });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    const output = JSON.parse(firstTextContent(result.content)) as Record<string, unknown>;
+
+    const saved = await store.get(goalId);
+    expect(saved).toMatchObject({ status: 'completed', executionStatus: 'aborted' });
+    expect(branchSha).toBe(saved.completion?.goalSha);
+    expect(saved.completion?.targetSha).toBe(branchSha);
+    const read = await client.callTool({ name: 'takt_get_goal', arguments: {
+      cwd, goalId, path: 'workLog.summary', recordId: output.workLogEntryId,
+    } });
+    expect(JSON.parse(firstTextContent(read.content))).toMatchObject({ content: reason });
+    expect(execFileSync('git', ['rev-parse', goalRecord().branch], { cwd, encoding: 'utf8' }).trim()).toBe(branchSha);
+    expect(ensureDaemon).not.toHaveBeenCalled();
+  });
+
+  it('finishes an aborted awaiting_merge goal with a saved closed PR even when PR lookup is unavailable', async () => {
+    const pullRequest = { number: 57, url: 'https://github.com/example/project/pull/57' };
+    const branchTip = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+    await store.update(goalId, (goal) => ({ ...goal, executionStatus: 'aborted', status: 'awaiting_merge', pullRequest,
+      completion: { goalBranch: goalRecord().branch, goalSha: branchTip, targetBranch: 'main', summary: '完了根拠を保存済み',
+        changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+        instructions: ['以前の案内'] } }));
+    execFileSync('git', ['remote', 'add', 'origin', join(cwd, 'missing-origin.git')], { cwd, stdio: 'pipe' });
+
+    const result = await client.callTool({ name: 'takt_finish_goal', arguments: { cwd, goalId, reason: 'PR は未マージで閉じられた' } });
+
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    expect(await store.get(goalId)).toMatchObject({ status: 'completed', executionStatus: 'aborted', pullRequest,
+      completion: { summary: '完了根拠を保存済み', targetSha: branchTip } });
+  });
+
+  it.each(['active', 'paused'] as const)('rejects finishing a %s goal through MCP without saving', async (executionStatus) => {
+    await store.update(goalId, (goal) => ({ ...goal, executionStatus }));
+    const before = await store.get(goalId);
+
+    const result = await client.callTool({ name: 'takt_finish_goal', arguments: { cwd, goalId, reason: '終了する' } });
+
+    expect(result.isError).toBe(true);
+    expect(await store.get(goalId)).toEqual(before);
+    expect(ensureDaemon).not.toHaveBeenCalled();
+    expect(autoRun.ensureManagerRun).not.toHaveBeenCalled();
+  });
+
+  it('keeps complete, check_completion and reopen rejecting an aborted goal after adding finishing', async () => {
+    await store.update(goalId, (goal) => ({ ...goal, executionStatus: 'aborted' }));
+    const before = await store.get(goalId);
+
+    for (const name of ['takt_complete_goal', 'takt_check_goal_completion', 'takt_reopen_goal']) {
+      const result = await client.callTool({ name, arguments: { cwd, goalId, reason: '理由' } });
+      expect(result.isError, name).toBe(true);
+    }
+
+    expect(await store.get(goalId)).toEqual(before);
   });
 });
 

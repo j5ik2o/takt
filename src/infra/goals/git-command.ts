@@ -91,6 +91,12 @@ export async function fetchGoalIntegrationBranchSha(cwd: string, branch: string,
   return goalGitText(cwd, ['rev-parse', '--verify', `${remoteRef}^{commit}`], signal);
 }
 
+export async function resolveGoalRemoteBranchSha(
+  cwd: string, branch: string, signal: AbortSignal | undefined, env?: NodeJS.ProcessEnv,
+): Promise<string> {
+  return goalGitText(cwd, ['rev-parse', '--verify', `${toRemoteTrackingBranchRef(branch)}^{commit}`], signal, env);
+}
+
 export async function isGoalCommitIncluded(
   cwd: string, source: string, target: string, signal: AbortSignal | undefined, env?: NodeJS.ProcessEnv,
 ): Promise<boolean> {
