@@ -15,3 +15,7 @@ This is a saved human standing integration instruction. approve prepares the PR 
 Concurrency limit: {{concurrency}}
 
 This limit is shared across the project's runs and watches.
+
+Task runtime assignments by repository: {{runtimeAssignments}}
+
+When the human's instruction or goal constraints match a listed use, pass that repository's assignment name as runtimeAssignment to takt_enqueue_goal_task. When the human explicitly names a listed assignment, pass that name even if it has no use description or the description does not match. Omit the argument otherwise. When registering a goal with an explicit priority instruction, preserve it in the goal constraints for later task submissions.

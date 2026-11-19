@@ -144,11 +144,15 @@ describe('manager conversation configuration and provider boundary', () => {
     );
   });
 
-  it('does not warn about a manager runtime assignment that runtime.yaml defines', () => {
-    saveProjectConfig(cwd, { language: 'en', manager: { runtimeAssignments: ['defined-assignment'] } });
+  it('passes configured runtime assignment names and usage to the manager prompt', () => {
+    saveProjectConfig(cwd, { language: 'en', manager: { runtimeAssignments: [{ 'defined-assignment': 'Explicit low priority' }] } });
     writeRuntimeAssignmentFixture(cwd, 'defined-assignment');
     const warning = vi.spyOn(ui, 'warn').mockImplementation(() => {});
-    expect(createManagerConversationPlan(cwd, {}).ctx.providerType).toBe('mock');
+    const plan = createManagerConversationPlan(cwd, {});
+    expect(plan.strategy.systemPrompt).toContain(JSON.stringify([{
+      repositoryDirectory: cwd,
+      assignments: [{ name: 'defined-assignment', usageDescription: 'Explicit low priority' }],
+    }]));
     expect(warning).not.toHaveBeenCalled();
   });
 
