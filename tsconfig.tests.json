@@ -545,6 +545,7 @@
     "src/__tests__/merge-caccia.test.ts",
     "src/__tests__/merge-cli.test.ts",
     "src/__tests__/merge-clone.integration.test.ts",
+    "src/__tests__/merge-gate-script.test.ts",
     "src/__tests__/merge-linked.test.ts",
     "src/__tests__/merge-method-propagation.integration.test.ts",
     "src/__tests__/merge-method.test.ts",

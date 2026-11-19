@@ -306,6 +306,47 @@ def test_repeated_end_cursor_aborts() -> None:
     assert len(graphql_calls) <= 3, f"repeated endCursor: must stop early, got {len(graphql_calls)} call(s)"
 
 
+def test_fork_pr_resolves_against_base_repository() -> None:
+    # fork 由来の PR では origin が fork を、base が PR のあるリポジトリを指す。
+    # 関門は base 側で PR を特定し、--head には fork の所有者を前置する。
+    class Fake(GitGhStub):
+        def dispatch(self, command, cwd):
+            if command[0] == "git":
+                if command[1:3] == ["symbolic-ref", "--short"]:
+                    return gh_ok(HEAD_BRANCH + "\n")
+                if command[1:3] == ["rev-parse", "HEAD"]:
+                    return gh_ok(HEAD_SHA + "\n")
+                if command[1:3] == ["config", "--get"]:
+                    if command[3] == "remote.origin.url":
+                        return gh_ok("git@github.com:alice/owner.git\n")
+                    if command[3] == "remote.base.url":
+                        return gh_ok(BASE_URL + "\n")
+            if command[0] == "gh":
+                if command[1:2] == ["api"]:
+                    return gh_ok(json.dumps(ZERO_2))
+                if command[1:3] == ["pr", "list"]:
+                    return gh_ok(json.dumps([{"number": 42, "headRefOid": HEAD_SHA}]))
+            return super().dispatch(command, cwd)
+
+    stub = Fake()
+    with GateRunner(stub) as runner:
+        code = runner.run([])
+        out = runner.stdout.getvalue()
+        err = runner.stderr.getvalue()
+    assert code == 0, f"fork case: expected exit 0, got {code}; stderr={err!r}"
+    payload = parse_stdout(out)
+    assert payload["pr_number"] == 42, payload
+    list_calls = [c[0] for c in stub.calls if c[0][1:3] == ["pr", "list"]]
+    assert len(list_calls) == 1, f"fork case: expected one pr list call, got {list_calls}"
+    args = list_calls[0]
+    assert args[args.index("--repo") + 1] == "example/owner", f"fork case: must query the base repository, got {args}"
+    assert args[args.index("--head") + 1] == f"alice:{HEAD_BRANCH}", f"fork case: head must be owner-prefixed, got {args}"
+    api_calls = [c[0] for c in stub.calls if c[0][1:2] == ["api"]]
+    assert any("owner=example" in token for call in api_calls for token in call), (
+        f"fork case: GraphQL must target the base repository, got {api_calls}"
+    )
+
+
 def test_pr_cannot_be_identified() -> None:
     """PR を 1 件に特定できなければ、取得失敗として止める（取り違えない）。"""
     for label, listed in {
@@ -373,6 +414,7 @@ def main() -> int:
         test_unresolved_aborts_with_count_and_urls,
         test_unknown_count_aborts,
         test_repeated_end_cursor_aborts,
+        test_fork_pr_resolves_against_base_repository,
         test_pr_cannot_be_identified,
         test_explicit_repo_and_pr_are_honoured,
     ]

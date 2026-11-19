@@ -11,25 +11,27 @@
 # builtin との差分は次の (a)-(e) だけである。
 #   (a) name と description
 #   (b) この冒頭コメント
-#   (c) max_steps を 75 から 86 にする（後述）
+#   (c) max_steps を 75 から 226 にする（後述）
 #   (d) wait_ci の最後の規則の next: merge を next: check_review_threads にする
 #   (e) merge ステップの直前に check_review_threads と unresolved_review_threads を足す
 #
-# max_steps について: TAKT は builtin 名のワークフローにだけ mergeResyncBudget
-# （5 * max(2, concurrency-1)）を上乗せする（dist/features/tasks/execute/taskWorkflowExecution.js）。
-# 独自名のワークフローではこの上乗せが 0 になる。既定 concurrency 2 では上乗せが 10 なので、
-# 同じだけの余裕を保つため max_steps を 75 + 10 + 1（関門のステップ）= 86 にする。
+# max_steps について: TAKT は builtin 名のワークフローにだけ、再同期の予算として
+# mergeResyncBudget（maxSteps * max(2, concurrency-1)）を上乗せする
+# （src/features/tasks/execute/taskWorkflowExecution.ts）。独自名のワークフローでは
+# この上乗せが 0 になる。既定 concurrency 2 では builtin の実効上限は 75 + 75*2 = 225
+# なので、同じだけの余裕を保つため max_steps を 225 + 1（関門のステップ）= 226 にする。
+# concurrency や builtin の maxSteps が変わったら、この式で取り直すこと。
 # 再同期の上限 resyncLimit はワークフロー名に依存せず sync_with_root が与えるので変わらない。
 #
 # builtin を更新するときの追随手順:
 #   1. 新しい版の builtin（ja）の merge-review-fix-simple.yaml を取得する。
 #   2. このファイルとの diff を取り、(a)-(e) を除いた差分をこのファイルへ取り込む。
-#   3. taskWorkflowExecution.js の mergeResyncBudget の式を確認し、max_steps を見直す。
+#   3. taskWorkflowExecution.ts の mergeResyncBudget の式を確認し、max_steps を見直す。
 #   4. `takt workflow doctor merge-review-fix-simple-thread-gate` と
 #      `python3 tools/merge-gate/review_threads_gate_test.py` を再実行する。
 name: merge-review-fix-simple-thread-gate
 description: 1体の読み取り専用レビューと裁定・修正・検証を経て、CI通過後に未解決レビュースレッドが0件のときだけPRをマージする
-max_steps: 86
+max_steps: 226
 initial_step: identify
 steps:
   - name: identify

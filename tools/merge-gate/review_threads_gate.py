@@ -10,9 +10,10 @@ stderr はその結果だけから作る。
   1  未解決が 1 件以上。stderr に件数とスレッドの URL を出す
   2  件数を取得できない。stderr にその理由を出す
 
-対象 PR は、clone の remote.origin.url（head リポジトリ）・HEAD ブランチ・HEAD の
-コミットから特定する。merge_pr も clone の HEAD を基準にするため、この 3 つが同じ PR
-を指すことを確かめる。`--repo OWNER/NAME --pr N` を渡した場合は clone を読まずその PR を使う。
+対象 PR は、clone の HEAD ブランチと HEAD のコミットから特定する。PR はマージ先
+（base）リポジトリに存在するため、clone に base リモートがあればそのリポジトリを
+対象にし、無ければ remote.origin.url のリポジトリを対象にする。merge_pr も clone
+の HEAD を基準にするため、この 3 つが同じ PR を指すことを確かめる。`--repo OWNER/NAME --pr N` を渡した場合は clone を読まずその PR を使う。
 
 TAKT は command に PATH/SHELL/TMPDIR などの限られた環境しか渡さない。HOME がないと
 gh が認証情報を読めないため、子プロセスでは HOME が無ければログインユーザーのホームを補う。
@@ -100,11 +101,19 @@ def resolve_target(argv: list[str]) -> tuple[str, str, int]:
     if repo is not None or pr is not None:
         raise GateError("--repo と --pr は同時に指定してください")
 
-    owner, name = _parse_repo_slug(_git("config", "--get", "remote.origin.url"))
+    head_owner, head_name = _parse_repo_slug(_git("config", "--get", "remote.origin.url"))
+    # PR はマージ先リポジトリに存在する。merge 用の clone は base リモートを
+    # マージ先に向けるため、base があればそのリポジトリを対象にする。
+    base = run_command(["git", "config", "--get", "remote.base.url"])
+    if base["status"] == 0 and base["stdout"].strip():
+        owner, name = _parse_repo_slug(base["stdout"])
+    else:
+        owner, name = head_owner, head_name
     branch = _git("symbolic-ref", "--short", "HEAD")
     head_oid = _git("rev-parse", "HEAD")
+    head_filter = branch if (owner, name) == (head_owner, head_name) else f"{head_owner}:{branch}"
     listing = run_command(
-        ["gh", "pr", "list", "--repo", f"{owner}/{name}", "--head", branch, "--state", "open",
+        ["gh", "pr", "list", "--repo", f"{owner}/{name}", "--head", head_filter, "--state", "open",
          "--json", "number,headRefOid"]
     )
     if listing["status"] != 0:
