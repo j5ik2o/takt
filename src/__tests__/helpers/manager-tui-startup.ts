@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { conversationId } from '../../infra/conversations/identity.js';
 import { expect, it, vi } from 'vitest';
 import stringWidth from 'string-width';
-import { ManagerClientDouble, mount, showProposal, waitFor, summaryA, approveSummary, promptFrame } from './manager-tui-fixtures.js';
+import { ManagerClientDouble, mount, showProposal, waitFor, summaryA, managerConversationId, approveSummary, promptFrame } from './manager-tui-fixtures.js';
 import { getLabel } from '../../shared/i18n/index.js';
-import { MANAGER_REFRESH_INTERVAL_MS } from '../../features/manager/ManagerView.js';
+/** ManagerView の定期更新の既定間隔（ミリ秒）。設定 manager.refresh_interval_ms が無い場合の値で、ManagerView の既定値と一致させる。 */
+const MANAGER_REFRESH_INTERVAL_MS = 500;
 
 it.each(['ja', 'en'] as const)('shows the status line and assignment without sending a provider request in %s', async (lang) => {
   const context = mount(lang);
@@ -154,7 +155,7 @@ it.each(['reading', 'incomplete'] as const)('never approves a displayed proposal
   context.client.change({ readStatus: 'complete' });
   await waitFor(() => expect(context.app.lastFrame()).not.toContain(getLabel('manager.conversation.' + readStatus, 'en')));
   approveSummary(context);
-  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4 }]));
+  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4, conversationId: managerConversationId }]));
 });
 
 it('keeps the same screen and proposal while disconnected, then enables approval only after the new complete read', async () => {
@@ -173,7 +174,7 @@ it('keeps the same screen and proposal while disconnected, then enables approval
     expect(context.app.lastFrame()).not.toContain(getLabel('manager.conversation.incomplete', 'en'));
   });
   approveSummary(context);
-  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4 }]));
+  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4, conversationId: managerConversationId }]));
 });
 
 it('displays the interruption state and preserves the conversation identity while accepting a new message', async () => {
