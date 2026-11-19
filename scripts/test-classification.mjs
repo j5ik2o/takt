@@ -122,6 +122,8 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/globalConfig-defaults.test.ts',
   'src/__tests__/globalConfig-resolvers.test.ts',
   'src/__tests__/globalConfig.test.ts',
+  // Finishes goals against a real Git repository to resolve the saved branch tip.
+  'src/__tests__/goal-finish-operations.test.ts',
   'src/__tests__/imageAttachments.test.ts',
   'src/__tests__/instructMode.test.ts',
   'src/__tests__/interactive-mode.test.ts',

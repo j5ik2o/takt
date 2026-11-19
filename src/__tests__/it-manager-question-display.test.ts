@@ -933,6 +933,7 @@ it('exposes manager work tools without exposing a goal abort tool to the agent',
     expect(names).toContain('takt_enqueue_goal_task');
     expect(names).toContain('takt_abort_epic');
     expect(names).not.toContain('takt_abort_goal');
+    expect(names).not.toContain('takt_finish_goal');
   } finally { await client.close(); await server.close(); }
 });
 

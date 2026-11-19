@@ -225,7 +225,7 @@ it.each(['claude', 'claude-sdk'] as const)('auto-approves manager MCP tools with
     assignment: undefined })).toMatchObject(structured);
   const sdk = queryMock.mock.calls[0]![0].options;
   expect(sdk.allowedTools).toEqual([
-    ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal',
+    ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal', 'takt_finish_goal',
   ].map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`));
   expect(sdk.tools).toBeUndefined();
   expect(sdk.mcpServers).toHaveProperty('external');

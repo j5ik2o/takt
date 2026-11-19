@@ -274,6 +274,8 @@ With any provider supporting the required MCP capability, ask manager to pause t
 
 Pausing also stops running tasks, which remain as retryable failures. On resume, the manager receives the deferred events, decides how to continue the stopped tasks, and advances the work. Aborting interrupts running tasks and invalidates unstarted tasks. An aborted goal cannot resume. Completed goals cannot be paused or resumed; only active goals can be paused, and only paused goals can resume.
 
+To close out an aborted goal, ask manager to finish it with a reason. `takt_finish_goal` moves an aborted goal whose status is `created` or `awaiting_merge` to `completed` and saves the reason in the work log and the completion summary; `completion.targetSha` uses the saved goal branch tip. A saved unmerged, closed pull request does not block finishing, and the pull request is not queried. Goals that are not aborted, and goals with running work or an unintegrated result, are rejected. A result is a task with status `completed` or `pr_failed`, or a saved completion SHA or `workflowResult: completed`; it is unintegrated when its SHA is not included in the integration branch tip by ancestry or identical content. Pending tasks do not block finishing because `takt_abort_goal` already marks them `failed`. This operation leaves `executionStatus` and tasks unchanged.
+
 Conversation state tools are exposed for all providers with the required MCP capability. The TUI goal menu opened with `Ctrl+G` is also available. Deleting a finished goal cannot be requested in conversation; use `Ctrl+G`.
 
 ## Commands for waiting on external state

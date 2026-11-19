@@ -28,12 +28,13 @@ import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { makeProvider } from './test-helpers.js';
 import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
+import * as autoRun from '../features/manager/autoRun.js';
 import type { ManagerAssignmentIdentity } from '../features/manager/assignment.js';
 
 vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async () => {}) }));
 
 describe('manager MCP connection confirmation', () => {
-  const names = ['takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal'];
+  const names = ['takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal', 'takt_finish_goal'];
   let cwd: string;
   let store: GoalStore;
   beforeEach(async () => {
@@ -317,6 +318,32 @@ describe('manager MCP connection confirmation', () => {
       expect((await store.get(goalId)).executionStatus).toBe(expected);
       await transport.terminateSession();
     } finally {
+      try { await reader.close(); } finally { try { await transport.close(); } finally { await connection.dispose(); } }
+    }
+  });
+
+  it('finishes an aborted goal with its reason over the owned HTTP server without starting manager work', async () => {
+    await store.update(goalId, (goal) => ({ ...goal, executionStatus: 'aborted' }));
+    const ensureManagerRun = vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
+    const branchTip = execFileSync('git', ['rev-parse', goalRecord().branch], { cwd, encoding: 'utf8' }).trim();
+    const connection = await connectTestManagerMcp(cwd, undefined, undefined);
+    const config = connection.servers[TAKT_MANAGER_MCP_SERVER_NAME]!;
+    if (config.type !== 'http') throw new Error('Expected HTTP manager configuration');
+    const reader = new Client({ name: 'provider-manager-finish-test', version: '1' });
+    const transport = new StreamableHTTPClientTransport(new URL(config.url), { requestInit: { headers: config.headers } });
+    const reason = 'Codex の利用上限で中止したゴールを終了する';
+    try {
+      await reader.connect(transport);
+      const result = await reader.callTool({ name: 'takt_finish_goal', arguments: { cwd, goalId, reason } });
+      expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+      const saved = await store.get(goalId);
+      expect(saved).toMatchObject({ status: 'completed', executionStatus: 'aborted' });
+      expect(saved.workLog.at(-1)?.summary).toBe(reason);
+      expect(saved.completion?.targetSha).toBe(branchTip);
+      expect(ensureManagerRun).not.toHaveBeenCalled();
+      await transport.terminateSession();
+    } finally {
+      ensureManagerRun.mockRestore();
       try { await reader.close(); } finally { try { await transport.close(); } finally { await connection.dispose(); } }
     }
   });

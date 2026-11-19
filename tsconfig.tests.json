@@ -295,6 +295,7 @@
     "src/__tests__/goal-activity.test.ts",
     "src/__tests__/goal-execution-operations.test.ts",
     "src/__tests__/goal-execution.test.ts",
+    "src/__tests__/goal-finish-operations.test.ts",
     "src/__tests__/goal-git-command.test.ts",
     "src/__tests__/goal-git.test.ts",
     "src/__tests__/goal-inquiries.test.ts",
