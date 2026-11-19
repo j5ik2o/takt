@@ -413,6 +413,7 @@
     "src/__tests__/it-manager-verification-interruption.test.ts",
     "src/__tests__/it-manager-workspaces.test.ts",
     "src/__tests__/it-mcp-task-cleanup.test.ts",
+    "src/__tests__/it-merge-gate-script.test.ts",
     "src/__tests__/it-merge-review-ci.test.ts",
     "src/__tests__/it-merge-workflow-execution.test.ts",
     "src/__tests__/it-mock-mcp-abort.test.ts",
