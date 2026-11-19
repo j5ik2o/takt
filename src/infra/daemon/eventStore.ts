@@ -122,19 +122,21 @@ export class FileEventStore implements EventStore, ConversationTurns {
     const present = new Set<string>();
     for await (const entry of await opendir(this.directory)) {
       if (!entry.name.endsWith('.json')) continue;
-      const path = join(this.directory, entry.name);
-      present.add(path);
+      present.add(join(this.directory, entry.name));
+    }
+    // A file another instance indexed can disappear afterwards (the
+    // rollback in accept() unlinks after releasing the lock). Drop index
+    // entries whose file is gone before registering new files: a new
+    // event may reuse the vanished event's sequence or request key, and
+    // registering it against the stale entry would throw a conflict.
+    for (const path of this.knownFiles) {
+      if (!present.has(path)) this.forget(path);
+    }
+    for (const path of present) {
       if (!this.knownFiles.has(path)) {
         const record = await this.read(path);
         this.index(record, path);
       }
-    }
-    // A file another instance indexed can disappear afterwards (the
-    // rollback in accept() unlinks after releasing the lock). Drop index
-    // entries whose file is gone, so a later read does not fail on a
-    // path that no longer exists.
-    for (const path of this.knownFiles) {
-      if (!present.has(path)) this.forget(path);
     }
   }
 

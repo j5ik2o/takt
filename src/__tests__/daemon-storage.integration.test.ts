@@ -241,6 +241,24 @@ describe('durable daemon event storage', () => {
     expect(turns.filter((turn) => turn.message !== undefined).map((turn) => turn.message)).toEqual(['kept message']);
   });
 
+  it('readTurns survives a new event reusing a vanished event sequence and request', async () => {
+    const directory = await root();
+    const writer = new FileEventStore(directory);
+    const kept = event('kept message', 1);
+    const vanished = event('vanished message', 2);
+    await writer.accept(kept); await writer.accept(vanished);
+    const reader = new FileEventStore(directory);
+    expect((await reader.readTurns(kept.conversationId)).filter((turn) => turn.message !== undefined)).toHaveLength(2);
+    const vanishedFile = join(directory, 'daemon-events', `${createHash('sha256').update(vanished.eventId).digest('hex')}.json`);
+    await rm(vanishedFile);
+    // After the rollback a restarted instance re-accepts the same request
+    // under a new event id, reusing the vanished event's sequence.
+    const reaccepted = { ...event('reaccepted message', 2), eventId: 'reaccepted', requestId: vanished.requestId, operationId: 'operation-reaccepted' };
+    await new FileEventStore(directory).accept(reaccepted);
+    const turns = await reader.readTurns(kept.conversationId);
+    expect(turns.filter((turn) => turn.message !== undefined).map((turn) => turn.message)).toEqual(['kept message', 'reaccepted message']);
+  });
+
   it('indexes retired PR retry observations and restores only unfinished settlement', async () => {
     const directory = await root();
     const store = new FileEventStore(directory);
