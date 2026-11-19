@@ -208,7 +208,7 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
       env: {
         ...isolatedEnv.env,
         TAKT_MOCK_SCENARIO: scenarioPath,
-        NODE_OPTIONS: `${isolatedEnv.env.NODE_OPTIONS ?? ''} --require="${preloadPath.replace(/"/g, '\\"')}"`,
+        NODE_OPTIONS: `${isolatedEnv.env.NODE_OPTIONS ?? ''} --require="${preloadPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
