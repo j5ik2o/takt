@@ -57,7 +57,28 @@ describe('takt-mcp HTTP transport integration', () => {
     }
   });
 
-  it('Given the same listener, When two clients connect, Then both share one resident server and a closed client leaves the other working', async () => {
+  it('Given an established connection, When the same client calls a tool repeatedly, Then it reuses the connection and each call is answered', async () => {
+    const target = await serve();
+    const client = await clientFor(target);
+    try {
+      const first = await client.callTool({ name: 'takt_list_tasks', arguments: { cwd } });
+      expect(first.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(first.content)).tasks).toEqual([]);
+
+      const second = await client.callTool({ name: 'takt_enqueue_task', arguments: {
+        cwd, task: 'reuse through http', workflow: 'default', autoPr: false,
+      } });
+      expect(second.isError, firstTextContent(second.content)).toBeUndefined();
+
+      const third = await client.callTool({ name: 'takt_list_tasks', arguments: { cwd } });
+      expect(third.isError).toBeUndefined();
+      expect(JSON.parse(firstTextContent(third.content)).tasks).toHaveLength(1);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it('Given two clients on the same listener, When one closes, Then the other keeps serving a resident session', async () => {
     const target = await serve();
     const first = await clientFor(target);
     const second = await clientFor(target);
