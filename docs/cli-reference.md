@@ -267,11 +267,30 @@ TAKT currently supports `initialize`, `session/new`, `session/prompt`, `session/
 
 ## MCP Server
 
-`takt-mcp` starts TAKT as a stdio Model Context Protocol server. Register it in an MCP client when you want to enqueue tasks, inspect task/run state, or send an additional instruction to a running worktree-clone task without shelling out to TAKT commands.
+`takt-mcp` starts TAKT as a Model Context Protocol server. By default it uses stdio; pass `--http` to serve the same tools over a resident Streamable HTTP server on the loopback interface. Register it in an MCP client when you want to enqueue tasks, inspect task/run state, or send an additional instruction to a running worktree-clone task without shelling out to TAKT commands.
 
 ```bash
 takt-mcp
 ```
+
+### HTTP transport
+
+Run `takt-mcp --http` to start a resident Streamable HTTP server instead of stdio. The server listens on `127.0.0.1` only and keeps running until it is interrupted, so several clients can connect to one shared process.
+
+```bash
+takt-mcp --http --http-port 7000
+```
+
+| Flag | Description |
+|------|-------------|
+| `--http` | Serve over Streamable HTTP on `127.0.0.1` instead of stdio. |
+| `--http-port <n>` | TCP port to bind on `127.0.0.1` (default `0`, letting the OS pick a free port). |
+| `--http-token <token>` | Bearer token clients must send. When omitted, TAKT generates one and prints it at startup. |
+
+The listen address is `http://127.0.0.1:<port>/`. Every request must send `Authorization: Bearer <token>`; requests without a matching token are rejected with `403`, and paths other than `/` return `404`. When `--http-token` is omitted, the startup output on stderr prints the bound URL and the generated `Authorization: Bearer <token>` value so you can copy it into your client. `--tool-set` and `--include-reference-markers` apply to the HTTP transport exactly as they do to stdio.
+
+To register a fixed URL in your MCP client, pass `--http-port` explicitly. With the default `0` the OS assigns the port, so the URL you register would not match the port actually bound; in that case read the port from the startup output on stderr. Point an HTTP-capable MCP client at that URL and send the Bearer header. For example, when you start with `takt-mcp --http --http-port 7000`, an HTTP server entry carries `url = "http://127.0.0.1:7000/"` plus an `Authorization: Bearer <token>` header.
+
 
 For Codex, add a stdio MCP server to `~/.codex/config.toml`, or to project-scoped `.codex/config.toml` for trusted projects:
 
