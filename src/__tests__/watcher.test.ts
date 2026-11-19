@@ -140,15 +140,15 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     const nativeFs = await vi.importActual<typeof import('node:fs')>('node:fs');
     const failure = Object.assign(new Error('disk full'), { code: 'ENOSPC' });
     const claimNextTasks = TaskRunner.prototype.claimNextTasks;
-    let claiming = false;
     let lockDescriptor: number | undefined;
+    let claiming = false;
     const claim = vi.spyOn(TaskRunner.prototype, 'claimNextTasks').mockImplementation(function (this: TaskRunner, count) {
       claiming = true;
+      lockDescriptor = undefined;
       try {
         return claimNextTasks.call(this, count);
       } finally {
         claiming = false;
-        lockDescriptor = undefined;
       }
     });
     const fail = () => {
@@ -158,7 +158,9 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
       }
     };
     vi.mocked(fs.openSync).mockImplementation((path, flags, mode) => {
-      const claimLock = claiming && path === `${runner.getTasksFilePath()}.lock` && flags === 'wx';
+      const claimLock = claiming && typeof path === 'string' && flags === 'wx'
+        && (path === `${runner.getTasksFilePath()}.lock`
+          || path.startsWith(`${runner.getTasksFilePath()}.lock.`) && path.endsWith('.tmp'));
       if (claimLock && stage === 'create') fail();
       const descriptor = nativeFs.openSync(path, flags, mode);
       if (claimLock) lockDescriptor = descriptor;

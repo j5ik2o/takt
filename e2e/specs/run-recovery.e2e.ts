@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   mkdtempSync,
   mkdirSync,
+  realpathSync,
   writeFileSync,
   readFileSync,
   rmSync,
@@ -170,17 +171,44 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
 
     const workflowPath = resolve(__dirname, '../fixtures/workflows/mock-slow-multi-step.yaml');
     const scenarioPath = resolve(__dirname, '../fixtures/scenarios/run-sigint-parallel.json');
-    const tasksFile = join(repo.path, '.takt', 'tasks.yaml');
+    const tasksFile = join(realpathSync(repo.path), '.takt', 'tasks.yaml');
 
     mkdirSync(join(repo.path, '.takt'), { recursive: true });
     writeFileSync(tasksFile, createPendingTasksYaml(2, workflowPath, 'recovery-target'), 'utf-8');
 
     const binPath = resolve(__dirname, '../../bin/takt');
+    const interruptedLock = join(repo.path, '.takt', 'interrupted-lock.json');
+    const preloadPath = join(repo.path, '.takt', 'interrupt-lock.cjs');
+    // Pause at lock publication after a task is running, rather than depending on
+    // whether the parent's polling happens to overlap the next queue read.
+    writeFileSync(preloadPath, `
+      const fs = require('node:fs');
+      const { syncBuiltinESMExports } = require('node:module');
+      const tasks = ${JSON.stringify(tasksFile)};
+      const lock = tasks + '.lock';
+      const marker = ${JSON.stringify(interruptedLock)};
+      const open = fs.openSync;
+      const link = fs.linkSync;
+      function pause(path) {
+        if (path !== lock || !fs.readFileSync(tasks, 'utf8').includes('status: running')) return;
+        fs.writeFileSync(marker + '.tmp', JSON.stringify({ pid: process.pid, content: fs.readFileSync(lock, 'utf8') }));
+        fs.renameSync(marker + '.tmp', marker);
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+      }
+      fs.openSync = (...args) => {
+        const fd = open(...args);
+        if (args[1] === 'wx') pause(args[0]);
+        return fd;
+      };
+      fs.linkSync = (...args) => { const result = link(...args); pause(args[1]); return result; };
+      syncBuiltinESMExports();
+    `);
     const child = spawn('node', [binPath, 'run', '--provider', 'mock'], {
       cwd: repo.path,
       env: {
         ...isolatedEnv.env,
         TAKT_MOCK_SCENARIO: scenarioPath,
+        NODE_OPTIONS: `${isolatedEnv.env.NODE_OPTIONS ?? ''} --require="${preloadPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -213,8 +241,13 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
 
       expect(runningObserved, `stdout:\n${firstStdout}\n\nstderr:\n${firstStderr}`).toBe(true);
 
+      expect(await waitFor(() => existsSync(interruptedLock), 30_000, 20),
+        `Lock publication was not reached. stdout:\n${firstStdout}\nstderr:\n${firstStderr}`).toBe(true);
+
       child.kill('SIGKILL');
       await childClosedPromise;
+      const interrupted = JSON.parse(readFileSync(interruptedLock, 'utf8')) as { pid: number; content: string };
+      expect(interrupted.pid).toBe(child.pid);
 
       const staleTasks = readTasks(tasksFile);
       const runningTask = staleTasks.find((task) => task.status === 'running');
@@ -231,7 +264,8 @@ describe('E2E: Run interrupted task cleanup and high-priority run flows', () => 
         timeout: 240_000,
       });
 
-      expect(rerunResult.exitCode, formatTaktRunResult(rerunResult)).toBe(0);
+      expect(rerunResult.exitCode, `${formatTaktRunResult(rerunResult)}\nInterrupted lock: ${JSON.stringify(interrupted)}`).toBe(0);
+      expect(JSON.parse(interrupted.content)).toMatchObject({ pid: child.pid });
 
       const finalTasks = readTasks(tasksFile);
       expect(finalTasks).toEqual(expect.arrayContaining([

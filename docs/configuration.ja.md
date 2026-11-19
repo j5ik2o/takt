@@ -214,6 +214,7 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 | `sync_project_local_takt_on_retry` | boolean | `true` | 既存 worktree の再試行位置を選ぶ前、または SDK を確認する前にルートの project-local `.takt` を同期します。SDK 導入を断った場合や選択を中止した場合も同期済みのファイルは残ります。`false` では worktree 側のコピーを維持します。 |
 | `worktree_dir` | string | - | 共有クローンのディレクトリ（デフォルトは `../{clone-name}`） |
 | `manager.preserve_goal_worktree` | boolean | `false` | manager がゴールタスクの成果を取り込んだ後も worktree と run 証跡を保持します。[ゴールタスクの worktree 保持](#ゴールタスクの-worktree-保持)を参照。 |
+| `manager.verify_on_register` | boolean | `false` | ゴール登録後に登録済みの Quint・Alloy を自動検証します。[ゴール登録時の検証](#ゴール登録時の検証)を参照。 |
 | `allow_git_hooks` | boolean | `false` | TAKT 管理の auto-commit 時に git hooks を許可 |
 | `allow_git_filters` | boolean | `false` | TAKT 管理の auto-commit 時に git filter を許可 |
 | `auto_pr` | boolean | - | worktree 実行後に PR を自動作成 |
@@ -522,6 +523,24 @@ manager:
 ```
 
 worktree、clone metadata、worktree 内の `.takt/runs` の reports・logs はそのまま残ります。completed タスク記録も従来どおり残し、タスク履歴の自動削除は行いません。既定の `false` では、従来の worktree・clone metadata の cleanup と `cleanupWarning` の挙動を維持します。この設定は、通常の `completeTask`、List Tasks からの手動 merge・delete、PR merge タスク、未取り込みタスクには影響しません。
+
+## ゴール登録時の検証
+
+プロジェクトの `.takt/config.yaml` またはグローバルの `~/.takt/config.yaml` に指定します。
+
+```yaml
+manager:
+  verify_on_register: true
+assistant:
+  formal_spec:
+    mode: true
+```
+
+`manager.verify_on_register` の既定値は `false` です。優先順位は boolean の環境変数 `TAKT_MANAGER_VERIFY_ON_REGISTER`、project、global、既定値の順です。上位の明示的な `false` は下位の `true` に優先します。
+
+`takt_create_goal` または登録案の承認（manager の TUI ダイアログを含む）による登録完了後、登録された Quint・Alloy の本文をまとめて一度検証します。この設定と、非対話で解決した `assistant.formal_spec.mode` の両方が有効（`true` または `"Y/n"`）な場合だけ動作します。両言語を持たないゴールや Gherkin 単独のゴールは、検証せず通常どおり登録します。仕様の生成やタスク登録時の検証は行いません。
+
+既存の検証器と `assistant.formal_spec.model_check_timeout_seconds` を使います。結果が `failed` または `error` でも登録は成立し、総合判定と言語別の結果を同じゴールの作業記録に追記します。manager の会話でそのゴールの検証結果を尋ねると、記録を参照できます。中断や作業記録の保存失敗はエラーとして通知し、登録済みのゴールは残ります。
 
 ## manager がタスクに使う workflow
 
@@ -1744,7 +1763,11 @@ runtime profile または capability preset で設定できます。legacy モ�
 
 #### Codex の context compaction からの復帰
 
-Codex が Phase 1 の実行中に transport または session rollout へ `compacted` event を記録した場合、TAKT は現在の turn の完了を待ってから同じ thread を resume し、compaction が発生したことを示す文脈と元の Phase 1 指示を再投入します。復帰 turn は逐次実行します。上限は compaction の総回数ではなく、進捗のない復帰が連続した回数に対して適用されます。復帰 turn の中でファイル読み込み・コマンド実行・編集などのツール呼び出しが1回でもあれば進捗ありとして連続回数をリセットし、ツールを呼び出さないまま再び compaction した復帰が3回続くと provider call を終了します。progress notes の有無や保存の成否、ツール呼び出し前に応答文を書いたかどうかは、この判定に影響しません。最終回答、result の文章、ツール呼び出しを伴わない応答文は進捗に数えません。復帰に失敗した場合、または上限後にさらに compaction が発生した場合は step を成功とせず、その失敗を返します。この進捗判定は復帰の繰り返しを止めるための実用的な目安であり、作業が実際に前進していることを証明するものではありません。収束しないままツール呼び出しを繰り返す agent はこの上限では止まりません。assistant の応答文から compaction を推測することはありません。このイベントを発行しない provider、または復帰に対応しない provider の動作は変わりません。この自動復帰は workflow の `session: compact` とは別の処理であり、既存の `session: compact` の動作は変更しません。
+Codex の developer instructions には、TAKT が各 turn に渡す現在の担当指示を優先する固定の契約を設定します。担当、persona、フェーズなどの現在の指示は turn の `taktCurrentInstructions` に、作業依頼は `userInstruction` に分けて渡します。現在の担当指示は過去の担当や progress notes より優先されます。利用者の既存の `developer_instructions` 設定はこの契約で上書きしますが、設定ファイルは変更しません。契約の変更前に作られた workflow session は新しい session key では再開せず、現在の指示から開始します。報告フェーズでは保存済みの作業結果を新しい依頼に含めます。
+
+Codex が Phase 1 で `compacted` event を記録し、同じ session の turn が完了した場合、TAKT は応答が現在の担当ステップを完了したか判定します。判定には MCP ツールを持たない独立した読み取り専用の Codex session を使います。具体的な指摘を伴う REJECT もレビューの完了として扱い、元の応答を返します。担当を見失った場合は作業中の thread を resume し、元の Phase 1 指示と現在の担当・権限を再提示します。判定に失敗した場合や結果が不正な場合は、候補応答を採用せず provider call を失敗にします。
+
+復帰 turn でツールを使わず再び compaction が起き、さらに復帰が必要になる状態が3回連続すると失敗を返します。復帰 turn でツールを使うと回数をリセットするため、復帰の累計回数には上限を設けません。progress notes の利用や保存の成否は回数に影響しません。assistant の応答文から compaction を推測することはありません。この event を発行しない provider や復帰に対応しない provider の動作は変わりません。この自動復帰は workflow の `session: compact` とは別の処理です。
 
 #### Codex の fast mode (`fast_mode`)
 

@@ -214,6 +214,7 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 | `sync_project_local_takt_on_retry` | boolean | `true` | Sync the root project-local `.takt` into a reused worktree before selecting a retry position or checking SDKs. Synced files remain if SDK installation is declined or the selection is cancelled. Set `false` to keep the worktree copy. |
 | `worktree_dir` | string | - | Directory for shared clones (defaults to `../{clone-name}`) |
 | `manager.preserve_goal_worktree` | boolean | `false` | Preserve goal task worktrees and their run artifacts after manager integrates them; see [Goal task worktree retention](#goal-task-worktree-retention). |
+| `manager.verify_on_register` | boolean | `false` | Automatically verify registered Quint/Alloy specifications after goal registration; see [Verification on goal registration](#verification-on-goal-registration). |
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
@@ -526,6 +527,24 @@ manager:
 ```
 
 The worktree, its clone metadata, and its `.takt/runs` reports and logs remain in place. Completed task records also remain; no task-history cleanup is added. The default `false` keeps the existing worktree and clone-metadata cleanup, including `cleanupWarning` behavior. This setting does not change ordinary `completeTask` cleanup, manual merge or deletion from List Tasks, PR merge tasks, or unintegrated tasks.
+
+## Verification on goal registration
+
+Set the following in project `.takt/config.yaml` or global `~/.takt/config.yaml`:
+
+```yaml
+manager:
+  verify_on_register: true
+assistant:
+  formal_spec:
+    mode: true
+```
+
+The default for `manager.verify_on_register` is `false`. Precedence is `TAKT_MANAGER_VERIFY_ON_REGISTER` (a boolean), project configuration, global configuration, then the default. An explicit `false` overrides a lower-priority `true`.
+
+After `takt_create_goal` or approval of a registration proposal (including the manager TUI dialog), registered Quint and Alloy fields are verified together once. Both this setting and the non-interactive value of `assistant.formal_spec.mode` must be enabled (`true` or `"Y/n"`). Goals with neither language, including Gherkin-only goals, register normally without verification. This does not generate specifications or verify task registrations.
+
+Verification uses the existing verifier and `assistant.formal_spec.model_check_timeout_seconds`. A `failed` or `error` result keeps the goal registered and appends the verdict and language results to its work log. Ask the manager about the goal's verification result to consult that record. Cancellation or failure to save the work log is reported as an error; the already registered goal remains available.
 
 ## Manager task workflows
 
@@ -1782,7 +1801,11 @@ legacy mode it can also be set through `provider_routing`, deprecated
 
 #### Codex context compaction recovery
 
-When Codex records a `compacted` event in its transport or session rollout during Phase 1, TAKT waits for the current turn to finish, then resumes the same thread and re-injects the original Phase 1 instruction with context explaining that compaction occurred. Recovery turns are sequential. The cap counts consecutive recoveries without progress, not the total number of compactions: a recovery turn that makes at least one tool call (reading files, running commands, editing, and so on) resets the count, and three consecutive recoveries that are compacted again without any tool call end the provider call. Whether progress notes exist or were saved, and whether the agent wrote text before the tool call, does not affect this check. A final answer, result text, or text without a tool call does not count as progress. A failed recovery, or another compaction after that cap, is returned as a failure rather than a successful step. The progress check is a practical guard against recovery loops, not proof that the work advances: an agent that keeps calling tools without converging is not stopped by this cap. TAKT does not infer compaction from assistant text. Providers that do not emit the event or do not support recovery keep their existing behavior. This automatic recovery is separate from the workflow-level `session: compact` behavior, which remains unchanged.
+Codex receives a stable developer contract that gives TAKT's current turn instructions priority. TAKT sends the current assignment, persona, and phase in `taktCurrentInstructions`, and the task input in `userInstruction`. The current assignment takes precedence over earlier assignments and progress notes. The developer contract overrides an existing user `developer_instructions` setting without changing the configuration file. Workflow sessions created before this contract use a different session key, so a new session starts with the current instructions. The report phase includes saved work results in that new request.
+
+When Codex records a `compacted` event during Phase 1 and the same session returns a completed turn, TAKT checks whether that response completes the assigned step. The check runs in a separate, read-only structured Codex session without MCP tools. A completed review, including a concrete REJECT finding, is returned as the original response. If the agent has lost its assignment, TAKT resumes the working thread with the original Phase 1 instruction, current assignment and permissions. A failed or invalid check fails the provider call rather than accepting the candidate.
+
+The call fails after three consecutive recovery turns that use no tools, compact again, and still require recovery. Tool use during a recovery turn resets this count, so there is no limit on the total number of recovery turns. Progress notes remain available to the resumed step, but their availability does not change the count. TAKT does not infer compaction from assistant text. Providers without the event or recovery capability keep their existing behavior. This automatic recovery is separate from workflow-level `session: compact`.
 
 #### Codex fast mode (`fast_mode`)
 
