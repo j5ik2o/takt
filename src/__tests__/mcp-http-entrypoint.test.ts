@@ -117,6 +117,20 @@ describe('takt-mcp HTTP entrypoint flag', () => {
     expect(printed).toContain('Bearer ' + 'a'.repeat(64));
   });
 
+  it('does not print the connection Bearer <redacted> when the token was provided with --http-token', async () => {
+    process.argv.push('--http', '--http-token', 'injected-token');
+    const lines: string[] = [];
+    doubles.writeStdout.mockImplementation((line: string) => lines.push(line));
+    doubles.http.mockImplementation(async () => httpConnection('http://127.0.0.1:55999/'));
+
+    await connectTaktMcpServerToHttp({ connectStdio: doubles.connectStdio, writeStartup: doubles.writeStdout });
+
+    const printed = lines.join('\n');
+    expect(printed).toContain('http://127.0.0.1:55999/');
+    expect(printed).not.toContain('Bearer ' + 'a'.repeat(64));
+    expect(printed).not.toContain('injected-token');
+  });
+
   it('rejects an --http-port value that is not a TCP port before starting the server', async () => {
     process.argv.push('--http', '--http-port', 'not-a-port');
 

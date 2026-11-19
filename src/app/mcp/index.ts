@@ -150,7 +150,8 @@ export async function connectTaktMcpServerToHttp(
     ...(httpOptions.token === undefined ? {} : { token: httpOptions.token }),
   });
   const writeStartup = input.writeStartup ?? ((line: string) => { process.stderr.write(line); });
-  writeStartup(`MCP HTTP listening on ${connection.url}\nAuthorization: ${connection.authorization}\n`);
+  const authorizationForDisplay = httpOptions.token === undefined ? connection.authorization : 'Bearer ********';
+  writeStartup(`MCP HTTP listening on ${connection.url}\nAuthorization: ${authorizationForDisplay}\n`);
   const onSignal = input.onSignal ?? ((handler: () => void) => {
     process.once('SIGINT', handler);
     process.once('SIGTERM', handler);
