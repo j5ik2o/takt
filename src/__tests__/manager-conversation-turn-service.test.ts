@@ -732,6 +732,33 @@ it('keeps the reservation when registration fails after leaving a goal or branch
     .toEqual([expect.objectContaining({ state: 'reserved' })]);
   expect(doubles.artifacts).toHaveBeenCalledWith('/repository', expect.any(String));
 });
+it.each(['result save failure', 'caller cancellation'])('completes approval with the same reservation when retrying after %s', async (failure) => {
+  const f = conversationFixture();
+  f.execute.mockResolvedValueOnce({ message: 'proposal', sessionId: 'session-after', assignment: undefined, summary: {
+    objective: 'goal', acceptanceCriteria: ['criterion'], constraints: [], outOfScope: [],
+  } });
+  await f.run(humanMessage('prepare a goal', true));
+  const pending = f.state().pending!;
+  const command = { kind: 'human_command' as const, speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'approve_summary' as const, revision: pending.revision, conversationId: turnConversationId } };
+  doubles.artifacts.mockResolvedValue(true);
+  const controller = new AbortController();
+  doubles.register.mockImplementationOnce(async () => {
+    if (failure === 'caller cancellation') { controller.abort(new Error(failure)); controller.signal.throwIfAborted(); }
+    throw new Error(failure);
+  });
+  await f.run(command, controller);
+  const reservation = f.state().approval;
+  expect(reservation).toMatchObject({ state: 'reserved', revision: pending.revision });
+  f.restore();
+  const goal = { ...goalRecord(), id: reservation!.goalId };
+  doubles.register.mockResolvedValueOnce(goal);
+  const outcome = await f.run(command);
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'goal_registered', goal } });
+  expect(f.state()).toMatchObject({ approval: { ...reservation, state: 'registered' }, pending: null });
+  expect(doubles.register.mock.calls[1]![0]).toMatchObject({ id: reservation!.goalId });
+});
+
 it('keeps the reservation and reports reconciliation failure when registration artifacts cannot be checked', async () => {
   const f = conversationFixture();
   f.execute.mockResolvedValueOnce({ message: 'proposal', sessionId: 'session-after', assignment: undefined, summary: {

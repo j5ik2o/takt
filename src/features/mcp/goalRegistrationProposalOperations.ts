@@ -20,6 +20,7 @@ import type {
 } from './schemas.js';
 
 const REGISTRATION_RESULT_WAIT_MS = 120_000;
+const REGISTRATION_RECOVERY_REFRESH_MS = 1_000;
 
 interface RegistrationOwner {
   readonly identity: ManagerAssignmentIdentity;
@@ -119,6 +120,7 @@ async function submitRegistrationCommand(
 ): Promise<OperationResult> {
   signal.throwIfAborted();
   const client = new ConversationIpcClient(identity);
+  let stopWaiting = (): void => {};
   try {
     await client.connect();
     signal.throwIfAborted();
@@ -132,21 +134,88 @@ async function submitRegistrationCommand(
           resolve(output.result);
         });
         const onAbort = (): void => { stopWaiting(); reject(signal.reason); };
-        const timer = setTimeout(() => {
+        const timer = command.kind === 'approve_summary' ? undefined : setTimeout(() => {
           stopWaiting();
           reject(new Error(`The ${command.kind} command was accepted but its result was not observed within ${REGISTRATION_RESULT_WAIT_MS} ms`));
         }, REGISTRATION_RESULT_WAIT_MS);
-        const stopWaiting = (): void => {
+        let reconnecting = false;
+        let restoring = false;
+        let waiting = true;
+        let connectionGeneration = 0;
+        let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+        let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+        const failRecovery = (): void => {
+          stopWaiting();
+          reject(new Error('The approval command was accepted, but its result could not be confirmed after reconnecting'));
+        };
+        const unsubscribeConnection = client.subscribe(() => {
+          if (!waiting) return;
+          const snapshot = client.getSnapshot();
+          const completed = snapshot.readStatus === 'complete'
+            ? snapshot.items.find((item) => item.kind === 'turn_result' && item.operationId === operationId) : undefined;
+          if (completed?.kind === 'turn_result') {
+            stopWaiting();
+            resolve(completed.result);
+            return;
+          }
+          if (restoring && snapshot.connection === 'connected' && snapshot.readStatus === 'complete') {
+            if (snapshot.state?.running?.operationId === operationId) {
+              clearTimeout(recoveryTimer);
+              recoveryTimer = undefined;
+            } else if (recoveryTimer === undefined) {
+              recoveryTimer = setTimeout(failRecovery, REGISTRATION_RESULT_WAIT_MS);
+            }
+          }
+          if (restoring && snapshot.connection === 'connected' && snapshot.readStatus === 'complete' && refreshTimer === undefined) {
+            // refresh() owns active transfers; only a completed history can trigger the next read.
+            refreshTimer = setTimeout(() => {
+              refreshTimer = undefined;
+              if (!waiting || client.getSnapshot().connection !== 'connected') return;
+              const generation = connectionGeneration;
+              void client.refresh().catch(() => {
+                if (waiting && generation === connectionGeneration && client.getSnapshot().connection === 'connected') failRecovery();
+              });
+            }, REGISTRATION_RECOVERY_REFRESH_MS);
+          }
+          if (restoring && snapshot.connection === 'connected' && snapshot.readStatus === 'incomplete') {
+            // disconnect() can publish incomplete before publishing disconnected.
+            queueMicrotask(() => {
+              if (!waiting || !restoring) return;
+              const latest = client.getSnapshot();
+              if (latest.connection !== 'connected' || latest.readStatus !== 'incomplete') return;
+              failRecovery();
+            });
+          }
+          if (snapshot.connection !== 'disconnected' || reconnecting) return;
+          connectionGeneration++;
+          if (command.kind !== 'approve_summary') return;
+          restoring = command.kind === 'approve_summary';
+          clearTimeout(refreshTimer);
+          refreshTimer = undefined;
+          if (restoring && recoveryTimer === undefined) recoveryTimer = setTimeout(failRecovery, REGISTRATION_RESULT_WAIT_MS);
+          reconnecting = true;
+          void client.connect().catch((error: unknown) => {
+            stopWaiting();
+            reject(error);
+          }).finally(() => { reconnecting = false; });
+        });
+        stopWaiting = (): void => {
+          stopWaiting = (): void => {};
+          waiting = false;
           clearTimeout(timer);
+          clearTimeout(recoveryTimer);
+          clearTimeout(refreshTimer);
           signal.removeEventListener('abort', onAbort);
           unsubscribe();
+          unsubscribeConnection();
         };
         signal.addEventListener('abort', onAbort, { once: true });
       });
+      void wait.catch(() => {});
     });
     if (submission.kind === 'error') throw new Error(`${submission.code}: ${submission.message}`);
     return await wait!;
-  } finally { client.close(); }
+  } finally { stopWaiting(); client.close(); }
 }
 
 async function submitOwnedRegistrationCommand(

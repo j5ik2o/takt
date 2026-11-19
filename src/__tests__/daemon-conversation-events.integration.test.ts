@@ -36,6 +36,7 @@ import { ControlledTurnRunner, deferred, input, accepted } from './helpers/contr
 import { conversationRecord } from './helpers/conversation-fixtures.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import type { Goal } from '../infra/goals/schema.js';
+import * as registrationVerification from '../infra/formal-spec/formalSpecVerifier.js';
 import type { PortOutput } from '../features/manager/conversationPort.js';
 import { createTurnProcessRuntime } from '../features/daemonTurn/processRuntime.js';
 import { TurnConversationState } from '../features/daemonTurn/conversationState.js';
@@ -1415,11 +1416,12 @@ it('settles interruption after a save commits before its reply reaches the child
   await restarted.runner.finish(waiting);
 });
 
-it('recovers the reserved goal ID after its registration event leaves the inbox and the child exits', async () => {
+it.each([undefined, { status: 'pending' as const }])('recovers a legacy reserved goal after inbox delivery unless verification is explicitly pending: %j', async (registrationState) => {
   const f = await fixture();
   vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
-  const goal = goalRecord();
-  const summary = { objective: goal.objective, outOfScope: goal.outOfScope, acceptanceCriteria: goal.acceptanceCriteria, constraints: goal.constraints };
+  const verify = vi.spyOn(registrationVerification, 'runFormalSpecVerification');
+  const goal = { ...goalRecord(), specifications: { quint: 'module csv {}' }, registrationVerification: registrationState };
+  const summary = { objective: goal.objective, outOfScope: goal.outOfScope, acceptanceCriteria: goal.acceptanceCriteria, constraints: goal.constraints, specifications: goal.specifications };
   const path = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
   await mkdir(join(path, '..'), { recursive: true }); await writeFile(path, JSON.stringify(goal));
   expect(await f.conversations.store.save({ conversationId: f.id, operationId: 'reserve', generation: 1 }, {
@@ -1444,9 +1446,15 @@ it('recovers the reserved goal ID after its registration event leaves the inbox 
   const service = createConversationTurnService(f.directory, { resolve, async close() {} });
   const outcome = await service.execute(retry.input, { signal: retry.signal, progress() {},
     request: (request) => f.dispatcher.request(retry.turn, request, retry.signal) });
-  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'goal_registered', goal: { id: goal.id } } });
+  expect(outcome).toMatchObject({ kind: 'completed', result: registrationState === undefined
+    ? { kind: 'goal_registered', goal: { id: goal.id } } : { kind: 'error', code: 'registration_recovery' } });
   await f.runner.finish(retry, outcome);
-  expect((await f.conversations.store.read(f.id))?.state.approval).toMatchObject({ state: 'registered', goalId: goal.id });
+  const state = (await f.conversations.store.read(f.id))!.state;
+  expect(state.approval).toMatchObject({ state: registrationState === undefined ? 'registered' : 'reserved', goalId: goal.id });
+  expect(state.pending).toEqual(registrationState === undefined ? null : { revision: 1, repositoryDirectory: f.repository, summary });
+  expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(JSON.parse(JSON.stringify(goal)));
+  expect(await readdir(inbox)).toEqual([]);
+  expect(verify).not.toHaveBeenCalled();
   expect(await readdir(join(f.repository, '.takt', 'goals'))).toEqual([goal.id]);
   expect(resolve).not.toHaveBeenCalled();
 });

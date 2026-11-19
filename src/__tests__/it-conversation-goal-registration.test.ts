@@ -46,13 +46,14 @@ it('reports a branch left before goal persistence without creating another times
 });
 
 it('preserves an existing goal with ambiguous event delivery until its registration can be reconciled', async () => {
-  const goal = goalRecord(); const path = savedPath(); mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, JSON.stringify(goal));
+  const specifications = { quint: 'module csv {}' };
+  const goal = { ...goalRecord(), specifications }; const path = savedPath(); mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, JSON.stringify(goal));
   const bytes = readFileSync(path);
-  await expect(registerReservedGoal(request())).rejects.toMatchObject({ code: 'registration_recovery' });
+  await expect(registerReservedGoal({ ...request(), specifications })).rejects.toMatchObject({ code: 'registration_recovery' });
   expect(readFileSync(path)).toEqual(bytes); expect(readManagerEvents(repository)).toEqual([]);
   saveManagerEvent(repository, { kind: 'registered', goalId: goal.id });
   const events = readManagerEvents(repository);
-  expect(await registerReservedGoal(request())).toEqual(goal);
+  expect(await registerReservedGoal({ ...request(), specifications })).toEqual(goal);
   expect(readManagerEvents(repository)).toEqual(events); expect(readFileSync(path)).toEqual(bytes);
 });
 

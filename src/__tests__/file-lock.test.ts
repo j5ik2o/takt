@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('node:fs', () => ({
   openSync: vi.fn(), closeSync: vi.fn(), fstatSync: vi.fn(), readFileSync: vi.fn(),
-  statSync: vi.fn(), unlinkSync: vi.fn(), writeFileSync: vi.fn(),
+  statSync: vi.fn(), unlinkSync: vi.fn(), writeFileSync: vi.fn(), linkSync: vi.fn(),
 }));
 vi.mock('../infra/task/process.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../infra/task/process.js')>(),
@@ -20,30 +20,41 @@ const selfContent = JSON.stringify({ pid: process.pid, processIdentity: identity
 const otherContent = JSON.stringify({ pid: 4101, processIdentity: identity });
 let content: string | undefined;
 let stat: fs.Stats;
+let temporaryContent: string | undefined;
+let temporaryStat: fs.Stats;
 
 beforeEach(() => {
   vi.resetAllMocks();
   vi.useFakeTimers();
   vi.setSystemTime(100_000);
   content = undefined;
+  temporaryContent = undefined;
   stat = { dev: 1, ino: 1, mtimeMs: Date.now() } as fs.Stats;
   vi.mocked(getSelfProcessIdentity).mockReturnValue(identity);
   vi.mocked(getProcessIdentity).mockReturnValue(identity);
   vi.mocked(isProcessAlive).mockReturnValue(true);
   vi.mocked(fs.openSync).mockImplementation((_path, flags) => {
     if (flags === 'wx') {
-      if (content !== undefined) throw Object.assign(new Error('exists'), { code: 'EEXIST' });
-      content = '';
-      stat = { ...stat, ino: stat.ino + 1, mtimeMs: Date.now() } as fs.Stats;
+      temporaryContent = '';
+      temporaryStat = { ...stat, ino: stat.ino + 1, mtimeMs: Date.now() } as fs.Stats;
+      return 43;
     } else if (content === undefined) {
       throw Object.assign(new Error('missing'), { code: 'ENOENT' });
     }
     return 42;
   });
-  vi.mocked(fs.fstatSync).mockImplementation(() => stat);
+  vi.mocked(fs.fstatSync).mockImplementation((fd) => fd === 43 ? temporaryStat : stat);
   vi.mocked(fs.readFileSync).mockImplementation(() => content!);
-  vi.mocked(fs.writeFileSync).mockImplementation((_fd, value) => { content = String(value); });
-  vi.mocked(fs.unlinkSync).mockImplementation(() => { content = undefined; });
+  vi.mocked(fs.writeFileSync).mockImplementation((_fd, value) => { temporaryContent = String(value); });
+  vi.mocked(fs.linkSync).mockImplementation(() => {
+    if (content !== undefined) throw Object.assign(new Error('exists'), { code: 'EEXIST' });
+    content = temporaryContent;
+    stat = temporaryStat;
+  });
+  vi.mocked(fs.unlinkSync).mockImplementation((path) => {
+    if (path === lockPath) content = undefined;
+    else temporaryContent = undefined;
+  });
   vi.spyOn(Atomics, 'wait').mockImplementation((_array, _index, _value, timeout) => {
     vi.advanceTimersByTime(timeout!);
     return 'timed-out';
@@ -66,7 +77,7 @@ describe('withFileLock', () => {
     if (stage === 'create') {
       vi.mocked(fs.openSync).mockImplementationOnce(() => { throw failure; });
     } else {
-      vi.mocked(fs.writeFileSync).mockImplementationOnce(() => { content = '{'; throw failure; });
+      vi.mocked(fs.writeFileSync).mockImplementationOnce(() => { temporaryContent = '{'; throw failure; });
     }
     const action = vi.fn();
 
@@ -84,7 +95,7 @@ describe('withFileLock', () => {
     if (stage === 'owner') {
       vi.mocked(getSelfProcessIdentity).mockImplementationOnce(() => { throw failure; });
     } else if (stage === 'release') {
-      vi.mocked(fs.unlinkSync).mockImplementationOnce(() => { throw failure; });
+      vi.mocked(fs.unlinkSync).mockImplementation((path) => { if (path === lockPath) throw failure; });
     }
     const action = vi.fn(() => {
       if (stage === 'action') throw failure;
@@ -105,10 +116,14 @@ describe('withFileLock', () => {
   it('writes the process identity with exclusive creation, returns the result, and releases', () => {
     expect(withFileLock(lockPath, () => {
       expect(content).toBe(selfContent);
-      expect(fs.closeSync).toHaveBeenCalledWith(42);
+      expect(fs.closeSync).toHaveBeenCalledWith(43);
       return 123;
     })).toBe(123);
-    expect(fs.openSync).toHaveBeenCalledWith(lockPath, 'wx', 0o600);
+    const temporaryPath = vi.mocked(fs.openSync).mock.calls[0]![0];
+    expect(temporaryPath).not.toBe(lockPath);
+    expect(fs.openSync).toHaveBeenCalledWith(temporaryPath, 'wx', 0o600);
+    expect(fs.linkSync).toHaveBeenCalledWith(temporaryPath, lockPath);
+    expect(vi.mocked(fs.writeFileSync).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(fs.linkSync).mock.invocationCallOrder[0]!);
     expect(content).toBeUndefined();
   });
 
@@ -118,7 +133,7 @@ describe('withFileLock', () => {
     });
 
     withFileLock(lockPath, () => {
-      expect(fs.closeSync).toHaveBeenCalledWith(42);
+      expect(fs.closeSync).toHaveBeenCalledWith(43);
       expect(stat.mtimeMs).toBe(101_000);
       expect(content).toBe(selfContent);
     });
@@ -147,7 +162,7 @@ describe('withFileLock', () => {
     content = otherContent;
     vi.mocked(isProcessAlive).mockReturnValue(false);
     expect(withFileLock(lockPath, () => content)).toBe(selfContent);
-    expect(fs.unlinkSync).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(fs.unlinkSync).mock.calls.filter(([path]) => path === lockPath)).toHaveLength(2);
   });
 
   it('times out after five seconds without deleting even an old live owner', () => {
@@ -158,7 +173,7 @@ describe('withFileLock', () => {
     expect(Date.now()).toBe(105_000);
     expect(content).toBe(otherContent);
     expect(action).not.toHaveBeenCalled();
-    expect(fs.unlinkSync).not.toHaveBeenCalled();
+    expect(fs.unlinkSync).not.toHaveBeenCalledWith(lockPath);
   });
 
   it('waits for an old live PID-only owner and recovers it once the owner dies', () => {
@@ -170,13 +185,13 @@ describe('withFileLock', () => {
     expect(() => withFileLock(lockPath, action, { timeoutMs: 25 })).toThrow(/timed out/);
     expect(content).toBe(legacyContent);
     expect(isProcessAlive).toHaveBeenCalledWith(4101);
-    expect(fs.unlinkSync).not.toHaveBeenCalled();
+    expect(fs.unlinkSync).not.toHaveBeenCalledWith(lockPath);
     expect(action).not.toHaveBeenCalled();
 
     vi.mocked(isProcessAlive).mockReturnValue(false);
     expect(withFileLock(lockPath, () => content)).toBe(selfContent);
     expect(content).toBeUndefined();
-    expect(fs.unlinkSync).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(fs.unlinkSync).mock.calls.filter(([path]) => path === lockPath)).toHaveLength(2);
   });
 
   it.each(['{', '0\n', JSON.stringify({ pid: 0 }), JSON.stringify({ pid: 4101, processIdentity: [] })])(
@@ -203,7 +218,7 @@ describe('withFileLock', () => {
     const action = vi.fn();
     expect(() => withFileLock(lockPath, action, { timeoutMs: 25 })).toThrow(/timed out/);
     expect(JSON.parse(content!).pid).toBe(4102);
-    expect(fs.unlinkSync).not.toHaveBeenCalled();
+    expect(fs.unlinkSync).not.toHaveBeenCalledWith(lockPath);
     expect(action).not.toHaveBeenCalled();
   });
 
@@ -220,7 +235,7 @@ describe('withFileLock', () => {
     expect(withFileLock(lockPath, () => 'recovered')).toBe('recovered');
     // The new owner's readable content must be confirmed before release.
     expect(content).toBe(selfContent);
-    expect(fs.unlinkSync).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fs.unlinkSync).mock.calls.filter(([path]) => path === lockPath)).toHaveLength(1);
   });
 
   it('releases after an action throws and permits the next acquisition', () => {
@@ -233,7 +248,7 @@ describe('withFileLock', () => {
   it('leaves a different owner untouched during release', () => {
     withFileLock(lockPath, () => { content = otherContent; });
     expect(content).toBe(otherContent);
-    expect(fs.unlinkSync).not.toHaveBeenCalled();
+    expect(fs.unlinkSync).not.toHaveBeenCalledWith(lockPath);
   });
 
   it('rejects nested acquisition of the same path without releasing the outer lock', () => {
@@ -254,30 +269,29 @@ describe('withFileLock', () => {
 
   it('closes and removes a partial record if writing fails', () => {
     const failure = new Error('write failed');
-    vi.mocked(fs.writeFileSync).mockImplementationOnce(() => { content = '{'; throw failure; });
+    vi.mocked(fs.writeFileSync).mockImplementationOnce(() => { temporaryContent = '{'; throw failure; });
     const action = vi.fn();
     expect(() => withFileLock(lockPath, action)).toThrow(failure);
     expect(content).toBeUndefined();
-    expect(fs.closeSync).toHaveBeenCalledWith(42);
+    expect(temporaryContent).toBeUndefined();
+    expect(fs.linkSync).not.toHaveBeenCalled();
+    expect(fs.closeSync).toHaveBeenCalledWith(43);
     expect(action).not.toHaveBeenCalled();
   });
 
-  it.each(['fstat', 'readSnapshot', 'unlinkSnapshot'])(
-    'preserves the write error when cleanup fails in %s', (operation) => {
-      const failure = new Error('write failed');
+  it.each(['write', 'fstat', 'link'])(
+    'preserves the acquisition error when temporary cleanup fails after %s', (operation) => {
+      const failure = new Error('acquisition failed');
       const cleanupFailure = new Error('cleanup failed');
-      vi.mocked(fs.writeFileSync).mockImplementationOnce(() => { content = '{'; throw failure; });
-      if (operation === 'fstat') {
-        vi.mocked(fs.fstatSync).mockImplementationOnce(() => { throw cleanupFailure; });
-      } else if (operation === 'readSnapshot') {
-        vi.mocked(fs.openSync).mockReturnValueOnce(42).mockImplementationOnce(() => { throw cleanupFailure; });
-      } else {
-        vi.mocked(fs.unlinkSync).mockImplementationOnce(() => { throw cleanupFailure; });
-      }
+      if (operation === 'write') vi.mocked(fs.writeFileSync).mockImplementationOnce(() => { throw failure; });
+      else if (operation === 'fstat') vi.mocked(fs.fstatSync).mockImplementationOnce(() => { throw failure; });
+      else vi.mocked(fs.linkSync).mockImplementationOnce(() => { throw failure; });
+      vi.mocked(fs.unlinkSync).mockImplementationOnce(() => { throw cleanupFailure; });
       const action = vi.fn();
 
       expect(() => withFileLock(lockPath, action)).toThrow(failure);
-      expect(fs.closeSync).toHaveBeenCalledWith(42);
+      expect(fs.closeSync).toHaveBeenCalledWith(43);
+      expect(content).toBeUndefined();
       expect(action).not.toHaveBeenCalled();
     },
   );

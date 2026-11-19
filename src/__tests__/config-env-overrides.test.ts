@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { parse } from 'yaml';
+import { enableRoutingTelemetry, disableRoutingTelemetry } from '../infra/config/global/globalConfigAccessors.js';
 import { envVarNameFromPath } from '../infra/config/env/config-env-overrides.js';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
@@ -39,8 +41,9 @@ vi.mock('../infra/deepseek-harness/npm-plugin.js', async (importOriginal) => {
   };
 });
 
-const { loadGlobalConfig, invalidateGlobalConfigCache } = await import('../infra/config/global/globalConfig.js');
-const { loadProjectConfig } = await import('../infra/config/project/projectConfig.js');
+const { loadGlobalConfig, saveGlobalConfig, invalidateGlobalConfigCache } = await import('../infra/config/global/globalConfig.js');
+const { loadProjectConfig, saveProjectConfig, updateProjectConfig } = await import('../infra/config/project/projectConfig.js');
+const { resolveManagerConfig } = await import('../infra/config/managerConfig.js');
 const { getProjectConfigDir } = await import('../infra/config/paths.js');
 
 let taktEnvSnapshot: TaktEnvSnapshot;
@@ -56,6 +59,79 @@ afterEach(() => {
 });
 
 describe('config traced env overrides', () => {
+  it.each(['project', 'global'] as const)('preserves file values across telemetry updates under an override in %s', (scope) => {
+    const projectDir = join(testRoot, 'telemetry');
+    for (const original of [true, false, undefined]) {
+      for (const update of [enableRoutingTelemetry, disableRoutingTelemetry]) {
+        delete process.env.TAKT_MANAGER_VERIFY_ON_REGISTER;
+        saveProjectConfig(projectDir, { telemetry: scope === 'project' ? { routingDecisions: false } : undefined,
+          manager: scope === 'project' ? { verifyOnRegister: original } : undefined });
+        mkdirSync(globalTaktDir, { recursive: true });
+        saveGlobalConfig({ language: 'en', autoFetch: false, manager: { verifyOnRegister: scope === 'global' ? original : true } });
+        process.env.TAKT_MANAGER_VERIFY_ON_REGISTER = String(original !== true);
+        invalidateGlobalConfigCache();
+        update(projectDir);
+        const path = scope === 'project' ? join(getProjectConfigDir(projectDir), 'config.yaml') : globalConfigPath;
+        const yaml = parse(readFileSync(path, 'utf8')) as { manager?: { verify_on_register?: boolean } };
+        expect(yaml.manager?.verify_on_register).toBe(original);
+        if (original === undefined) expect(yaml.manager ?? {}).not.toHaveProperty('verify_on_register');
+        delete process.env.TAKT_MANAGER_VERIFY_ON_REGISTER;
+        invalidateGlobalConfigCache();
+        expect(resolveManagerConfig(projectDir).verifyOnRegister).toBe(original ?? (scope === 'project'));
+      }
+    }
+  });
+
+  it('preserves the file value on unrelated project updates and permits explicit saves under an override', () => {
+    const projectDir = join(testRoot, 'explicit');
+    saveProjectConfig(projectDir, { manager: { verifyOnRegister: false } });
+    mkdirSync(globalTaktDir, { recursive: true });
+    process.env.TAKT_MANAGER_VERIFY_ON_REGISTER = 'true';
+    updateProjectConfig(projectDir, 'language', 'ja');
+    expect(parse(readFileSync(join(getProjectConfigDir(projectDir), 'config.yaml'), 'utf8')).manager.verify_on_register).toBe(false);
+    for (const value of [true, false]) {
+      updateProjectConfig(projectDir, 'manager', { verifyOnRegister: value });
+      saveGlobalConfig({ language: 'en', autoFetch: false, manager: { verifyOnRegister: value } });
+      expect(parse(readFileSync(join(getProjectConfigDir(projectDir), 'config.yaml'), 'utf8')).manager.verify_on_register).toBe(value);
+      expect(parse(readFileSync(globalConfigPath, 'utf8')).manager.verify_on_register).toBe(value);
+    }
+  });
+  it.each([true, false])('roundtrips registration verification at both configuration scopes: %s', (verifyOnRegister) => {
+    const projectDir = join(testRoot, 'verify-roundtrip');
+    const project = { manager: { autoRun: false, verifyOnRegister } };
+    const global = { language: 'en' as const, autoFetch: true, manager: { autoRun: false, verifyOnRegister } };
+    saveProjectConfig(projectDir, project);
+    mkdirSync(globalTaktDir, { recursive: true });
+    saveGlobalConfig(global);
+    expect(readFileSync(join(getProjectConfigDir(projectDir), 'config.yaml'), 'utf8')).toContain(`verify_on_register: ${verifyOnRegister}`);
+    expect(readFileSync(globalConfigPath, 'utf8')).toContain(`verify_on_register: ${verifyOnRegister}`);
+    invalidateGlobalConfigCache();
+    expect(loadProjectConfig(projectDir).manager).toMatchObject({ autoRun: false, verifyOnRegister });
+    expect(loadGlobalConfig().manager).toMatchObject({ autoRun: false, verifyOnRegister });
+  });
+
+  it.each([
+    { global: undefined, project: undefined, env: undefined, expected: false },
+    { global: true, project: undefined, env: undefined, expected: true },
+    { global: true, project: false, env: undefined, expected: false },
+    { global: false, project: true, env: undefined, expected: true },
+    { global: true, project: true, env: 'false', expected: false },
+    { global: false, project: false, env: 'true', expected: true },
+  ])('resolves registration verification from real files and environment: %j', ({ global, project, env, expected }) => {
+    const projectDir = join(testRoot, 'verify-priority');
+    mkdirSync(getProjectConfigDir(projectDir), { recursive: true });
+    mkdirSync(globalTaktDir, { recursive: true });
+    writeFileSync(join(getProjectConfigDir(projectDir), 'config.yaml'), JSON.stringify({ manager: { verify_on_register: project } }));
+    writeFileSync(globalConfigPath, JSON.stringify({ manager: { verify_on_register: global } }));
+    if (env !== undefined) process.env.TAKT_MANAGER_VERIFY_ON_REGISTER = env;
+    invalidateGlobalConfigCache();
+    if (env !== undefined) {
+      expect(loadProjectConfig(projectDir).manager).toHaveProperty('verifyOnRegister', expected);
+      expect(loadGlobalConfig().manager).toHaveProperty('verifyOnRegister', expected);
+    }
+    expect(resolveManagerConfig(projectDir)).toHaveProperty('verifyOnRegister', expected);
+  });
+
   describe.each(['project', 'global'] as const)('DeepSeek root JSON env in %s config', (scope) => {
     function loadConfig() {
       return scope === 'project'

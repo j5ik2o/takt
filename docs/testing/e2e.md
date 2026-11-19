@@ -247,7 +247,7 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 手順（ユーザー行動/コマンド）:
     - `takt --version` に2 MiBの標準入力を送り、stdin の EPIPE 後も終了コード0とバージョン出力が返ることを確認する。
     - 異常終了したrunningタスクのfailed化:
-      - `.takt/tasks.yaml` に pending タスク2件を投入し、`takt run --provider mock` 実行中にプロセスを強制終了する。
+      - `.takt/tasks.yaml` に pending タスク2件を投入し、running を観測した後、次のキューロック公開直後で子プロセスを停止して強制終了する。残存ロックの内容とPIDを記録し、書込み途中のロックが公開されないことも確認する。
       - 再度 `takt run --provider mock` を実行し、`Marked 1 interrupted running task(s) as failed.` が出力されることを確認する。
       - 異常終了時にrunningだったタスクはfailedで残り、残りのpendingタスクだけが完了することを確認する。
     - 高並列実行:

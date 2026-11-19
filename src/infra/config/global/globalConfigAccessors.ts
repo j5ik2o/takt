@@ -1,7 +1,7 @@
-import type { Language } from '../../../core/models/index.js';
+import { GlobalConfigSchema, type Language } from '../../../core/models/index.js';
 import { DEFAULT_LANGUAGE } from '../../../shared/constants.js';
 import { loadGlobalConfig, loadGlobalConfigTraceState, saveGlobalConfig } from './globalConfigCore.js';
-import { loadProjectConfig, loadProjectConfigTraceState, saveProjectConfig } from '../project/projectConfig.js';
+import { loadProjectConfig, loadProjectConfigTraceState, updateProjectConfig } from '../project/projectConfig.js';
 
 const ROUTING_TELEMETRY_CONFIG_PATH = 'telemetry.routing_decisions';
 const ROUTING_TELEMETRY_ENV_VAR = 'TAKT_TELEMETRY_ROUTING_DECISIONS';
@@ -65,25 +65,15 @@ export function enableRoutingTelemetry(projectDir?: string): RoutingTelemetrySta
   if (projectDir !== undefined) {
     const projectConfig = loadProjectConfig(projectDir);
     if (projectConfig.telemetry?.routingDecisions !== undefined) {
-      saveProjectConfig(projectDir, {
-        ...projectConfig,
-        telemetry: {
-          ...projectConfig.telemetry,
-          routingDecisions: true,
-        },
+      updateProjectConfig(projectDir, 'telemetry', {
+        ...projectConfig.telemetry,
+        routingDecisions: true,
       });
       return { localRecordingEnabled: true };
     }
   }
 
-  const config = loadGlobalConfig();
-  saveGlobalConfig({
-    ...config,
-    telemetry: {
-      ...config.telemetry,
-      routingDecisions: true,
-    },
-  });
+  saveGlobalRoutingTelemetry(true);
   return { localRecordingEnabled: true };
 }
 
@@ -93,24 +83,28 @@ export function disableRoutingTelemetry(projectDir?: string): RoutingTelemetrySt
   if (projectDir !== undefined) {
     const projectConfig = loadProjectConfig(projectDir);
     if (projectConfig.telemetry?.routingDecisions !== undefined) {
-      saveProjectConfig(projectDir, {
-        ...projectConfig,
-        telemetry: {
-          ...projectConfig.telemetry,
-          routingDecisions: false,
-        },
+      updateProjectConfig(projectDir, 'telemetry', {
+        ...projectConfig.telemetry,
+        routingDecisions: false,
       });
       return { localRecordingEnabled: false };
     }
   }
 
+  saveGlobalRoutingTelemetry(false);
+  return { localRecordingEnabled: false };
+}
+
+function saveGlobalRoutingTelemetry(enabled: boolean): void {
   const config = loadGlobalConfig();
+  const fileValue = loadGlobalConfigTraceState().getFileValue('manager.verify_on_register');
   saveGlobalConfig({
     ...config,
+    ...(config.manager === undefined ? {} : { manager: { ...config.manager,
+      verifyOnRegister: GlobalConfigSchema.parse({ manager: { verify_on_register: fileValue } }).manager?.verify_on_register } }),
     telemetry: {
       ...config.telemetry,
-      routingDecisions: false,
+      routingDecisions: enabled,
     },
   });
-  return { localRecordingEnabled: false };
 }

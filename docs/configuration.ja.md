@@ -214,6 +214,7 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 | `sync_project_local_takt_on_retry` | boolean | `true` | 既存 worktree の再試行位置を選ぶ前、または SDK を確認する前にルートの project-local `.takt` を同期します。SDK 導入を断った場合や選択を中止した場合も同期済みのファイルは残ります。`false` では worktree 側のコピーを維持します。 |
 | `worktree_dir` | string | - | 共有クローンのディレクトリ（デフォルトは `../{clone-name}`） |
 | `manager.preserve_goal_worktree` | boolean | `false` | manager がゴールタスクの成果を取り込んだ後も worktree と run 証跡を保持します。[ゴールタスクの worktree 保持](#ゴールタスクの-worktree-保持)を参照。 |
+| `manager.verify_on_register` | boolean | `false` | ゴール登録後に登録済みの Quint・Alloy を自動検証します。[ゴール登録時の検証](#ゴール登録時の検証)を参照。 |
 | `allow_git_hooks` | boolean | `false` | TAKT 管理の auto-commit 時に git hooks を許可 |
 | `allow_git_filters` | boolean | `false` | TAKT 管理の auto-commit 時に git filter を許可 |
 | `auto_pr` | boolean | - | worktree 実行後に PR を自動作成 |
@@ -522,6 +523,24 @@ manager:
 ```
 
 worktree、clone metadata、worktree 内の `.takt/runs` の reports・logs はそのまま残ります。completed タスク記録も従来どおり残し、タスク履歴の自動削除は行いません。既定の `false` では、従来の worktree・clone metadata の cleanup と `cleanupWarning` の挙動を維持します。この設定は、通常の `completeTask`、List Tasks からの手動 merge・delete、PR merge タスク、未取り込みタスクには影響しません。
+
+## ゴール登録時の検証
+
+プロジェクトの `.takt/config.yaml` またはグローバルの `~/.takt/config.yaml` に指定します。
+
+```yaml
+manager:
+  verify_on_register: true
+assistant:
+  formal_spec:
+    mode: true
+```
+
+`manager.verify_on_register` の既定値は `false` です。優先順位は boolean の環境変数 `TAKT_MANAGER_VERIFY_ON_REGISTER`、project、global、既定値の順です。上位の明示的な `false` は下位の `true` に優先します。
+
+`takt_create_goal` または登録案の承認（manager の TUI ダイアログを含む）による登録完了後、登録された Quint・Alloy の本文をまとめて一度検証します。この設定と、非対話で解決した `assistant.formal_spec.mode` の両方が有効（`true` または `"Y/n"`）な場合だけ動作します。両言語を持たないゴールや Gherkin 単独のゴールは、検証せず通常どおり登録します。仕様の生成やタスク登録時の検証は行いません。
+
+既存の検証器と `assistant.formal_spec.model_check_timeout_seconds` を使います。結果が `failed` または `error` でも登録は成立し、総合判定と言語別の結果を同じゴールの作業記録に追記します。manager の会話でそのゴールの検証結果を尋ねると、記録を参照できます。中断や作業記録の保存失敗はエラーとして通知し、登録済みのゴールは残ります。
 
 ## manager がタスクに使う workflow
 
