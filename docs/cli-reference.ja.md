@@ -261,11 +261,30 @@ ACP prompt がタスクを作成または直接実行する場合、会話結果
 
 ## MCP Server
 
-`takt-mcp` は TAKT を stdio Model Context Protocol server として起動します。MCP client から shell 経由で TAKT command を直接呼ばずにタスクの enqueue、task/run 状態の確認、実行中 worktree clone への追加指示を行いたい場合に登録します。
+`takt-mcp` は TAKT を Model Context Protocol server として起動します。既定は stdio で、`--http` を付けると同じ tool を loopback 上の常駐 Streamable HTTP server として提供します。MCP client から shell 経由で TAKT command を直接呼ばずにタスクの enqueue、task/run 状態の確認、実行中 worktree clone への追加指示を行いたい場合に登録します。
 
 ```bash
 takt-mcp
 ```
+
+### HTTP transport
+
+`takt-mcp --http` を実行すると、stdio の代わりに常駐 Streamable HTTP server を起動します。待ち受けは `127.0.0.1` に限定され、中断されるまで動作し続けるため、複数 client が 1 つのプロセスへ接続できます。
+
+```bash
+takt-mcp --http --http-port 7000
+```
+
+| フラグ | 説明 |
+|--------|------|
+| `--http` | stdio の代わりに `127.0.0.1` 上の Streamable HTTP で提供する。 |
+| `--http-port <n>` | `127.0.0.1` で待ち受ける TCP port（既定 `0` で OS が空き port を選ぶ）。 |
+| `--http-token <token>` | client が送る必要がある Bearer token。省略時は TAKT が生成し起動時に表示する。 |
+
+待ち受け URL は `http://127.0.0.1:<port>/` です。各リクエストは `Authorization: Bearer <token>` を送る必要があり、token が一致しないリクエストは `403`、`/` 以外のパスは `404` を返します。`--http-token` を省略した場合、stderr の起動出力に待ち受け URL と生成された `Authorization: Bearer <token>` が表示されるので、client 設定へそのままコピーできます。`--tool-set` と `--include-reference-markers` は stdio と同じように HTTP transport にも適用されます。
+
+固定の URL を MCP client に登録する場合は `--http-port` を明示してください。既定の `0` では OS が port を割り当てるため、登録する URL と実際に待ち受けた port が一致しません。省略した場合は stderr の起動出力に表示される port を読み取ってください。HTTP に対応した MCP client からその URL を指定し、Bearer header を送ってください。たとえば `takt-mcp --http --http-port 7000` で起動した場合、HTTP server エントリは `url = "http://127.0.0.1:7000/"` と `Authorization: Bearer <token>` header を持ちます。
+
 
 Codex では`~/.codex/config.toml`、または trusted project の project-scoped `.codex/config.toml` に stdio MCP server を追加します。
 
