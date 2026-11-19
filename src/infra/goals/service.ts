@@ -7,6 +7,7 @@ import { TaskRunner } from '../task/runner.js';
 import { getGlobalConfigDir } from '../config/paths.js';
 import { registerProject } from '../config/global/projectRegistry.js';
 import { FileEventStore } from '../daemon/eventStore.js';
+import { verifyRegisteredGoal } from './registrationVerification.js';
 
 export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): Promise<Goal> {
   signal?.throwIfAborted();
@@ -21,6 +22,8 @@ export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): 
     id: input.id, createdAt: new Date().toISOString(), objective: input.objective, outOfScope: input.outOfScope,
     acceptanceCriteria: input.acceptanceCriteria, constraints: input.constraints,
     ...(input.specifications === undefined ? {} : { specifications: input.specifications }),
+    ...(input.specifications?.quint === undefined && input.specifications?.alloy === undefined
+      ? {} : { registrationVerification: { status: 'pending' } }),
     workLog: [], mode: 'local', status: 'created', executionStatus: 'active',
     acceptanceCriteriaVersion: 1, ...branches,
   });
@@ -31,7 +34,7 @@ export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): 
     throw error;
   }
   saveManagerEvent(input.cwd, { kind: 'registered', goalId: goal.id });
-  return goal;
+  return verifyRegisteredGoal(input.cwd, goal, signal);
 }
 
 export class GoalRegistrationRecoveryError extends Error {
@@ -68,6 +71,11 @@ export async function registerReservedGoal(input: GoalCreateInput, signal?: Abor
       && !new TaskRunner(input.cwd).listTaskStateItems().some((task) => task.goalId === input.id)
       && !await new FileEventStore(getGlobalConfigDir()).hasGoalRegistration(input.cwd, input.id)) {
       throw new GoalRegistrationRecoveryError('Goal exists, but registration event delivery cannot be confirmed');
+    }
+    if (existing.registrationVerification?.status === 'pending'
+      || existing.registrationVerification === undefined
+      && (existing.specifications?.quint !== undefined || existing.specifications?.alloy !== undefined)) {
+      throw new GoalRegistrationRecoveryError('Registration verification completion cannot be confirmed');
     }
     return existing;
   }

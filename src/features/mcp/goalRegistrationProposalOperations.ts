@@ -36,6 +36,7 @@ async function submitRegistrationCommand(
 ): Promise<OperationResult> {
   signal.throwIfAborted();
   const client = new ConversationIpcClient(identity);
+  let stopWaiting = (): void => {};
   try {
     await client.connect();
     let wait: Promise<OperationResult> | undefined;
@@ -48,21 +49,57 @@ async function submitRegistrationCommand(
           resolve(output.result);
         });
         const onAbort = (): void => { stopWaiting(); reject(signal.reason); };
-        const timer = setTimeout(() => {
+        const timer = command.kind === 'approve_summary' ? undefined : setTimeout(() => {
           stopWaiting();
           reject(new Error(`The ${command.kind} command was accepted but its result was not observed within ${REGISTRATION_RESULT_WAIT_MS} ms`));
         }, REGISTRATION_RESULT_WAIT_MS);
-        const stopWaiting = (): void => {
+        let reconnecting = false;
+        let restoring = false;
+        let waiting = true;
+        const unsubscribeConnection = client.subscribe(() => {
+          if (!waiting) return;
+          const snapshot = client.getSnapshot();
+          if (snapshot.readStatus === 'complete') restoring = false;
+          const completed = snapshot.readStatus === 'complete'
+            ? snapshot.items.find((item) => item.kind === 'turn_result' && item.operationId === operationId) : undefined;
+          if (completed?.kind === 'turn_result') {
+            stopWaiting();
+            resolve(completed.result);
+            return;
+          }
+          if (restoring && snapshot.connection === 'connected' && snapshot.readStatus === 'incomplete') {
+            // disconnect() can publish incomplete before publishing disconnected.
+            queueMicrotask(() => {
+              if (!waiting || !restoring) return;
+              const latest = client.getSnapshot();
+              if (latest.connection !== 'connected' || latest.readStatus !== 'incomplete') return;
+              stopWaiting();
+              reject(new Error('The approval command was accepted, but its result could not be confirmed after reconnecting'));
+            });
+          }
+          if (snapshot.connection !== 'disconnected' || reconnecting) return;
+          restoring = command.kind === 'approve_summary';
+          reconnecting = true;
+          void client.connect().catch((error: unknown) => {
+            stopWaiting();
+            reject(error);
+          }).finally(() => { reconnecting = false; });
+        });
+        stopWaiting = (): void => {
+          stopWaiting = (): void => {};
+          waiting = false;
           clearTimeout(timer);
           signal.removeEventListener('abort', onAbort);
           unsubscribe();
+          unsubscribeConnection();
         };
         signal.addEventListener('abort', onAbort, { once: true });
       });
+      void wait.catch(() => {});
     });
     if (submission.kind === 'error') throw new Error(`${submission.code}: ${submission.message}`);
     return await wait!;
-  } finally { client.close(); }
+  } finally { stopWaiting(); client.close(); }
 }
 
 export async function approveTaktGoalRegistration(

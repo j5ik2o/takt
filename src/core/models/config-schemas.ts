@@ -176,6 +176,7 @@ const ProjectConfigObjectBaseSchema = z.object({
     provider_permissions: z.record(z.string(), ManagerPermissionSchema).optional(),
     auto_run: z.boolean().optional(),
     preserve_goal_worktree: z.boolean().optional(),
+    verify_on_register: z.boolean().optional(),
     workflows: z.union([z.literal('all'), z.array(ManagerWorkflowEntrySchema)]).optional(),
     runtime_assignments: z.array(ManagerRuntimeAssignmentEntrySchema).optional(),
     // Deprecated: accepted for existing configuration files and ignored.

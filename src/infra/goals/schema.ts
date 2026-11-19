@@ -188,6 +188,11 @@ export const GoalRecordObjectSchema = z.object({
   startBranch: goalBranch,
   integrationBranch: goalBranch,
   workLog: z.array(GoalWorkLogSchema),
+  registrationVerification: z.discriminatedUnion('status', [
+    z.object({ status: z.literal('pending') }).strict(),
+    z.object({ status: z.literal('not_required') }).strict(),
+    z.object({ status: z.literal('completed'), workLogId: z.uuid() }).strict(),
+  ]).optional(),
   questions: z.array(GoalQuestionSchema).optional(),
   notifications: z.array(GoalNotificationInputSchema.extend({
     id: z.uuid(), recordedAt: z.iso.datetime(),
@@ -198,6 +203,11 @@ export const GoalRecordObjectSchema = z.object({
 const readableGoal = GoalRecordObjectSchema.extend({ pullRequestFailure: z.unknown().optional() })
   .transform(({ pullRequestFailure: _retiredFailure, ...goal }) => goal);
 export const GoalSchema = readableGoal.superRefine((goal, ctx) => {
+  const verification = goal.registrationVerification;
+  if (verification?.status === 'completed'
+    && !goal.workLog.some(({ id }) => id === verification.workLogId)) {
+    ctx.addIssue({ code: 'custom', path: ['registrationVerification'], message: 'Registration verification record is missing' });
+  }
   if (goal.status !== 'created' && goal.completion === undefined) {
     ctx.addIssue({ code: 'custom', path: ['completion'], message: 'Completion evidence is required' });
   }
