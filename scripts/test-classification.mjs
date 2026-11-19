@@ -452,6 +452,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/manager-conversation-sequential-reads.integration.test.ts',
   'src/__tests__/manager-conversation-service.integration.test.ts',
   'src/__tests__/manager-turn-failure-webhook.integration.test.ts',
+  'src/__tests__/mcp-entrypoint-http.integration.test.ts',
   'src/__tests__/merge-caccia.test.ts',
   'src/__tests__/merge-pagination.integration.test.ts',
   'src/__tests__/merge-settings.integration.test.ts',
