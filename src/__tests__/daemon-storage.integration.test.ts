@@ -224,6 +224,23 @@ describe('durable daemon event storage', () => {
     expect(turns.filter((turn) => turn.message !== undefined).map((turn) => turn.message)).toEqual(['own message']);
   });
 
+  it('readTurns survives an indexed event file disappearing after a rollback in another instance', async () => {
+    const directory = await root();
+    const writer = new FileEventStore(directory);
+    const kept = event('kept message', 1);
+    const vanished = event('vanished message', 2);
+    await writer.accept(kept); await writer.accept(vanished);
+    // A second instance indexes both events.
+    const reader = new FileEventStore(directory);
+    expect((await reader.readTurns(kept.conversationId)).filter((turn) => turn.message !== undefined)).toHaveLength(2);
+    // The rollback in accept() unlinks the file after releasing the lock, so
+    // an event file another instance has already indexed can disappear.
+    const vanishedFile = join(directory, 'daemon-events', `${createHash('sha256').update(vanished.eventId).digest('hex')}.json`);
+    await rm(vanishedFile);
+    const turns = await reader.readTurns(kept.conversationId);
+    expect(turns.filter((turn) => turn.message !== undefined).map((turn) => turn.message)).toEqual(['kept message']);
+  });
+
   it('indexes retired PR retry observations and restores only unfinished settlement', async () => {
     const directory = await root();
     const store = new FileEventStore(directory);

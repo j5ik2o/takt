@@ -119,13 +119,44 @@ export class FileEventStore implements EventStore, ConversationTurns {
 
   private async refresh(): Promise<void> {
     await ensurePrivateDirectory(this.directory);
+    const present = new Set<string>();
     for await (const entry of await opendir(this.directory)) {
       if (!entry.name.endsWith('.json')) continue;
       const path = join(this.directory, entry.name);
+      present.add(path);
       if (!this.knownFiles.has(path)) {
         const record = await this.read(path);
         this.index(record, path);
       }
+    }
+    // A file another instance indexed can disappear afterwards (the
+    // rollback in accept() unlinks after releasing the lock). Drop index
+    // entries whose file is gone, so a later read does not fail on a
+    // path that no longer exists.
+    for (const path of this.knownFiles) {
+      if (!present.has(path)) this.forget(path);
+    }
+  }
+
+  private forget(path: string): void {
+    this.knownFiles.delete(path);
+    const removedIds = new Set<string>();
+    for (const [eventId, candidate] of this.ids) {
+      if (candidate === path) {
+        this.ids.delete(eventId);
+        removedIds.add(eventId);
+      }
+    }
+    for (const [request, candidate] of this.requests) {
+      if (candidate === path) this.requests.delete(request);
+    }
+    if (removedIds.size === 0) return;
+    for (const [sequence, eventId] of this.sequences) {
+      if (removedIds.has(eventId)) this.sequences.delete(sequence);
+    }
+    for (const [conversationId, conversation] of this.byConversation) {
+      for (const eventId of removedIds) conversation.delete(eventId);
+      if (conversation.size === 0) this.byConversation.delete(conversationId);
     }
   }
 
