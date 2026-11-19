@@ -354,7 +354,7 @@ def test_pr_cannot_be_identified() -> None:
         "two matches": [{"number": 42, "headRefOid": HEAD_SHA, "headRepositoryOwner": {"login": "example"}}, {"number": 43, "headRefOid": HEAD_SHA, "headRepositoryOwner": {"login": "example"}}],
         # head が clone の HEAD と違う PR だけが返る。HEAD を照合せず先頭を採る誤実装は、
         # ここで別の PR を数えて merge に進む/別 PR を数える。照合する実装は 0 件一致で止まる。
-        "head oid mismatch": [{"number": 99, "headRefOid": "f" * 40}],
+        "head oid mismatch": [{"number": 99, "headRefOid": "f" * 40, "headRepositoryOwner": {"login": "example"}}],
     }.items():
         class Fake(GitGhStub):
             def dispatch(self, command, cwd, listed=listed):
@@ -421,8 +421,11 @@ def main() -> int:
     failures = 0
     for test in tests:
         # ページングの欠陥は無限ループになる。テスト自体が固まらないよう、各テストに上限を置く。
-        signal.signal(signal.SIGALRM, _on_timeout)
-        signal.alarm(TEST_TIMEOUT_SECONDS)
+        # SIGALRM は Unix 専用なので、ある環境でだけ使う。
+        use_alarm = hasattr(signal, "SIGALRM")
+        if use_alarm:
+            signal.signal(signal.SIGALRM, _on_timeout)
+            signal.alarm(TEST_TIMEOUT_SECONDS)
         try:
             test()
         except AssertionError as error:
@@ -438,7 +441,8 @@ def main() -> int:
         else:
             print(f"ok   {test.__name__}")
         finally:
-            signal.alarm(0)
+            if use_alarm:
+                signal.alarm(0)
     print(f"{len(tests) - failures} passed, {failures} failed")
     return 0 if failures == 0 else 1
 

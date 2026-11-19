@@ -20,7 +20,6 @@ gh が認証情報を読めないため、子プロセスでは HOME が無け�
 """
 import json
 import os
-import pwd
 import subprocess
 import sys
 
@@ -45,12 +44,22 @@ class GateError(Exception):
     """件数を取得できない理由を表す。"""
 
 
+def _login_home() -> str:
+    try:
+        import pwd
+
+        return pwd.getpwuid(os.getuid()).pw_dir
+    except (ImportError, KeyError):
+        # pwd が無い環境（Windows 等）では環境変数か expanduser で代替する。
+        return os.environ.get("USERPROFILE") or os.path.expanduser("~")
+
+
 def _run(command: list[str], cwd: str | None = None) -> dict:
     env = dict(os.environ)
     if "HOME" not in env:
         # TAKT の command 環境には HOME が無い。gh の認証情報はログインユーザーの
         # ホームに置かれているため、復元しないと常に認証エラーになる。
-        env["HOME"] = pwd.getpwuid(os.getuid()).pw_dir
+        env["HOME"] = _login_home()
     proc = subprocess.run(command, cwd=cwd, capture_output=True, text=True, env=env)
     return {"status": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr}
 
@@ -113,9 +122,12 @@ def resolve_target(argv: list[str]) -> tuple[str, str, int]:
     head_oid = _git("rev-parse", "HEAD")
     # gh pr list の --head はブランチ名だけを受け付ける（"<owner>:<branch>" 形式は
     # 非対応）。fork 由来かどうかは、返ってきた head の所有者で別に確かめる。
+    # --limit は既定の 30 では、同名ブランチの PR が多いときに候補から漏れる。
+    # 上限を超える規模では関門は一致 0 件で停止する（fail-closed）ため、誤って
+    # 別 PR を数えることはない。
     listing = run_command(
         ["gh", "pr", "list", "--repo", f"{owner}/{name}", "--head", branch, "--state", "open",
-         "--json", "number,headRefOid,headRepositoryOwner"]
+         "--limit", "1000", "--json", "number,headRefOid,headRepositoryOwner"]
     )
     if listing["status"] != 0:
         raise GateError(f"gh pr list が失敗しました: {listing['stderr'].strip()}")
@@ -141,10 +153,12 @@ def fetch_unresolved_thread_urls(owner: str, name: str, number: int) -> list[str
     cursor = None
     seen_cursors: set[str] = set()
     while True:
+        # 文字列の変数は -f で渡す。-F は "123" のような名前を整数へ変換してしまい、
+        # String! の引数で型エラーになる。整数の number だけを -F にする。
         command = ["gh", "api", "graphql", "-f", f"query={REVIEW_THREADS_QUERY}",
-                   "-F", f"owner={owner}", "-F", f"name={name}", "-F", f"number={number}"]
+                   "-f", f"owner={owner}", "-f", f"name={name}", "-F", f"number={number}"]
         if cursor is not None:
-            command += ["-F", f"cursor={cursor}"]
+            command += ["-f", f"cursor={cursor}"]
         response = run_command(command)
         if response["status"] != 0:
             raise GateError(f"gh api graphql が失敗しました: {response['stderr'].strip()}")

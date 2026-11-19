@@ -8,6 +8,11 @@
 #   system ステップ（wait_ci）には効かない。そのため builtin を写し、wait_ci と merge の
 #   間に関門のステップを足す。関門の方式は takt-dash の同名ワークフローを参考にした。
 #
+# 前提（プロジェクト設定 .takt/config.yaml）:
+#   merge.workflow にこのワークフロー名を指定し、workflow_system_commands.custom_scripts
+#   と workflow_command_gates.custom_scripts の両方を true にすること。片方でも欠けると、
+#   検証で command の system input が無効だとして読み込みに失敗する。
+#
 # builtin との差分は次の (a)-(e) だけである。
 #   (a) name と description
 #   (b) この冒頭コメント
