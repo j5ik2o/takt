@@ -207,6 +207,7 @@ assistant:
 | `sync_project_local_takt_on_retry` | boolean | `true` | 在选择重试位置或检查 SDK 之前，将根项目的 `.takt` 同步到现有 worktree。即使拒绝安装 SDK 或取消选择，已同步的文件也会保留。设为 `false` 时保留 worktree 中的副本。 |
 | `worktree_dir` | string | - | shared clone 目录，默认 `../{clone-name}` |
 | `manager.preserve_goal_worktree` | boolean | `false` | manager 取入 goal 任务成果后保留 worktree 及 run 记录，参阅[Goal 任务 worktree 保留](#goal-任务-worktree-保留)。 |
+| `manager.verify_on_register` | boolean | `false` | 在 goal 注册后自动验证已注册的 Quint/Alloy 规格，参阅[Goal 注册时验证](#goal-注册时验证)。 |
 | `allow_git_hooks` | boolean | `false` | 允许 TAKT 管理的自动 commit 运行 git hooks |
 | `allow_git_filters` | boolean | `false` | 允许 TAKT 管理的自动 commit 运行 git filters |
 | `auto_pr` | boolean | - | worktree 执行后自动创建 PR |
@@ -517,6 +518,24 @@ manager:
 ```
 
 worktree、clone metadata，以及 worktree 内 `.takt/runs` 下的 reports 和 logs 都会保留。completed 任务记录也照常保留，不会自动删除任务历史。默认 `false` 维持原有 worktree 和 clone metadata cleanup 以及 `cleanupWarning` 行为。此设置不改变普通 `completeTask`、List Tasks 中的手动 merge 或 delete、PR merge 任务及未取入任务的行为。
+
+## Goal 注册时验证
+
+在项目 `.takt/config.yaml` 或全局 `~/.takt/config.yaml` 中设置：
+
+```yaml
+manager:
+  verify_on_register: true
+assistant:
+  formal_spec:
+    mode: true
+```
+
+`manager.verify_on_register` 默认为 `false`。优先级依次为 boolean 环境变量 `TAKT_MANAGER_VERIFY_ON_REGISTER`、项目配置、全局配置、默认值。高优先级的显式 `false` 覆盖低优先级的 `true`。
+
+通过 `takt_create_goal` 或批准注册提案（包括 manager TUI 对话框）完成注册后，已注册的 Quint 和 Alloy 字段会一起验证一次。此设置和非交互解析的 `assistant.formal_spec.mode` 必须同时启用（`true` 或 `"Y/n"`）。没有这两种语言的 goal（包括仅含 Gherkin 的 goal）正常注册，不执行验证。此功能不生成规格，也不在任务注册时执行验证。
+
+验证使用现有验证器及 `assistant.formal_spec.model_check_timeout_seconds`。即使结果为 `failed` 或 `error`，goal 仍注册成功，并将总体判定和各语言结果追加到同一 goal 的工作记录中。可在 manager 会话中询问该 goal 的验证结果。取消或工作记录保存失败会报告错误，已注册的 goal 仍然保留。
 
 ## manager 的任务 workflow
 

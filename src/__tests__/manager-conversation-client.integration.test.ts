@@ -1,7 +1,7 @@
 import { connectConversationIpc } from '../features/daemon/conversationReadiness.js';
 import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
 import * as daemonFiles from '../infra/daemon/privateFile.js';
-import { mkdirSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import * as net from 'node:net';
 import { createElement } from 'react';
@@ -16,6 +16,13 @@ import { ConversationIpcClient } from '../features/manager/conversationIpcClient
 import { ConversationTransferReceiver } from '../features/manager/conversationTransferReceiver.js';
 import * as frames from '../features/daemon/conversationFrames.js';
 import * as goalService from '../infra/goals/service.js';
+import * as goalGit from '../infra/goals/git.js';
+import * as goalGitCommand from '../infra/goals/git-command.js';
+import * as formalVerification from '../infra/formal-spec/formalSpecVerifier.js';
+import { readManagerEvents } from '../infra/goals/events.js';
+import { createTaktGoal } from '../features/mcp/goalOperations.js';
+import { approveTaktGoalRegistration } from '../features/mcp/goalRegistrationProposalOperations.js';
+import { buildManagerGoalSummary } from '../features/manager/turnContext.js';
 import type { ConversationDelivery, SnapshotItem, SnapshotRead } from '../features/manager/conversationPort.js';
 import { invalidateResolvedConfigCache } from '../infra/config/resolveConfigValue.js';
 import * as privateFiles from '../shared/utils/private-file.js';
@@ -110,6 +117,92 @@ beforeEach(async () => {
 });
 afterEach(async () => { cleanup(); client.close(); await fixture.close(); await server.close(); vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 async function complete() { await vi.waitFor(() => expect(client.getSnapshot().readStatus).toBe('complete'), { timeout: 10_000 }); }
+
+function enableRegistrationVerification() {
+  mkdirSync(join(repository, '.takt'), { recursive: true });
+  writeFileSync(join(repository, '.takt', 'config.yaml'),
+    'manager:\n  verify_on_register: true\nassistant:\n  formal_spec:\n    mode: true\n    model_check_timeout_seconds: 17\n');
+  invalidateResolvedConfigCache(repository);
+  vi.spyOn(goalGit, 'validateGoalBranchReferences').mockImplementation(() => {});
+  vi.spyOn(goalGit, 'prepareGoalBranch').mockResolvedValue({
+    branch: goalRecord().branch, startBranch: 'main', integrationBranch: 'main', commit: 'a'.repeat(40),
+  });
+  vi.spyOn(goalGit, 'createGoalBranch').mockImplementation(() => {});
+  vi.spyOn(goalGitCommand, 'runGoalGit').mockResolvedValue({ output: Buffer.alloc(0), truncated: false, code: 0 });
+  return vi.spyOn(formalVerification, 'runFormalSpecVerification').mockResolvedValue({
+    verdict: 'passed', verificationStarted: true, quint: { status: 'passed' }, alloy: { status: 'passed' },
+  });
+}
+
+it('verifies direct MCP goal creation and persists the result for manager context', async () => {
+  const verify = enableRegistrationVerification();
+  const cwd = realpathSync(repository);
+  const specifications = { quint: 'module csv {}', alloy: 'sig CSV {}' };
+  const response = await createTaktGoal({ cwd, id: randomUUID(), objective: 'CSV', outOfScope: [],
+    acceptanceCriteria: ['CSV exists'], constraints: [], specifications }, {}, new AbortController().signal);
+  expect(response.isError).not.toBe(true);
+  expect(verify).toHaveBeenCalledOnce();
+  const [source, target] = verify.mock.calls[0]!;
+  expect(target).toBe(cwd);
+  expect(formalVerification.extractFormalSpecBlocks(source)).toEqual({ quint: [specifications.quint], alloy: [specifications.alloy] });
+  const goals = (await new GoalStore(cwd).list()).goals;
+  expect(goals).toHaveLength(1);
+  expect(goals[0]!.workLog).toHaveLength(1);
+  expect(buildManagerGoalSummary(cwd, goals[0]!, []).workLog[0]!.summary).toMatch(/passed/iu);
+});
+
+it.each(['MCP', 'TUI'] as const)('verifies an approved proposal once through %s and preserves its result on repeated approval', async (entry) => {
+  const verify = enableRegistrationVerification();
+  const specifications = { quint: 'module csv {}', alloy: 'sig CSV {}' };
+  const summary = { objective: 'Verified CSV', outOfScope: [], acceptanceCriteria: ['CSV exists'], constraints: [], specifications };
+  const generate = vi.fn(async (_input: ManagerTurnInput) => ({ message: 'Proposal ready', summary, sessionId: 'session', assignment }));
+  doubles.resolve.mockResolvedValue({ provider: 'mock', model: null, language: 'en', contextKey: 'verify-registration',
+    executor: { execute: generate } });
+  await client.connect(); await complete();
+  await client.submit({ kind: 'message', text: 'Create the CSV goal', requestProposal: true });
+  await fixture.settled();
+  await waitFor(() => expect(client.getSnapshot().state?.pending?.summary).toMatchObject(summary));
+  const revision = client.getSnapshot().state!.pending!.revision;
+  verify.mockImplementation(async () => {
+    const goals = (await new GoalStore(repository).list()).goals;
+    expect(goals).toHaveLength(1);
+    expect(readManagerEvents(repository).filter(({ event }) => event.kind === 'registered' && event.goalId === goals[0]!.id)).toHaveLength(1);
+    return { verdict: 'passed', verificationStarted: true, quint: { status: 'passed' }, alloy: { status: 'passed' } };
+  });
+  if (entry === 'MCP') {
+    expect((await approveTaktGoalRegistration({ cwd: repository, revision }, {}, new AbortController().signal)).isError).not.toBe(true);
+  } else {
+    const app = render(createElement(ManagerView, { cwd: repository, lang: 'en', client, assignment, initialDiagnostics: [], onExit() {} }));
+    await waitFor(() => expect(app.lastFrame()).toContain(summary.objective));
+    app.stdin.write('\x1b[A'); app.stdin.write('\r');
+  }
+  const id = conversationRecord(repository).id;
+  await waitFor(async () => expect((await new ConversationStateStore(directory).read(id))?.record.approval?.state).toBe('registered'));
+  expect(verify).toHaveBeenCalledOnce();
+  const goal = (await new GoalStore(repository).list()).goals[0]!;
+  expect(goal).toMatchObject({ specifications });
+  expect(goal.workLog).toHaveLength(1);
+  expect(buildManagerGoalSummary(repository, goal, []).workLog[0]!.summary).toMatch(/passed/iu);
+  expect((await approveTaktGoalRegistration({ cwd: repository, revision }, {}, new AbortController().signal)).isError).not.toBe(true);
+  expect(verify).toHaveBeenCalledOnce();
+  expect((await new GoalStore(repository).get(goal.id)).workLog).toEqual(goal.workLog);
+  await client.submit({ kind: 'message', text: 'What was the verification result?' });
+  await fixture.settled();
+  expect(generate).toHaveBeenCalledTimes(2);
+  const context = JSON.parse(generate.mock.lastCall![0].recovery!.context) as {
+    goals: { repositories: { repositoryDirectory: string; goals: ReturnType<typeof buildManagerGoalSummary>[] }[] };
+  };
+  const contextRepository = context.goals.repositories.find(({ repositoryDirectory }) => repositoryDirectory === repository);
+  expect(contextRepository).toBeDefined();
+  const contextGoal = contextRepository!.goals.find(({ id }) => id === goal.id);
+  expect(contextGoal).toBeDefined();
+  expect(contextGoal!.workLog).toHaveLength(1);
+  expect(contextGoal!.workLog[0]).toMatchObject({
+    id: goal.workLog[0]!.id,
+    summary: goal.workLog[0]!.summary,
+  });
+  expect(contextGoal!.workLog[0]!.summary).toMatch(/passed/iu);
+});
 
 function useToolProvider(call: ProviderAgent['call']): void {
   const executor = createManagerTurnExecutor(repository, {

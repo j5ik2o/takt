@@ -1602,6 +1602,90 @@ describe('runFormalSpecVerification', () => {
     }
   });
 
+  it('propagates caller cancellation during the first Alloy jar download', async () => {
+    const directory = createTestDirectory();
+    const controller = new AbortController();
+    const reason = new Error('download cancelled by caller');
+    vi.stubGlobal('fetch', vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+      const downloading = new Promise<Response>((_resolve, reject) => {
+        init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true });
+      });
+      controller.abort(reason);
+      return downloading;
+    }));
+    processResponses.push({ code: 0, stderr: 'openjdk version "17.0.1"' });
+    try {
+      await expect(runFormalSpecVerification(validAlloyResponse(), directory, {
+        modelCheckTimeoutSeconds: 5, abortSignal: controller.signal,
+      })).rejects.toBe(reason);
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
+
+  it.each(['cancel', 'timeout', 'http'] as const)('preserves registration and records only ordinary Alloy preparation errors: %s', async (failure) => {
+    vi.useFakeTimers();
+    const directory = createTestDirectory();
+    const controller = new AbortController();
+    const reason = new Error('registration cancelled');
+    const { createGoal } = await import('../infra/goals/service.js');
+    const { GoalStore } = await import('../infra/goals/store.js');
+    const { GoalSchema } = await import('../infra/goals/schema.js');
+    const { goalInput, goalRecord } = await import('./helpers/goal-fixtures.js');
+    const git = await import('../infra/goals/git.js');
+    const events = await import('../infra/goals/events.js');
+    const registry = await import('../infra/config/global/projectRegistry.js');
+    const manager = await import('../infra/config/managerConfig.js');
+    const formal = await import('../infra/config/formalSpecConfig.js');
+    let saved: import('../infra/goals/schema.js').Goal | undefined;
+    vi.spyOn(GoalStore.prototype, 'assertAbsent').mockImplementation(() => {});
+    vi.spyOn(GoalStore.prototype, 'create').mockImplementation(async (goal) => { saved = GoalSchema.parse(goal); return saved; });
+    vi.spyOn(GoalStore.prototype, 'update').mockImplementation(async (_id, transform) => {
+      saved = GoalSchema.parse(await transform(saved!)); return saved;
+    });
+    vi.spyOn(registry, 'registerProject').mockResolvedValue({
+      version: 2, locationId: 'a'.repeat(64), stateId: goalRecord().id,
+      canonicalDirectory: directory, displayName: 'test',
+      createdAt: '2026-11-19T00:00:00Z', lastSeenAt: '2026-11-19T00:00:00Z',
+      lastCommand: 'test', available: true, id: 'a'.repeat(64), projectDirectory: directory,
+    });
+    vi.spyOn(git, 'prepareGoalBranch').mockResolvedValue({ branch: goalRecord().branch,
+      startBranch: 'main', integrationBranch: 'main', commit: 'a'.repeat(40) });
+    vi.spyOn(git, 'createGoalBranch').mockImplementation(() => {});
+    const remove = vi.spyOn(git, 'removeGoalBranch').mockImplementation(() => {});
+    const registered = vi.spyOn(events, 'saveManagerEvent').mockImplementation(() => {});
+    vi.spyOn(manager, 'resolveManagerConfig').mockReturnValue({ ...manager.resolveManagerConfig(directory), verifyOnRegister: true });
+    vi.spyOn(formal, 'resolveFormalSpecConfigurationWithoutPrompt').mockReturnValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 5 });
+    vi.stubGlobal('fetch', vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+      if (failure === 'http') return Promise.resolve({ ok: false, status: 503 } as Response);
+      const waiting = new Promise<Response>((_resolve, reject) => {
+        init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason), { once: true });
+      });
+      if (failure === 'cancel') controller.abort(reason);
+      return waiting;
+    }));
+    processResponses.push({ code: 0, stderr: 'openjdk version "17.0.1"' });
+    try {
+      const registration = createGoal({ cwd: directory, id: goalRecord().id, ...goalInput(), specifications: { alloy: 'sig A {}' } }, controller.signal);
+      const outcome = registration.then((goal) => ({ goal }), (error: unknown) => ({ error }));
+      await vi.advanceTimersByTimeAsync(5_000);
+      const result = await outcome;
+      expect(registered).toHaveBeenCalledOnce();
+      expect(remove).not.toHaveBeenCalled();
+      expect(saved!.status).toBe('created');
+      if (failure === 'cancel') {
+        expect(result).toEqual({ error: reason });
+        expect(saved!.workLog).toHaveLength(0);
+        expect(saved!.registrationVerification?.status).toBe('pending');
+      } else {
+        expect(result).toHaveProperty('goal');
+        expect(saved!.workLog).toHaveLength(1);
+        expect(saved!.workLog[0]!.summary).toContain('error');
+        expect(saved!.registrationVerification?.status).toBe('completed');
+      }
+    } finally {
+      vi.useRealTimers(); vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('should fail explicitly when no parsed module has both executable actions', async () => {
     const directory = createTestDirectory();
     parseResult = {

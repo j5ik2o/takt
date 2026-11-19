@@ -6,6 +6,27 @@ import { resolveManagerConfig } from '../infra/config/managerConfig.js';
 import { resolveDirectorConfig } from '../infra/config/directorConfig.js';
 import { GlobalConfigSchema, ProjectConfigSchema } from '../core/models/config-schemas.js';
 beforeEach(() => { vi.resetAllMocks(); doubles.project.mockReturnValue({}); doubles.global.mockReturnValue({}); });
+it.each([true, false])('accepts verify_on_register=%s at both scopes', (verify_on_register) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.parse({ manager: { verify_on_register } }).manager).toHaveProperty('verify_on_register', verify_on_register);
+  }
+});
+it.each([null, 'true', 1])('rejects invalid verify_on_register=%j at both scopes', (verify_on_register) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.safeParse({ manager: { verify_on_register } }).success).toBe(false);
+  }
+});
+it.each([
+  { global: undefined, project: undefined, expected: false },
+  { global: true, project: undefined, expected: true },
+  { global: false, project: undefined, expected: false },
+  { global: true, project: false, expected: false },
+  { global: false, project: true, expected: true },
+])('resolves registration verification with explicit project precedence: %j', ({ global, project, expected }) => {
+  doubles.global.mockReturnValue({ manager: { verifyOnRegister: global } });
+  doubles.project.mockReturnValue({ manager: { verifyOnRegister: project } });
+  expect(resolveManagerConfig('/project')).toHaveProperty('verifyOnRegister', expected);
+});
 it.each([
   { global: ['default', { simple: 'Small changes' }], project: undefined, expected: ['default', { simple: 'Small changes' }] },
   { global: ['default'], project: ['simple'], expected: ['simple'] },
