@@ -886,6 +886,15 @@ it('rechecks the saved status before applying the reopen update', async () => {
   expect(goal).toEqual({ ...before, status: 'completed', completion: { ...before.completion!, targetSha } });
 });
 
+it('rechecks the saved integration branch before applying the reopen update', async () => {
+  await completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check the result', 'ja');
+  doubles.contentIncluded.mockImplementation(async () => { goal = { ...goal, integrationBranch: 'release' }; return false; });
+  const before = structuredClone(goal);
+  await expect(reopenGoal('/project', goal.id, '追加の修正', undefined))
+    .rejects.toThrow('Goal integration branch changed during the reopen check');
+  expect(goal).toEqual({ ...before, integrationBranch: 'release' });
+});
+
 it.each([
   { updatedSha: sourceSha, includedOnRetry: false },
   { updatedSha: 'c'.repeat(40), includedOnRetry: false },
@@ -1356,26 +1365,27 @@ it.each(['integrate', 'complete'] as const)('stops %s before changing or publish
 
 describe('goal branch correction', () => {
   const changeSummary = { filesChanged: 1, additions: 2, deletions: 1, files: [], truncated: false, totalsTruncated: false };
+  const branchChangedDuringCheck = 'Goal integration branch changed during the completion check';
+
+  beforeEach(() => {
+    doubles.tasks.mockReturnValue([]);
+  });
 
   it('corrects the integration branch of a created goal and saves the reason in the work log', async () => {
     const result = await updateGoalBranches('/project', goal.id, 'integration/takt-mcp', 'プルリクエストの宛先が変わったため', undefined);
     expect(goal.integrationBranch).toBe('integration/takt-mcp');
+    expect(goal.completion).toBeUndefined();
     expect(goal.workLog).toHaveLength(1);
     expect(goal.workLog.at(-1)?.summary).toBe('プルリクエストの宛先が変わったため');
     expect(result).toMatchObject({ goal: { integrationBranch: 'integration/takt-mcp' }, workLogEntryId: goal.workLog.at(-1)?.id });
   });
 
-  it('corrects the completion target branch and clears the saved target SHA', async () => {
-    goal = { ...goal, status: 'awaiting_merge', completion: {
-      goalBranch: goal.branch, goalSha: sourceSha, targetBranch: 'main', targetSha,
-      summary: 'evidence', changeSummary, instructions: [],
-    } };
+  it('corrects the completion target branch of a goal awaiting merge and keeps the other evidence', async () => {
+    const completion = { goalBranch: goal.branch, goalSha: sourceSha, targetBranch: 'main', summary: 'evidence', changeSummary, instructions: [] };
+    goal = { ...goal, status: 'awaiting_merge', completion };
     await updateGoalBranches('/project', goal.id, 'integration/takt-mcp', '宛先の訂正', undefined);
-    expect(goal.integrationBranch).toBe('integration/takt-mcp');
-    expect(goal.completion?.targetBranch).toBe('integration/takt-mcp');
-    expect(goal.completion?.targetSha).toBeUndefined();
-    expect(goal.completion?.goalSha).toBe(sourceSha);
-    expect(goal.completion?.summary).toBe('evidence');
+    expect(goal).toMatchObject({ status: 'awaiting_merge', integrationBranch: 'integration/takt-mcp',
+      completion: { ...completion, targetBranch: 'integration/takt-mcp' } });
   });
 
   it('rejects a completed goal', async () => {
@@ -1383,14 +1393,55 @@ describe('goal branch correction', () => {
       goalBranch: goal.branch, goalSha: sourceSha, targetBranch: 'main', targetSha,
       summary: 'evidence', changeSummary, instructions: [],
     } };
+    const before = structuredClone(goal);
     await expect(updateGoalBranches('/project', goal.id, 'integration/takt-mcp', '宛先の訂正', undefined))
-      .rejects.toThrow();
+      .rejects.toThrow('Goal is already completed');
+    expect(goal).toEqual(before);
+  });
+
+  it.each(['paused', 'aborted'] as const)('rejects a goal that becomes %s after the saved goal is read', async (executionStatus) => {
+    doubles.get.mockImplementationOnce(async () => {
+      const snapshot = structuredClone(goal);
+      goal = { ...goal, executionStatus };
+      return snapshot;
+    });
+    await expect(updateGoalBranches('/project', goal.id, 'integration/takt-mcp', '宛先の訂正', undefined))
+      .rejects.toThrow(executionStatus === 'paused'
+        ? 'Goal is paused. Resume it before continuing work.'
+        : 'Goal is aborted. Work cannot continue for this goal.');
     expect(goal.integrationBranch).toBe('main');
+    expect(goal.workLog).toHaveLength(0);
+  });
+
+  it('rejects the goal branch itself as the integration branch', async () => {
+    const before = structuredClone(goal);
+    await expect(updateGoalBranches('/project', goal.id, goal.branch, '宛先の訂正', undefined))
+      .rejects.toThrow('The integration branch must differ from the goal branch');
+    expect(goal).toEqual(before);
   });
 
   it('rejects an invalid branch name', async () => {
-    await expect(updateGoalBranches('/project', goal.id, 'bad branch', '宛先の訂正', undefined)).rejects.toThrow();
-    expect(goal.integrationBranch).toBe('main');
+    const before = structuredClone(goal);
+    await expect(updateGoalBranches('/project', goal.id, 'bad branch', '宛先の訂正', undefined)).rejects.toThrow('bad branch');
+    expect(goal).toEqual(before);
+  });
+
+  it('rejects while a PR merge task for the goal is running', async () => {
+    doubles.tasks.mockReturnValue([{ name: 'merge-pr-1950', goalId: goal.id, mergeTask: true, status: 'running' }]);
+    const before = structuredClone(goal);
+    await expect(updateGoalBranches('/project', goal.id, 'integration/takt-mcp', '宛先の訂正', undefined))
+      .rejects.toThrow('A PR merge task is running for this goal');
+    expect(goal).toEqual(before);
+  });
+
+  it('corrects the branches when no PR merge task for the goal is running', async () => {
+    doubles.tasks.mockReturnValue([
+      { name: 'merge-pr-1950', goalId: goal.id, mergeTask: true, status: 'completed' },
+      { name: 'merge-pr-1951', goalId: 'another-goal', mergeTask: true, status: 'running' },
+      { name: 'task', goalId: goal.id, status: 'running' },
+    ]);
+    await updateGoalBranches('/project', goal.id, 'integration/takt-mcp', '宛先の訂正', undefined);
+    expect(goal.integrationBranch).toBe('integration/takt-mcp');
   });
 
   it('does not complete a goal when the integration branch changes during the completion check', async () => {
@@ -1402,8 +1453,33 @@ describe('goal branch correction', () => {
       goal = { ...goal, integrationBranch: 'release' };
       return true;
     });
-    await expect(checkGoalCompletion('/project', goal.id, undefined, policy)).rejects.toThrow();
+    await expect(checkGoalCompletion('/project', goal.id, undefined, policy)).rejects.toThrow(branchChangedDuringCheck);
     expect(goal.status).toBe('awaiting_merge');
     expect(goal.completion?.targetBranch).toBe('main');
+  });
+
+  it('does not return a negative result when the integration branch changes during the completion check', async () => {
+    goal = { ...goal, status: 'awaiting_merge', completion: {
+      goalBranch: goal.branch, goalSha: sourceSha, targetBranch: 'main',
+      summary: 'evidence', changeSummary, instructions: [],
+    } };
+    doubles.contentIncluded.mockImplementation(async () => {
+      goal = { ...goal, integrationBranch: 'release' };
+      return false;
+    });
+    await expect(checkGoalCompletion('/project', goal.id, undefined, policy)).rejects.toThrow(branchChangedDuringCheck);
+    expect(goal.status).toBe('awaiting_merge');
+    expect(goal.completion?.targetBranch).toBe('main');
+  });
+
+  it.each([true, false])('does not save completion evidence when the integration branch changes during completion (included: %s)', async (included) => {
+    doubles.contentIncluded.mockImplementation(async () => {
+      goal = { ...goal, integrationBranch: 'release' };
+      return included;
+    });
+    await expect(completeGoal('/project', goal.id, sourceSha, 'evidence', 'approve', undefined, policy, 'Check the result', 'ja'))
+      .rejects.toThrow(branchChangedDuringCheck);
+    expect(goal).toMatchObject({ status: 'created', integrationBranch: 'release' });
+    expect(goal.completion).toBeUndefined();
   });
 });
