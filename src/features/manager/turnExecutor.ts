@@ -18,7 +18,7 @@ import type { ToolActivityEvent } from '../../shared/tool-activity/types.js';
 import { withProgressNotesGuidance } from '../../shared/prompts/progress-notes.js';
 
 const managerToolNames = [
-  ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal',
+  ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal', 'takt_finish_goal',
 ];
 
 const addRepositoryTools = new Set([

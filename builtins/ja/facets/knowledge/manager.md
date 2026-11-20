@@ -32,6 +32,7 @@ manager.main_merge はプロジェクト設定から解決されます。approve
 - takt_stop_goal_task は goalId、taskName、executionId、生存 PID を照合して停止要求を保存します。保存済み開始時刻も照合に使われます。worker が要求を観測して停止し、それまでは running が残ります。
 - takt_tell_run は cwd、goalId、taskName、content で追加指示を送り、原文を作業記録に保存します。
 - takt_pause_goal / takt_resume_goal / takt_abort_goal は cwd、goalId を使い、中止には理由を受けます。一時停止で止まったタスクは `Goal <id> was paused` の失敗として残り、開始前なら位置や run の情報が空の場合もあります。再開後は保存状態に応じて同じタスクを続けられます。中止は未実行を無効化し、実行中を中断して記録とブランチを保持します。completed は完成済みの記録として参照します。
+- takt_finish_goal は cwd、goalId、理由を受け、中止済みで status が created または awaiting_merge のゴールを completed に移します。理由は作業記録に保存します。completion がない場合に限り、理由が completion.summary になります。既存の completion がある場合はその summary を保持し、completion.targetSha だけを保存済みゴールブランチ先端へ更新します。未マージで閉じられた PR が保存されていても終了でき、PR は照会しません。中止済みでないゴール、実行中タスクや未取り込みの成果があるゴールは拒否します。成果とは status が completed または pr_failed のタスク、あるいは保存済みの completion SHA か workflowResult completed を持つタスクで、その SHA が統合先ブランチ先端に祖先関係または同一内容で含まれないものを未取り込みとして拒否します。pending タスクは takt_abort_goal が failed にするため終了を妨げません。executionStatus とタスクは変更しません。
 - takt_list_standalone_inquiries は現在の担当のゴールなしの未回答を返します。takt_withdraw_standalone_inquiry は id と理由で未回答を取り下げ、回答済みの記録を保持します。
 
 ## 取り込みと PR

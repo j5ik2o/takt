@@ -74,6 +74,8 @@ import type { ManagerAssignment } from '../manager/startupResolution.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
 import { recordTaktGoalWorkLog, listTaktGoalRecords } from './goalWorkLogOperations.js';
 import { pauseTaktGoal, resumeTaktGoal, abortTaktGoal } from './goalExecutionOperations.js';
+import { finishTaktAbortedGoal } from './goalFinishOperations.js';
+import { finishGoalInputSchema } from './goalFinishSchemas.js';
 import { mergeTaktGoalTask, mergeTaktGoalPr, completeTaktGoal, checkTaktGoalCompletion, reopenTaktGoal, updateTaktGoalBranches } from './goalIntegrationOperations.js';
 import { getTaktGoalDiff, getTaktGoalHistory, getTaktGoalRelation } from './goalReadOperations.js';
 import { assertCwdAllowedByMcpRoot, errorResult } from './operations.js';
@@ -259,6 +261,11 @@ export function createTaktMcpServer(
         description: 'Abort the selected goal with a required reason. Abort cannot be undone; goal records and branches remain. Pending work is invalidated and running work is interrupted. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
         inputSchema: abortGoalInputSchema,
       }, (input, extra) => goalOperation(input.cwd, 'Goal abort failed', (deps) => abortTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))));
+      server.registerTool('takt_finish_goal', {
+        title: 'Finish an aborted goal',
+        description: 'Move an aborted goal with status created or awaiting_merge to the completed state with a required reason, which is saved in the work log. The reason becomes the completion summary only when the goal has no completion record; an existing completion summary is preserved. A saved unmerged, closed pull request does not block finishing. This rejects goals that are not aborted, and goals with running work or an unintegrated result. A result is any task with status completed or pr_failed, or a saved completion SHA or workflowResult completed; it is unintegrated when its SHA is not included in the integration branch tip by ancestry or identical content. Pending tasks do not block finishing because takt_abort_goal already marks them failed. It does not query the pull request, delete tasks, or change executionStatus. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
+        inputSchema: finishGoalInputSchema,
+      }, (input, extra) => goalOperation(input.cwd, 'Goal finish failed', (deps) => finishTaktAbortedGoal(projectInput(input, deps), deps, turnSignal(extra.signal))));
     }
     server.registerTool('takt_tell_run', {
       title: 'Send an instruction to running goal work',

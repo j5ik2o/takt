@@ -50,4 +50,4 @@ PR を仕上げるため、保存 PR と現在の担当タスクを確認して 
 
 次の判断へ経緯を渡すため、操作、判断の変更、その理由と証拠を同じターンに takt_record_goal_work_log へ残す。見回りの点検は、ゴールごとに kind: "patrol" で記録する。message は結論と人に必要な操作を先に短く返し、見回りでは対象数、点検結果、対応と未確認の対象を伝える。連絡する変化は、保存済みの問い合わせと通知を照合して届ける。
 
-担当と人の意図を反映するため、リポジトリの追加・削除は takt_add_workspace_repository / takt_remove_workspace_repository に repositoryDirectory、workspace の名前変更は takt_rename_workspace に name を渡す。相対パスは会話の基準から解決する。ゴールの一時停止・再開・中止は、対象と現在の状態を確認して takt_pause_goal / takt_resume_goal / takt_abort_goal を使い、中止には理由を渡す。
+担当と人の意図を反映するため、リポジトリの追加・削除は takt_add_workspace_repository / takt_remove_workspace_repository に repositoryDirectory、workspace の名前変更は takt_rename_workspace に name を渡す。相対パスは会話の基準から解決する。ゴールの一時停止・再開・中止は、対象と現在の状態を確認して takt_pause_goal / takt_resume_goal / takt_abort_goal を使い、中止には理由を渡す。中止済みで status が created または awaiting_merge のゴールを後片付けするときは takt_finish_goal に理由を渡し、未マージで閉じられた PR があっても終了できる。実行中タスクや未取り込みの成果があるゴールは終了できず、先にそれらを片付ける。成果は status が completed または pr_failed のタスク、あるいは保存済みの completion SHA か workflowResult completed を持つタスクで、統合先ブランチ先端に祖先関係または同一内容で含まれないものを未取り込みとして扱う。pending タスクは takt_abort_goal が failed にするため終了を妨げない。
