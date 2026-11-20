@@ -7,7 +7,8 @@ import { TaskRunner } from '../task/runner.js';
 import { getGlobalConfigDir } from '../config/paths.js';
 import { registerProject } from '../config/global/projectRegistry.js';
 import { FileEventStore } from '../daemon/eventStore.js';
-import { initialRegistrationVerification, verifyRegisteredGoal } from './registrationVerification.js';
+import { initialRegistrationVerification, verifyGoalSpecificationsForRegistration } from './registrationVerification.js';
+import { appendGoalWorkLog } from './workLog.js';
 
 export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): Promise<Goal> {
   signal?.throwIfAborted();
@@ -15,11 +16,16 @@ export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): 
   const store = new GoalStore(input.cwd);
   store.assertAbsent(input.id);
   const registrationVerification = initialRegistrationVerification(input.cwd, input.specifications);
+  let verificationSummary: string | undefined;
+  if (registrationVerification?.status === 'pending') {
+    verificationSummary = await verifyGoalSpecificationsForRegistration(input.cwd, input.specifications, signal);
+  }
+  signal?.throwIfAborted();
   await registerProject({ globalConfigDirectory: getGlobalConfigDir(), projectDirectory: input.cwd, command: 'manager', managerUsed: true });
   signal?.throwIfAborted();
   const { commit, ...branches } = await prepareGoalBranch(input.cwd, input.id, input.startBranch, input.integrationBranch, signal);
   signal?.throwIfAborted();
-  const goal = GoalSchema.parse({
+  let goal = GoalSchema.parse({
     id: input.id, createdAt: new Date().toISOString(), objective: input.objective, outOfScope: input.outOfScope,
     acceptanceCriteria: input.acceptanceCriteria, constraints: input.constraints,
     ...(input.specifications === undefined ? {} : { specifications: input.specifications }),
@@ -27,6 +33,13 @@ export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): 
     workLog: [], mode: 'local', status: 'created', executionStatus: 'active',
     acceptanceCriteriaVersion: 1, ...branches,
   });
+  if (verificationSummary !== undefined) {
+    const withVerification = appendGoalWorkLog(goal, { summary: verificationSummary });
+    goal = GoalSchema.parse({
+      ...withVerification,
+      registrationVerification: { status: 'completed', verdict: 'passed', workLogId: withVerification.workLog.at(-1)!.id },
+    });
+  }
   createGoalBranch(input.cwd, goal.branch, commit);
   try { await store.create(goal); }
   catch (error) {
@@ -34,7 +47,7 @@ export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): 
     throw error;
   }
   saveManagerEvent(input.cwd, { kind: 'registered', goalId: goal.id });
-  return verifyRegisteredGoal(input.cwd, goal, signal);
+  return goal;
 }
 
 export class GoalRegistrationRecoveryError extends Error {

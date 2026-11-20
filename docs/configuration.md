@@ -214,7 +214,7 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 | `sync_project_local_takt_on_retry` | boolean | `true` | Sync the root project-local `.takt` into a reused worktree before selecting a retry position or checking SDKs. Synced files remain if SDK installation is declined or the selection is cancelled. Set `false` to keep the worktree copy. |
 | `worktree_dir` | string | - | Directory for shared clones (defaults to `../{clone-name}`) |
 | `manager.preserve_goal_worktree` | boolean | `false` | Preserve goal task worktrees and their run artifacts after manager integrates them; see [Goal task worktree retention](#goal-task-worktree-retention). |
-| `manager.verify_on_register` | boolean | `false` | Automatically verify registered Quint/Alloy specifications after goal registration; see [Verification on goal registration](#verification-on-goal-registration). |
+| `manager.verify_on_register` | boolean | `false` | Automatically verify Quint/Alloy specifications before goal registration completes; see [Verification on goal registration](#verification-on-goal-registration). |
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
@@ -542,9 +542,9 @@ assistant:
 
 The default for `manager.verify_on_register` is `false`. Precedence is `TAKT_MANAGER_VERIFY_ON_REGISTER` (a boolean), project configuration, global configuration, then the default. An explicit `false` overrides a lower-priority `true`.
 
-After `takt_create_goal` or approval of a registration proposal (including the manager TUI dialog), registered Quint and Alloy fields are verified together once. Both this setting and the non-interactive value of `assistant.formal_spec.mode` must be enabled (`true` or `"Y/n"`). Goals with neither language, including Gherkin-only goals, register normally without verification. This does not generate specifications or verify task registrations.
+Before `takt_create_goal` or approval of a registration proposal (including the manager TUI dialog) completes a registration, the Quint and Alloy fields are verified together once, before the goal is saved. Both this setting and the non-interactive value of `assistant.formal_spec.mode` must be enabled (`true` or `"Y/n"`). Goals with neither language, including Gherkin-only goals, register normally without verification. This does not generate specifications or verify task registrations.
 
-Verification uses the existing verifier and `assistant.formal_spec.model_check_timeout_seconds`. A `failed` or `error` result keeps the goal registered and appends the verdict and language results to its work log. Ask the manager about the goal's verification result to consult that record. Cancellation or failure to save the work log is reported as an error; the already registered goal remains available.
+Verification uses the existing verifier and `assistant.formal_spec.model_check_timeout_seconds`. Registration only completes when the verdict is `passed`; the verdict is then stored in the goal's `registrationVerification`, and the verdict and language results are recorded in its work log. A `failed` verdict (the specifications did not pass) or an `error` verdict (verification could not be completed) rejects the registration: no goal and no goal branch are created, and the error reports the verdict and language results. The registration proposal is kept, so the specifications can be fixed and registered again. Cancellation before the goal is saved also rejects the registration.
 
 ## Manager task workflows
 

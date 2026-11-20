@@ -1637,7 +1637,7 @@ describe('runFormalSpecVerification', () => {
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 
-  it.each(['cancel', 'timeout', 'http', 'java'] as const)('preserves registration and records preparation errors: %s', async (failure) => {
+  it.each(['cancel', 'timeout', 'http', 'java'] as const)('rejects registration without saving the goal when verification cannot complete: %s', async (failure) => {
     vi.useFakeTimers();
     const directory = createTestDirectory();
     const controller = new AbortController();
@@ -1687,20 +1687,17 @@ describe('runFormalSpecVerification', () => {
       await vi.advanceTimersByTimeAsync(5_000);
       const result = await outcome;
       expect(fetch).toHaveBeenCalledTimes(failure === 'java' ? 0 : 1);
-      expect(registered).toHaveBeenCalledOnce();
+      expect(registered).not.toHaveBeenCalled();
       expect(remove).not.toHaveBeenCalled();
-      expect(saved!.status).toBe('created');
+      expect(saved).toBeUndefined();
       if (failure === 'cancel') {
         expect(result).toEqual({ error: reason });
-        expect(saved!.workLog).toHaveLength(0);
-        expect(saved!.registrationVerification?.status).toBe('pending');
       } else {
-        expect(result).toHaveProperty('goal');
-        expect(saved!.workLog).toHaveLength(1);
-        expect(saved!.workLog[0]!.summary).toContain('error');
-        expect(saved!.workLog[0]!.summary).toMatch(failure === 'java' ? /Java 17 or later was not detected/iu
+        expect(result).toHaveProperty('error');
+        const message = (result as { error: Error }).error.message;
+        expect(message).toContain('Formal specification verification: error');
+        expect(message).toMatch(failure === 'java' ? /Java 17 or later was not detected/iu
           : failure === 'http' ? /Alloy: error:.*503/iu : /Alloy: error:.*timeout|Alloy: error:.*timed out/iu);
-        expect(saved!.registrationVerification?.status).toBe('completed');
       }
     } finally {
       vi.useRealTimers(); vi.restoreAllMocks(); rmSync(directory, { recursive: true, force: true });
