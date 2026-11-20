@@ -87,6 +87,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { resolveAssignedProjectRoot, resolveCurrentManagerAssignment, type ManagerAssignmentIdentity } from '../manager/assignment.js';
+import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirectory.js';
 import { addManagerRepository, removeManagerRepository, renameManagerWorkspace } from '../manager/workspaceOperations.js';
 import type { ManagerMcpConnection } from '../manager/managerMcpConnection.js';
 
@@ -167,6 +168,16 @@ export function createTaktMcpServer(
   const globalConfigDirectory = getGlobalConfigDir();
   let managerIdentity: ManagerAssignmentIdentity = options.managerAssignment ?? { kind: 'repository', repositoryDirectory: operationDeps.allowedProjectRoot! };
   const currentAssignment = () => resolveCurrentManagerAssignment(managerIdentity, globalConfigDirectory);
+  // Servers whose tool set is not 'manager' (for example a resident server shared by
+  // several projects) own no assignment of their own: standalone inquiries belong to
+  // the assignment of the repository that contains the call's cwd, so one server can
+  // serve the standalone inquiries of every project under its allowed root.
+  const assignmentForStandaloneInquiry = async (cwd: string, assignment: ManagerAssignment | undefined): Promise<ManagerAssignment> => {
+    if (assignment !== undefined) return assignment;
+    if (options.toolSet === 'manager') return currentAssignment();
+    const repositoryDirectory = await resolveGitRepositoryDirectory(cwd);
+    return resolveCurrentManagerAssignment({ kind: 'repository', repositoryDirectory }, globalConfigDirectory);
+  };
   const projectInput = <T extends { cwd: string }>(input: T, currentDeps: McpOperationDependencies): T =>
     options.toolSet === 'manager' ? { ...input, cwd: currentDeps.allowedProjectRoot! } : input;
   const withTurn = (action: () => Promise<CallToolResult>): Promise<CallToolResult> => options.turnScope === undefined
@@ -303,25 +314,25 @@ export function createTaktMcpServer(
   if (options.toolSet !== 'read-only') {
     server.registerTool('takt_ask_standalone_question', {
       title: 'Ask a standalone question',
-      description: 'Save a pending inquiry without a goal in the current manager assignment. cwd must be an absolute path in an assigned repository. Supports kind question (default) or operation_request, with the same options and recommendation as goal questions. People answer through TUI or Slack. Returns questionId within 64 KiB.',
+      description: 'Save a pending inquiry without a goal in the manager assignment of the repository that contains cwd. cwd must be an absolute path in an assigned repository. Supports kind question (default) or operation_request, with the same options and recommendation as goal questions. People answer through TUI or Slack. Returns questionId within 64 KiB.',
       inputSchema: askStandaloneQuestionInputSchema,
     }, (input, extra) => operation(input.cwd, 'Standalone question failed', async (deps, assignment) => {
-      const current = assignment ?? await currentAssignment();
+      const current = await assignmentForStandaloneInquiry(input.cwd, assignment);
       const cwd = assignment === undefined ? await resolveAssignedProjectRoot(input.cwd, current) : deps.allowedProjectRoot!;
       return askTaktStandaloneQuestion({ ...input, cwd }, globalConfigDirectory, current, turnSignal(extra.signal));
     }, false));
     server.registerTool('takt_list_standalone_inquiries', {
       title: 'List standalone inquiries',
-      description: 'Read only pending standalone inquiries owned by the current manager assignment. Includes id, kind, body and creation time without changing saved state. Use offset/limit (1-50) and nextOffset for continuation. Responses fit 64 KiB, with explicit truncation.',
+      description: 'Read only pending standalone inquiries owned by the manager assignment of the repository that contains cwd. Includes id, kind, body and creation time without changing saved state. Use offset/limit (1-50) and nextOffset for continuation. Responses fit 64 KiB, with explicit truncation.',
       inputSchema: listStandaloneInquiriesInputSchema,
     }, (input) => operation(input.cwd, 'Standalone inquiry list failed', async (_deps, assignment) =>
-      listTaktStandaloneInquiries(input, globalConfigDirectory, assignment ?? await currentAssignment()), false));
+      listTaktStandaloneInquiries(input, globalConfigDirectory, await assignmentForStandaloneInquiry(input.cwd, assignment)), false));
     server.registerTool('takt_withdraw_standalone_inquiry', {
       title: 'Withdraw a standalone inquiry',
-      description: 'Withdraw an obsolete pending standalone inquiry in the current manager assignment by id and required reason. Saves the reason and withdrawal time. Other states and saved answers remain unchanged and the current state is returned. Unknown IDs are errors. Responses fit 64 KiB.',
+      description: 'Withdraw an obsolete pending standalone inquiry in the manager assignment of the repository that contains cwd by id and required reason. Saves the reason and withdrawal time. Other states and saved answers remain unchanged and the current state is returned. Unknown IDs are errors. Responses fit 64 KiB.',
       inputSchema: withdrawStandaloneInquiryInputSchema,
     }, (input) => operation(input.cwd, 'Standalone inquiry withdrawal failed', async (_deps, assignment) =>
-      withdrawTaktStandaloneInquiry(input, globalConfigDirectory, assignment ?? await currentAssignment()), false));
+      withdrawTaktStandaloneInquiry(input, globalConfigDirectory, await assignmentForStandaloneInquiry(input.cwd, assignment)), false));
     server.registerTool('takt_record_goal_work_log', {
       title: 'Record manager work', description: 'Append a short account of submitted, integrated or abandoned work and its reasons. Available in conversation and event turns. Returns the saved entry and count within 64 KiB, with explicit truncation. Read the entry with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes.', inputSchema: recordGoalWorkLogInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal work log failed', (deps) => recordTaktGoalWorkLog(
