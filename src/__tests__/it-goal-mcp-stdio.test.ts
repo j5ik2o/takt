@@ -1543,3 +1543,76 @@ describe('default stdio manager runtime assignment candidates', () => {
     expect(pendingTaskNames()).toEqual([]);
   });
 });
+
+describe('standalone inquiries through a shared non-manager MCP server', () => {
+  let root: string;
+  let projectA: string;
+  let projectB: string;
+  let configDirectory: string;
+  let client: Client;
+  let server: ReturnType<typeof createTaktMcpServer>;
+
+  beforeEach(() => {
+    vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
+    configDirectory = process.env.TAKT_CONFIG_DIR!;
+    const temporaryRoot = join(process.cwd(), '.tmp');
+    mkdirSync(temporaryRoot, { recursive: true });
+    root = realpathSync(mkdtempSync(join(temporaryRoot, 'standalone-shared-mcp-')));
+    projectA = join(root, 'project-a');
+    projectB = join(root, 'project-b');
+    for (const directory of [projectA, projectB]) {
+      mkdirSync(directory);
+      initializeGitFixture(directory, []);
+    }
+  });
+
+  afterEach(async () => {
+    try { await client?.close(); }
+    finally {
+      try { await server?.close(); }
+      finally {
+        vi.restoreAllMocks();
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  async function connect() {
+    server = createTaktMcpServer({}, { toolSet: 'all', allowedProjectRoot: root });
+    client = new Client({ name: 'standalone-inquiry-shared-test', version: '1' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(b);
+    await client.connect(a);
+  }
+
+  async function listInquiries(cwd: string) {
+    const result = await client.callTool({ name: 'takt_list_standalone_inquiries', arguments: { cwd } });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    const value: Record<string, unknown> = JSON.parse(firstTextContent(result.content));
+    return z.array(standaloneItemSchema).parse(value.inquiries);
+  }
+
+  it('lists, creates and withdraws the inquiries of the project given by cwd, not of the server root', async () => {
+    const ownerB: InquiryOwner = { kind: 'repository', repositoryDirectory: projectB };
+    const seeded = await new StandaloneInquiryStore(configDirectory, ownerB).create({ body: 'プロジェクトBの相談' });
+    await connect();
+
+    expect((await listInquiries(projectB)).map(({ id }) => id)).toEqual([seeded.id]);
+    expect(await listInquiries(projectA)).toEqual([]);
+
+    const askResult = await client.callTool({ name: 'takt_ask_standalone_question',
+      arguments: { cwd: projectA, body: 'プロジェクトAの相談' } });
+    expect(askResult.isError, firstTextContent(askResult.content)).not.toBe(true);
+    const questionId = z.object({ questionId: z.uuid() }).parse(JSON.parse(firstTextContent(askResult.content))).questionId;
+    const ownerA: InquiryOwner = { kind: 'repository', repositoryDirectory: projectA };
+    expect(await new StandaloneInquiryStore(configDirectory, ownerA).get(questionId))
+      .toMatchObject({ id: questionId, status: 'pending', body: 'プロジェクトAの相談' });
+    expect((await listInquiries(projectA)).map(({ id }) => id)).toEqual([questionId]);
+    expect((await listInquiries(projectB)).map(({ id }) => id)).toEqual([seeded.id]);
+
+    const withdrawResult = await client.callTool({ name: 'takt_withdraw_standalone_inquiry',
+      arguments: { cwd: projectB, id: seeded.id, reason: '解決済み' } });
+    expect(withdrawResult.isError, firstTextContent(withdrawResult.content)).not.toBe(true);
+    expect(await listInquiries(projectB)).toEqual([]);
+  });
+});
