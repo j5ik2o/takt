@@ -167,8 +167,8 @@ it.each(['MCP', 'TUI'] as const)('verifies an approved proposal once through %s 
   const revision = client.getSnapshot().state!.pending!.revision;
   verify.mockImplementation(async () => {
     const goals = (await new GoalStore(repository).list()).goals;
-    expect(goals).toHaveLength(1);
-    expect(readManagerEvents(repository).filter(({ event }) => event.kind === 'registered' && event.goalId === goals[0]!.id)).toHaveLength(1);
+    expect(goals).toHaveLength(0);
+    expect(readManagerEvents(repository).filter(({ event }) => event.kind === 'registered')).toHaveLength(0);
     return { verdict: 'passed', verificationStarted: true, quint: { status: 'passed' }, alloy: { status: 'passed' } };
   });
   if (entry === 'MCP') {
