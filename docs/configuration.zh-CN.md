@@ -207,7 +207,7 @@ assistant:
 | `sync_project_local_takt_on_retry` | boolean | `true` | 在选择重试位置或检查 SDK 之前，将根项目的 `.takt` 同步到现有 worktree。即使拒绝安装 SDK 或取消选择，已同步的文件也会保留。设为 `false` 时保留 worktree 中的副本。 |
 | `worktree_dir` | string | - | shared clone 目录，默认 `../{clone-name}` |
 | `manager.preserve_goal_worktree` | boolean | `false` | manager 取入 goal 任务成果后保留 worktree 及 run 记录，参阅[Goal 任务 worktree 保留](#goal-任务-worktree-保留)。 |
-| `manager.verify_on_register` | boolean | `false` | 在 goal 注册后自动验证已注册的 Quint/Alloy 规格，参阅[Goal 注册时验证](#goal-注册时验证)。 |
+| `manager.verify_on_register` | boolean | `false` | 在 goal 注册完成前自动验证 Quint/Alloy 规格，参阅[Goal 注册时验证](#goal-注册时验证)。 |
 | `allow_git_hooks` | boolean | `false` | 允许 TAKT 管理的自动 commit 运行 git hooks |
 | `allow_git_filters` | boolean | `false` | 允许 TAKT 管理的自动 commit 运行 git filters |
 | `auto_pr` | boolean | - | worktree 执行后自动创建 PR |
@@ -533,9 +533,9 @@ assistant:
 
 `manager.verify_on_register` 默认为 `false`。优先级依次为 boolean 环境变量 `TAKT_MANAGER_VERIFY_ON_REGISTER`、项目配置、全局配置、默认值。高优先级的显式 `false` 覆盖低优先级的 `true`。
 
-通过 `takt_create_goal` 或批准注册提案（包括 manager TUI 对话框）完成注册后，已注册的 Quint 和 Alloy 字段会一起验证一次。此设置和非交互解析的 `assistant.formal_spec.mode` 必须同时启用（`true` 或 `"Y/n"`）。没有这两种语言的 goal（包括仅含 Gherkin 的 goal）正常注册，不执行验证。此功能不生成规格，也不在任务注册时执行验证。
+通过 `takt_create_goal` 或批准注册提案（包括 manager TUI 对话框）完成注册之前，Quint 和 Alloy 字段会先一起验证一次，验证在保存 goal 之前执行。此设置和非交互解析的 `assistant.formal_spec.mode` 必须同时启用（`true` 或 `"Y/n"`）。没有这两种语言的 goal（包括仅含 Gherkin 的 goal）正常注册，不执行验证。此功能不生成规格，也不在任务注册时执行验证。
 
-验证使用现有验证器及 `assistant.formal_spec.model_check_timeout_seconds`。即使结果为 `failed` 或 `error`，goal 仍注册成功，并将总体判定和各语言结果追加到同一 goal 的工作记录中。可在 manager 会话中询问该 goal 的验证结果。取消或工作记录保存失败会报告错误，已注册的 goal 仍然保留。
+验证使用现有验证器及 `assistant.formal_spec.model_check_timeout_seconds`。只有总体判定为 `passed` 时注册才完成；合格时判定会保存到 goal 的 `registrationVerification`，并将总体判定和各语言结果记录到同一 goal 的工作记录中。`failed`（规格未通过验证）或 `error`（验证未能完成）都会使注册失败，不创建 goal 和 goal 分支，错误中包含总体判定和各语言结果。注册提案会保留，可以修改规格后重新注册。在保存 goal 之前取消也会使注册失败。
 
 ## manager 的任务 workflow
 

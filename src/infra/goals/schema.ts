@@ -191,7 +191,7 @@ export const GoalRecordObjectSchema = z.object({
   registrationVerification: z.discriminatedUnion('status', [
     z.object({ status: z.literal('pending') }).strict(),
     z.object({ status: z.literal('not_required') }).strict(),
-    z.object({ status: z.literal('completed'), workLogId: z.uuid() }).strict(),
+    z.object({ status: z.literal('completed'), workLogId: z.uuid(), verdict: z.enum(['passed', 'failed', 'error']).optional() }).strict(),
   ]).optional(),
   questions: z.array(GoalQuestionSchema).optional(),
   notifications: z.array(GoalNotificationInputSchema.extend({

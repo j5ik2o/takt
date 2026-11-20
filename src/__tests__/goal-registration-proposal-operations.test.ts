@@ -571,7 +571,7 @@ it('returns a goal verified and recorded once when registration takes 121 second
   vi.spyOn(manager, 'resolveManagerConfig').mockReturnValue({ ...manager.resolveManagerConfig(cwd), verifyOnRegister: true });
   vi.spyOn(formal, 'resolveFormalSpecConfigurationWithoutPrompt').mockReturnValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 900 });
   const verify = vi.spyOn(verification, 'runFormalSpecVerification').mockImplementation(async () => {
-    expect(registered).toHaveBeenCalledOnce();
+    expect(registered).not.toHaveBeenCalled();
     return new Promise((resolve) => setTimeout(() => resolve({ verdict: 'passed', verificationStarted: true,
       quint: { status: 'passed' }, alloy: { status: 'skipped' } }), 121_000));
   });
@@ -587,14 +587,14 @@ it('returns a goal verified and recorded once when registration takes 121 second
     const pending = approveTaktGoalRegistration({ cwd, revision, conversationId: ownerConversationId }, {}, signal).then((result) => { settled = true; return result; });
     await vi.advanceTimersByTimeAsync(120_000);
     expect(settled).toBe(false);
-    expect(saved!.workLog).toHaveLength(0);
+    expect(saved).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1_000);
     const result = await pending;
     expect(result.isError).toBeUndefined();
     expect(JSON.parse(firstTextContent(result.content))).toEqual({ revision, goal: saved });
     expect(verify).toHaveBeenCalledOnce();
     expect(saved!.workLog).toHaveLength(1);
-    expect(saved!.registrationVerification).toEqual({ status: 'completed', workLogId: saved!.workLog[0]!.id });
+    expect(saved!.registrationVerification).toEqual({ status: 'completed', verdict: 'passed', workLogId: saved!.workLog[0]!.id });
     expect(doubles.submit).toHaveBeenCalledOnce();
     expect(doubles.close).toHaveBeenCalledOnce();
   } finally { vi.useRealTimers(); vi.restoreAllMocks(); }
@@ -675,7 +675,7 @@ it.each(['complete', 'incomplete after open', 'incomplete before open'] as const
         expect(firstTextContent(result.content)).toMatch(/accepted.*result.*confirm/iu);
       }
       expect(saved!.workLog).toHaveLength(1);
-      expect(saved!.registrationVerification).toEqual({ status: 'completed', workLogId: saved!.workLog[0]!.id });
+      expect(saved!.registrationVerification).toEqual({ status: 'completed', verdict: 'passed', workLogId: saved!.workLog[0]!.id });
       expect(verify).toHaveBeenCalledOnce();
       expect(doubles.submit).toHaveBeenCalledOnce();
       expect(unsubscribeOutput).toHaveBeenCalledOnce();

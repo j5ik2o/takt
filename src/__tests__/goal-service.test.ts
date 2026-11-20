@@ -1,6 +1,7 @@
 vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: vi.fn(), readManagerEvents: vi.fn() }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createGoal, GoalRegistrationRecoveryError, hasGoalRegistrationArtifacts, registerReservedGoal } from '../infra/goals/service.js';
+import { GoalRegistrationVerificationError } from '../infra/goals/registrationVerification.js';
 import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import type { prepareGoalBranch } from '../infra/goals/git.js';
@@ -183,7 +184,7 @@ describe('Goal registration service', () => {
   });
 });
 
-describe('formal verification after goal registration', () => {
+describe('formal verification before goal registration', () => {
   let saved: Goal | undefined;
   const input = () => ({ cwd: '/project', ...goalInput(), id: goalRecord().id,
     specifications: { quint: 'module csv {}', alloy: 'sig CSV {}' } });
@@ -214,11 +215,12 @@ describe('formal verification after goal registration', () => {
     { quint: 'module csv {}', alloy: 'sig CSV {}' },
     { quint: 'module csv {}' },
     { alloy: 'sig CSV {}' },
-  ])('verifies registered language fields once after publication: %j', async (specifications) => {
+  ])('verifies language fields once before publication: %j', async (specifications) => {
     const controller = new AbortController();
     doubles.verify.mockImplementation(async () => {
-      expect(saved).toMatchObject({ id: input().id, specifications });
-      expect(saveManagerEvent).toHaveBeenCalledExactlyOnceWith('/project', { kind: 'registered', goalId: input().id });
+      expect(saved).toBeUndefined();
+      expect(doubles.prepare).not.toHaveBeenCalled();
+      expect(saveManagerEvent).not.toHaveBeenCalled();
       return result('passed');
     });
     const goal = await createGoal({ ...input(), specifications }, controller.signal);
@@ -233,6 +235,8 @@ describe('formal verification after goal registration', () => {
     expect(goal).toEqual(saved);
     expect(goal.workLog).toHaveLength(1);
     expect(goal.workLog[0]!.summary).toMatch(/passed/iu);
+    expect(goal.registrationVerification).toEqual({ status: 'completed', verdict: 'passed', workLogId: goal.workLog[0]!.id });
+    expect(doubles.update).not.toHaveBeenCalled();
   });
 
   it('preserves embedded fences as Quint source without creating an Alloy input', async () => {
@@ -268,22 +272,28 @@ describe('formal verification after goal registration', () => {
     },
   );
 
-  it.each(['failed', 'error'] as const)('keeps registration and records a %s verification result', async (verdict) => {
+  it.each(['failed', 'error'] as const)('rejects registration without saving when verification returns %s', async (verdict) => {
     doubles.verify.mockResolvedValue(result(verdict));
-    const goal = await createGoal(input());
-    expect(goal.status).toBe('created'); expect(goal).toEqual(saved);
-    expect(goal.workLog).toHaveLength(1);
-    expect(goal.workLog[0]!.summary).toContain(verdict);
-    expect(goal.workLog[0]!.summary).toMatch(/quint/iu);
-    expect(goal.workLog[0]!.summary).toMatch(/alloy/iu);
+    const error = await createGoal(input()).then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(GoalRegistrationVerificationError);
+    expect((error as GoalRegistrationVerificationError).verdict).toBe(verdict);
+    expect((error as Error).message).toContain(verdict);
+    expect((error as Error).message).toMatch(/quint/iu);
+    expect((error as Error).message).toMatch(/alloy/iu);
+    expect(saved).toBeUndefined();
+    expect(doubles.prepare).not.toHaveBeenCalled();
+    expect(doubles.createBranch).not.toHaveBeenCalled();
+    expect(doubles.create).not.toHaveBeenCalled();
+    expect(saveManagerEvent).not.toHaveBeenCalled();
     expect(doubles.removeBranch).not.toHaveBeenCalled();
+    expect(doubles.cleanup).toHaveBeenCalledOnce();
   });
 
-  it('does not verify when initial goal publication fails', async () => {
+  it('verifies before publication and compensates the branch when publication fails', async () => {
     doubles.create.mockRejectedValueOnce(new Error('publication failed'));
     await expect(createGoal(input())).rejects.toThrow('publication failed');
     expect(doubles.removeBranch).toHaveBeenCalledOnce();
-    expect(doubles.verify).not.toHaveBeenCalled();
+    expect(doubles.verify).toHaveBeenCalledOnce();
   });
 
   it('rejects a configuration resolution failure before publishing the goal', async () => {
@@ -297,32 +307,23 @@ describe('formal verification after goal registration', () => {
     expect(doubles.verify).not.toHaveBeenCalled();
   });
 
-  it('reports a work log save failure without undoing the published registration', async () => {
-    doubles.update.mockRejectedValueOnce(new Error('work log save failed'));
-    await expect(createGoal(input())).rejects.toThrow('work log save failed');
-    expect(saved).toMatchObject({ id: input().id, status: 'created' });
-    expect(doubles.verify).toHaveBeenCalledOnce();
-    expect(doubles.removeBranch).not.toHaveBeenCalled();
-    expect(doubles.cleanup).toHaveBeenCalledOnce();
-    saved = GoalSchema.parse(saved);
-    await expect(registerReservedGoal(input())).rejects.toThrow(GoalRegistrationRecoveryError);
-    expect(doubles.verify).toHaveBeenCalledOnce();
-    expect(saved.registrationVerification?.status).toBe('pending');
-    expect(saved.workLog).toHaveLength(0);
-  });
-
-  it('appends verification to the latest goal without overwriting another work log entry', async () => {
-    doubles.verify.mockImplementation(async () => {
-      saved = appendGoalWorkLog(saved!, { summary: 'Work recorded during verification' });
-      return result('passed');
-    });
+  it('saves the verification record as part of the goal without a follow-up update', async () => {
     const goal = await createGoal(input());
-    expect(goal.workLog).toHaveLength(2);
-    expect(goal.workLog[0]!.summary).toBe('Work recorded during verification');
-    expect(goal.workLog[1]!.summary).toContain('passed');
+    expect(doubles.verify).toHaveBeenCalledOnce();
+    expect(doubles.update).not.toHaveBeenCalled();
+    expect(goal.registrationVerification).toEqual({ status: 'completed', verdict: 'passed', workLogId: goal.workLog[0]!.id });
+    expect(await registerReservedGoal(input())).toEqual(goal);
+    expect(doubles.verify).toHaveBeenCalledOnce();
   });
 
-  it('propagates verification cancellation while keeping the published goal and event', async () => {
+  it('verifies before preparing the branch and saving the goal', async () => {
+    await createGoal(input());
+    expect(doubles.verify.mock.invocationCallOrder[0]).toBeLessThan(doubles.prepare.mock.invocationCallOrder[0]!);
+    expect(doubles.prepare.mock.invocationCallOrder[0]).toBeLessThan(doubles.createBranch.mock.invocationCallOrder[0]!);
+    expect(doubles.createBranch.mock.invocationCallOrder[0]).toBeLessThan(doubles.create.mock.invocationCallOrder[0]!);
+  });
+
+  it('propagates verification cancellation without saving the goal or the event', async () => {
     const controller = new AbortController();
     const cancellation = new Error('verification cancelled');
     doubles.verify.mockImplementation(async (_source: string, _cwd: string, options: { abortSignal: AbortSignal }) => {
@@ -330,37 +331,52 @@ describe('formal verification after goal registration', () => {
       options.abortSignal.throwIfAborted();
     });
     await expect(createGoal(input(), controller.signal)).rejects.toBe(cancellation);
-    expect(saved).toMatchObject({ status: 'created', workLog: [] });
-    expect(saveManagerEvent).toHaveBeenCalledExactlyOnceWith('/project', { kind: 'registered', goalId: input().id });
+    expect(saved).toBeUndefined();
+    expect(doubles.create).not.toHaveBeenCalled();
+    expect(saveManagerEvent).not.toHaveBeenCalled();
     expect(doubles.removeBranch).not.toHaveBeenCalled();
-    saved = GoalSchema.parse(saved);
-    doubles.verify.mockResolvedValue(result('passed'));
-    doubles.verify.mockClear();
-    await expect(registerReservedGoal(input(), new AbortController().signal)).rejects.toThrow(GoalRegistrationRecoveryError);
-    expect(doubles.verify).not.toHaveBeenCalled();
-    expect(saved.registrationVerification?.status).toBe('pending');
-    expect(saved.workLog).toHaveLength(0);
   });
 
-  it('records bounded failure diagnostics and uses the existing artifact cleanup', async () => {
+  it('rejects registration with bounded failure diagnostics and uses the existing artifact cleanup', async () => {
     const verification = { ...result('error'), message: 'environment unavailable',
       quint: { status: 'error' as const, message: 'large diagnostic '.repeat(20_000) } };
     doubles.verify.mockResolvedValue(verification);
-    const goal = await createGoal(input());
-    expect(goal.workLog[0]!.summary).toContain('environment unavailable');
-    expect(goal.workLog[0]!.summary).toContain('large diagnostic');
-    expect(goal.workLog[0]!.summary.length).toBeLessThan(128 * 1024);
+    const error = await createGoal(input()).then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(GoalRegistrationVerificationError);
+    expect((error as Error).message).toContain('environment unavailable');
+    expect((error as Error).message).toContain('large diagnostic');
+    expect((error as Error).message.length).toBeLessThan(128 * 1024);
     expect(doubles.cleanup).toHaveBeenCalledExactlyOnceWith(verification);
+    expect(saved).toBeUndefined();
   });
 
-  it('records distinct language results under the overall failed verdict', async () => {
+  it('reports distinct language results in the registration rejection', async () => {
     doubles.verify.mockResolvedValue({ verdict: 'failed', verificationStarted: true,
       quint: { status: 'passed' }, alloy: { status: 'failed', message: 'Counterexample found' } });
-    const goal = await createGoal(input());
-    expect(goal.workLog[0]!.summary.split('\n')[0]).toContain('failed');
-    expect(goal.workLog[0]!.summary).toContain('Quint: passed');
-    expect(goal.workLog[0]!.summary).toContain('Alloy: failed');
-    expect(goal.workLog[0]!.summary).toContain('Counterexample found');
+    const error = await createGoal(input()).then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(GoalRegistrationVerificationError);
+    expect((error as Error).message.split('\n')[0]).toContain('failed');
+    expect((error as Error).message).toContain('Quint: passed');
+    expect((error as Error).message).toContain('Alloy: failed');
+    expect((error as Error).message).toContain('Counterexample found');
+    expect(saved).toBeUndefined();
+  });
+
+  it('keeps every stage result and the artifact location in the rejection when diagnostics are long', async () => {
+    doubles.verify.mockResolvedValue({ verdict: 'failed', verificationStarted: true,
+      quint: { status: 'failed', message: 'large diagnostic '.repeat(1_000) },
+      alloy: { status: 'failed', message: 'Counterexample found' },
+      artifacts: { runDirectory: '/project/.takt/verify/run-1', specifications: {}, logs: {} },
+      message: 'Verification artifacts retained at: /project/.takt/verify/run-1' });
+    const error = await createGoal(input()).then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(GoalRegistrationVerificationError);
+    const message = (error as Error).message;
+    expect(message).toContain('Quint: failed');
+    expect(message).toContain('Alloy: failed');
+    expect(message).toContain('Counterexample found');
+    expect(message).toContain('/project/.takt/verify/run-1');
+    expect(message.length).toBeLessThan(500);
+    expect(saved).toBeUndefined();
   });
 
   it('returns an existing reserved goal without verifying it again', async () => {
