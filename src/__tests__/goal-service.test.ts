@@ -362,6 +362,23 @@ describe('formal verification before goal registration', () => {
     expect(saved).toBeUndefined();
   });
 
+  it('keeps every stage result and the artifact location in the rejection when diagnostics are long', async () => {
+    doubles.verify.mockResolvedValue({ verdict: 'failed', verificationStarted: true,
+      quint: { status: 'failed', message: 'large diagnostic '.repeat(1_000) },
+      alloy: { status: 'failed', message: 'Counterexample found' },
+      artifacts: { runDirectory: '/project/.takt/verify/run-1', specifications: {}, logs: {} },
+      message: 'Verification artifacts retained at: /project/.takt/verify/run-1' });
+    const error = await createGoal(input()).then(() => undefined, (caught: unknown) => caught);
+    expect(error).toBeInstanceOf(GoalRegistrationVerificationError);
+    const message = (error as Error).message;
+    expect(message).toContain('Quint: failed');
+    expect(message).toContain('Alloy: failed');
+    expect(message).toContain('Counterexample found');
+    expect(message).toContain('/project/.takt/verify/run-1');
+    expect(message.length).toBeLessThan(500);
+    expect(saved).toBeUndefined();
+  });
+
   it('returns an existing reserved goal without verifying it again', async () => {
     const goal = await registerReservedGoal(input());
     expect(await registerReservedGoal(input())).toEqual(goal);

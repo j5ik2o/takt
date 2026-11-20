@@ -54,6 +54,27 @@ export class GoalRegistrationVerificationError extends Error {
   }
 }
 
+function stageFailureSummary(language: string, result: FormalSpecStageResult): string {
+  const message = result.message === undefined ? '' : `: ${truncateUtf8(result.message, 96).value}`;
+  return `${language}: ${result.status}${message}`;
+}
+
+// The manager conversation displays operation failures with the reason
+// truncated to 500 width units, and a failed registration leaves no saved
+// goal or work log to recover the details from. The failure summary therefore
+// carries only the verdict, one short line per stage, a short overall
+// message, and the retained artifact directory, sized to survive that
+// truncation. The full diagnostics remain in the retained artifacts.
+function registrationFailureSummary(specifications: Goal['specifications'], result: FormalSpecVerificationResult): string {
+  return [
+    `Formal specification verification: ${result.verdict}`,
+    ...(specifications?.quint === undefined ? [] : [stageFailureSummary('Quint', result.quint)]),
+    ...(specifications?.alloy === undefined ? [] : [stageFailureSummary('Alloy', result.alloy)]),
+    ...(result.message === undefined ? [] : [truncateUtf8(result.message, 64).value]),
+    ...(result.artifacts === undefined ? [] : [`Verification artifacts: ${result.artifacts.runDirectory}`]),
+  ].join('\n');
+}
+
 export async function verifyGoalSpecificationsForRegistration(
   cwd: string,
   specifications: Goal['specifications'],
@@ -61,9 +82,10 @@ export async function verifyGoalSpecificationsForRegistration(
 ): Promise<string> {
   const result = await runRegistrationVerification(cwd, specifications, signal);
   try {
-    const summary = verificationSummary(specifications, result);
-    if (result.verdict !== 'passed') throw new GoalRegistrationVerificationError(result.verdict, summary);
-    return summary;
+    if (result.verdict !== 'passed') {
+      throw new GoalRegistrationVerificationError(result.verdict, registrationFailureSummary(specifications, result));
+    }
+    return verificationSummary(specifications, result);
   } finally {
     cleanupFormalSpecVerificationArtifacts(result);
   }
