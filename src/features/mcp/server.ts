@@ -174,7 +174,6 @@ export function createTaktMcpServer(
   // serve the standalone inquiries of every project under its allowed root.
   const assignmentForStandaloneInquiry = async (cwd: string, assignment: ManagerAssignment | undefined): Promise<ManagerAssignment> => {
     if (assignment !== undefined) return assignment;
-    if (options.toolSet === 'manager') return currentAssignment();
     const repositoryDirectory = await resolveGitRepositoryDirectory(cwd);
     return resolveCurrentManagerAssignment({ kind: 'repository', repositoryDirectory }, globalConfigDirectory);
   };
