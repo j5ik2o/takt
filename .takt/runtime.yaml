@@ -1,0 +1,40 @@
+version: 1
+provider:
+  profiles:
+    cloud-codex:
+      provider: codex
+    dgx-flash:
+      provider: opencode
+      model: dgx/deepseek-v4.1-flash
+
+  defaults:
+    assignment: codex-spark
+
+  assignments:
+    codex-spark:
+      defaults:
+        profile: dgx-flash
+      targets:
+        personas:
+          planner:
+            profile: cloud-codex
+          reviewer:
+            profile: cloud-codex
+          coding-reviewer:
+            profile: cloud-codex
+          review-adjudicator:
+            profile: cloud-codex
+          takt-prompt-reviewer:
+            profile: cloud-codex
+          coder:
+            ladder:
+              - dgx-flash
+              - cloud-codex
+        tags:
+          review:
+            profile: cloud-codex
+          final-gate:
+            profile: cloud-codex
+        steps:
+          takt-prompt-engineering/takt-prompt-final-check:
+            profile: cloud-codex
