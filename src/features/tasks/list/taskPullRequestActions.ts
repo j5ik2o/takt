@@ -35,6 +35,15 @@ interface TaskPullRequestBodyOptions {
   readonly worktreeSummary: string;
 }
 
+export type PublishTaskResult =
+  | { readonly success: true; readonly prUrl: string }
+  | { readonly success: false; readonly error: string };
+
+type PrFailedPublishOutcome =
+  | { readonly kind: 'existing'; readonly prUrl: string }
+  | { readonly kind: 'created'; readonly prUrl: string }
+  | { readonly kind: 'creation-failed'; readonly error: string };
+
 function resolveReportSummary(task: TaskListItem): RunReportSummary | null {
   if (!task.worktreePath) {
     return null;
@@ -132,6 +141,108 @@ async function publishExistingPrMergeTask(
   return true;
 }
 
+export async function publishPrFailedTask(
+  projectDir: string,
+  task: TaskListItem,
+): Promise<PublishTaskResult> {
+  if (!task.branch) {
+    return { success: false, error: `Task ${task.name} has no branch to publish` };
+  }
+  const branch = task.branch;
+  const worktreePath = task.worktreePath;
+  if (worktreePath === undefined) {
+    return { success: false, error: `Task ${task.name} has no worktree to publish` };
+  }
+  if (task.data?.merge_task === true) {
+    return { success: false, error: 'PR merge tasks cannot be recovered through pr_failed publication' };
+  }
+
+  const outcome = await publishPrFailedPr(projectDir, { ...task, branch, worktreePath }, undefined, worktreePath, {
+    commitMessage: `takt: ${task.name}`,
+    commitError: 'Commit failed',
+    branchError: 'Branch publication failed',
+  });
+  if (outcome.kind === 'existing' || outcome.kind === 'created') {
+    const persisted = persistPublishedPr(projectDir, task.name, outcome.prUrl);
+    if (!persisted.success) return persisted;
+    return { success: true, prUrl: outcome.prUrl };
+  }
+  return { success: false, error: outcome.error };
+}
+
+interface PrFailedPublishMessages {
+  readonly commitMessage: string;
+  readonly commitError: string;
+  readonly branchError: string;
+}
+
+async function publishPrFailedPr(
+  projectDir: string,
+  task: TaskListItem & { branch: string; worktreePath: string },
+  baseBranch: string | undefined,
+  body: string | undefined,
+  messages?: PrFailedPublishMessages,
+): Promise<PrFailedPublishOutcome> {
+  const branch = task.branch;
+  const worktreePath = task.worktreePath;
+  let resolvedBody = body;
+  const resolvedBase = baseBranch ?? task.data?.base_branch ?? detectDefaultBranch(projectDir);
+  if (messages !== undefined) {
+    try {
+      const autoCommitOptions = resolveAutoCommitOptions(projectDir);
+      await stageAndCommit(worktreePath, messages.commitMessage, autoCommitOptions);
+      resolvedBody = buildTaskPullRequestBody({
+        taskKind: task.kind,
+        reportSummary: resolveReportSummary(task),
+        worktreeSummary: collectTaskWorktreeSummary(worktreePath, resolvedBase, branch).text,
+      });
+    } catch (err) {
+      return { kind: 'creation-failed', error: `${messages.commitError}: ${getErrorMessage(err)}` };
+    }
+    try {
+      publishTaskBranch(worktreePath, projectDir, branch);
+    } catch (err) {
+      return { kind: 'creation-failed', error: `${messages.branchError}: ${getErrorMessage(err)}` };
+    }
+  }
+  if (resolvedBody === undefined) {
+    return { kind: 'creation-failed', error: 'Pull request body is required for publication' };
+  }
+  const bodyForRequest: string = resolvedBody;
+
+  const gitProvider = getGitProvider();
+  const existingPr = gitProvider.findExistingPr(branch, projectDir);
+  if (existingPr) {
+    return { kind: 'existing', prUrl: existingPr.url };
+  }
+  const result = createPullRequestSafely(gitProvider, {
+    branch,
+    title: buildPullRequestTitle(task),
+    body: bodyForRequest,
+    base: resolvedBase,
+    draft: task.data?.draft_pr,
+  }, projectDir);
+  if (!result.success) {
+    return { kind: 'creation-failed', error: result.error ?? 'Pull request creation failed' };
+  }
+  if (result.url === undefined) {
+    return { kind: 'creation-failed', error: 'Pull request creation returned no URL' };
+  }
+  return { kind: 'created', prUrl: result.url };
+}
+
+function persistPublishedPr(projectDir: string, taskName: string, prUrl: string): PublishTaskResult {
+  try {
+    new TaskRunner(projectDir).completePublishedTask(taskName, prUrl);
+    return { success: true, prUrl };
+  } catch (err) {
+    return {
+      success: false,
+      error: `PR is public but the task ${taskName} could not be saved as completed: ${getErrorMessage(err)}`,
+    };
+  }
+}
+
 export async function createPullRequestForTask(
   projectDir: string,
   task: TaskListItem,
@@ -227,11 +338,27 @@ export async function createPullRequestForTask(
     return false;
   }
 
+  if (task.kind === 'pr_failed') {
+    const published = await publishPrFailedPr(
+      projectDir, { ...task, worktreePath, branch }, baseBranch, body,
+    );
+    if (published.kind === 'creation-failed') {
+      error(`PR 作成に失敗しました: ${published.error}`);
+      return false;
+    }
+    success(published.kind === 'existing'
+      ? `既存の PR を使用します: ${published.prUrl}`
+      : `PR を作成しました: ${published.prUrl}`);
+    const persisted = persistPublishedPr(projectDir, task.name, published.prUrl);
+    if (!persisted.success) {
+      error(`PR は公開済みですが、タスク ${sanitizeTerminalText(task.name)} を completed として保存できませんでした: ${sanitizeTerminalText(persisted.error)}\ntakt list で状態を確認し、pr_failed の場合は Create PR で再試行してください。既存の PR を再利用します。`);
+      return false;
+    }
+    return true;
+  }
+
   const gitProvider = getGitProvider();
-  const existingPr = task.kind === 'pr_failed'
-    ? gitProvider.findExistingPr(branch, projectDir)
-    : undefined;
-  const result = existingPr ? { success: true, url: existingPr.url } : createPullRequestSafely(gitProvider, {
+  const result = createPullRequestSafely(gitProvider, {
     branch,
     title: buildPullRequestTitle(task),
     body,
@@ -244,16 +371,6 @@ export async function createPullRequestForTask(
     return false;
   }
 
-  success(existingPr ? `既存の PR を使用します: ${result.url}` : `PR を作成しました: ${result.url}`);
-
-  if (task.kind === 'pr_failed') {
-    try {
-      new TaskRunner(projectDir).completePublishedTask(task.name, result.url);
-    } catch (err) {
-      error(`PR は公開済みですが、タスク ${sanitizeTerminalText(task.name)} を completed として保存できませんでした: ${sanitizeTerminalText(getErrorMessage(err))}\ntakt list で状態を確認し、pr_failed の場合は Create PR で再試行してください。既存の PR を再利用します。`);
-      return false;
-    }
-  }
-
+  success(`PR を作成しました: ${result.url}`);
   return true;
 }

@@ -7,6 +7,7 @@ import {
   mergeGoalTaskInputSchema, mergeGoalPrInputSchema, notifyGoalInputSchema, reopenGoalInputSchema, tellGoalRunInputSchema, updateGoalBranchesInputSchema, withdrawGoalQuestionInputSchema, type GoalIdentityInput,
 } from './schemas.js';
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
+import { publishPrFailedGoalTaskInputSchema } from './goalTaskPrRetrySchemas.js';
 import { removeGoalTaskInputSchema } from './goalTaskRemovalSchemas.js';
 import { stopGoalTaskInputSchema } from './goalTaskStopSchemas.js';
 
@@ -19,6 +20,7 @@ const inputSchemas = {
   update_branches: updateGoalBranchesInputSchema,
   stop: stopGoalTaskInputSchema,
   merge_pr: mergeGoalPrInputSchema,
+  publish_pr: publishPrFailedGoalTaskInputSchema,
 };
 
 export async function goalWrite(
@@ -35,7 +37,7 @@ export async function goalWrite(
     if (previous.executionStatus === 'aborted' && tool !== 'withdraw_question' && tool !== 'remove') {
       throw new Error('Goal is aborted. Work cannot continue for this goal.');
     }
-    if (isGoalPaused(previous) && ['enqueue', 'integrate', 'complete', 'check_completion', 'requeue', 'retry', 'reopen', 'tell', 'merge_pr', 'update_branches'].includes(tool)) {
+    if (isGoalPaused(previous) && ['enqueue', 'integrate', 'complete', 'check_completion', 'requeue', 'retry', 'publish_pr', 'reopen', 'tell', 'merge_pr', 'update_branches'].includes(tool)) {
       throw new Error('Goal is paused. Resume it before continuing work.');
     }
     const options = resolveManagerNotificationOptions(input.cwd);
