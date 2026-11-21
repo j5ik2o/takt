@@ -145,8 +145,10 @@ steps:
         next: remediation
 
   - name: remediation
-    uses: review-remediation
-    with:
+    description: レビュー指摘の裁定から修正計画、実装、完了検証までを実行する
+    kind: workflow_call
+    call: review-remediation
+    args:
       plan_policy:
         - review
         - coding
