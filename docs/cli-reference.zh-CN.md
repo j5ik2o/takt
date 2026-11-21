@@ -276,6 +276,22 @@ command = "takt-mcp"
 codex mcp add takt -- takt-mcp
 ```
 
+`takt-mcp` 默认通过 stdio 提供 MCP 服务。添加 `--http` 后会仅在 `127.0.0.1` 上监听 Streamable HTTP。
+
+```bash
+takt-mcp --http
+```
+
+指定 `--http` 时，服务器监听 `127.0.0.1`，并对每个请求要求 bearer token（只接受 `/`）。
+
+| 选项 | 说明 |
+|------|------|
+| `--http` | 改为在 `127.0.0.1` 上提供 Streamable HTTP，而不是 stdio。 |
+| `--http-port N` | 在 `127.0.0.1` 上监听的 TCP 端口。默认为 `0`，由操作系统分配空闲端口。 |
+| `--http-token TOKEN` | 客户端必须发送的 bearer token。省略时由服务器生成，并在启动时输出 `Authorization: Bearer <token>`。指定时启动输出会将值掩码为 `Authorization: Bearer ********`。 |
+
+不指定 `--http` 时继续通过 stdio 提供服务；端口和令牌选项仅在 HTTP 模式下生效。
+
 server 暴露以下工具：
 
 | 工具 | 说明 |
