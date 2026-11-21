@@ -1,0 +1,43 @@
+# この設定を使うには、共通 config.yaml の旧 provider 設定を runtime.yaml に
+# 移行するか、TAKT_CONFIG_DIR で移行済みの設定ディレクトリを選ぶ。
+# 移行先の一覧は docs/configuration.ja.md の「legacy config.yaml からの移行」を参照。
+version: 1
+provider:
+  profiles:
+    cloud-codex:
+      provider: codex
+    dgx-flash:
+      provider: opencode
+      model: dgx/deepseek-v4.1-flash
+
+  defaults:
+    assignment: codex-spark
+
+  assignments:
+    codex-spark:
+      defaults:
+        profile: dgx-flash
+      targets:
+        personas:
+          planner:
+            profile: cloud-codex
+          reviewer:
+            profile: cloud-codex
+          coding-reviewer:
+            profile: cloud-codex
+          review-adjudicator:
+            profile: cloud-codex
+          takt-prompt-reviewer:
+            profile: cloud-codex
+          coder:
+            ladder:
+              - dgx-flash
+              - cloud-codex
+        tags:
+          review:
+            profile: cloud-codex
+          final-gate:
+            profile: cloud-codex
+        steps:
+          takt-prompt-engineering/takt-prompt-final-check:
+            profile: cloud-codex

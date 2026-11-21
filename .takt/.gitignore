@@ -6,6 +6,7 @@
 
 # Project configuration
 !config.yaml
+!runtime.yaml
 
 # Quality gate scripts (version-controlled; logs stay local)
 !quality-gates/

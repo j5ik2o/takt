@@ -79,9 +79,33 @@ jobs:
           npm install -g @anthropic-ai/claude-code
           npm install -g takt
 
+      - name: /review 用の Claude 設定を準備
+        run: |
+          node --input-type=commonjs - "$(npm root -g)" <<'NODE'
+          const fs = require('node:fs');
+          const { createRequire } = require('node:module');
+          const { join } = require('node:path');
+          const configDir = fs.lstatSync('.takt', { throwIfNoEntry: false });
+          if (configDir && !configDir.isDirectory()) throw new Error('.takt must be a directory');
+          const configPath = '.takt/config.yaml';
+          const config = fs.lstatSync(configPath, { throwIfNoEntry: false });
+          if (config) {
+            if (!config.isFile()) throw new Error('config.yaml must be a regular file');
+            const requireTakt = createRequire(join(process.argv[2], 'takt', 'package.json'));
+            const { parseDocument } = requireTakt('yaml');
+            const doc = parseDocument(fs.readFileSync(configPath, 'utf8'));
+            if (doc.errors.length > 0) throw doc.errors[0];
+            doc.set('rate_limit_fallback', { switch_chain: [{ provider: 'claude' }] });
+            fs.writeFileSync(configPath, doc.toString());
+          }
+          NODE
+          # このジョブではプロジェクトの Codex / Spark の runtime を読み込まない。
+          printf 'version: 1\n' > "$RUNNER_TEMP/takt-review-runtime.yaml"
+
       - name: TAKT Review 実行
-        run: takt --pipeline --skip-git --pr ${{ github.event.issue.number }} -w review-takt-default
+        run: takt --runtime-file "$RUNNER_TEMP/takt-review-runtime.yaml" --pipeline --skip-git --pr ${{ github.event.issue.number }} -w review-takt-default
         env:
+          TAKT_CONFIG_DIR: ${{ runner.temp }}/takt-review-config
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
