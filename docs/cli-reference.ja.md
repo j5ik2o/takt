@@ -278,6 +278,22 @@ Codex の MCP CLI から追加することもできます。
 codex mcp add takt -- takt-mcp
 ```
 
+`takt-mcp` は既定で stdio で MCP を提供します。`--http` を付けると `127.0.0.1` のみで Streamable HTTP を待ち受けます。
+
+```bash
+takt-mcp --http
+```
+
+`--http` 指定時は `127.0.0.1` に待ち受け、すべての要求に bearer token を要求します（`/` のみ受け付けます）。
+
+| オプション | 説明 |
+|------------|------|
+| `--http` | stdio の代わりに `127.0.0.1` で Streamable HTTP を提供します。 |
+| `--http-port N` | `127.0.0.1` で待ち受ける TCP ポート。既定値は `0` で、空いているポートを OS が割り当てます。 |
+| `--http-token TOKEN` | クライアントが送る bearer token。省略時は server が生成し、起動時に `Authorization: Bearer <token>` を表示します。指定時は起動時の表示を `Authorization: Bearer ********` に伏せます。 |
+
+`--http` を指定しなければ従来どおり stdio で提供し、ポートとトークンのオプションは HTTP モードでのみ意味を持ちます。
+
 この server は次の tool を公開します。
 
 | Tool | 説明 |
