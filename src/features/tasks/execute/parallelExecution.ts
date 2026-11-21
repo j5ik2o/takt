@@ -172,8 +172,13 @@ export async function runWithWorkerPool(
       if (schedulingSignal.aborted && error === schedulingSignal.reason) return;
       if (error instanceof TaskClaimLockUnavailableError) {
         if (claimRetryAt === undefined) {
-          warn('Cannot claim pending tasks because the disk is full. Waiting to retry.');
-          log.warn('Task claim lock creation failed with ENOSPC; waiting to retry');
+          if (error.code === 'TIMEOUT') {
+            warn('Cannot claim pending tasks because the task store lock is held. Waiting to retry.');
+            log.warn('Task claim lock acquisition timed out; waiting to retry', { error: sanitizeSensitiveText(error.message) });
+          } else {
+            warn('Cannot claim pending tasks because the disk is full. Waiting to retry.');
+            log.warn('Task claim lock creation failed with ENOSPC; waiting to retry');
+          }
         }
         claimRetryAt = Date.now() + CLAIM_RETRY_INTERVAL_MS;
       } else {

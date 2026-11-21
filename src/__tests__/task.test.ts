@@ -6,7 +6,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { prepareTaskSpecDirectory } from '../infra/task/enqueueService.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { TaskRetryService } from '../infra/task/taskRetryService.js';
-import { TaskLifecycleService } from '../infra/task/taskLifecycleService.js';
+import { TaskClaimLockAcquisitionError, TaskLifecycleService } from '../infra/task/taskLifecycleService.js';
 import { TaskStore } from '../infra/task/store.js';
 import { TaskRecordSchema, type TaskRecord, type TasksFileData } from '../infra/task/schema.js';
 import type { AutoRequeueResult } from '../infra/task/index.js';
@@ -2795,5 +2795,61 @@ describe('failed PR merge task publication', () => {
       merge_pushed_head_sha: newHeadSha, merge_push_base_head_sha: oldHeadSha,
       merge_push_source: 'manual',
     });
+  });
+});
+
+describe('claim lock acquisition errors', () => {
+  class LockErrorTaskStore extends RecordingTaskStore {
+    constructor(state: TasksFileData, private readonly acquisitionError: unknown) {
+      super(state);
+    }
+
+    override update(
+      mutator: (current: TasksFileData) => TasksFileData | undefined,
+      options?: { onAcquisitionError?: (error: unknown) => never },
+    ): TasksFileData {
+      options?.onAcquisitionError?.(this.acquisitionError);
+      return super.update(mutator);
+    }
+  }
+
+  const pendingTask = TaskRecordSchema.parse({
+    name: 'pending-task', status: 'pending', content: 'Do work',
+    created_at: '2026-02-09T00:00:00.000Z', started_at: null, completed_at: null, owner_pid: null,
+  });
+
+  function claimError(acquisitionError: unknown): unknown {
+    const store = new LockErrorTaskStore({ tasks: [pendingTask] }, acquisitionError);
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-claim-lock-'));
+    try {
+      const lifecycle = new TaskLifecycleService(projectDir, join(projectDir, '.takt', 'tasks.yaml'), store);
+      lifecycle.claimNextTasks(1);
+    } catch (error) {
+      return error;
+    } finally {
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+    throw new Error('claimNextTasks did not surface the acquisition error');
+  }
+
+  it('keeps the existing ENOSPC classification', () => {
+    const error = claimError(Object.assign(new Error('disk full'), { code: 'ENOSPC', errno: -28 }));
+    expect(error).toBeInstanceOf(TaskClaimLockAcquisitionError);
+    expect((error as Error).message).toBe('disk full');
+  });
+
+  it('classifies a tasks.yaml write-lock timeout as a recoverable claim failure', () => {
+    const error = claimError(new Error('File lock: timed out waiting for lock: /project/.takt/tasks.yaml.lock'));
+    expect(error).toBeInstanceOf(TaskClaimLockAcquisitionError);
+    expect(error).toMatchObject({ code: 'TIMEOUT' });
+    expect((error as Error).cause).toMatchObject({ message: expect.stringContaining('timed out waiting for lock') });
+  });  it('preserves an unrelated acquisition error instead of classifying it', () => {
+    const failure = new Error('denied');
+    expect(claimError(failure)).toBe(failure);
+  });
+
+  it('keeps goal-execution.lock timeouts outside the recoverable claim classification', () => {
+    const failure = new Error('Timed out waiting for private file lock: /project/.takt/goal-execution.lock');
+    expect(claimError(failure)).toBe(failure);
   });
 });

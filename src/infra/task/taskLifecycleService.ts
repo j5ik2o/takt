@@ -4,6 +4,7 @@ import type { TaskInfo, TaskResult, TaskState } from './types.js';
 import { resolveTaskContent, toTaskInfo, toTaskState } from './mapper.js';
 import { cleanupTaskSpecDirectory, prepareTaskSpecDirectory, type PreparedTaskSpecDirectory } from './enqueueService.js';
 import { TaskStore } from './store.js';
+import { isFileLockTimeoutError } from '../fs/file-lock.js';
 import { firstLine, nowIso } from './naming.js';
 import { slugify } from '../../shared/utils/slug.js';
 import { isProcessAlive, isStaleRunningTask } from './process.js';
@@ -39,7 +40,13 @@ export interface PrMergeTaskInput {
   concurrency?: number;
 }
 
-export class TaskClaimLockAcquisitionError extends Error {}
+export type TaskClaimLockFailureCode = 'ENOSPC' | 'TIMEOUT';
+
+export class TaskClaimLockAcquisitionError extends Error {
+  constructor(message: string, readonly code: TaskClaimLockFailureCode, options?: ErrorOptions) {
+    super(message, options);
+  }
+}
 
 function formatGoalList(items: readonly string[]): string {
   return items.map((item) => `- ${item.replace(/\r?\n/g, '\n  ')}`).join('\n');
@@ -297,7 +304,10 @@ export class TaskLifecycleService {
     }, {
       onAcquisitionError: (error) => {
         if (error instanceof Error && 'code' in error && error.code === 'ENOSPC') {
-          throw new TaskClaimLockAcquisitionError(error.message, { cause: error });
+          throw new TaskClaimLockAcquisitionError(error.message, 'ENOSPC', { cause: error });
+        }
+        if (isFileLockTimeoutError(error)) {
+          throw new TaskClaimLockAcquisitionError(error.message, 'TIMEOUT', { cause: error });
         }
         throw error;
       },

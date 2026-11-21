@@ -136,9 +136,11 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     return added;
   }
 
-  async function injectClaimFailure(stage: 'create' | 'metadata' | 'persistence', failures: number) {
+  async function injectClaimFailure(stage: 'create' | 'metadata' | 'persistence' | 'timeout', failures: number) {
     const nativeFs = await vi.importActual<typeof import('node:fs')>('node:fs');
     const failure = Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+    const timeoutFailure = new Error(`File lock: timed out waiting for lock: ${runner.getTasksFilePath()}.lock`);
+    const claimFailure = stage === 'timeout' ? timeoutFailure : failure;
     const claimNextTasks = TaskRunner.prototype.claimNextTasks;
     let claiming = false;
     let lockDescriptor: number | undefined;
@@ -154,12 +156,12 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     const fail = () => {
       if (failures > 0) {
         failures--;
-        throw failure;
+        throw claimFailure;
       }
     };
     vi.mocked(fs.openSync).mockImplementation((path, flags, mode) => {
       const claimLock = claiming && path === `${runner.getTasksFilePath()}.lock` && flags === 'wx';
-      if (claimLock && stage === 'create') fail();
+      if (claimLock && (stage === 'create' || stage === 'timeout')) fail();
       const descriptor = nativeFs.openSync(path, flags, mode);
       if (claimLock) lockDescriptor = descriptor;
       return descriptor;
@@ -292,6 +294,38 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     expect(executions).toHaveLength(0);
     expect(vi.getTimerCount()).toBe(0);
     expect(existsSync(join(projectDir, '.takt', 'execution.lock'))).toBe(false);
+  });
+
+  it('実TaskStoreのロック取得タイムアウト後、同じ run で次の tick に pending を取り込む', async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const task = runner.addTask('recover after lock timeout');
+    const { claim } = await injectClaimFailure('timeout', 1);
+
+    const entry = runAllTasks(projectDir);
+    const outcome = entry.then(() => undefined, (error: unknown) => error);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(claim).toHaveBeenCalledTimes(1);
+      expect(state(task.name)?.status).toBe('pending');
+      expect(executions).toHaveLength(0);
+      expect(vi.mocked(console.log).mock.calls.some(([message]) =>
+        String(message).includes('Cannot claim pending tasks because the task store lock is held'))).toBe(true);
+      expect(vi.mocked(console.log).mock.calls.some(([message]) => String(message).includes('disk is full'))).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(claim).toHaveBeenCalledTimes(2);
+      expect(state(task.name)?.status).toBe('running');
+      expect(executions.map(({ task: executed }) => executed.name)).toEqual([task.name]);
+    } finally {
+      for (const execution of executions) execution.finish(true);
+      await vi.advanceTimersByTimeAsync(0);
+      await outcome;
+    }
+    expect(state(task.name)?.status).toBe('completed');
+    expect(vi.mocked(console.log).mock.calls.filter(([message]) =>
+      String(message).includes('[WARN]'))).toHaveLength(1);
   });
 
   it('実TaskStoreの取得後永続化ENOSPCは変換せずに伝播する', async () => {

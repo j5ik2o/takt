@@ -16,7 +16,7 @@ import { getLabel } from '../../../shared/i18n/index.js';
 import type { RunAllTasksOptions, TaskExecutionOptions } from './types.js';
 import { requeueExistingFailedTasks, runWithWorkerPool } from './parallelExecution.js';
 import { toSlackTaskDetail } from './slackSummaryAdapter.js';
-import { failInterruptedTasksWithGoalEvents } from './claimTasks.js';
+import { failInterruptedTasksWithGoalEvents, isClaimLockTimeoutFailure } from './claimTasks.js';
 import { checkQueuedTaskProviders, checkPendingTaskProviders, terminalProviderConfirmation } from './providerPreflight.js';
 
 export async function runAllTasks(
@@ -63,27 +63,33 @@ export async function runAllTasks(
     }
     const confirmation = terminalProviderConfirmation();
     const pendingTasks = shutdownSignals.schedulingSignal.aborted
-      ? [] : taskRunner.listTasksForProviderPreflight(options?.goalTasksOnly === true);
+      ? [] : readOnLockTimeout(() => taskRunner.listTasksForProviderPreflight(options?.goalTasksOnly === true), []);
     const failedTasks = runOptions.autoRequeueMaxAttempts > 0 && !shutdownSignals.schedulingSignal.aborted
-      ? taskRunner.listFailedTasks() : [];
+      ? readOnLockTimeout(() => taskRunner.listFailedTasks(), []) : [];
     for (const task of pendingTasks) {
       if (shutdownSignals.schedulingSignal.aborted) break;
       await checkQueuedTaskProviders(cwd, task, agentOverrides ?? {}, confirmation, shutdownSignals.schedulingSignal);
     }
     for (const task of failedTasks) {
       if (shutdownSignals.schedulingSignal.aborted) break;
-      if (!taskRunner.isAutoRequeueEligible(task.name, runOptions.autoRequeueMaxAttempts)) continue;
+      if (!readOnLockTimeout(() => taskRunner.isAutoRequeueEligible(task.name, runOptions.autoRequeueMaxAttempts), false)) continue;
       await checkQueuedTaskProviders(cwd, task, agentOverrides ?? {}, confirmation, shutdownSignals.schedulingSignal);
     }
-    const requeuedExistingFailed = runOptions.autoRequeueMaxAttempts > 0 ? requeueExistingFailedTasks(
-      taskRunner, runOptions.autoRequeueMaxAttempts, shutdownSignals.schedulingSignal, failedTasks,
+    const requeuedExistingFailed = runOptions.autoRequeueMaxAttempts > 0 ? readOnLockTimeout(
+      () => requeueExistingFailedTasks(
+        taskRunner, runOptions.autoRequeueMaxAttempts, shutdownSignals.schedulingSignal, failedTasks,
+      ),
+      0,
     ) : 0;
     if (requeuedExistingFailed > 0) {
       info(`Auto-requeued ${requeuedExistingFailed} existing failed task(s).`);
     }
     if (!shutdownSignals.schedulingSignal.aborted) {
-      await checkPendingTaskProviders(taskRunner, cwd, agentOverrides ?? {}, confirmation,
-        pendingTasks, shutdownSignals.schedulingSignal, options?.goalTasksOnly === true);
+      await readOnLockTimeoutAsync(
+        () => checkPendingTaskProviders(taskRunner, cwd, agentOverrides ?? {}, confirmation,
+          pendingTasks, shutdownSignals.schedulingSignal, options?.goalTasksOnly === true),
+        undefined,
+      );
     }
 
     const runId = generateRunId();
@@ -168,4 +174,27 @@ export async function runAllTasks(
       statusLine.stop();
     }
   }, options?.goalTasksOnly);
+}
+
+/**
+ * Startup preflight runs before the worker pool starts. A lock timeout here only means the
+ * pending snapshot could not be read yet; the pool claims tasks on its own poll ticks, so the
+ * startup read is skipped instead of aborting the whole run.
+ */
+function readOnLockTimeout<T>(read: () => T, fallback: T): T {
+  try {
+    return read();
+  } catch (error) {
+    if (isClaimLockTimeoutFailure(error)) return fallback;
+    throw error;
+  }
+}
+
+async function readOnLockTimeoutAsync<T>(read: () => Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (isClaimLockTimeoutFailure(error)) return fallback;
+    throw error;
+  }
 }
