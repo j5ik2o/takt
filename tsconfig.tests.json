@@ -372,6 +372,7 @@
     "src/__tests__/it-goal-mcp.test.ts",
     "src/__tests__/it-goal-store.test.ts",
     "src/__tests__/it-goal-task-pause-retry.test.ts",
+    "src/__tests__/it-goal-task-pr-retry.test.ts",
     "src/__tests__/it-goal-task-retry.test.ts",
     "src/__tests__/it-goal-task-stop.test.ts",
     "src/__tests__/it-handoff-progress.test.ts",
