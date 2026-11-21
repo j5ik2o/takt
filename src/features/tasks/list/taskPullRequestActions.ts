@@ -148,16 +148,23 @@ export async function publishPrFailedTask(
   if (!task.branch) {
     return { success: false, error: `Task ${task.name} has no branch to publish` };
   }
+  if (!validateWorktreeTarget(task, 'PR creation')) {
+    return { success: false, error: `Task ${task.name} has no worktree to publish` };
+  }
   const branch = task.branch;
   const worktreePath = task.worktreePath;
-  if (worktreePath === undefined) {
-    return { success: false, error: `Task ${task.name} has no worktree to publish` };
+  const currentBranch = getCurrentBranch(worktreePath);
+  if (currentBranch === 'HEAD' || currentBranch !== branch) {
+    return {
+      success: false,
+      error: `Worktree branch (${currentBranch}) does not match the task branch (${branch})`,
+    };
   }
   if (task.data?.merge_task === true) {
     return { success: false, error: 'PR merge tasks cannot be recovered through pr_failed publication' };
   }
 
-  const outcome = await publishPrFailedPr(projectDir, { ...task, branch, worktreePath }, undefined, worktreePath, {
+  const outcome = await publishPrFailedPr(projectDir, { ...task, branch, worktreePath }, undefined, undefined, {
     commitMessage: `takt: ${task.name}`,
     commitError: 'Commit failed',
     branchError: 'Branch publication failed',

@@ -32,6 +32,7 @@ vi.mock('../features/mcp/operations.js', async (original) => ({
 }));
 
 const prUrl = 'https://example.test/pr/7';
+const otherGoalId = '550e8400-e29b-41d4-a716-446655440001';
 const input = { cwd: '/project', goalId: goalRecord().id, taskName: 'task-a' };
 const signal = new AbortController().signal;
 let goal: Goal;
@@ -51,7 +52,11 @@ beforeEach(() => {
     worktreePath: '/project/.takt/worktrees/task-a',
     failure: { error: 'PR creation failed: push rejected' },
   };
-  doubles.get.mockImplementation(async (id: string) => ({ ...goal, id }));
+  doubles.get.mockImplementation(async (id: string) => {
+    if (id === goal.id) return goal;
+    if (id === otherGoalId) return { ...goalRecord(), id: otherGoalId };
+    throw new Error(`Goal does not exist: ${id}`);
+  });
   doubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => {
     goal = transform(goal);
     return goal;
@@ -61,7 +66,7 @@ beforeEach(() => {
     name: state.name,
     kind: 'pr_failed',
     status: 'pr_failed',
-    goalId: goal.id,
+    goalId: state.goalId,
     content: 'Publish the reviewed work',
     createdAt: state.createdAt,
     filePath: state.filePath,
@@ -101,8 +106,19 @@ it.each(['completed', 'pending', 'running', 'failed', 'exceeded'] as const)('rej
   expect(doubles.update).not.toHaveBeenCalled();
 });
 
-it('rejects a task owned by another goal without publishing', async () => {
-  state = { ...state, goalId: '550e8400-e29b-41d4-a716-446655440001' };
+it('rejects a task owned by another registered goal without publishing', async () => {
+  state = { ...state, goalId: otherGoalId };
+
+  const result = await publishFailedGoalTask(input, {}, signal);
+
+  expect(result.isError).toBe(true);
+  expect(doubles.get).toHaveBeenCalledWith(input.goalId);
+  expect(doubles.publish).not.toHaveBeenCalled();
+  expect(goal.workLog).toHaveLength(0);
+});
+
+it('rejects a task owned by another goal that is not registered', async () => {
+  state = { ...state, goalId: '650e8400-e29b-41d4-a716-446655440001' };
 
   const result = await publishFailedGoalTask(input, {}, signal);
 

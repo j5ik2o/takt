@@ -169,13 +169,24 @@ describe('pr_failed goal task recovery through manager MCP', () => {
   });
 
   it('rejects recovery of work owned by another goal', async () => {
+    const otherGoalId = '650e8400-e29b-41d4-a716-446655440001';
+    await registerFixtureGoal(cwd, { id: otherGoalId });
+    runner.requeueTask(taskName, ['pr_failed'], { startStep: 'review' });
+    const reclaimed = runner.claimNextTasks(1)[0]!;
+    runner.prFailTask({ task: reclaimed, success: true, response: 'Result ready', executionLog: [], branch, worktreePath: clone,
+      startedAt: '2026-10-08T00:00:00Z', completedAt: '2026-10-08T00:01:00Z',
+      completion: { success: true, interrupted: false, branch, sha: git(clone, ['rev-parse', 'HEAD']), workflowResult: 'completed' } },
+    'push rejected');
+    expect(runner.listTaskStateItems()[0]).toMatchObject({ name: taskName, goalId, status: 'pr_failed' });
     const current = readFileSync(join(cwd, '.takt', 'tasks.yaml'), 'utf8');
 
     const result = await withClient((client) => client.callTool({ name: 'takt_publish_pr_failed_goal_task',
-      arguments: { cwd, goalId: '550e8400-e29b-41d4-a716-446655440001', taskName } }));
+      arguments: { cwd, goalId: otherGoalId, taskName } }));
 
     expect(result.isError).toBe(true);
+    expect(runner.listTaskStateItems()[0]).toMatchObject({ name: taskName, goalId, status: 'pr_failed' });
     expect(readFileSync(join(cwd, '.takt', 'tasks.yaml'), 'utf8')).toBe(current);
+    expect((await store.get(otherGoalId)).workLog).toEqual([]);
   });
 
   it('rejects recovery while the goal is paused', async () => {

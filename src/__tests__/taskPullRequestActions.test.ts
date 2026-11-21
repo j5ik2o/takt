@@ -944,4 +944,37 @@ describe('publishPrFailedTask', () => {
     expect(result.success).toBe(false);
     expect(mockStageAndCommit).not.toHaveBeenCalled();
   });
+
+  it('rejects publication when the worktree directory is missing', async () => {
+    mockExistsSync.mockReturnValue(false);
+
+    const result = await publishPrFailedTask('/project', prFailedTask);
+
+    expect(result.success).toBe(false);
+    expect(mockStageAndCommit).not.toHaveBeenCalled();
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+    expect(mockCompletePublishedTask).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['another branch', 'takt/other'],
+    ['detached HEAD', 'HEAD'],
+  ])('rejects publication when the worktree is on %s', async (_label, currentBranch) => {
+    mockExecFileSync.mockImplementation((_command, args, options) => {
+      const gitArgs = args as string[];
+      if (gitArgs[0] === 'rev-parse' && gitArgs.includes('--abbrev-ref')) return `${currentBranch}\n`;
+      if (gitArgs[0] === 'remote') return 'origin\n';
+      if (gitArgs[0] === 'push') return '';
+      const cwd = (options as { cwd?: string } | undefined)?.cwd ?? '';
+      if (cwd === '/project' && gitArgs[0] === 'branch' && gitArgs[1] === '--list') return '';
+      return '';
+    });
+
+    const result = await publishPrFailedTask('/project', prFailedTask);
+
+    expect(result.success).toBe(false);
+    expect(mockStageAndCommit).not.toHaveBeenCalled();
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+    expect(mockCompletePublishedTask).not.toHaveBeenCalled();
+  });
 });
