@@ -480,6 +480,7 @@ export const heavyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/workflow-resume-results.integration.test.ts',
   'src/__tests__/it-cli-react-production.test.ts',
   'src/__tests__/it-goal-task-pause-retry.test.ts',
+  'src/__tests__/it-goal-task-pr-retry.test.ts',
   'src/__tests__/it-daemon-worktree-run-log.test.ts',
   ...legacyParallelIntegrationTestFiles,
   ...auditedIntegrationBoundaryTestFiles,

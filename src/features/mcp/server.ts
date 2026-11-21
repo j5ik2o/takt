@@ -60,6 +60,8 @@ import { loadGlobalConfigTraceState } from '../../infra/config/global/globalConf
 import { cleanupTaktTasks } from './taskCleanupOperations.js';
 import { requeueTaktGoalTask, retryTaktGoalTask } from './goalTaskRetryOperations.js';
 import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTaskRetrySchemas.js';
+import { publishTaktPrFailedGoalTask } from './goalTaskPrRetryOperations.js';
+import { publishPrFailedGoalTaskInputSchema } from './goalTaskPrRetrySchemas.js';
 import { removeGoalTaskInputSchema } from './goalTaskRemovalSchemas.js';
 import { removeTaktGoalTask } from './goalTaskRemovalOperations.js';
 import { stopGoalTaskInputSchema } from './goalTaskStopSchemas.js';
@@ -108,6 +110,7 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_add_workspace_repository', 'takt_remove_workspace_repository', 'takt_rename_workspace',
   'takt_enqueue_goal_task', 'takt_list_workflows', 'takt_get_workflow',
   'takt_requeue_goal_task', 'takt_retry_goal_task',
+  'takt_publish_pr_failed_goal_task',
   'takt_remove_goal_task',
   'takt_stop_goal_task', 'takt_wait_command',
   'takt_merge_goal_task', 'takt_complete_goal', 'takt_check_goal_completion',
@@ -341,6 +344,11 @@ export function createTaktMcpServer(
       title: 'Retry corrected goal work', description: 'Save corrected canonical instructions and return the same failed goal task to pending, optionally restarting from startStep. If the saved position cannot be used and startStep is omitted, the call fails with the reason and the accepted startStep values. Responses fit 64 KiB, with explicit truncation. Read task state with takt_list_tasks offset/limit and saved records with takt_list_goal_work_log offset/limit. Read record text with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes.',
       inputSchema: retryGoalTaskInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal task retry failed', (deps) => retryTaktGoalTask(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
+    server.registerTool('takt_publish_pr_failed_goal_task', {
+      title: 'Publish pr_failed goal work',
+      description: 'Recover a goal task whose workflow succeeded but whose PR creation or push failed (status pr_failed). This reruns publication instead of the workflow: it commits remaining worktree changes, pushes the task branch, reuses an existing open pull request or creates one, and moves the task to completed. On failure the task stays pr_failed and the reason is returned. Rejects tasks that are not pr_failed, work owned by another goal, and paused or aborted goals. Responses fit 64 KiB, with explicit truncation. Read task state with takt_list_tasks offset/limit and saved records with takt_list_goal_work_log offset/limit. Read record text with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes.',
+      inputSchema: publishPrFailedGoalTaskInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal task publication failed', (deps) => publishTaktPrFailedGoalTask(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
     server.registerTool('takt_merge_goal_task', {
       title: 'Merge reviewed goal work', description: 'Merge a task result into its saved goal branch after checking ownership and the reviewed SHA. Returns conflicts or checked-out worktree locations without moving the target. Responses fit 64 KiB, with explicit truncation. Read saved completion fields with takt_get_goal path and textOffset/maxBytes.',
       inputSchema: mergeGoalTaskInputSchema,

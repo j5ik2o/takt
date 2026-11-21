@@ -126,7 +126,7 @@ vi.mock('../shared/ui/index.js', async (importOriginal) => ({
   success: (...args: unknown[]) => mockSuccess(...args),
 }));
 
-import { createPullRequestForTask } from '../features/tasks/list/taskPullRequestActions.js';
+import { publishPrFailedTask, createPullRequestForTask } from '../features/tasks/list/taskPullRequestActions.js';
 
 const failedTask: TaskListItem = {
   kind: 'failed',
@@ -859,5 +859,122 @@ describe('createPullRequestForTask', () => {
     expect(mockResolveAutoCommitOptions).not.toHaveBeenCalled();
     expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
     expect(mockExecFileSync).not.toHaveBeenCalled();
+  });
+});
+
+describe('publishPrFailedTask', () => {
+  const prFailedTask: TaskListItem = { ...failedTask, kind: 'pr_failed' };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockExistsSync.mockReturnValue(true);
+    mockStageAndCommit.mockResolvedValue('commit-123');
+    mockResolveAutoCommitOptions.mockReturnValue({ allowGitHooks: false, allowGitFilters: false });
+    mockCreatePullRequestSafely.mockReturnValue({ success: true, url: 'https://example.test/pr/1' });
+    mockFindExistingPr.mockReturnValue(undefined);
+    mockCollectTaskWorktreeSummary.mockReturnValue({ files: ['src/app.ts'], text: ' M src/app.ts' });
+    mockFindRunForTask.mockReturnValue(null);
+    mockLoadRunSessionContext.mockReturnValue(runSessionContext);
+    mockGetGitProvider.mockReturnValue({ findExistingPr: mockFindExistingPr, commentOnPr: mockCommentOnPr });
+    mockExecFileSync.mockImplementation((_command, args, options) => {
+      const gitArgs = args as string[];
+      if (gitArgs[0] === 'remote') return 'origin\n';
+      if (gitArgs[0] === 'rev-parse' && gitArgs.includes('--abbrev-ref')) return 'takt/failed-task\n';
+      if (gitArgs[0] === 'branch' && gitArgs[1] === '--show-current') return 'takt/failed-task\n';
+      if (gitArgs[0] === 'push') return '';
+      const cwd = (options as { cwd?: string } | undefined)?.cwd ?? '';
+      if (cwd === '/project' && gitArgs[0] === 'branch' && gitArgs[1] === '--list') return '';
+      return '';
+    });
+  });
+
+  it('commits, pushes, reuses an existing PR and marks the task completed without prompting', async () => {
+    mockFindExistingPr.mockReturnValue({ number: 9, url: 'https://example.test/pull/9' });
+
+    const result = await publishPrFailedTask('/project', prFailedTask);
+
+    expect(result).toEqual({ success: true, prUrl: 'https://example.test/pull/9' });
+    expect(mockConfirmWithCancel).not.toHaveBeenCalled();
+    expect(mockStageAndCommit).toHaveBeenCalledWith('/worktree/failed-task', 'takt: failed-task',
+      { allowGitHooks: false, allowGitFilters: false });
+    expect(mockExecFileSync).toHaveBeenCalledWith('git', ['push', 'origin', 'takt/failed-task'],
+      expect.objectContaining({ cwd: '/worktree/failed-task' }));
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+    expect(mockCompletePublishedTask).toHaveBeenCalledWith('failed-task', 'https://example.test/pull/9');
+  });
+
+  it('creates a PR when none exists and reports the created URL', async () => {
+    const result = await publishPrFailedTask('/project', prFailedTask);
+
+    expect(result).toEqual({ success: true, prUrl: 'https://example.test/pr/1' });
+    expect(mockFindExistingPr).toHaveBeenCalledWith('takt/failed-task', '/project');
+    expect(mockCompletePublishedTask).toHaveBeenCalledWith('failed-task', 'https://example.test/pr/1');
+  });
+
+  it.each([
+    ['commit', () => mockStageAndCommit.mockRejectedValue(new Error('commit failed'))],
+    ['push', () => mockExecFileSync.mockImplementation((_c, args) => {
+      if ((args as string[])[0] === 'push') throw new Error('push failed');
+      if ((args as string[])[0] === 'remote') return 'origin\n';
+      return 'takt/failed-task\n';
+    })],
+    ['pr', () => mockCreatePullRequestSafely.mockReturnValue({ success: false, error: 'PR failed' })],
+    ['save', () => mockCompletePublishedTask.mockImplementation(() => { throw new Error('disk full'); })],
+  ] as const)('keeps the task unpublished when %s fails', async (_stage, arrange) => {
+    arrange();
+
+    const result = await publishPrFailedTask('/project', prFailedTask);
+
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a task without a branch', async () => {
+    const result = await publishPrFailedTask('/project', { ...prFailedTask, branch: undefined });
+
+    expect(result.success).toBe(false);
+    expect(mockStageAndCommit).not.toHaveBeenCalled();
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+  });
+
+  it('rejects a PR merge task', async () => {
+    const result = await publishPrFailedTask('/project', {
+      ...prFailedTask, data: { task: '修正する', merge_task: true },
+    });
+
+    expect(result.success).toBe(false);
+    expect(mockStageAndCommit).not.toHaveBeenCalled();
+  });
+
+  it('rejects publication when the worktree directory is missing', async () => {
+    mockExistsSync.mockReturnValue(false);
+
+    const result = await publishPrFailedTask('/project', prFailedTask);
+
+    expect(result.success).toBe(false);
+    expect(mockStageAndCommit).not.toHaveBeenCalled();
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+    expect(mockCompletePublishedTask).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['another branch', 'takt/other'],
+    ['detached HEAD', 'HEAD'],
+  ])('rejects publication when the worktree is on %s', async (_label, currentBranch) => {
+    mockExecFileSync.mockImplementation((_command, args, options) => {
+      const gitArgs = args as string[];
+      if (gitArgs[0] === 'rev-parse' && gitArgs.includes('--abbrev-ref')) return `${currentBranch}\n`;
+      if (gitArgs[0] === 'remote') return 'origin\n';
+      if (gitArgs[0] === 'push') return '';
+      const cwd = (options as { cwd?: string } | undefined)?.cwd ?? '';
+      if (cwd === '/project' && gitArgs[0] === 'branch' && gitArgs[1] === '--list') return '';
+      return '';
+    });
+
+    const result = await publishPrFailedTask('/project', prFailedTask);
+
+    expect(result.success).toBe(false);
+    expect(mockStageAndCommit).not.toHaveBeenCalled();
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+    expect(mockCompletePublishedTask).not.toHaveBeenCalled();
   });
 });
