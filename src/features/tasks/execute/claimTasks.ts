@@ -1,10 +1,11 @@
-import type { TaskRunner, TaskInfo } from '../../../infra/task/index.js';
+import type { TaskRunner, TaskInfo, TaskState } from '../../../infra/task/index.js';
 import { saveManagerEvent } from '../../../infra/goals/events.js';
 import { PrivateFileLockAcquisitionError } from '../../../shared/utils/private-file-lock.js';
-import { TaskClaimLockAcquisitionError } from '../../../infra/task/taskLifecycleService.js';
+import { TaskClaimLockAcquisitionError, type TaskClaimLockFailureCode } from '../../../infra/task/taskLifecycleService.js';
+import { isFileLockTimeoutError } from '../../../infra/fs/file-lock.js';
 
 export class TaskClaimLockUnavailableError extends Error {
-  constructor(message: string, options: ErrorOptions) {
+  constructor(message: string, readonly code: TaskClaimLockFailureCode, options: ErrorOptions) {
     super(message, options);
   }
 }
@@ -14,7 +15,12 @@ export function claimTasksWithGoalCompletions(
   goalTasksOnly = false,
 ): { tasks: TaskInfo[] } {
   if (count <= 0 || signal.aborted) return { tasks: [] };
-  const taskStates = taskRunner.listTaskStateItems();
+  let taskStates: TaskState[];
+  try {
+    taskStates = taskRunner.listTaskStateItems();
+  } catch (error) {
+    throw classifyClaimLockFailure(error);
+  }
   const hasPending = taskStates.some((task) => task.status === 'pending'
     && (!goalTasksOnly || task.goalId !== undefined));
   const pending = new Set(taskStates
@@ -23,10 +29,7 @@ export function claimTasksWithGoalCompletions(
   try {
     tasks = taskRunner.claimNextTasks(count);
   } catch (error) {
-    if (hasPending && (error instanceof TaskClaimLockAcquisitionError
-      || (error instanceof PrivateFileLockAcquisitionError && error.code === 'ENOSPC'))) {
-      throw new TaskClaimLockUnavailableError(error.message, { cause: error });
-    }
+    if (hasPending) throw classifyClaimLockFailure(error);
     throw error;
   }
   for (const task of taskRunner.listTaskStateItems()) {
@@ -36,6 +39,24 @@ export function claimTasksWithGoalCompletions(
     }
   }
   return { tasks };
+}
+
+function classifyClaimLockFailure(error: unknown): unknown {
+  if (error instanceof TaskClaimLockAcquisitionError) {
+    return new TaskClaimLockUnavailableError(error.message, error.code, { cause: error });
+  }
+  if (error instanceof PrivateFileLockAcquisitionError && error.code === 'ENOSPC') {
+    return new TaskClaimLockUnavailableError(error.message, 'ENOSPC', { cause: error });
+  }
+  if (isFileLockTimeoutError(error)) {
+    return new TaskClaimLockUnavailableError(error.message, 'TIMEOUT', { cause: error });
+  }
+  return error;
+}
+
+export function isClaimLockTimeoutFailure(error: unknown): boolean {
+  const classified = classifyClaimLockFailure(error);
+  return classified instanceof TaskClaimLockUnavailableError && classified.code === 'TIMEOUT';
 }
 
 export function failInterruptedTasksWithGoalEvents(taskRunner: TaskRunner, cwd: string): number {

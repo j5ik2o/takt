@@ -3,11 +3,14 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, w
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { parse as parseYaml } from 'yaml';
-import { afterEach, describe, expect, it } from 'vitest';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TaskStore } from '../infra/task/store.js';
 import { getSelfProcessIdentity } from '../infra/task/process.js';
 import { TaskRunner } from '../infra/task/runner.js';
+import type { TaskInfo } from '../infra/task/types.js';
+import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
+import { isClaimLockTimeoutFailure } from '../features/tasks/execute/claimTasks.js';
 import { TSX_ESM_LOADER } from './helpers/typescript-source.js';
 
 const fixturePath = join(
@@ -15,6 +18,18 @@ const fixturePath = join(
   'fixtures',
   'task-store-concurrent-add.ts',
 );
+
+vi.mock('../features/tasks/execute/providerPreflight.js', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  checkPendingTaskProviders: async () => undefined,
+}));
+
+class TaskExecutionDispatchError extends Error {
+  constructor() {
+    super('Task execution is unavailable in this test');
+    this.name = 'TaskExecutionDispatchError';
+  }
+}
 
 function runWorker(
   projectDir: string,
@@ -223,4 +238,112 @@ describe('TaskStore process lock', () => {
     expect(() => store.read()).toThrow(/timed out waiting for lock/);
     expect(existsSync(lockFile)).toBe(true);
   }, 10_000);
+
+  it('recovers from a real tasks.yaml lock timeout and claims the pending task on the next tick', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-task-store-lock-timeout-'));
+    testDirs.push(projectDir);
+    const globalDirectory = mkdtempSync(join(tmpdir(), 'takt-task-store-lock-timeout-global-'));
+    testDirs.push(globalDirectory);
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    mkdirSync(join(globalDirectory, 'workflows', 'personas'), { recursive: true });
+    const previousConfigDir = process.env.TAKT_CONFIG_DIR;
+    process.env.TAKT_CONFIG_DIR = globalDirectory;
+    writeFileSync(join(globalDirectory, 'config.yaml'), 'provider: mock\nlanguage: en\n');
+    writeFileSync(join(globalDirectory, 'workflows', 'personas', 'worker.md'), 'Execute the task.');
+    writeFileSync(join(globalDirectory, 'workflows', 'lock-timeout.yaml'), stringifyYaml({
+      name: 'lock-timeout', initial_step: 'work', max_steps: 1,
+      steps: [{ name: 'work', persona: './personas/worker.md', instruction: '{task}',
+        rules: [{ condition: 'when(true)', next: 'ABORT' }] }],
+    }));
+    writeFileSync(join(projectDir, '.takt', 'tasks.yaml'), stringifyYaml({
+      tasks: [{
+        name: 'lock-timeout-task',
+        status: 'pending',
+        content: 'lock timeout recovery',
+        workflow: 'lock-timeout',
+        created_at: '2026-02-09T00:00:00.000Z',
+        started_at: null,
+        completed_at: null,
+      }],
+    }));
+    const runner = new TaskRunner(projectDir);
+
+    const dispatchFailure = new TaskExecutionDispatchError();
+    const dispatch = vi.spyOn(TaskRunner.prototype, 'claimNextTasks').mockImplementation(function (
+      this: TaskRunner, count: number,
+    ): TaskInfo[] {
+      throw dispatchFailure;
+    });
+    const scheduling = new AbortController();
+    const cleanup = new AbortController();
+    const warnings: string[] = [];
+    const outputSpy = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+      const message = String(args[0]);
+      if (message.includes('[WARN]')) warnings.push(message);
+    });
+    let released = false;
+    const timer = setInterval(() => {
+      if (!released && warnings.some((message) => message.includes('Cannot claim pending tasks'))) {
+        released = true;
+        dispatch.mockRestore();
+        if (existsSync(lockFile)) rmSync(lockFile, { force: true });
+      }
+    }, 10);
+    const lockFile = join(projectDir, '.takt', 'tasks.yaml.lock');
+    writeFileSync(lockFile, JSON.stringify({ pid: process.pid, processIdentity: getSelfProcessIdentity() }), 'utf-8');
+    const olderThanStaleThreshold = new Date(Date.now() - 60_000);
+    utimesSync(lockFile, olderThanStaleThreshold, olderThanStaleThreshold);
+
+    try {
+      const result = await runWithWorkerPool(
+        runner, [], 1, projectDir, undefined, undefined, 50, 'run',
+        { schedulingSignal: scheduling.signal, taskAbortSignal: cleanup.signal },
+      );
+
+      expect(result.executedTaskNames).toEqual(['lock-timeout-task']);
+      expect(warnings.filter((message) => message.includes('Cannot prepare pending tasks'))).toHaveLength(0);
+      expect(warnings.filter((message) => message.includes('Cannot claim pending tasks'))).toHaveLength(1);
+    } finally {
+      clearInterval(timer);
+      dispatch.mockRestore();
+      outputSpy.mockRestore();
+      if (previousConfigDir === undefined) delete process.env.TAKT_CONFIG_DIR;
+      else process.env.TAKT_CONFIG_DIR = previousConfigDir;
+      if (existsSync(lockFile)) rmSync(lockFile, { force: true });
+    }
+  }, 30_000);
+
+  it('treats a startup provider-preflight read timeout on the real lock as a retryable timeout', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-task-store-startup-timeout-'));
+    testDirs.push(projectDir);
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'tasks.yaml'), stringifyYaml({
+      tasks: [{
+        name: 'startup-timeout-task',
+        status: 'pending',
+        content: 'startup preflight timeout',
+        created_at: '2026-02-09T00:00:00.000Z',
+        started_at: null,
+        completed_at: null,
+      }],
+    }));
+    const runner = new TaskRunner(projectDir);
+
+    const lockFile = join(projectDir, '.takt', 'tasks.yaml.lock');
+    writeFileSync(lockFile, JSON.stringify({ pid: process.pid, processIdentity: getSelfProcessIdentity() }), 'utf-8');
+    const olderThanStaleThreshold = new Date(Date.now() - 60_000);
+    utimesSync(lockFile, olderThanStaleThreshold, olderThanStaleThreshold);
+
+    let caught: unknown;
+    try {
+      try {
+        runner.listTasksForProviderPreflight(false);
+      } catch (error) {
+        caught = error;
+      }
+      expect(isClaimLockTimeoutFailure(caught)).toBe(true);
+    } finally {
+      if (existsSync(lockFile)) rmSync(lockFile, { force: true });
+    }
+  }, 30_000);
 });

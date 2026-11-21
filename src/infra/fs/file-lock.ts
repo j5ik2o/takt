@@ -8,8 +8,13 @@ import {
 const RETRY_MS = 25;
 const TIMEOUT_MS = 5_000;
 const STALE_MS = 30_000;
+const LOCK_TIMEOUT_MESSAGE_PREFIX = 'File lock: timed out waiting for lock';
 const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
 const heldLocks = new Set<string>();
+
+export function isFileLockTimeoutError(error: unknown): error is Error {
+  return error instanceof Error && error.message.startsWith(LOCK_TIMEOUT_MESSAGE_PREFIX);
+}
 
 interface LockOwner {
   readonly pid: number;
@@ -112,7 +117,7 @@ function acquireLock(lockPath: string, content: string, timeoutMs: number): Lock
       if (!hasCode(error, 'EEXIST')) throw error;
       recoverStaleLock(lockPath);
       if (Date.now() >= deadline) {
-        throw new Error(`File lock: timed out waiting for lock: ${lockPath}`);
+        throw new Error(`${LOCK_TIMEOUT_MESSAGE_PREFIX}: ${lockPath}`);
       }
       Atomics.wait(waitBuffer, 0, 0, Math.min(RETRY_MS, deadline - Date.now()));
       continue;

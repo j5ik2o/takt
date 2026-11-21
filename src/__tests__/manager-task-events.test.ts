@@ -132,7 +132,7 @@ describe.each(['private', 'task-store'] as const)('eligible pending tasks for %s
   ])('wraps claim ENOSPC only for eligible pending tasks: %j', ({ goalTasksOnly, goalId, status, retry }) => {
     const failure = source === 'private'
       ? new PrivateFileLockAcquisitionError('disk full', 'ENOSPC', undefined, {})
-      : new TaskClaimLockAcquisitionError('disk full', { cause: new Error('disk full') });
+      : new TaskClaimLockAcquisitionError('disk full', 'ENOSPC', { cause: new Error('disk full') });
     const runner = {
       listTaskStateItems: () => [{ name: 'task-a', goalId, status }],
       claimNextTasks: () => { throw failure; },
@@ -142,6 +142,42 @@ describe.each(['private', 'task-store'] as const)('eligible pending tasks for %s
       expect(claim).toThrow(TaskClaimLockUnavailableError);
       expect(claim).toThrow(expect.objectContaining({ cause: failure }));
     } else expect(claim).toThrow(failure);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { goalTasksOnly: false, goalId: undefined, retry: true },
+    { goalTasksOnly: true, goalId: undefined, retry: false },
+  ])('wraps claim lock timeout for eligible pending tasks: %j', ({ goalTasksOnly, goalId, retry }) => {
+    const failure = new TaskClaimLockAcquisitionError(
+      'File lock: timed out waiting for lock: /project/.takt/tasks.yaml.lock', 'TIMEOUT',
+    );
+    const runner = {
+      listTaskStateItems: () => [{ name: 'task-a', goalId, status: 'pending' }],
+      claimNextTasks: () => { throw failure; },
+    } as unknown as TaskRunner;
+    const claim = () => claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal, goalTasksOnly);
+    if (retry) {
+      expect(claim).toThrow(TaskClaimLockUnavailableError);
+      expect(claim).toThrow(expect.objectContaining({ cause: failure, code: 'TIMEOUT' }));
+    } else expect(claim).toThrow(failure);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('wraps pre-claim read lock timeout as a timeout unavailable error: goalTasksOnly=%s', (goalTasksOnly) => {
+    const failure = new TaskClaimLockAcquisitionError(
+      'File lock: timed out waiting for lock: /project/.takt/tasks.yaml.lock', 'TIMEOUT',
+    );
+    const claimNextTasks = vi.fn(() => [] as never[]);
+    const runner = {
+      listTaskStateItems: () => { throw failure; },
+      claimNextTasks,
+    } as unknown as TaskRunner;
+    const claim = () => claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal, goalTasksOnly);
+
+    expect(claim).toThrow(TaskClaimLockUnavailableError);
+    expect(claim).toThrow(expect.objectContaining({ cause: failure, code: 'TIMEOUT' }));
+    expect(claimNextTasks).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
   });
 });

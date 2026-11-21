@@ -9,6 +9,7 @@ import chalk from 'chalk';
 import type { AutoRequeueResult, TaskInfo } from '../infra/task/index.js';
 import type { executeRunTaskAndComplete as ExecuteRunTask } from '../features/tasks/execute/runTaskExecution.js';
 import { PrivateFileLockAcquisitionError } from '../shared/utils/private-file-lock.js';
+import { TaskClaimLockAcquisitionError } from '../infra/task/taskLifecycleService.js';
 
 const { executeRunTaskAndComplete, executeWithDetails, saveEvent } = vi.hoisted(() => ({
   executeRunTaskAndComplete: vi.fn(),
@@ -114,6 +115,74 @@ describe('runWithWorkerPool', () => {
     expect(runner.claimNextTasks).toHaveBeenCalledTimes(3);
     expect(output.mock.calls.filter(([message]) => String(message).includes('[WARN]'))).toHaveLength(1);
     expect(output.mock.calls.filter(([message]) => String(message).includes('Task claiming resumed'))).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('ロック取得のタイムアウト後も同じrun内でpendingを取り込み一度だけ実行する', async () => {
+    vi.useFakeTimers();
+    const task = createTask('pending');
+    const runner = createRunner();
+    runner.listTaskStateItems.mockReturnValue([{
+      name: task.name, status: 'pending', goalId: undefined,
+    }] as never);
+    runner.claimNextTasks
+      .mockImplementationOnce(() => { throw new TaskClaimLockAcquisitionError('File lock: timed out waiting for lock: /cwd/.takt/tasks.yaml.lock', 'TIMEOUT'); })
+      .mockReturnValueOnce([task])
+      .mockReturnValue([]);
+    const output = vi.mocked(console.log);
+    const pool = runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100, 'run');
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(executeRunTaskAndComplete).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pool).resolves.toEqual({ success: 1, fail: 0, executedTaskNames: ['pending'] });
+    expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(1);
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(3);
+    expect(output.mock.calls.filter(([message]) => String(message).includes('[WARN]'))).toHaveLength(1);
+    expect(output.mock.calls.some(([message]) => String(message).includes('disk is full'))).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['run', 'watch'] as const)('持続するロックタイムアウトの復旧待ちは%sのabortで即時終了し、警告を連打しない', async (mode) => {
+    vi.useFakeTimers();
+    const runner = createRunner();
+    runner.listTaskStateItems.mockReturnValue([{
+      name: 'pending', status: 'pending', goalId: undefined,
+    }] as never);
+    runner.claimNextTasks.mockImplementation(() => {
+      throw new TaskClaimLockAcquisitionError('File lock: timed out waiting for lock: /cwd/.takt/tasks.yaml.lock', 'TIMEOUT');
+    });
+    const scheduling = new AbortController();
+    const task = new AbortController();
+    const output = vi.mocked(console.log);
+    const pool = runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100, mode, {
+      schedulingSignal: scheduling.signal, taskAbortSignal: task.signal,
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(3);
+    scheduling.abort();
+    await expect(pool).resolves.toEqual({ success: 0, fail: 0, executedTaskNames: [] });
+    expect(output.mock.calls.filter(([message]) => String(message).includes('[WARN]'))).toHaveLength(1);
+    expect(output.mock.calls.some(([message]) => String(message).includes('disk is full'))).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('pendingがないロック取得タイムアウトでは復旧待ちを始めない', async () => {
+    vi.useFakeTimers();
+    const runner = createRunner();
+    runner.listTaskStateItems.mockReturnValue([] as never);
+    const error = new TaskClaimLockAcquisitionError('File lock: timed out waiting for lock: /cwd/.takt/tasks.yaml.lock', 'TIMEOUT');
+    runner.claimNextTasks.mockImplementation(() => { throw error; });
+    const output = vi.mocked(console.log);
+
+    await expect(runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100))
+      .rejects.toBe(error);
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(1);
+    expect(output.mock.calls.some(([message]) => String(message).includes('disk is full'))).toBe(false);
     expect(vi.getTimerCount()).toBe(0);
   });
 
