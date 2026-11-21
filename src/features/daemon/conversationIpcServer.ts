@@ -60,6 +60,7 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
   onInitializingChange: (difference: number) => void) {
   const decoder = new ConversationFrameDecoder();
   const owned = new Set<string>();
+  const historyLifetime = new AbortController();
   let authenticated = false;
   let awaitingOpen = false;
   const finishInitializing = (): void => {
@@ -87,6 +88,7 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
     if (old !== undefined) { old.cancelled = true; old.read.cancel(); void old.iterator.return(undefined).catch(() => { socket.destroy(); }); }
   };
   const fail = (): void => {
+    historyLifetime.abort();
     finishInitializing();
     wakeControls();
     wakeWriter?.();
@@ -247,8 +249,9 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
       if (request.method === 'open') {
         onInitializingChange(1);
         try {
-          if (request.params.binding.port !== 'tui') throw new ConversationError('invalid_input');
-          const resolved = await port.resolve(request.params.assignment);
+          const localPort = request.params.binding.port;
+          if (localPort !== 'tui' && localPort !== 'mcp') throw new ConversationError('invalid_input');
+          const resolved = await createTuiConversationPort(configDirectory, delivery, localPort).resolve(request.params.assignment);
           if (JSON.stringify(request.params.binding) !== JSON.stringify(resolved.binding)
             || JSON.stringify(request.params.speaker) !== JSON.stringify(resolved.speaker)) throw new ConversationError('invalid_input');
           const opened = await service.open(request.params, port.delivery);
@@ -261,6 +264,11 @@ function attachConnection(socket: Socket, service: ConversationInput, configDire
       } else {
         if (!owned.has(request.params.attachmentId)) throw new ConversationError('unavailable_attachment');
         switch (request.method) {
+          case 'recent_messages': {
+            if (service.recentMessages === undefined) throw new ConversationError('operation_failed');
+            await response(await service.recentMessages(request.params.attachmentId, request.params.limit, historyLifetime.signal));
+            break;
+          }
           case 'submit': {
             const result = await service.submit({ ...request.params, requestId: request.requestId });
             await response(result);

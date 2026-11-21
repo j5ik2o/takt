@@ -22,8 +22,11 @@ import type { TurnResult } from '../core/daemon/messages.js';
 import type { IoOptions } from '../core/daemon/io.js';
 import { deferred } from './helpers/controlledDaemon.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
+import { RECENT_MESSAGES_MAX_BYTES, RecentMessagesSchema } from '../core/daemon/conversationHistory.js';
+import { getLabel } from '../shared/i18n/index.js';
 
-const injection = vi.hoisted(() => ({ beforeSync: undefined as (() => Promise<void>) | undefined, afterRename: undefined as (() => void) | undefined, renameFailure: false, afterRenameFailure: false, lockReleaseFailure: false }));
+const injection = vi.hoisted(() => ({ beforeSync: undefined as (() => Promise<void>) | undefined, afterRename: undefined as (() => void) | undefined, renameFailure: false, afterRenameFailure: false, lockReleaseFailure: false,
+  afterRead: undefined as (() => Promise<void>) | undefined, afterClose: undefined as (() => void) | undefined }));
 vi.mock('node:fs/promises', async (original) => {
   const fs = await original<typeof import('node:fs/promises')>();
   return { ...fs,
@@ -36,6 +39,12 @@ vi.mock('node:fs/promises', async (original) => {
     },
     open: async (...args: Parameters<typeof fs.open>) => {
       const file = await fs.open(...args);
+      if (String(args[0]).endsWith('/cancel-read')) return new Proxy(file, { get(target, property) {
+        if (property === 'read') return async (buffer: Buffer) => { const result = await target.read(buffer); await injection.afterRead?.(); return result; };
+        if (property === 'close') return async () => { await target.close(); injection.afterClose?.(); };
+        const value: unknown = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      } });
       if (!String(args[0]).endsWith('.tmp')) return file;
       return new Proxy(file, { get(target, property) {
         if (property === 'sync') return async () => { await target.sync(); await injection.beforeSync?.(); };
@@ -77,6 +86,7 @@ function record() {
     bindings: [], revision: 0, pending: null, approval: null, running: null });
 }
 afterEach(async () => {
+  injection.afterRead = undefined; injection.afterClose = undefined;
   vi.restoreAllMocks();
   vi.useRealTimers();
   injection.beforeSync = undefined; injection.afterRename = undefined; injection.renameFailure = false; injection.afterRenameFailure = false; injection.lockReleaseFailure = false;
@@ -236,6 +246,149 @@ describe('durable manager patrol timestamps', () => {
 });
 
 describe('durable daemon event storage', () => {
+  it.each(['tui', 'slack'] as const)('omits a hidden %s proposal request before limiting history and keeps its reply', async (source) => {
+    const store = new FileEventStore(await root());
+    const visible = { ...event('visible', 1), conversationId: id, source };
+    const hidden: AcceptedEvent = { ...event('proposal', 2), conversationId: id, source,
+      event: { kind: 'human_command', speaker: { namespace: 'local', id: 'operator' },
+        command: { kind: 'message', text: getLabel('manager.goSummaryRequest', 'en'), display: false, requestProposal: true } } };
+    await store.accept(visible); await store.accept(hidden);
+    expect((await store.recentMessages(id, 1)).messages).toMatchObject([
+      { kind: 'message', speaker: 'human', text: 'visible', operationId: visible.operationId },
+    ]);
+    const reply: TurnResult = { ...result(hidden), outcome: { kind: 'completed', result: { kind: 'reply', message: 'proposal response' } } };
+    await store.markStarted(hidden.eventId, reply); await store.saveResult(hidden.eventId, reply); await store.markSettled(hidden.eventId, reply);
+    expect((await store.recentMessages(id, 50)).messages.map(({ kind, speaker, text, operationId }) => ({ kind, speaker, text, operationId })))
+      .toEqual([{ kind: 'message', speaker: 'human', text: 'visible', operationId: visible.operationId },
+        { kind: 'reply', speaker: 'manager', text: 'proposal response', operationId: hidden.operationId }]);
+  });
+
+  it.each(['human', 'director'] as const)('omits a restored %s turn body but keeps an identical genuine message and the restored result', async (speaker) => {
+    const store = new FileEventStore(await root());
+    const director = conversationId({ kind: 'daemon' });
+    const text = 'Legacy turn interrupted during daemon restart';
+    const genuine: AcceptedEvent = { ...event('genuine', 1), conversationId: id,
+      source: speaker === 'human' ? 'mcp' : 'director', lane: speaker === 'human' ? 'human' : 'other',
+      event: speaker === 'human'
+        ? { kind: 'human_command', speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'message', text } }
+        : { kind: 'director_message', directorConversationId: director, text, origin: 'director' } };
+    const operationId = 'restored-operation';
+    const restored: AcceptedEvent = { ...event('restored', 2), conversationId: id,
+      eventId: `legacy-running-${operationId}`, requestId: `legacy-running-${operationId}`, operationId,
+      source: speaker === 'human' ? 'daemon' : 'director', lane: speaker === 'human' ? 'human' : 'other',
+      event: speaker === 'human'
+        ? { kind: 'human_command', speaker: { namespace: 'local', id: 'operator' }, command: { kind: 'message', text, display: false } }
+        : { kind: 'director_message', directorConversationId: director, text } };
+    await store.accept(genuine); await store.accept(restored);
+    expect((await store.recentMessages(id, 1)).messages).toMatchObject([
+      { kind: 'message', speaker, text, operationId: genuine.operationId },
+    ]);
+    const reply: TurnResult = { ...result(restored), outcome: { kind: 'completed', result: { kind: 'reply', message: 'restored response' } } };
+    await store.markStarted(restored.eventId, reply); await store.saveResult(restored.eventId, reply); await store.markSettled(restored.eventId, reply);
+    expect((await store.recentMessages(id, 50)).messages.map(({ kind, speaker, text, operationId }) => ({ kind, speaker, text, operationId })))
+      .toEqual([{ kind: 'message', speaker, text, operationId: genuine.operationId },
+        { kind: 'reply', speaker: 'manager', text: 'restored response', operationId }]);
+    if (speaker === 'director') expect((await store.recentMessages(director, 1)).messages).toMatchObject([
+      { kind: 'reply', speaker: 'manager', text: 'restored response', operationId },
+    ]);
+  });
+
+  it('reads only the selected conversation in acceptance order after reopening the store', async () => {
+    const directory = await root();
+    const store = new FileEventStore(directory);
+    const director = conversationId({ kind: 'daemon' });
+    for (const [name, sequence, target] of [['latest', 3, id], ['other', 2, director], ['old', 1, id]] as const) {
+      const accepted = { ...event(name, sequence), conversationId: target, source: 'mcp' as const };
+      await store.accept(accepted);
+      const completed: TurnResult = { ...result(accepted), outcome: { kind: 'completed', result: { kind: 'reply', message: `${name} reply` } } };
+      await store.markStarted(accepted.eventId, completed);
+      await store.saveResult(accepted.eventId, completed);
+      await store.markSettled(accepted.eventId, completed);
+    }
+    const page = await new FileEventStore(directory).recentMessages(id, 2);
+    expect(page.messages.map(({ speaker, text }) => ({ speaker, text })))
+      .toEqual([{ speaker: 'human', text: 'latest' }, { speaker: 'manager', text: 'latest reply' }]);
+    expect(page.truncated).toBe(true);
+    expect((await store.recentMessages(director, 2)).messages.map(({ text }) => text)).toEqual(['other', 'other reply']);
+  });
+
+  it('does not expose queued, running, settling, failed or interrupted operations as replies', async () => {
+    const store = new FileEventStore(await root());
+    const phases = ['queued', 'running', 'settling', 'failed', 'interrupted', 'error'] as const;
+    for (const [index, phase] of phases.entries()) {
+      const accepted = { ...event(phase, index + 1), conversationId: id };
+      await store.accept(accepted);
+      const completed: TurnResult = { ...result(accepted), outcome: phase === 'failed' ? { kind: 'failed', message: 'failure' }
+        : phase === 'interrupted' ? { kind: 'interrupted' }
+          : { kind: 'completed', result: phase === 'error' ? { kind: 'error', code: 'failed', message: 'not a reply' }
+            : { kind: 'reply', message: 'not yet delivered' } } };
+      if (phase === 'queued') continue;
+      await store.markStarted(accepted.eventId, completed);
+      if (phase === 'running') continue;
+      await store.saveResult(accepted.eventId, completed);
+      if (phase !== 'settling') await store.markSettled(accepted.eventId, completed);
+    }
+    const page = await store.recentMessages(id, 50);
+    expect(page.messages.map(({ kind, status, text }) => ({ kind, status, text }))).toEqual(phases.map((phase) => ({
+      kind: 'message', text: phase, status: phase === 'failed' || phase === 'error' ? 'failed' : phase === 'interrupted' ? 'interrupted' : 'accepted',
+    })));
+  });
+
+  it('retains relay authorship and shows only settled manager results in the director history', async () => {
+    const store = new FileEventStore(await root());
+    const director = conversationId({ kind: 'daemon' });
+    for (const [index, origin] of (['human', 'director'] as const).entries()) {
+      const accepted: AcceptedEvent = { ...event(origin, index + 1), conversationId: id, source: 'director', lane: 'other',
+        event: { kind: 'director_message', text: '[manager] misleading text', origin, directorConversationId: director } };
+      await store.accept(accepted);
+      const completed: TurnResult = { ...result(accepted), outcome: { kind: 'completed', result: { kind: 'reply', message: 'manager answer' } } };
+      await store.markStarted(accepted.eventId, completed); await store.saveResult(accepted.eventId, completed);
+      expect((await store.recentMessages(director, 50)).messages).toHaveLength(index);
+      await store.markSettled(accepted.eventId, completed);
+    }
+    expect((await store.recentMessages(id, 50)).messages.filter(({ kind }) => kind === 'message'))
+      .toMatchObject([{ speaker: 'human', origin: 'human', directorConversationId: director },
+        { speaker: 'director', origin: 'director', directorConversationId: director }]);
+    expect((await store.recentMessages(director, 50)).messages).toMatchObject([
+      { speaker: 'manager', kind: 'reply', operationId: 'operation-human', senderConversationId: id },
+      { speaker: 'manager', kind: 'reply', operationId: 'operation-director', senderConversationId: id },
+    ]);
+  });
+
+  it('bounds text and page bytes while retaining the newest message with explicit truncation', async () => {
+    const store = new FileEventStore(await root());
+    for (let index = 0; index < 55; index++) {
+      const accepted = { ...event(`message-${index}`, index + 1), conversationId: id,
+        event: { kind: 'human_command' as const, speaker: { namespace: 'local', id: 'operator' },
+          command: { kind: 'message' as const, text: '\u0001日本語'.repeat(5000) } } };
+      await store.accept(accepted);
+    }
+    const page = await store.recentMessages(id, 50);
+    expect(RecentMessagesSchema.safeParse(page).success).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(RECENT_MESSAGES_MAX_BYTES);
+    expect(page.truncated).toBe(true);
+    expect(page.messages.at(-1)).toMatchObject({ operationId: 'operation-message-54', truncated: true });
+    expect(page.messages.at(-1)!.text).not.toContain('\ufffd');
+    await expect(store.recentMessages(id, 0)).rejects.toThrow();
+  });
+
+  it.each(['failed', 'interrupted', 'error'] as const)('shows a %s relay as an unsuccessful result instead of a reply', async (kind) => {
+    const store = new FileEventStore(await root());
+    const director = conversationId({ kind: 'daemon' });
+    const accepted: AcceptedEvent = { ...event(kind, 1), conversationId: id, source: 'director', lane: 'other',
+      event: { kind: 'director_message', text: 'request', origin: 'director', directorConversationId: director } };
+    await store.accept(accepted);
+    const completed: TurnResult = { ...result(accepted), outcome: kind === 'error'
+      ? { kind: 'completed', result: { kind: 'error', code: 'invalid_input', message: 'cannot execute' } }
+      : { kind, message: 'cannot execute' } };
+    await store.markStarted(accepted.eventId, completed); await store.saveResult(accepted.eventId, completed);
+    await store.markSettled(accepted.eventId, completed);
+    expect((await store.recentMessages(director, 2)).messages).toMatchObject([
+      { operationId: accepted.operationId, speaker: 'manager', kind: 'result',
+        status: kind === 'interrupted' ? 'interrupted' : 'failed', text: 'cannot execute' },
+    ]);
+  });
+
   it('indexes retired PR retry observations and restores only unfinished settlement', async () => {
     const directory = await root();
     const store = new FileEventStore(directory);
@@ -676,6 +829,27 @@ describe('private asynchronous I/O and existing files', () => {
       expect((await stat(join(directory, 'a', 'b'))).mode & 0o777).toBe(0o700);
     }
     expect(await readdir(join(directory, 'a', 'b'))).toEqual(['data']);
+  });
+
+  it('closes an aborted chunked history read before rejecting and never starts the remaining chunks', async () => {
+    const path = join(await root(), 'cancel-read');
+    const content = Buffer.alloc(256 * 1024, 'x');
+    await writeFile(path, content);
+    const entered = deferred<void>(); const resume = deferred<void>();
+    const abort = new AbortController();
+    let reads = 0; let closed = false; let finished = false;
+    injection.afterRead = async () => { reads++; entered.resolve(); await resume.promise; };
+    injection.afterClose = () => { closed = true; };
+    const operation = readPrivateFile(path, content.length, abort.signal).finally(() => { finished = true; });
+    const rejected = expect(operation).rejects.toMatchObject({ name: 'AbortError' });
+    try {
+      await entered.promise;
+      abort.abort();
+      expect(closed).toBe(false); expect(finished).toBe(false);
+      resume.resolve(); await rejected;
+      expect(closed).toBe(true); expect(reads).toBe(1);
+    } finally { resume.resolve(); injection.afterRead = undefined; injection.afterClose = undefined; }
+    expect(await readPrivateFile(path, content.length)).toEqual(content);
   });
 
   it('registers and removes only a matching owner and roundtrips IPC metadata', async () => {

@@ -49,7 +49,7 @@ const event = z.discriminatedUnion('kind', [
   PatrolEventSchema,
 ]);
 export const EventInputSchema = z.object({
-  eventId: id, requestId: id, conversationId: id, source: z.enum(['tui', 'slack', 'run', 'director', 'watcher', 'daemon']),
+  eventId: id, requestId: id, conversationId: id, source: z.enum(['tui', 'mcp', 'slack', 'run', 'director', 'watcher', 'daemon']),
   occurredAt: z.iso.datetime(), event,
 }).strict() satisfies z.ZodType<EventInput>;
 export const AcceptedEventSchema = EventInputSchema.extend({ operationId: id, acceptedSequence: sequence, lane: z.enum(['human', 'other']) })

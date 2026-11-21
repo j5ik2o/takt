@@ -2,6 +2,7 @@ import { isAbsolute } from 'node:path';
 import { z } from 'zod/v4';
 import { GoalAnswerInputSchema, GoalCreateInputSchema, GoalIdSchema, GoalQuestionInputSchema, GoalInquiryInputSchema, GoalQuestionSchema, GoalNotificationInputSchema, GoalSummarySchema, GoalWorkLogInputSchema } from '../../infra/goals/schema.js';
 import { MCP_TEXT_PAGE_BYTES } from './response.js';
+import { RecentMessageLimitSchema } from '../../core/daemon/conversationHistory.js';
 import {
   isValidTaskContextBranchName,
   isValidTaskContextPrNumber,
@@ -16,6 +17,16 @@ const MCP_LABEL_MAX_COUNT = 20;
 const absolutePathSchema = z.string().min(1).refine(isAbsolute, {
   message: 'cwd must be an absolute path',
 }).describe('Absolute path to the TAKT project where .takt/tasks.yaml is read or written.');
+
+const messageRecipientShape = { recipient: z.enum(['manager', 'director']), cwd: absolutePathSchema.optional() };
+const validMessageRecipient = (input: { recipient: 'manager' | 'director'; cwd?: string }): boolean =>
+  input.recipient === 'manager' ? input.cwd !== undefined : input.cwd === undefined;
+export const sendMessageInputSchema = z.object({ ...messageRecipientShape,
+  text: z.string().max(128 * 1024).refine((value) => value.trim().length > 0),
+}).strict().refine(validMessageRecipient, { message: 'manager requires cwd; director must omit cwd' });
+export const listRecentMessagesInputSchema = z.object({ ...messageRecipientShape,
+  limit: RecentMessageLimitSchema.optional(),
+}).strict().refine(validMessageRecipient, { message: 'manager requires cwd; director must omit cwd' });
 
 const taskContentSchema = z.string().max(MCP_TASK_MAX_LENGTH).refine((value) => value.trim().length > 0, {
   message: 'task is required',

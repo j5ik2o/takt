@@ -13,7 +13,7 @@ import { DaemonNotifications } from '../../infra/daemon/notifications.js';
 import { resolveCurrentManagerAssignment } from '../../features/manager/assignment.js';
 
 /** 実プロセス境界を使わない UI/保存試験用。業務、保存、受付、配送は本実装を使う。 */
-export async function conversationDaemon(directory: string, runtime: ConversationRuntime) {
+export async function conversationDaemon(directory: string, runtime: ConversationRuntime, options?: { routing: DaemonRouting }) {
   class TestRouting extends DaemonRouting {
     override async resolve(selected: ConversationAssignment): Promise<ConversationAssignment> {
       if (selected.kind === 'daemon') return selected;
@@ -26,7 +26,7 @@ export async function conversationDaemon(directory: string, runtime: Conversatio
         : resolveCurrentManagerAssignment(assignment, directory);
     }
   }
-  const routing = new TestRouting(directory);
+  const routing = options?.routing ?? new TestRouting(directory);
   const store = new ConversationStateStore(directory);
   const events = new FileEventStore(directory, new DaemonRouting(directory));
   const failures: unknown[] = [];
@@ -68,7 +68,7 @@ export async function conversationDaemon(directory: string, runtime: Conversatio
     stateRequests: createDaemonStateRequests({ conversations, ingress: { accept: (event) => dispatcher.accept(event) }, connectedPorts: (id) => input.connectedPorts(id) }),
     resources: { close: () => conversations.close() }, limits: { maxPendingEvents: 32, maxPendingBytes: 1024 * 1024 },
     onFailure: ({ error }) => onError(error) });
-  const input = createDaemonConversationInput({ ingress: dispatcher, async resolveAssignment(selected) {
+  const input = createDaemonConversationInput({ ingress: dispatcher, history: events, async resolveAssignment(selected) {
     const assignment = await routing.resolve(selected);
     await conversations.ensure(assignment); return assignment;
   } });

@@ -16,7 +16,7 @@ export const routeAssignment = (route: { repositoryDirectory: string; workspaceI
 export class DaemonRouting {
   constructor(readonly directory: string) {}
 
-  routes() { return readDaemonProjectRoutes(this.directory); }
+  routes(signal?: AbortSignal) { return readDaemonProjectRoutes(this.directory, undefined, signal); }
 
   async assignments(): Promise<readonly ConversationAssignment[]> {
     const assignments = new Map<string, ConversationAssignment>();
@@ -33,25 +33,30 @@ export class DaemonRouting {
     return [...assignments.values()];
   }
 
-  async resolve(selected: ConversationAssignment): Promise<ConversationAssignment> {
+  async resolve(selected: ConversationAssignment, signal?: AbortSignal): Promise<ConversationAssignment> {
+    signal?.throwIfAborted();
     if (selected.kind === 'daemon') return selected;
-    const routes = await this.routes();
+    const routes = await this.routes(signal);
+    signal?.throwIfAborted();
     if (selected.kind === 'workspace') {
       if (!routes.some((route) => route.workspaceId === selected.workspaceId)) {
         // 空の workspace も director/TUI の有効な会話先。
-        await this.workspace(selected.workspaceId);
+        await this.workspace(selected.workspaceId, signal);
       }
       return selected;
     }
     const canonical = await realpath(selected.repositoryDirectory);
+    signal?.throwIfAborted();
     const route = routes.find((entry) => entry.repositoryDirectory === canonical);
     if (route === undefined) throw new ConversationError('invalid_assignment');
     return routeAssignment(route);
   }
 
-  async workspace(id: string) {
+  async workspace(id: string, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     const value = z.object({ id: z.uuid(), name: z.string().min(1), repositoryDirectories: z.array(z.string()) }).parse(
-      await readSmallJson(join(this.directory, 'workspaces', z.uuid().parse(id), 'workspace.json')));
+      await readSmallJson(join(this.directory, 'workspaces', z.uuid().parse(id), 'workspace.json'), signal));
+    signal?.throwIfAborted();
     if (value.id !== id) throw new ConversationError('invalid_assignment');
     return value;
   }
@@ -63,8 +68,15 @@ export class DaemonRouting {
     return { ...assignment, name: workspace.name, repositoryDirectories: workspace.repositoryDirectories };
   }
 
-  async permits(assignment: ConversationAssignment, id: string): Promise<boolean> {
-    try { return conversationId(await this.resolve(assignment)) === id; }
-    catch (error) { if (error instanceof ConversationError) return false; throw error; }
+  async permits(assignment: ConversationAssignment, id: string, signal?: AbortSignal): Promise<boolean> {
+    try {
+      const resolved = await this.resolve(assignment, signal);
+      signal?.throwIfAborted();
+      return conversationId(resolved) === id;
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (error instanceof ConversationError) return false;
+      throw error;
+    }
   }
 }

@@ -74,3 +74,9 @@ manager.notifications は question / awaiting_merge / completed / progress / blo
 specifications は任意の保存フィールドです。takt_get_goal の path に specifications.gherkin、specifications.quint、specifications.alloy を指定すると各本文を取得できます。PR の最終レビュー用タスクには保存仕様が自動で渡ります。
 
 形式仕様が有効な場合、人が TUI または Slack の会話で /verify を送ると、現在の合意から仕様を生成して検査し、結果を同じ会話へ返します。保存済みのゴールと仕様は検証前の内容で保持されます。形式仕様の設定に応じて、検証の利用可否が応答に返ります。
+
+## stdio MCP の会話道具
+
+stdio の takt-mcp を通常起動（tool-set all）する利用者は、takt_send_message に {"recipient":"manager","cwd":"/absolute/repository","text":"相談内容"} を渡して manager に直接送れます。director 経由は {"recipient":"director","text":"manager に確認してください"} を渡し、cwd は省略します。manager への中継は director が既存の takt_tell_manager と origin を使います。
+
+accepted と operationId は保存済みの受付で、返信ではありません。同じ宛先を takt_list_recent_messages に指定して返信を確認します。例: {"recipient":"manager","cwd":"/absolute/repository","limit":20} または {"recipient":"director","limit":20}。limit は直近の発言数（1〜50、既定20）です。speaker は human / manager / director / unknown（旧記録で著者が不明な場合）、status は accepted / completed / failed / interrupted、kind は message / reply / result（中継の失敗・中断）です。中継は origin と directorConversationId、返信は同じ operationId で照合します。本文や一覧の省略は truncated に現れます。宛先ごとに履歴を読み、受付済み・成否不明の発言は自動再送しません。これらの道具は stdio 利用者向けで、エージェント用の制限付き tool set には追加されません。

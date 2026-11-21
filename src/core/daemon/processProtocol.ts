@@ -68,7 +68,7 @@ const event = z.discriminatedUnion('kind', [
   PatrolEventSchema,
 ]);
 const acceptedEvent = z.object({ eventId: id, requestId: id, conversationId: id,
-  source: z.enum(['tui', 'slack', 'run', 'director', 'watcher', 'daemon']), occurredAt: z.iso.datetime(), event,
+  source: z.enum(['tui', 'mcp', 'slack', 'run', 'director', 'watcher', 'daemon']), occurredAt: z.iso.datetime(), event,
   operationId: id, acceptedSequence: version.refine((v) => v > 0), lane: z.enum(['human', 'other']),
 }).strict().refine((value) => (value.lane === 'human') === ['human_command', 'inquiry_answer'].includes(value.event.kind)) satisfies z.ZodType<AcceptedEvent>;
 const operationResult = z.discriminatedUnion('kind', [

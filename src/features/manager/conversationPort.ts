@@ -7,6 +7,7 @@ import type { EpicSnapshot } from '../../infra/epics/projection.js';
 import type { ManagerDisplayEvent } from './savedEvents.js';
 import type { ConversationActivity, ConversationText } from '../../shared/types/conversation-activity.js';
 import type { ToolActivityTurnState } from '../../shared/tool-activity/types.js';
+import type { RecentMessages } from '../../core/daemon/conversationHistory.js';
 
 export type ConversationDisplayAssignment = ManagerAssignment | { readonly kind: 'daemon'; readonly repositoryDirectories: readonly string[] };
 
@@ -82,6 +83,7 @@ export interface ConversationInput {
   open(input: ConversationOpen, delivery: ConversationDelivery): Promise<{ attachmentId: string; read: SnapshotRead }>;
   submit(input: { attachmentId: string; requestId: string; speaker: ConversationActor; command: ConversationCommand }): Promise<Submission>;
   snapshot(attachmentId: string): Promise<SnapshotRead>;
+  recentMessages?(attachmentId: string, limit: number, signal?: AbortSignal): Promise<RecentMessages>;
   detach(attachmentId: string): void;
 }
 export interface ConversationPort<Endpoint> {

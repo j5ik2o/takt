@@ -14,6 +14,7 @@ import { snapshotItemKey, orderSnapshotItems, type SnapshotDisplayItem } from '.
 import { ConversationReadMetadataSchema, ConversationTransferReceiver } from './conversationTransferReceiver.js';
 import type { AssistantCliOverrides } from '../../core/config/provider-resolution.js';
 import type { ToolActivityTurnState } from '../../shared/tool-activity/types.js';
+import { RecentMessagesSchema, RecentMessageLimitSchema, type RecentMessages } from '../../core/daemon/conversationHistory.js';
 
 const responseSchema = z.object({ protocolVersion: z.literal(1), type: z.literal('response'), requestId: z.string(),
   result: z.unknown().optional(), error: z.object({ kind: z.literal('error'), code: z.string(), message: z.string() }).strict().optional() }).strict()
@@ -109,6 +110,12 @@ export class ConversationIpcClient {
       const result = z.object({ read: ConversationReadMetadataSchema }).strict().parse(value);
       this.receiver!.expectRead(result.read);
     });
+  }
+
+  recentMessages(limit: number): Promise<RecentMessages> {
+    if (this.attachmentId === undefined || this.view.connection !== 'connected') return Promise.reject(new Error('Conversation is disconnected'));
+    return this.request('recent_messages', { attachmentId: this.attachmentId, limit: RecentMessageLimitSchema.parse(limit) },
+      (value) => RecentMessagesSchema.parse(value));
   }
 
   close(): void {

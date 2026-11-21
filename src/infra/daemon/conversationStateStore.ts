@@ -150,8 +150,8 @@ export class ConversationStateStore {
 
   private path(id: string): string { return join(this.directory, `${ConversationIdSchema.parse(id)}.json`); }
 
-  private async load(id: string): Promise<StoredConversation | undefined> {
-    const content = await readPrivateFile(this.path(id), MAX_CONVERSATION_BYTES);
+  private async load(id: string, signal?: AbortSignal): Promise<StoredConversation | undefined> {
+    const content = await readPrivateFile(this.path(id), MAX_CONVERSATION_BYTES, signal);
     if (content === undefined) return undefined;
     const value: unknown = JSON.parse(content.toString('utf8'));
     if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid stored conversation');
@@ -173,8 +173,8 @@ export class ConversationStateStore {
       ...(record.interruptedMessage === undefined ? {} : { interruptedMessage: record.interruptedMessage }) };
   }
 
-  async read(id: string): Promise<{ record: ConversationRecord; state: ConversationTurnState } | undefined> {
-    const stored = await this.load(id);
+  async read(id: string, signal?: AbortSignal): Promise<{ record: ConversationRecord; state: ConversationTurnState } | undefined> {
+    const stored = await this.load(id, signal);
     return stored === undefined ? undefined : { record: stored.record, state: this.state(stored) };
   }
 

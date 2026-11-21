@@ -23,7 +23,8 @@ export async function ensurePrivateDirectory(path: string): Promise<void> {
 }
 
 /** サイズ確認後に同じ記述子から読む。増大中のファイルも上限を越えて保持しない。 */
-export async function readPrivateFile(path: string, maxBytes: number): Promise<Buffer | undefined> {
+export async function readPrivateFile(path: string, maxBytes: number, signal?: AbortSignal): Promise<Buffer | undefined> {
+  signal?.throwIfAborted();
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('Invalid file capacity');
   const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)).catch((error: unknown) => {
     if (hasCode(error, 'ENOENT')) return undefined;
@@ -31,13 +32,16 @@ export async function readPrivateFile(path: string, maxBytes: number): Promise<B
   });
   if (file === undefined) return undefined;
   try {
+    signal?.throwIfAborted();
     const stat = await file.stat();
     if (!stat.isFile() || stat.size > maxBytes) throw new Error(`Invalid or oversized private file: ${path}`);
     const chunks: Buffer[] = [];
     let size = 0;
     while (true) {
+      signal?.throwIfAborted();
       const buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes + 1 - size));
       const { bytesRead } = await file.read(buffer);
+      signal?.throwIfAborted();
       if (bytesRead === 0) return Buffer.concat(chunks, size);
       size += bytesRead;
       if (size > maxBytes) throw new Error(`Private file exceeds capacity: ${path}`);

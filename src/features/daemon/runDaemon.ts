@@ -114,7 +114,7 @@ export async function startDaemon(options: {
     }, 1000);
     storageRetry.unref();
   } });
-  const input = createDaemonConversationInput({ ingress: dispatcher, async resolveAssignment(selected) {
+  const input = createDaemonConversationInput({ ingress: dispatcher, history: eventStore, async resolveAssignment(selected) {
     const assignment = await routing.resolve(selected);
     await conversations.ensure(assignment);
     return assignment;

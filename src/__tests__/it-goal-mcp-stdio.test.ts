@@ -5,7 +5,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { cleanup,render } from 'ink-testing-library';
 import { execFileSync } from 'node:child_process';
 import * as crypto from 'node:crypto';
-import { mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync,writeFileSync } from 'node:fs';
+import { mkdirSync,mkdtempSync,readFileSync,readdirSync,realpathSync,rmSync,writeFileSync } from 'node:fs';
 import { createServer,type Server } from 'node:http';
 import { basename,join } from 'node:path';
 import { createElement } from 'react';
@@ -36,6 +36,49 @@ import { initializeGitFixture } from './helpers/git-fixture.js';
 import { goalId,goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 import { MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
+import { conversationDaemon } from './helpers/conversation-daemon.js';
+import { connectConversationIpc } from '../features/daemon/conversationReadiness.js';
+import { createConversationIpcServer } from '../features/daemon/conversationIpcServer.js';
+import { registerProject } from '../infra/config/global/projectRegistry.js';
+import { conversationId } from '../infra/conversations/identity.js';
+import { EventRecordSchema } from '../infra/daemon/eventRecord.js';
+import { DaemonRouting } from '../features/daemon/routing.js';
+import type { Socket } from 'node:net';
+import * as daemonProcess from '../infra/daemon/process.js';
+import { deferred } from './helpers/controlledDaemon.js';
+import { RecentMessagesSchema } from '../core/daemon/conversationHistory.js';
+import { restoreLegacyConversations } from '../features/daemon/inbox.js';
+import { conversationRecord, writeLegacyConversation } from './helpers/conversation-fixtures.js';
+import type { TurnOutcome } from '../core/daemon/messages.js';
+
+const acceptanceIo = vi.hoisted(() => ({
+  renamed: undefined as ((path: string) => Promise<void>) | undefined,
+  removing: undefined as ((path: string) => Promise<void>) | undefined,
+  scanning: undefined as ((path: string) => void) | undefined,
+  failRelease: false,
+}));
+vi.mock('node:fs/promises', async (original) => {
+  const fs = await original<typeof import('node:fs/promises')>();
+  return { ...fs,
+    async opendir(...args: Parameters<typeof fs.opendir>) {
+      acceptanceIo.scanning?.(String(args[0]));
+      return fs.opendir(...args);
+    },
+    async rename(...args: Parameters<typeof fs.rename>) {
+      await fs.rename(...args);
+      await acceptanceIo.renamed?.(String(args[1]));
+    },
+    async unlink(...args: Parameters<typeof fs.unlink>) {
+      const path = String(args[0]);
+      if (acceptanceIo.failRelease && path.endsWith('/daemon-events/.lock')) {
+        acceptanceIo.failRelease = false;
+        throw Object.assign(new Error('lock release failed'), { code: 'EIO' });
+      }
+      await acceptanceIo.removing?.(path);
+      return fs.unlink(...args);
+    },
+  };
+});
 
 const stdioTransport = vi.hoisted(() => vi.fn());
 vi.mock('@modelcontextprotocol/sdk/server/stdio.js', () => ({ StdioServerTransport: stdioTransport }));
@@ -45,6 +88,381 @@ vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: vi.fn(async ()
 vi.mock('node:crypto', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:crypto')>();
   return { ...original, randomUUID: vi.fn(original.randomUUID) };
+});
+
+describe('conversation messages through the stdio MCP entrypoint', () => {
+  let root: string;
+  let cwd: string;
+  let directory: string;
+  let daemon: Awaited<ReturnType<typeof conversationDaemon>>;
+  let ipc: Awaited<ReturnType<typeof createConversationIpcServer>>;
+  let client: Client;
+  let transport: ReturnType<typeof InMemoryTransport.createLinkedPair>[1];
+  let relay = false;
+  let relayedOperationId: string | undefined;
+  let relayOrigin: 'human' | 'director' = 'human';
+  const owner = { pid: process.pid, identity: { startTime: 'stdio-message-test' }, version: 'test', cliPath: '/test/cli.js' };
+
+  function ensureTestDaemon(options: { retainConnection: true }): Promise<Socket>;
+  function ensureTestDaemon(): Promise<void>;
+  async function ensureTestDaemon(options?: { retainConnection: true }): Promise<Socket | void> {
+    const socket = await connectConversationIpc(directory, owner);
+    if (socket === undefined) throw new Error('Test daemon authentication failed');
+    if (options?.retainConnection) return socket;
+    socket.destroy();
+  }
+
+  beforeEach(async () => {
+    relay = false;
+    relayedOperationId = undefined;
+    relayOrigin = 'human';
+    vi.spyOn(daemonProcess, 'readProcessOwner').mockResolvedValue({ pid: owner.pid, startTime: owner.identity.startTime });
+    directory = process.env.TAKT_CONFIG_DIR!;
+    mkdirSync(join(process.cwd(), '.tmp'), { recursive: true });
+    root = realpathSync(mkdtempSync(join(process.cwd(), '.tmp', 'stdio-messages-')));
+    cwd = join(root, 'repository');
+    mkdirSync(cwd);
+    initializeGitFixture(cwd, []);
+    await registerProject({ globalConfigDirectory: directory, projectDirectory: cwd, command: 'manager', managerUsed: true });
+    daemon = await conversationDaemon(directory, {
+      async resolve(assignment) {
+        return { provider: 'mock', model: null, language: 'en', contextKey: 'stdio-messages', executor: {
+          async execute(input) {
+            if (assignment.kind === 'daemon' && relay) {
+              relay = false;
+              if (input.requestDaemon === undefined) throw new Error('Director turn requires the daemon request port');
+              const reply = await input.requestDaemon({ kind: 'accept_director_message',
+                conversationId: conversationId({ kind: 'repository', repositoryDirectory: cwd }),
+                eventId: crypto.randomUUID(), requestId: crypto.randomUUID(), occurredAt: new Date().toISOString(),
+                text: 'relayed input', origin: relayOrigin,
+              });
+              if (reply.kind !== 'event_accepted' || reply.admission.kind !== 'accepted') throw new Error('Relay was not admitted');
+              relayedOperationId = reply.admission.operationId;
+            }
+            return { message: assignment.kind === 'daemon' ? 'director reply' : 'manager reply',
+              summary: null, sessionId: 'test-session', assignment: undefined };
+          },
+        } };
+      },
+      async close() {},
+    }, { routing: new DaemonRouting(directory) });
+    ipc = await createConversationIpcServer(directory, owner, daemon.input);
+    vi.mocked(ensureDaemon).mockImplementation(ensureTestDaemon);
+  });
+
+  afterEach(async () => {
+    acceptanceIo.renamed = undefined;
+    acceptanceIo.removing = undefined;
+    acceptanceIo.scanning = undefined;
+    acceptanceIo.failRelease = false;
+    try { await client?.close(); }
+    finally {
+      try { await transport?.close(); }
+      finally {
+        try { await daemon?.close(); }
+        finally {
+          await ipc?.close();
+          vi.mocked(ensureDaemon).mockReset().mockResolvedValue(undefined);
+          vi.restoreAllMocks();
+          invalidateResolvedConfigCache(cwd);
+          rmSync(root, { recursive: true, force: true });
+        }
+      }
+    }
+  });
+
+  async function connect() {
+    const originalArgv = process.argv;
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    transport = b;
+    stdioTransport.mockImplementationOnce(function StdioServerTransport() { return b; });
+    try {
+      process.argv = [...originalArgv.slice(0, 2), '--tool-set', 'all'];
+      await connectTaktMcpServerToStdio();
+    } finally { process.argv = originalArgv; }
+    client = new Client({ name: 'stdio-messages', version: '1' });
+    await client.connect(a);
+  }
+
+  function records() {
+    const path = join(directory, 'daemon-events');
+    return readdirSync(path).filter((name) => name.endsWith('.json'))
+      .map((name) => EventRecordSchema.parse(JSON.parse(readFileSync(join(path, name), 'utf8'))));
+  }
+
+  it.each(['success', 'save-failure', 'lock-release-failure'] as const)('publishes only committed acceptance during %s', async (phase) => {
+    await connect();
+    await send('manager', '前');
+    await daemon.settled();
+    const saved = deferred<void>();
+    const resumeSave = deferred<void>();
+    const deleting = deferred<void>();
+    const resumeDelete = deferred<void>();
+    const reached = deferred<void>();
+    const order: string[] = [];
+    let pendingPath: string | undefined;
+    let accepting = true;
+    const prematureScans: boolean[] = [];
+    const accept = daemon.events.accept.bind(daemon.events);
+    vi.spyOn(daemon.events, 'accept').mockImplementation(async (...args) => {
+      try { return await accept(...args); }
+      finally { accepting = false; order.push('accept-end'); }
+    });
+    acceptanceIo.scanning = (path) => {
+      if (pendingPath !== undefined && path === join(directory, 'daemon-events')) {
+        prematureScans.push(accepting); order.push('scan');
+      }
+    };
+    acceptanceIo.renamed = async (path) => {
+      if (!path.includes('/daemon-events/') || !path.endsWith('.json')) return;
+      const record = EventRecordSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
+      if (record.event.event.kind !== 'human_command' || record.event.event.command.kind !== 'message'
+        || record.event.event.command.text !== '次') return;
+      acceptanceIo.renamed = undefined;
+      pendingPath = path;
+      order.push('renamed'); saved.resolve();
+      await resumeSave.promise;
+      if (phase === 'save-failure') throw Object.assign(new Error('save acknowledgement failed'), { code: 'EIO' });
+      if (phase === 'lock-release-failure') acceptanceIo.failRelease = true;
+    };
+    acceptanceIo.removing = async (path) => {
+      if (path !== pendingPath) return;
+      order.push('deleting'); deleting.resolve();
+      await resumeDelete.promise;
+    };
+    const recent = daemon.events.recentMessages.bind(daemon.events);
+    vi.spyOn(daemon.events, 'recentMessages').mockImplementation((...args) => {
+      order.push('read-start'); reached.resolve(); return recent(...args);
+    });
+    const sending = client.callTool({ name: 'takt_send_message', arguments: { recipient: 'manager', cwd, text: '次' } })
+      .then((response) => { order.push('send-end'); return response; });
+    await saved.promise;
+    if (phase === 'lock-release-failure') { resumeSave.resolve(); await deleting.promise; }
+    let readFinished = false;
+    const reading = client.callTool({ name: 'takt_list_recent_messages', arguments: { recipient: 'manager', cwd, limit: 1 } })
+      .then((response) => { readFinished = true; order.push('read-end'); return response; });
+    await reached.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const beforeCommit = readFinished;
+    let duringDelete = false;
+    try {
+      if (phase === 'save-failure') {
+        resumeSave.resolve(); await deleting.promise;
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        duringDelete = readFinished;
+      }
+    } finally { resumeSave.resolve(); resumeDelete.resolve(); }
+    const response = await sending;
+    const history = await reading;
+    console.info('acceptance visibility', JSON.stringify({ phase, beforeCommit, order, history: JSON.parse(firstTextContent(history.content)), sendError: response.isError === true }));
+    if (phase === 'lock-release-failure') rmSync(join(directory, 'daemon-events', '.lock'));
+    expect(response.isError === true).toBe(phase !== 'success');
+    if (phase !== 'success') {
+      expect(daemon.failures).toHaveLength(1);
+      expect(daemon.failures[0]).toMatchObject({ code: 'EIO' });
+      daemon.failures.splice(0);
+    }
+    expect(beforeCommit, JSON.stringify(order)).toBe(false);
+    expect(duringDelete, JSON.stringify(order)).toBe(false);
+    expect(prematureScans, JSON.stringify(order)).not.toContain(true);
+    expect(prematureScans.length).toBeGreaterThan(0);
+    expect(history.isError).not.toBe(true);
+    const page = JSON.parse(firstTextContent(history.content)) as { messages: Array<{ text: string; operationId: string }> };
+    if (phase === 'success') {
+      expect(page.messages).toHaveLength(1);
+      expect(page.messages[0]).toMatchObject({ text: '次', operationId: JSON.parse(firstTextContent(response.content)).operationId });
+    } else {
+      expect(page.messages).toHaveLength(1);
+      expect(page.messages[0]?.text).toBe('manager reply');
+    }
+    await daemon.settled();
+    await send('manager', '後');
+    await daemon.settled();
+    expect(records().filter(({ event }) => event.event.kind === 'human_command' && event.event.command.kind === 'message'
+      && event.event.command.text === '次')).toHaveLength(phase === 'success' ? 1 : 0);
+  });
+
+  async function send(recipient: 'manager' | 'director', text: string) {
+    const result = await client.callTool({ name: 'takt_send_message', arguments: {
+      recipient, ...(recipient === 'manager' ? { cwd } : {}), text,
+    } });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    return z.object({ operationId: z.uuid() }).parse(JSON.parse(firstTextContent(result.content)));
+  }
+
+  it('registers both conversation tools through the public stdio entrypoint', async () => {
+    await connect();
+    expect((await client.listTools()).tools.map(({ name }) => name))
+      .toEqual(expect.arrayContaining(['takt_send_message', 'takt_list_recent_messages', 'takt_enqueue_task']));
+  });
+
+  it.each([
+    { toolSet: 'all' as const, conversationTools: false },
+    { toolSet: 'manager' as const, conversationTools: true },
+    { toolSet: 'read-only' as const, conversationTools: true },
+  ])('keeps conversation tools unavailable for shared or restricted servers: $toolSet', async (options) => {
+    const restricted = createTaktMcpServer({}, { ...options, allowedProjectRoot: cwd });
+    const reader = new Client({ name: 'restricted-conversations', version: '1' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    try {
+      await restricted.connect(b); await reader.connect(a);
+      const names = (await reader.listTools()).tools.map(({ name }) => name);
+      expect(names).not.toContain('takt_send_message');
+      expect(names).not.toContain('takt_list_recent_messages');
+      expect((await reader.callTool({ name: 'takt_send_message', arguments: { recipient: 'director', text: 'body' } })).isError).toBe(true);
+    } finally { await reader.close(); await restricted.close(); }
+  });
+
+  it('saves each recipient message through daemon admission without mixing their conversations', async () => {
+    await connect();
+    const manager = await send('manager', 'manager direct input');
+    const director = await send('director', 'director input');
+    await daemon.settled();
+    const saved = records().filter(({ event }) => event.event.kind === 'human_command');
+    expect(saved).toHaveLength(2);
+    for (const [assignment, operationId, text] of [
+      [{ kind: 'repository' as const, repositoryDirectory: cwd }, manager.operationId, 'manager direct input'],
+      [{ kind: 'daemon' as const }, director.operationId, 'director input'],
+    ] as const) {
+      expect(saved.filter(({ event }) => event.conversationId === conversationId(assignment)))
+        .toEqual([expect.objectContaining({ event: expect.objectContaining({ operationId, source: 'mcp',
+          event: expect.objectContaining({ kind: 'human_command', command: { kind: 'message', text },
+            speaker: { namespace: 'local', id: 'operator' } }),
+        }) })]);
+    }
+    await vi.waitFor(() => expect(daemon.input.attachmentCount).toBe(0));
+  });
+
+  it('reads the latest exchanges with speakers from only the selected conversation', async () => {
+    await connect();
+    await send('manager', 'old manager input'); await daemon.settled();
+    await send('director', 'director input'); await daemon.settled();
+    const latest = await send('manager', 'latest manager input'); await daemon.settled();
+    for (const [recipient, text, speaker] of [
+      ['manager', 'latest manager input', 'manager'], ['director', 'director input', 'director'],
+    ] as const) {
+      const result = await client.callTool({ name: 'takt_list_recent_messages', arguments: {
+        recipient, ...(recipient === 'manager' ? { cwd } : {}), limit: 2,
+      } });
+      expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+      const page = z.object({ messages: z.array(z.object({ speaker: z.enum(['human', 'manager', 'director']), text: z.string() })) })
+        .parse(JSON.parse(firstTextContent(result.content)));
+      expect(page.messages.map(({ speaker, text }) => ({ speaker, text })))
+        .toEqual([{ speaker: 'human', text }, { speaker, text: `${speaker} reply` }]);
+    }
+    expect(records().some(({ event }) => event.operationId === latest.operationId)).toBe(true);
+  });
+
+  it('returns an empty history for a valid recipient without messages', async () => {
+    await connect();
+    const result = await client.callTool({ name: 'takt_list_recent_messages', arguments: { recipient: 'manager', cwd } });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ messages: [] });
+  });
+
+  it('keeps the director relay origin and exposes the manager reply under the same operation', async () => {
+    await daemon.conversations.ensure({ kind: 'repository', repositoryDirectory: cwd });
+    await connect();
+    relay = true;
+    await send('director', 'ask the manager');
+    await daemon.settled();
+    expect(relayedOperationId).toBeDefined();
+    expect(records().filter(({ event }) => event.operationId === relayedOperationId))
+      .toEqual([expect.objectContaining({ state: 'settled', event: expect.objectContaining({ source: 'director',
+        conversationId: conversationId({ kind: 'repository', repositoryDirectory: cwd }),
+        event: { kind: 'director_message', text: 'relayed input', origin: 'human',
+          directorConversationId: conversationId({ kind: 'daemon' }) },
+      }) })]);
+    const result = await client.callTool({ name: 'takt_list_recent_messages', arguments: { recipient: 'director' } });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ messages: expect.arrayContaining([
+      expect.objectContaining({ speaker: 'manager', text: 'manager reply', operationId: relayedOperationId }),
+    ]) });
+  });
+
+  it.each((['human', 'director'] as const).flatMap((origin) => (['reply', 'failed', 'interrupted', 'error'] as const)
+    .map((outcome) => ({ origin, outcome }))))('retains $origin relay metadata in the $outcome MCP result', async ({ origin, outcome }) => {
+    const manager = conversationId({ kind: 'repository', repositoryDirectory: cwd });
+    const director = conversationId({ kind: 'daemon' });
+    await daemon.conversations.ensure({ kind: 'repository', repositoryDirectory: cwd });
+    const text = { reply: '確認済み', failed: '実行失敗', interrupted: '中断', error: '処理エラー' }[outcome];
+    const selected: TurnOutcome = outcome === 'reply' ? { kind: 'completed', result: { kind: 'reply', message: text } }
+      : outcome === 'error' ? { kind: 'completed', result: { kind: 'error', code: 'execution_failed', message: text } }
+        : { kind: outcome, message: text };
+    const post = daemon.dispatcher.post.bind(daemon.dispatcher);
+    vi.spyOn(daemon.dispatcher, 'post').mockImplementation((message) => post(message.kind === 'turn_finished'
+      && message.turn.conversationId === manager ? { ...message, outcome: selected } : message));
+    await connect();
+    relayOrigin = origin; relay = true;
+    await send('director', 'ask the manager'); await daemon.settled();
+    const response = await client.callTool({ name: 'takt_list_recent_messages', arguments: { recipient: 'director' } });
+    expect(response.isError, firstTextContent(response.content)).not.toBe(true);
+    const page = RecentMessagesSchema.parse((({ messages, truncated }) => ({ messages, truncated }))(
+      JSON.parse(firstTextContent(response.content))));
+    const results = page.messages.filter(({ operationId }) => operationId === relayedOperationId);
+    expect(results).toEqual([expect.objectContaining({ operationId: relayedOperationId, conversationId: director,
+      speaker: 'manager', senderConversationId: manager, directorConversationId: director, origin, text,
+      kind: outcome === 'reply' ? 'reply' : 'result', status: outcome === 'reply' ? 'completed' : outcome === 'interrupted' ? 'interrupted' : 'failed' })]);
+    expect(records().find(({ event }) => event.operationId === relayedOperationId)?.event.event)
+      .toMatchObject({ kind: 'director_message', origin, directorConversationId: director });
+  });
+
+  it('returns restored legacy authors as unknown while preserving explicit human and director authors', async () => {
+    const director = conversationId({ kind: 'daemon' });
+    const legacy = conversationRecord(cwd);
+    const operationId = crypto.randomUUID();
+    legacy.directorMessages = [{ operationId, text: '進捗を確認', speaker: { namespace: 'agent', id: 'director' }, directorConversationId: director }];
+    writeLegacyConversation(directory, legacy);
+    await restoreLegacyConversations(daemon.conversations, daemon.events);
+    for (const [index, origin] of (['human', 'director'] as const).entries()) {
+      const eventId = crypto.randomUUID();
+      await daemon.events.accept({ eventId, requestId: eventId, operationId: crypto.randomUUID(), conversationId: legacy.id,
+        source: 'director', lane: 'other', acceptedSequence: index + 2, occurredAt: new Date().toISOString(),
+        event: { kind: 'director_message', text: '進捗を確認', origin, directorConversationId: director } });
+    }
+    await connect();
+    const response = await client.callTool({ name: 'takt_list_recent_messages', arguments: { recipient: 'manager', cwd } });
+    expect(response.isError, firstTextContent(response.content)).not.toBe(true);
+    const value = JSON.parse(firstTextContent(response.content));
+    const page = RecentMessagesSchema.parse({ messages: value.messages, truncated: value.truncated });
+    expect(page.messages.map(({ speaker, text, conversationId, directorConversationId, origin }) =>
+      ({ speaker, text, conversationId, directorConversationId, origin }))).toEqual([
+      { speaker: 'unknown', text: '進捗を確認', conversationId: legacy.id, directorConversationId: director, origin: undefined },
+      { speaker: 'human', text: '進捗を確認', conversationId: legacy.id, directorConversationId: director, origin: 'human' },
+      { speaker: 'director', text: '進捗を確認', conversationId: legacy.id, directorConversationId: director, origin: 'director' },
+    ]);
+    expect(page.messages[0]?.operationId).toBe(operationId);
+  });
+
+  it('rejects an unregistered manager without admitting a message to either conversation', async () => {
+    const unregistered = join(root, 'unregistered');
+    mkdirSync(unregistered); initializeGitFixture(unregistered, []);
+    await connect();
+    expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_send_message');
+    const before = records();
+    const result = await client.callTool({ name: 'takt_send_message', arguments: {
+      recipient: 'manager', cwd: unregistered, text: 'must not be delivered',
+    } });
+    expect(result.isError).toBe(true);
+    expect(firstTextContent(result.content).length).toBeGreaterThan(0);
+    expect(records()).toEqual(before);
+  });
+
+  it.each([
+    { recipient: 'manager', text: 'missing repository' },
+    { recipient: 'director', cwd: 'contradictory', text: 'wrong target' },
+    { recipient: 'unknown', text: 'unknown target' },
+    { recipient: 'director', text: '' },
+    { recipient: 'director', text: ' \n\t ' },
+  ])('rejects invalid input before durable admission %#', async (input) => {
+    await connect();
+    expect((await client.listTools()).tools.map(({ name }) => name)).toContain('takt_send_message');
+    const before = records();
+    const result = await client.callTool({ name: 'takt_send_message', arguments: input });
+    expect(result.isError).toBe(true);
+    expect(firstTextContent(result.content).length).toBeGreaterThan(0);
+    expect(records()).toEqual(before);
+  });
 });
 
 const standaloneItemSchema = z.object({

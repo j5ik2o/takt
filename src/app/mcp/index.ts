@@ -34,6 +34,7 @@ export async function connectTaktMcpServerToStdio(): Promise<void> {
       : managerAssignmentSchema.parse(JSON.parse(rawAssignment));
   const server = createTaktMcpServer({}, {
     toolSet, managerAssignment,
+    conversationTools: toolSet === 'all',
     includeReferenceMarkers: shouldIncludeReferenceMarkers(argv),
   });
   await server.connect(new StdioServerTransport());

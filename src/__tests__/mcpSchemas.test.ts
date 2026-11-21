@@ -8,6 +8,7 @@ import {
   updateGoalBranchesInputSchema,
 } from '../features/mcp/schemas.js';
 import { goalId } from './helpers/goal-fixtures.js';
+import { sendMessageInputSchema, listRecentMessagesInputSchema } from '../features/mcp/schemas.js';
 
 const required = {
   cwd: '/repo',
@@ -15,6 +16,38 @@ const required = {
   workflow: 'default',
   autoPr: false,
 } as const;
+
+describe('MCP conversation message inputs', () => {
+  it.each([
+    { recipient: 'manager', cwd: '/repo' },
+    { recipient: 'director' },
+  ])('accepts an explicit $recipient recipient for sending and reading', (recipient) => {
+    const input = { ...recipient, text: '  本文\nを保持する  ' };
+    expect(sendMessageInputSchema.parse(input)).toEqual(input);
+    expect(listRecentMessagesInputSchema.parse({ ...recipient, limit: 2 })).toMatchObject({ ...recipient, limit: 2 });
+  });
+
+  it.each([
+    {},
+    { recipient: 'unknown' },
+    { recipient: 'manager' },
+    { recipient: 'manager', cwd: 'relative' },
+    { recipient: 'director', cwd: '/repo' },
+  ])('rejects a missing, invalid or contradictory recipient %#', (recipient) => {
+    expect(sendMessageInputSchema.safeParse({ ...recipient, text: '送信する' }).success).toBe(false);
+    expect(listRecentMessagesInputSchema.safeParse(recipient).success).toBe(false);
+  });
+
+  it.each(['', ' \n\t '])('rejects a blank message %j for either recipient', (text) => {
+    for (const recipient of [{ recipient: 'manager', cwd: '/repo' }, { recipient: 'director' }]) {
+      expect(sendMessageInputSchema.safeParse({ ...recipient, text }).success).toBe(false);
+    }
+  });
+
+  it.each([0, -1, 1.5])('rejects an invalid recent message count %s', (limit) => {
+    expect(listRecentMessagesInputSchema.safeParse({ recipient: 'director', limit }).success).toBe(false);
+  });
+});
 
 describe('MCP tool input schema', () => {
   it.each([true, false])('preserves explicit draftPr %s', (draftPr) => {

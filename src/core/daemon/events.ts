@@ -76,7 +76,7 @@ export interface EventInput {
   eventId: string;
   requestId: string;
   conversationId: string;
-  source: 'tui' | 'slack' | 'run' | 'director' | 'watcher' | 'daemon';
+  source: 'tui' | 'mcp' | 'slack' | 'run' | 'director' | 'watcher' | 'daemon';
   occurredAt: string;
   event: TurnEvent;
 }

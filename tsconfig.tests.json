@@ -521,6 +521,7 @@
     "src/__tests__/mcp-enqueue-draft-pr.integration.test.ts",
     "src/__tests__/mcp-entrypoint.integration.test.ts",
     "src/__tests__/mcp-entrypoint.test.ts",
+    "src/__tests__/mcp-message-operations.test.ts",
     "src/__tests__/mcp-response.test.ts",
     "src/__tests__/mcp-workflow.test.ts",
     "src/__tests__/mcpOperations.test.ts",

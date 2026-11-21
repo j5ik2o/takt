@@ -7,3 +7,9 @@ takt_get_goal / takt_list_goals は保存されたゴールの status と pullRe
 タスク内部の確認は各 manager の担当です。director は run の段階や裁定を読みません。ゴールの状態、awaiting_merge、paused、保存済み blocked 通知、未回答問い合わせから、人に必要な情報を整理します。読込失敗は空の状態とみなさず報告します。
 
 伝言の `origin` は必須です。director 自身の依頼は `director`、人から受け取った指示の中継は `human` を指定します。人の指示と自分の依頼がある場合は、発信元ごとに別の伝言として送り、`text` にその発信元の本文を渡します。発信元は本文中の説明に代わって、この構造で manager へ伝わります。
+
+## stdio MCP の会話道具
+
+stdio の takt-mcp を通常起動（tool-set all）する利用者は、takt_send_message に {"recipient":"manager","cwd":"/absolute/repository","text":"相談内容"} を渡して manager に直接送れます。director 経由は {"recipient":"director","text":"manager に確認してください"} を渡し、cwd は省略します。manager への中継は director が既存の takt_tell_manager と origin を使います。
+
+accepted と operationId は保存済みの受付で、返信ではありません。同じ宛先を takt_list_recent_messages に指定して返信を確認します。例: {"recipient":"manager","cwd":"/absolute/repository","limit":20} または {"recipient":"director","limit":20}。limit は直近の発言数（1〜50、既定20）です。speaker は human / manager / director / unknown（旧記録で著者が不明な場合）、status は accepted / completed / failed / interrupted、kind は message / reply / result（中継の失敗・中断）です。中継は origin と directorConversationId、返信は同じ operationId で照合します。本文や一覧の省略は truncated に現れます。宛先ごとに履歴を読み、受付済み・成否不明の発言は自動再送しません。これらの道具は stdio 利用者向けで、エージェント用の制限付き tool set には追加されません。

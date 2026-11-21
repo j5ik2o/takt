@@ -42,6 +42,9 @@ describe('MCP stdio entrypoint integration', () => {
       await client.connect(transport);
 
       const tools = await client.listTools();
+      const historyDescription = tools.tools.find((tool) => tool.name === 'takt_list_recent_messages')?.description;
+      expect(historyDescription).toMatch(/human, manager, director and unknown speakers/u);
+      expect(historyDescription).toMatch(/unknown means author information is absent from legacy records/u);
       const result = await client.callTool({
         name: 'takt_enqueue_task',
         arguments: {
@@ -57,6 +60,8 @@ describe('MCP stdio entrypoint integration', () => {
         'takt_list_tasks',
         'takt_get_run',
         'takt_tell_run',
+        'takt_send_message',
+        'takt_list_recent_messages',
       ]));
       expect(result.isError).toBeUndefined();
       expect(JSON.parse(firstTextContent(result.content))).toEqual(expect.objectContaining({
