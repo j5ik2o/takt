@@ -11,6 +11,11 @@ import { PrivateFileLockAcquisitionError } from '../shared/utils/private-file-lo
 import { TaskClaimLockAcquisitionError } from '../infra/task/taskLifecycleService.js';
 beforeEach(() => save.mockReset());
 afterEach(() => vi.restoreAllMocks());
+
+function lockTimeoutFailure(): Error {
+  const message = 'File lock: timed out waiting for lock: /project/.takt/tasks.yaml.lock';
+  return new Error(message);
+}
 it('publishes task setup failures once when claiming changes their state', () => {
   let status = 'pending';
   const record = () => ({ name: 'task-a', goalId: goalRecord().id, status, runSlug: 'setup-run', completion: { success: false, interrupted: false } });
@@ -132,7 +137,7 @@ describe.each(['private', 'task-store'] as const)('eligible pending tasks for %s
   ])('wraps claim ENOSPC only for eligible pending tasks: %j', ({ goalTasksOnly, goalId, status, retry }) => {
     const failure = source === 'private'
       ? new PrivateFileLockAcquisitionError('disk full', 'ENOSPC', undefined, {})
-      : new TaskClaimLockAcquisitionError('disk full', { cause: new Error('disk full') });
+      : new TaskClaimLockAcquisitionError('disk full', 'ENOSPC', { cause: new Error('disk full') });
     const runner = {
       listTaskStateItems: () => [{ name: 'task-a', goalId, status }],
       claimNextTasks: () => { throw failure; },
@@ -143,5 +148,62 @@ describe.each(['private', 'task-store'] as const)('eligible pending tasks for %s
       expect(claim).toThrow(expect.objectContaining({ cause: failure }));
     } else expect(claim).toThrow(failure);
     expect(save).not.toHaveBeenCalled();
+  });
+});
+
+describe('tasks.yaml write-lock timeout failure', () => {
+  it.each([
+    { goalTasksOnly: false, goalId: undefined, retry: true },
+    { goalTasksOnly: true, goalId: undefined, retry: false },
+    { goalTasksOnly: true, goalId: goalRecord().id, retry: true },
+  ])('treats a classified write-lock timeout as a recoverable claim failure: %j', ({ goalTasksOnly, goalId, retry }) => {
+    const failure = new TaskClaimLockAcquisitionError(
+      'File lock: timed out waiting for lock: /project/.takt/tasks.yaml.lock', 'TIMEOUT',
+    );
+    const runner = {
+      listTaskStateItems: () => [{ name: 'task-a', goalId, status: 'pending' }],
+      claimNextTasks: () => { throw failure; },
+    } as unknown as TaskRunner;
+    const claim = () => claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal, goalTasksOnly);
+    if (retry) {
+      expect(claim).toThrow(TaskClaimLockUnavailableError);
+      expect(claim).toThrow(expect.objectContaining({ cause: failure, code: 'TIMEOUT' }));
+    } else expect(claim).toThrow(failure);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('treats a raw write-lock timeout read as a recoverable claim failure: goalTasksOnly=%s', (goalTasksOnly) => {
+    const failure = lockTimeoutFailure();
+    const claimNextTasks = vi.fn(() => [] as never[]);
+    const runner = {
+      listTaskStateItems: () => { throw failure; },
+      claimNextTasks,
+    } as unknown as TaskRunner;
+    const claim = () => claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal, goalTasksOnly);
+
+    expect(claim).toThrow(TaskClaimLockUnavailableError);
+    expect(claim).toThrow(expect.objectContaining({ cause: failure, code: 'TIMEOUT' }));
+    expect(claimNextTasks).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a timeout without a pending claim candidate as recoverable', () => {
+    const runner = {
+      listTaskStateItems: () => [{ name: 'task-a', goalId: undefined, status: 'running' }],
+      claimNextTasks: () => { throw lockTimeoutFailure(); },
+    } as unknown as TaskRunner;
+    expect(() => claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal))
+      .toThrow(/File lock: timed out waiting for lock/);
+  });
+
+  it('does not treat a non-timeout lock error as a recoverable claim failure', () => {
+    const runner = {
+      listTaskStateItems: () => [{ name: 'task-a', goalId: undefined, status: 'pending' }],
+      claimNextTasks: () => {
+        throw new Error('private file lock content is missing: /project/.takt/goal-execution.lock');
+      },
+    } as unknown as TaskRunner;
+    expect(() => claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal))
+      .toThrow('private file lock content is missing');
   });
 });

@@ -258,6 +258,8 @@
     "src/__tests__/fixtures/project-execution-lock-child.ts",
     "src/__tests__/fixtures/task-delete-claim.ts",
     "src/__tests__/fixtures/task-deletion-lock-child.ts",
+    "src/__tests__/fixtures/task-store-claim-lock-timeout.ts",
+    "src/__tests__/fixtures/task-store-lock-holder.ts",
     "src/__tests__/forceShutdown.test.ts",
     "src/__tests__/formalSpecPromptTemplates.test.ts",
     "src/__tests__/formalSpecVerifier.integration.test.ts",
