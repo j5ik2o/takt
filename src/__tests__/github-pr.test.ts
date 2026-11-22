@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PrHeadObservationMismatchError } from '../core/workflow/system/pr-execution-context.js';
 import { parseGitHubPullRequestTarget } from '../infra/github/pull-request-target.js';
 import {
+  CacciaGitHubTimeoutError,
   closePr,
   createPullRequest,
   fetchPrReviewComments,
@@ -933,7 +934,7 @@ describe('GitHub PR command boundary', () => {
     });
     expect(execFile).toHaveBeenLastCalledWith(
       'gh', ['api', 'repos/org/repo/commits/head-7/status?per_page=100&page=1'],
-      { cwd: '/project', encoding: 'utf-8' }, expect.any(Function),
+      { cwd: '/project', encoding: 'utf-8', timeout: 60_000, killSignal: 'SIGKILL' }, expect.any(Function),
     );
   });
 
@@ -1619,10 +1620,17 @@ describe('GitHub PR command boundary', () => {
       reviewedHeadShas: ['head-7'],
     });
     for (const [, , options] of execFile.mock.calls) {
-      expect(options).not.toHaveProperty('timeout');
-      expect(options).not.toHaveProperty('killSignal');
+      expect(options).toMatchObject({ timeout: 60_000, killSignal: 'SIGKILL' });
       expect(options).not.toHaveProperty('signal');
     }
+  });
+
+  it('fails a stalled GitHub command even when the CodeRabbit wait still has time', async () => {
+    queueAsyncGhResponses(Object.assign(new Error('gh stopped responding'), { killed: true, signal: 'SIGKILL' }));
+
+    await expect(fetchCodeRabbitReviewStatus(7, '/project', Date.now() + 120_000))
+      .rejects.toBeInstanceOf(CacciaGitHubTimeoutError);
+    expect(execFile.mock.calls[0]?.[2]).toMatchObject({ timeout: 60_000, killSignal: 'SIGKILL' });
   });
 
   it('uses the remaining absolute deadline for every status page and kills timed out gh processes', async () => {

@@ -12,6 +12,7 @@ import {
 } from '../../infra/github/pr.js';
 import {
   cloneAndIsolateAbortable,
+  registerCacciaCloneGit,
   runGitCommandAbortable,
 } from '../../infra/task/clone-exec.js';
 import { resolveAutoCommitOptions } from '../../infra/task/autoCommit.js';
@@ -45,8 +46,8 @@ let temporaryCloneExitListenerInstalled = false;
 function cleanupOwnedTemporaryClonesOnExit(): void {
   const failures: Array<{ cwd: string; error: unknown }> = [];
   for (const [cwd, releaseGitOperations] of [...ownedTemporaryClones]) {
-    releaseGitOperations();
     try {
+      releaseGitOperations();
       rmSync(cwd, { recursive: true, force: true });
       ownedTemporaryClones.delete(cwd);
     } catch (error) {
@@ -339,7 +340,11 @@ async function createTemporaryClone(
   }
   const cloneCwd = mkdtempSync(join(tmpdir(), `takt-caccia-${prNumber}-`));
   try {
-    registerOwnedTemporaryClone(cloneCwd, () => releaseGitOperations(cloneCwd));
+    const terminateGit = registerCacciaCloneGit(cloneCwd);
+    registerOwnedTemporaryClone(cloneCwd, () => {
+      terminateGit();
+      releaseGitOperations(cloneCwd);
+    });
     await cloneAndIsolateAbortable(input.projectCwd, cloneCwd, undefined, input.abortSignal);
     const autoCommitOptions = resolveAutoCommitOptions(input.projectCwd);
     const cloneGit = await createCacciaCloneGitOperations({
@@ -453,7 +458,7 @@ async function commitAndPush(
   onPushedHead: CacciaPushedHeadListener | undefined,
 ): Promise<{ headSha: string; pushed: boolean }> {
   assertNotAborted(signal);
-  const commitHash = await stageAndCommit(cwd, 'fix: address CodeRabbit review', resolveAutoCommitOptions(projectCwd));
+  const commitHash = await stageAndCommit(cwd, 'fix: address CodeRabbit review', resolveAutoCommitOptions(projectCwd), signal);
   const headSha = (await runGitCommandAbortable(cwd, ['rev-parse', 'HEAD'], signal)).stdout.trim();
   if (commitHash !== undefined) {
     const branch = (await runGitCommandAbortable(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], signal)).stdout.trim();

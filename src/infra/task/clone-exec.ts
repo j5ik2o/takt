@@ -120,8 +120,9 @@ function runIsolatedGitCommandAbortable(
   gitCwd: string,
   args: string[],
   abortSignal?: AbortSignal,
+  ownerCwd?: string,
 ): Promise<{ stdout: string; stderr: string }> {
-  return runGitCommandAbortable(gitCwd, args, abortSignal, isolatedGitEnv());
+  return runGitCommandAbortable(gitCwd, args, abortSignal, isolatedGitEnv(), undefined, ownerCwd);
 }
 
 // A destination that already holds files was not created by this clone attempt, so a failed attempt
@@ -380,12 +381,26 @@ function terminateProcessGroup(child: ReturnType<typeof spawn>, signal: NodeJS.S
   return child.kill(signal);
 }
 
+const cacciaCloneProcesses = new Map<string, Set<ReturnType<typeof spawn>>>();
+
+/** Track detached Git process groups started for this temporary clone until cleanup. */
+export function registerCacciaCloneGit(cwd: string): () => void {
+  const children = new Set<ReturnType<typeof spawn>>();
+  cacciaCloneProcesses.set(cwd, children);
+  return () => {
+    for (const child of children) terminateProcessGroup(child, 'SIGKILL');
+    children.clear();
+    cacciaCloneProcesses.delete(cwd);
+  };
+}
+
 export function runGitCommandAbortable(
   gitCwd: string,
   args: string[],
   abortSignal?: AbortSignal,
   env?: NodeJS.ProcessEnv,
   timeoutMs?: number,
+  ownerCwd = gitCwd,
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     if (abortSignal?.aborted) {
@@ -399,6 +414,8 @@ export function runGitCommandAbortable(
       detached: true,
       env,
     });
+    const ownedChildren = cacciaCloneProcesses.get(ownerCwd);
+    if (child.pid !== undefined) ownedChildren?.add(child);
 
     let stdout = '';
     let stderr = '';
@@ -472,6 +489,7 @@ export function runGitCommandAbortable(
       );
     });
     child.on('close', (code) => {
+      ownedChildren?.delete(child);
       if (timeoutKillTimer) {
         clearTimeout(timeoutKillTimer);
       }
@@ -498,8 +516,9 @@ function runGitCloneAbortable(
   gitCwd: string,
   args: string[],
   abortSignal?: AbortSignal,
+  clonePath?: string,
 ): Promise<void> {
-  return runIsolatedGitCommandAbortable(gitCwd, args, abortSignal).then(() => undefined);
+  return runIsolatedGitCommandAbortable(gitCwd, args, abortSignal, clonePath).then(() => undefined);
 }
 
 export async function cloneAndIsolateAbortable(
@@ -531,7 +550,7 @@ export async function cloneAndIsolateAbortable(
   const destinationHadContent = destinationHasContent(clonePath);
 
   try {
-    await runGitCloneAbortable(projectDir, referenceCloneArgs, abortSignal);
+    await runGitCloneAbortable(projectDir, referenceCloneArgs, abortSignal, clonePath);
   } catch (err) {
     if (isTaskAbortError(err)) {
       throw err;
@@ -542,7 +561,7 @@ export async function cloneAndIsolateAbortable(
       log.info('Reference repository is shallow, retrying clone without --reference');
       cleanupPartialClone(clonePath);
       try {
-        await runGitCloneAbortable(projectDir, fallbackCloneArgs, abortSignal);
+        await runGitCloneAbortable(projectDir, fallbackCloneArgs, abortSignal, clonePath);
       } catch (fallbackErr) {
         if (isTaskAbortError(fallbackErr)) {
           throw fallbackErr;

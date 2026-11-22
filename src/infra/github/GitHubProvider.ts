@@ -13,7 +13,7 @@ import type { PrCiFailure } from '../../core/workflow/system/pr-ci.js';
 import type { GitHubPullRequestTarget } from './pull-request-target.js';
 import { collectPrCiFailure, rerunPrCi } from './pr-ci.js';
 import type { ListOpenPrsOptions } from '../git/types.js';
-import { fetchPrStatus, fetchPrDetails, fetchPrListItem, fetchPrSelectionData, findExistingPr, commentOnPr, closePr, createPullRequest, fetchPrReviewComments, listOpenPrNumbers, listOpenPrs, mergePr } from './pr.js';
+import { fetchPrStatus, fetchPrDetails, fetchPrListItem, fetchPrSelectionData, findExistingPr, commentOnPr, commentOnPrAbortable, closePr, createPullRequest, fetchPrReviewComments, listOpenPrNumbers, listOpenPrs, mergePr } from './pr.js';
 import type { GitProvider, CliStatus, Issue, ExistingPr, IssueListItem, PrListItem, CreateIssueOptions, CreateIssueResult, CloseIssueResult, CreatePrOptions, CreatePrResult, CommentResult, IssueCommentResult, MergeResult, PrReviewData } from '../git/types.js';
 
 export class GitHubProvider implements GitProvider {
@@ -78,6 +78,10 @@ export class GitHubProvider implements GitProvider {
 
   commentOnPr(prNumber: number, body: string, cwd?: string): CommentResult {
     return commentOnPr(prNumber, body, cwd ?? process.cwd(), ...this.targetArguments(prNumber));
+  }
+
+  commentOnPrAbortable(prNumber: number, body: string, cwd: string, signal: AbortSignal): Promise<CommentResult> {
+    return commentOnPrAbortable(prNumber, body, cwd, signal, ...this.targetArguments(prNumber));
   }
 
   commentOnIssue(issueNumber: number, body: string, cwd?: string): IssueCommentResult {

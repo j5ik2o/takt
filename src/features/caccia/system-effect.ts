@@ -16,11 +16,11 @@ import { resolveCacciaSettings, runCaccia } from './index.js';
 import type { CacciaDisplayOptions } from './output.js';
 import type { WorkflowExecutionEventSink } from '../tasks/execute/types.js';
 import { parseGitHubPullRequestTarget } from '../../infra/github/pull-request-target.js';
+import { CACCIA_GITHUB_TIMEOUT_MS, CacciaGitHubTimeoutError } from '../../infra/github/pr.js';
 
 import { CacciaWorkflowError } from './workflow-report.js';
 
 const log = createLogger('caccia-effect');
-const HEAD_WAIT_MS = 60_000;
 const HEAD_POLL_INTERVAL_MS = 2_000;
 
 interface CacciaEffectOptions extends Omit<SystemStepServicesOptions, 'gitProvider'>, CacciaDisplayOptions {
@@ -37,6 +37,41 @@ function assertPrIdentity(context: PrExecutionContext, details: PrDetails): void
   }
 }
 
+async function awaitGitHub<T>(operation: (signal: AbortSignal) => T | Promise<T>, signal: AbortSignal): Promise<T> {
+  signal.throwIfAborted();
+  let abort: () => void = () => undefined;
+  const interrupted = new Promise<never>((_resolve, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
+  });
+  try {
+    // Start in the race so a provider throwing synchronously also settles it.
+    const result = await Promise.race([interrupted, Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return operation(signal);
+    })]);
+    signal.throwIfAborted();
+    return result;
+  } finally {
+    signal.removeEventListener('abort', abort);
+  }
+}
+
+async function withGitHubDeadline<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  callerSignal: AbortSignal | undefined,
+  timeoutError: () => Error,
+): Promise<T> {
+  const controller = new AbortController();
+  const signal = callerSignal === undefined ? controller.signal : AbortSignal.any([callerSignal, controller.signal]);
+  const timeout = setTimeout(() => controller.abort(timeoutError()), CACCIA_GITHUB_TIMEOUT_MS);
+  try {
+    return await operation(signal);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function waitForExpectedPrHead(
   provider: GitProvider,
   context: PrExecutionContext,
@@ -46,21 +81,21 @@ async function waitForExpectedPrHead(
   callerSignal: AbortSignal | undefined,
 ): Promise<void> {
   if (!provider.fetchPrDetails) throw new Error('PR details are not supported by this Git provider');
-  const deadline = Date.now() + HEAD_WAIT_MS;
-  const controller = new AbortController();
-  const signal = callerSignal === undefined ? controller.signal : AbortSignal.any([callerSignal, controller.signal]);
+  const fetchPrDetails = provider.fetchPrDetails.bind(provider);
+  const deadline = Date.now() + CACCIA_GITHUB_TIMEOUT_MS;
   let lastObservedHead: string | undefined;
-  const timeoutError = (): Error => new Error(
+  const timeoutError = (): Error => new CacciaGitHubTimeoutError(
     `${failureMessage} (expected ${expectedHeadSha}, ${lastObservedHead === undefined
       ? 'no PR head was fetched' : `last observed ${lastObservedHead}`})`,
   );
-  const timeout = setTimeout(() => controller.abort(timeoutError()), HEAD_WAIT_MS);
-  try {
+  await withGitHubDeadline(async (signal) => {
     while (true) {
       signal.throwIfAborted();
       let headMatches = false;
       try {
-        const details = await provider.fetchPrDetails(context.prNumber, projectCwd, signal);
+        const details = await awaitGitHub(
+          (requestSignal) => fetchPrDetails(context.prNumber, projectCwd, requestSignal), signal,
+        );
         signal.throwIfAborted();
         assertPrIdentity(context, details);
         lastObservedHead = details.headSha;
@@ -84,12 +119,7 @@ async function waitForExpectedPrHead(
         signal.addEventListener('abort', abort, { once: true });
       });
     }
-  } catch (error) {
-    signal.throwIfAborted();
-    throw error;
-  } finally {
-    clearTimeout(timeout);
-  }
+  }, callerSignal, timeoutError);
 }
 
 async function recordSkippedHead(options: CacciaEffectOptions, headSha: string, isGitHub: boolean): Promise<void> {
@@ -139,7 +169,8 @@ export async function cacciaEffect(
     }
     if (!context) throw new Error('GitHub PR execution metadata is required for Caccia');
     const provider = options.gitProvider ?? getGitProvider();
-    if (!provider.fetchPrDetails) throw new Error('PR details are not supported by this Git provider');
+    const fetchPrDetails = provider.fetchPrDetails?.bind(provider);
+    if (!fetchPrDetails) throw new Error('PR details are not supported by this Git provider');
     await waitForExpectedPrHead(provider, context, options.projectCwd, initialHeadSha,
       'Pull request head changed before Caccia execution', options.abortSignal);
     let expectedHeadSha = initialHeadSha;
@@ -161,7 +192,11 @@ export async function cacciaEffect(
       return { success: true, failed: false, outcome: result.outcome, headSha: initialHeadSha,
         unresolvedCount: result.unresolvedCount, skipReason: result.skipReason, reason: result.reason ?? null };
     }
-    const latest = await provider.fetchPrDetails(prNumber, options.projectCwd, options.abortSignal);
+    const latest = await withGitHubDeadline(
+      (signal) => awaitGitHub((requestSignal) => fetchPrDetails(prNumber, options.projectCwd, requestSignal), signal),
+      options.abortSignal,
+      () => new CacciaGitHubTimeoutError(`Timed out waiting for pull request #${prNumber} details after Caccia review`),
+    );
     assertPrIdentity(context, latest);
     // 初回待機だけで終了した結果にはpushがないため、開始時のheadを検証して補う。
     if (result.headSha === undefined && result.skipReason !== 'initial_review_unavailable') {
@@ -190,7 +225,15 @@ export async function cacciaEffect(
         });
         options.abortSignal?.throwIfAborted();
         if (!check.passed) {
-          const comment = provider.commentOnPr(prNumber, toPublicThreatCheckComment(check.comment), options.projectCwd);
+          const body = toPublicThreatCheckComment(check.comment);
+          const commentOnPr = provider.commentOnPrAbortable?.bind(provider);
+          const comment = commentOnPr === undefined
+            ? provider.commentOnPr(prNumber, body, options.projectCwd)
+            : await withGitHubDeadline(
+              (signal) => awaitGitHub((requestSignal) => commentOnPr(prNumber, body, options.projectCwd, requestSignal), signal),
+              options.abortSignal,
+              () => new CacciaGitHubTimeoutError(`Timed out posting the Caccia threat check to pull request #${prNumber}`),
+            );
           if (!comment.success) throw new Error(comment.error);
           throw new Error('Fork threat check failed after Caccia changes');
         }
@@ -203,6 +246,8 @@ export async function cacciaEffect(
       unresolvedCount: result.unresolvedCount, skipReason: result.skipReason ?? null, reason: result.reason ?? null };
   } catch (error) {
     log.error('Caccia effect failed', { prNumber, error: getErrorMessage(error) });
-    return { success: false, failed: true, error: error instanceof CacciaWorkflowError ? error.message : safeExternalErrorMessage(error).replaceAll('@', '＠') };
+    return { success: false, failed: true,
+      ...(error instanceof CacciaGitHubTimeoutError ? { timedOut: true } : {}),
+      error: error instanceof CacciaWorkflowError ? error.message : safeExternalErrorMessage(error).replaceAll('@', '＠') };
   }
 }
