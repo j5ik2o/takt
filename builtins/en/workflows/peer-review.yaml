@@ -136,6 +136,13 @@ loop_monitors:
           next: reviewers
         - condition: The remediation assumptions must change and replanning can be performed
           next: remediation
+        - condition: >-
+            The child fix loop (the remediation_workflow, such as development-remediation-dynamic) runs as a child workflow_call,
+            so the steps inside it are not visible to this loop's judgment. When only part of this loop runs inside that child fix
+            loop, its premises cannot be revised from here, and the same cause and evidence repeat unchanged inside the child loop
+            without adding a new verification result, knowledge, or related diff, do not choose re-planning (remediation); choose
+            the option that stops repeating the loop.
+          next: ABORT
         - condition: No feasible action can satisfy the requirements
           next: ABORT
   - cycle:
@@ -161,6 +168,13 @@ loop_monitors:
           next: reviewers
         - condition: The remediation assumptions must change and replanning can be performed
           next: remediation
+        - condition: >-
+            The child fix loop (the remediation_workflow, such as development-remediation-dynamic) runs as a child workflow_call,
+            so the steps inside it are not visible to this loop's judgment. When only part of this loop runs inside that child fix
+            loop, its premises cannot be revised from here, and the same cause and evidence repeat unchanged inside the child loop
+            without adding a new verification result, knowledge, or related diff, do not choose re-planning (remediation); choose
+            the option that stops repeating the loop.
+          next: ABORT
         - condition: No feasible action can satisfy the requirements
           next: ABORT
 steps:

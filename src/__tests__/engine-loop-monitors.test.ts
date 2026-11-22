@@ -46,6 +46,7 @@ import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import { runReportPhase } from '../core/workflow/phase-runner.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
+import { CycleDetector } from '../core/workflow/engine/cycle-detector.js';
 import { compileRuntimeProviderEnvironment } from '../infra/config/runtime-provider/environment.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfigCore.js';
 import { writeReportFile } from '../core/workflow/report-writer.js';
@@ -2603,4 +2604,58 @@ describe('Replan-family judge transitions (runtime)', () => {
     // judge の後に新しいステップは始まらない
     expect(steps[steps.length - 1]).toBe('fix');
   });
+});
+
+/**
+ * simple の外側反復は review → remediation（子）→ follow-up-review と supervise → remediation。
+ * remediation は workflow_call なので、子engine で起きた step は親engine の CycleDetector 履歴に
+ * 入らず、親が観測できるのは戻ってきた workflow_call step の完了だけである。
+ * 子の内側（review-remediation 4 周・peer-review 3 周）の monitor は、この外側の往復を数えない。
+ */
+describe('Outer loop over nested workflow_call steps (simple)', () => {
+  const simpleLoopMonitors = (threshold: number): LoopMonitorConfig[] => [
+    {
+      cycle: ['review', 'remediation', 'follow-up-review'],
+      threshold,
+      judge: {
+        persona: 'supervisor',
+        rules: [
+          normalizeRule({ condition: 'Healthy outer progress', next: 'remediation' }) as LoopMonitorRule,
+          normalizeRule({ condition: 'Same findings repeat with no new evidence', next: 'ABORT' }) as LoopMonitorRule,
+        ],
+      },
+    },
+    {
+      cycle: ['supervise', 'remediation'],
+      threshold,
+      judge: {
+        persona: 'supervisor',
+        rules: [
+          normalizeRule({ condition: 'Healthy outer progress', next: 'remediation' }) as LoopMonitorRule,
+          normalizeRule({ condition: 'Same findings repeat with no new evidence', next: 'ABORT' }) as LoopMonitorRule,
+        ],
+      },
+    },
+  ];
+
+  it.each([2, 3, 4])('does not trigger any outer monitor after %i identical review and supervise round trips', (threshold) => {
+    const detector = new CycleDetector(simpleLoopMonitors(threshold));
+    let outerTriggers = 0;
+    for (let roundTrip = 1; roundTrip <= threshold + 2; roundTrip += 1) {
+      for (const [step, next] of [
+        ['review', 'remediation'],
+        ['remediation', 'follow-up-review'],
+        ['follow-up-review', 'remediation'],
+        ['remediation', 'supervise'],
+        ['supervise', 'remediation'],
+      ] as const) {
+        // workflow_call の子engine は独立した CycleDetector を持ち、子の内側 step は
+        // 親の履歴に入らない。親は remediation の完了を見るだけである。
+        if (detector.recordAndCheck(step, next).triggered) outerTriggers += 1;
+      }
+    }
+    // 同じ往復を閾値より十分多く繰り返しても、外側の monitor は一度も judge を呼ばない。
+    expect(outerTriggers).toBe(0);
+  });
+
 });
