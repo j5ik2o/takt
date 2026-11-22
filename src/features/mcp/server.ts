@@ -39,6 +39,7 @@ import {
   withdrawStandaloneInquiryInputSchema,
   notifyGoalInputSchema,
   goalWriteInputSchema, withdrawGoalQuestionInputSchema, recordGoalWorkLogInputSchema, listGoalRecordsInputSchema,
+  goalSpecificationVerificationInputSchema,
 } from './schemas.js';
 import {
   listTaktGoals,
@@ -73,6 +74,7 @@ import { askTaktStandaloneQuestion, listTaktStandaloneInquiries, withdrawTaktSta
 import type { ManagerAssignment } from '../manager/startupResolution.js';
 import { notifyTaktGoal } from './goalNotificationOperations.js';
 import { recordTaktGoalWorkLog, listTaktGoalRecords } from './goalWorkLogOperations.js';
+import { verifyTaktGoalSpecification } from './goalSpecificationVerificationOperations.js';
 import { pauseTaktGoal, resumeTaktGoal, abortTaktGoal } from './goalExecutionOperations.js';
 import { finishTaktAbortedGoal } from './goalFinishOperations.js';
 import { finishGoalInputSchema } from './goalFinishSchemas.js';
@@ -125,6 +127,7 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
   'takt_withdraw_goal_question', 'takt_notify_goal',
   'takt_ask_standalone_question', 'takt_list_standalone_inquiries', 'takt_withdraw_standalone_inquiry',
   'takt_record_goal_work_log', 'takt_list_goal_work_log',
+  'takt_verify_goal_specification',
 ] as const;
 
 import type { TurnToolScope } from '../daemonTurn/toolScope.js';
@@ -298,6 +301,11 @@ export function createTaktMcpServer(
       title: 'Rename the assigned workspace', description: `Change the saved name of the manager workspace. ${workspaceRetrieval}`,
       inputSchema: { name: z.string().trim().min(1) },
     }, (input) => workspaceOperation(async () => renameManagerWorkspace(await currentAssignment(), input.name, globalConfigDirectory)));
+    server.registerTool('takt_verify_goal_specification', {
+      title: 'Verify a goal formal specification',
+      description: 'Run the same formal specification verification as the TUI /verify command over the goal\'s saved Quint and Alloy specifications. specifications selects quint, alloy or both; omission verifies every saved formal specification. Returns the verdict, each stage result, and artifact and log locations. Goals without a saved formal specification are errors. Oversized responses are summarized within 64 KiB and provide verificationResultPath for the full result.',
+      inputSchema: goalSpecificationVerificationInputSchema,
+    }, (input, extra) => operation(input.cwd, 'Goal specification verification failed', (deps) => verifyTaktGoalSpecification(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
   }
   if (options.toolSet !== 'read-only') server.registerTool('takt_list_workflows', {
     title: 'List workflows', description: 'Read workflow names and descriptions. Responses fit 64 KiB, with explicit truncation. Use offset/limit for continuation.', inputSchema: listGoalsInputSchema.omit({ errorOffset: true, state: true }),

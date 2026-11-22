@@ -272,6 +272,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/facet-resolution.test.ts',
   'src/__tests__/formalSpecVerifier.test.ts',
   'src/__tests__/global-workflowCategories.test.ts',
+  'src/__tests__/goalSpecificationVerification.test.ts',
   'src/__tests__/image-attachment-store-seal.test.ts',
   'src/__tests__/imageAttachmentReferences.test.ts',
   'src/__tests__/initialization-noninteractive.test.ts',
@@ -491,6 +492,8 @@ export const heavyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-cli-react-production.test.ts',
   'src/__tests__/it-goal-task-pause-retry.test.ts',
   'src/__tests__/it-daemon-worktree-run-log.test.ts',
+  'src/__tests__/it-mcp-goal-specification-verification-real.test.ts',
+  'src/__tests__/it-mcp-goal-specification-verification.test.ts',
   ...legacyParallelIntegrationTestFiles,
   ...auditedIntegrationBoundaryTestFiles,
   // Runs real `git init` / `git remote` processes for repository identity.
