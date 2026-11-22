@@ -16,6 +16,19 @@ const options: SystemStepServicesOptions = {
     headSha: 'a'.repeat(40), headRepositoryUrl: '/fork', headRepositoryPushUrls: ['/fork'] },
 };
 describe('PR clone code effects', () => {
+  it.each(['caller', 'owner'] as const)('passes both cancellation owners to fetch: %s', async (source) => {
+    const owner = new AbortController();
+    const caller = new AbortController();
+    const result = await createPrCloneGitOperations({ cwd: '/clone', headRepositoryUrl: '/fork',
+      headRepositoryPushUrls: ['/fork'], baseRepositoryUrl: '/project', abortSignal: owner.signal });
+    await result.operations.fetch('origin', 'refs/heads/feature/pr', caller.signal);
+    const signal = mocks.network.mock.calls[0]![2] as AbortSignal;
+    expect(signal.aborted).toBe(false);
+    (source === 'caller' ? caller : owner).abort(new Error('Fetch stopped'));
+    expect(signal.aborted).toBe(true);
+    await expect(result.operations.fetch('origin', 'refs/heads/feature/pr', caller.signal)).rejects.toThrow('Fetch stopped');
+    expect(mocks.network).toHaveBeenCalledTimes(1);
+  });
   beforeEach(() => {
     vi.resetAllMocks();
     mocks.git.mockImplementation((_command, args: string[]) => {

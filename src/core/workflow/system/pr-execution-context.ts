@@ -73,6 +73,6 @@ export interface CacciaPushedHead {
 }
 
 export interface PrGitOperations {
-  fetch(remote: 'origin' | 'base', refspec: string): Promise<void>;
+  fetch(remote: 'origin' | 'base', refspec: string, signal?: AbortSignal): Promise<void>;
   push(refspec: string): Promise<void>;
 }

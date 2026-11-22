@@ -5,6 +5,7 @@
 import { execFileSync } from 'node:child_process';
 import { createLogger } from '../../shared/utils/index.js';
 import { buildSafeGitEnvironment } from './git-environment.js';
+import { runGitCommandAbortable } from './clone-exec.js';
 import {
   toLocalBranchRef,
   toPullRequestBaseRef,
@@ -36,17 +37,13 @@ export async function stageAndCommit(
   cwd: string,
   message: string,
   options: StageAndCommitOptions = {},
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
-  const env = await buildSafeGitEnvironment(cwd, options);
+  const env = await buildSafeGitEnvironment(cwd, options, signal);
 
-  execFileSync('git', ['add', '-A'], { cwd, stdio: 'pipe', env });
+  await runGitCommandAbortable(cwd, ['add', '-A'], signal, env);
 
-  const stagedChanges = execFileSync('git', ['diff', '--cached', '--name-only'], {
-    cwd,
-    stdio: 'pipe',
-    encoding: 'utf-8',
-    env,
-  });
+  const stagedChanges = (await runGitCommandAbortable(cwd, ['diff', '--cached', '--name-only'], signal, env)).stdout;
 
   if (!stagedChanges.trim()) {
     return undefined;
@@ -56,14 +53,9 @@ export async function stageAndCommit(
     ? ['commit', '-m', message]
     : ['commit', '--no-verify', '-m', message];
 
-  execFileSync('git', commitArgs, { cwd, stdio: 'pipe', env });
+  await runGitCommandAbortable(cwd, commitArgs, signal, env);
 
-  return execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
-    cwd,
-    stdio: 'pipe',
-    encoding: 'utf-8',
-    env,
-  }).trim();
+  return (await runGitCommandAbortable(cwd, ['rev-parse', '--short', 'HEAD'], signal, env)).stdout.trim();
 }
 
 /**

@@ -206,7 +206,15 @@ async function runEffect(
     case 'enqueue_task':
       return enqueueTaskEffect(options, payload as Parameters<typeof enqueueTaskEffect>[1]);
     case 'comment_pr':
-      return commentPrEffect(options, payload as Parameters<typeof commentPrEffect>[1]);
+      return commentPrEffect(options, payload as Parameters<typeof commentPrEffect>[1],
+        [...effect.body.matchAll(/\{effect:([^}]+)\}/g)].some((match) => {
+          const reference = match[1]!.replaceAll(':', '.');
+          const suffix = '.caccia.error';
+          if (!reference.endsWith(suffix)) return false;
+          const result = state.effectResults.get(reference.slice(0, -suffix.length))?.caccia;
+          return typeof result === 'object' && result !== null
+            && 'failed' in result && result.failed === true;
+        }));
     case 'sync_with_root': {
       const result = await syncWithRootEffect(options, payload as Parameters<typeof syncWithRootEffect>[1]);
       const concurrency = options.prExecutionContext?.mergeConcurrency;

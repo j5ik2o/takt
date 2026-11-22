@@ -22,6 +22,47 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it('waits for close after cancellation and kills an unresponsive Git process group', async () => {
+  vi.useFakeTimers();
+  const child = new FakeChildProcess();
+  vi.mocked(spawn).mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+  const killProcessGroup = vi.spyOn(process, 'kill').mockReturnValue(true);
+  const controller = new AbortController();
+  const completed = vi.fn();
+  const pending = runGitCommandAbortable('/project', ['fetch'], controller.signal).catch(completed);
+  const exitCleanup = process.rawListeners('exit')[0] as () => void;
+  controller.abort();
+  child.stdout.emit('error', new Error('Read interrupted during cancellation'));
+  await vi.advanceTimersByTimeAsync(499);
+  expect(completed).not.toHaveBeenCalled();
+  expect(killProcessGroup).toHaveBeenCalledWith(-child.pid, 'SIGINT');
+  expect(killProcessGroup).not.toHaveBeenCalledWith(-child.pid, 'SIGKILL');
+  await vi.advanceTimersByTimeAsync(1);
+  expect(killProcessGroup).toHaveBeenCalledWith(-child.pid, 'SIGKILL');
+  expect(completed).not.toHaveBeenCalled();
+  child.emit('close', null, 'SIGKILL');
+  await pending;
+  expect(completed).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(0);
+  expect(process.rawListeners('exit')).not.toContain(exitCleanup);
+});
+
+it('kills its Git process group if the CLI exits during cancellation', async () => {
+  vi.useFakeTimers();
+  const child = new FakeChildProcess();
+  vi.mocked(spawn).mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+  const killProcessGroup = vi.spyOn(process, 'kill').mockReturnValue(true);
+  const controller = new AbortController();
+  const pending = runGitCommandAbortable('/project', ['commit'], controller.signal).catch(() => undefined);
+  const exitCleanup = process.rawListeners('exit')[0] as () => void;
+  controller.abort();
+  exitCleanup.call(process);
+  expect(killProcessGroup).toHaveBeenCalledWith(-child.pid, 'SIGKILL');
+  child.emit('close', null, 'SIGKILL');
+  await pending;
+  expect(process.rawListeners('exit')).not.toContain(exitCleanup);
+});
+
 it('terminates a Git process group when its command timeout expires', async () => {
   vi.useFakeTimers();
   const child = new FakeChildProcess();

@@ -16,7 +16,7 @@ vi.mock('node:child_process', async (original) => ({
 }));
 vi.mock('../infra/git/index.js', () => ({ getGitProvider: () => ({
   checkCliStatus: () => ({ available: true }), fetchPrDetails: mocks.details, fetchPrStatus: mocks.status,
-  commentOnPr: vi.fn(() => ({ success: true })), mergePr: mocks.merge,
+  commentOnPr: vi.fn(() => ({ success: true })), commentOnPrAsync: vi.fn(async () => ({ success: true })), mergePr: mocks.merge,
 }) }));
 vi.mock('../infra/config/index.js', async (original) => ({
   ...await original<typeof import('../infra/config/index.js')>(), resolveConfigValue: mocks.config,

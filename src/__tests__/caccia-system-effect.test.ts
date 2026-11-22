@@ -17,7 +17,8 @@ vi.mock('../features/caccia/index.js', async (original) => ({
 }));
 vi.mock('../infra/config/index.js', () => ({ resolveConfigValue: mocks.config }));
 vi.mock('../infra/git/detect.js', () => ({ detectVcsProvider: mocks.detect }));
-vi.mock('../infra/git/index.js', () => ({ getGitProvider: () => ({ fetchPrDetails: mocks.details, commentOnPr: mocks.comment }) }));
+vi.mock('../infra/git/index.js', () => ({ getGitProvider: () => ({ fetchPrDetails: mocks.details,
+  commentOnPr: mocks.comment, commentOnPrAsync: async (...args: unknown[]) => mocks.comment(...args.slice(0, 3)) }) }));
 vi.mock('../infra/task/clone-exec.js', () => ({ runGitCommandAbortable: mocks.git }));
 vi.mock('../infra/task/git-environment.js', () => ({ buildSafeGitEnvironment: vi.fn(async () => ({})) }));
 vi.mock('../features/merge/threat-check.js', async (original) => ({
@@ -158,6 +159,123 @@ describe('Caccia effect result', () => {
     expect(record).toHaveBeenCalledTimes(failure === 'record' ? 1 : 0);
     expect(mocks.run).toHaveBeenCalledTimes(source === 'github_unavailable' ? 1 : 0);
   });
+  it.each(['initial head', 'Caccia', 'final head'] as const)(
+    'fails after 60 seconds when %s ignores cancellation', async (stage) => {
+      const record = vi.fn();
+      const completed = vi.fn();
+      let signal: AbortSignal | undefined;
+      const stalledDetails = (_pr: number, _cwd: string, received?: AbortSignal) => {
+        signal = received;
+        return new Promise<PrDetails>(() => {});
+      };
+      if (stage === 'initial head') mocks.details.mockImplementation(stalledDetails);
+      else if (stage === 'final head') {
+        mocks.details.mockResolvedValueOnce(details({})).mockImplementation(stalledDetails);
+      } else {
+        mocks.run.mockImplementation(async (input) => {
+          signal = input.abortSignal;
+          return new Promise<CacciaResult>(() => {});
+        });
+      }
+      const input = { ...options(), prMergePushRecorder: { record } };
+      const running = cacciaEffect(input, 123).then(completed);
+
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(completed).not.toHaveBeenCalled();
+      expect(signal?.aborted).not.toBe(true);
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(completed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        success: false, failed: true, error: expect.stringMatching(/\S/u),
+      }));
+      await running;
+      expect(signal?.aborted).toBe(true);
+      expect(record).not.toHaveBeenCalled();
+      expect(input.prGitOperations!.fetch).not.toHaveBeenCalled();
+      expect(input.prGitOperations!.push).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it('preserves caller cancellation while Caccia ignores its signal', async () => {
+    const controller = new AbortController();
+    const completed = vi.fn();
+    let signal: AbortSignal | undefined;
+    mocks.run.mockImplementation(async (input) => {
+      signal = input.abortSignal;
+      return new Promise<CacciaResult>(() => {});
+    });
+    const running = cacciaEffect({ ...options(), abortSignal: controller.signal }, 123).then(completed);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    controller.abort(new Error('Caller interrupted'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(completed).toHaveBeenCalledExactlyOnceWith({
+      success: false, failed: true, error: 'Caller interrupted',
+    });
+    await running;
+    expect(signal?.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(completed).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not record or synchronize a late Caccia result after timing out', async () => {
+    let finish!: (result: CacciaResult) => void;
+    let pushed: ((head: string) => void) | undefined;
+    const completed = vi.fn();
+    const record = vi.fn();
+    mocks.run.mockImplementation(async (input) => {
+      if (input.entry === 'linked') pushed = input.onPushedHead;
+      return new Promise<CacciaResult>((resolve) => { finish = resolve; });
+    });
+    const input = { ...options(), prMergePushRecorder: { record } };
+    const running = cacciaEffect(input, 123).then(completed);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect.soft(completed).toHaveBeenCalledWith(expect.objectContaining({ failed: true }));
+    const detailCalls = mocks.details.mock.calls.length;
+
+    // A dependency may complete after receiving abort; it must not revive the effect.
+    try { pushed?.(updated); } catch { /* An aborted callback may reject the late push. */ }
+    finish({ outcome: 'success', headSha: updated, unresolvedCount: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    await running;
+
+    expect(completed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ failed: true }));
+    expect(record).not.toHaveBeenCalled();
+    expect(mocks.details).toHaveBeenCalledTimes(detailCalls);
+    expect(input.prGitOperations!.fetch).not.toHaveBeenCalled();
+    expect(mocks.git.mock.calls.some(([, args]) => args[0] === 'merge')).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps a later concurrent Caccia invocation alive when the first times out', async () => {
+    const signals: AbortSignal[] = [];
+    const finish: ((result: CacciaResult) => void)[] = [];
+    mocks.run.mockImplementation(async (input) => {
+      if (input.abortSignal) signals.push(input.abortSignal);
+      return new Promise<CacciaResult>((resolve) => { finish.push(resolve); });
+    });
+    const firstDone = vi.fn();
+    const secondDone = vi.fn();
+    const first = cacciaEffect(options(), 123).then(firstDone);
+    await vi.advanceTimersByTimeAsync(30_000);
+    const second = cacciaEffect(options(), 123).then(secondDone);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect.soft(firstDone).toHaveBeenCalledWith(expect.objectContaining({ failed: true }));
+    expect(secondDone).not.toHaveBeenCalled();
+    expect.soft(signals[0]?.aborted).toBe(true);
+    expect.soft(signals[1]?.aborted).toBe(false);
+    finish[1]!({ outcome: 'success', headSha: initial, unresolvedCount: 0 });
+    finish[0]!({ outcome: 'success', headSha: initial, unresolvedCount: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.all([first, second]);
+    expect(secondDone).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ success: true }));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('初回のheadが一致したら待機せずCacciaを実行する', async () => {
     const completed = vi.fn();
     const running = cacciaEffect(options(), 123).then((result) => {
@@ -693,7 +811,7 @@ describe('Caccia effect result', () => {
       .mockResolvedValue({ ...options().prExecutionContext, number: 123, headSha: updated });
     const input = options();
     expect(await cacciaEffect(input, 123)).toMatchObject({ failed: true });
-    expect(input.prGitOperations!.fetch).toHaveBeenCalledWith('origin', 'refs/heads/feature');
+    expect(input.prGitOperations!.fetch).toHaveBeenCalledWith('origin', 'refs/heads/feature', expect.any(AbortSignal));
     expect(mocks.git.mock.calls.some(([, args]) => args[0] === 'merge')).toBe(false);
   });
 });

@@ -107,6 +107,13 @@ vi.mock('node:child_process', () => ({
   execFile: mockExecFile,
   execFileSync: mockExecFileSync,
 }));
+vi.mock('../infra/task/clone-exec.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../infra/task/clone-exec.js')>(),
+  runGitCommandAbortable: async (cwd: string, args: string[], _signal: AbortSignal | undefined, env: NodeJS.ProcessEnv) => ({
+    stdout: mockExecFileSync('git', args, { cwd, stdio: 'pipe', env }).toString(),
+    stderr: '',
+  }),
+}));
 
 vi.mock('../shared/ui/index.js', () => ({
   info: vi.fn(),
@@ -1270,7 +1277,7 @@ describe('executePipeline', () => {
 
   it('should return exit code 4 when git commit/push fails', async () => {
     mockExecuteTask.mockResolvedValueOnce(true);
-    // stageAndCommit calls execFileSync('git', ['add', ...]) then ('git', ['commit', ...])
+    // The abortable stageAndCommit commands use the same command-level fixture.
     // Make the commit call throw
     mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === 'commit') {

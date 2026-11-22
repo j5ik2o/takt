@@ -10,6 +10,7 @@ import type { PrCiFailure } from '../core/workflow/system/pr-ci.js';
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { normalizeWorkflowConfig } from '../infra/config/loaders/workflowParser.js';
 import { createDefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
+import { parseGitHubPullRequestTarget } from '../infra/github/pull-request-target.js';
 
 describe.skipIf(process.platform === 'win32')('PR status process deadline and cancellation', () => {
   let root: string;
@@ -72,6 +73,28 @@ if (mode === 'hang') { process.on('SIGTERM', () => {}); setInterval(() => {}, 10
       number: 123, headSha, ci: { finished: true, passed: true },
     });
     expect(calls()).toEqual([expect.objectContaining({ cwd: root, args: expect.arrayContaining(['pr', 'view', '123']) })]);
+    assertStopped();
+  });
+
+  it.each([
+    ['authentication', ['hang']], ['submission', ['success', 'hang']], ['diagnostic', ['failure', 'hang']],
+  ] as const)('terminates a stalled PR comment %s within its shared deadline', async (_stage, selected) => {
+    modes(...selected);
+    expect(await new GitHubProvider().commentOnPrAsync(123, 'Rejected fork change', root, { timeoutMs: 1000 }))
+      .toMatchObject({ success: false, error: expect.any(String) });
+    expect(calls()).toHaveLength(selected.length);
+    assertStopped();
+  });
+
+  it('posts the unchanged comment to the published target after authentication', async () => {
+    modes('success');
+    const target = parseGitHubPullRequestTarget('https://github.com/owner/repository/pull/123');
+    const provider = new GitHubProvider(target);
+    expect(await provider.commentOnPrAsync(123, 'Rejected fork change', root, { timeoutMs: 1000 }))
+      .toEqual({ success: true });
+    expect(calls().map((call) => call.args)).toEqual([
+      ['auth', 'status'], ['pr', 'comment', target.url, '--body', 'Rejected fork change'],
+    ]);
     assertStopped();
   });
 

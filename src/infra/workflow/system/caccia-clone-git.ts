@@ -25,12 +25,12 @@ export async function createCacciaCloneGitOperations(options: CacciaCloneGitOpti
     headRepositoryPushUrls: [...options.headRepositoryPushUrls],
     operations: {
       async fetch(refspec) {
-        const env = await buildSafeGitEnvironment(options.cwd, { ...options, allowGitFilters: false });
+        const env = await buildSafeGitEnvironment(options.cwd, { ...options, allowGitFilters: false }, options.abortSignal);
         await runGitCommandAbortable(options.cwd, ['fetch', '--no-tags', 'origin', refspec], options.abortSignal, env);
       },
       async push(refspec, onPushSucceeded) {
         let firstFailure: unknown;
-        const env = await buildSafeGitEnvironment(options.cwd, options);
+        const env = await buildSafeGitEnvironment(options.cwd, options, options.abortSignal);
         // git push origin と同じく、通常の拒否後も残りのpush先を試行する。
         for (const url of options.headRepositoryPushUrls) {
           options.abortSignal?.throwIfAborted();

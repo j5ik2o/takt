@@ -1740,6 +1740,24 @@ describe('DefaultSystemStepServices', () => {
     expect(result).toEqual({ success: true, failed: false });
   });
 
+  it.each([false, true])('selects bounded failure notification from the Caccia result: %s', async (failed) => {
+    const comment = vi.fn(async () => ({ success: true }));
+    const provider = createSystemStepGitProvider({
+      commentOnPr: vi.fn(() => ({ success: true })), commentOnPrAsync: comment,
+    });
+    const services = new DefaultSystemStepServices({ cwd: '/repo/worktree', projectCwd: '/repo', task: 'Notify', gitProvider: provider });
+    const state = { effectResults: new Map([['external_review', { caccia: { failed, error: 'same body' } }]]) } as unknown as WorkflowState;
+    expect(await services.executeEffect({ type: 'comment_pr', pr: 938, body: '{effect:external_review.caccia.error}' },
+      { pr: 938, body: 'same body' }, state)).toEqual({ success: true, failed: false });
+    if (failed) {
+      expect(comment).toHaveBeenCalledWith(938, 'same body', '/repo', { signal: expect.any(AbortSignal), timeoutMs: 60_000 });
+      expect(provider.commentOnPr).not.toHaveBeenCalled();
+    } else {
+      expect(provider.commentOnPr).toHaveBeenCalledWith(938, 'same body', '/repo');
+      expect(comment).not.toHaveBeenCalled();
+    }
+  });
+
   it('enqueue_task の Issue 作成は SystemStepServicesOptions の gitProvider を優先する', async () => {
     const requestProvider = createSystemStepGitProvider({
       createIssue: vi.fn(),

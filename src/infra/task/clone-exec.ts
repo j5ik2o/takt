@@ -399,6 +399,13 @@ export function runGitCommandAbortable(
       detached: true,
       env,
     });
+    // A finite CLI run may exit before cancellation's grace period elapses.
+    // Kill the owned process group before exit handlers remove its clone.
+    const onExit = (): void => {
+      terminateProcessGroup(child, 'SIGKILL');
+    };
+    process.prependOnceListener('exit', onExit);
+    child.once('close', () => process.removeListener('exit', onExit));
 
     let stdout = '';
     let stderr = '';
@@ -439,13 +446,10 @@ export function runGitCommandAbortable(
 
     const onAbort = (): void => {
       terminateProcessGroup(child, 'SIGINT');
-      const killTimer = setTimeout(() => {
-        if (!settled) {
-          terminateProcessGroup(child, 'SIGKILL');
-        }
+      timeoutKillTimer = setTimeout(() => {
+        terminateProcessGroup(child, 'SIGKILL');
       }, 500);
-      killTimer.unref?.();
-      rejectOnce(new Error(TASK_EXECUTION_ABORTED_MESSAGE));
+      timeoutKillTimer.unref?.();
     };
 
     const onTimeout = (): void => {
@@ -464,6 +468,7 @@ export function runGitCommandAbortable(
       stderr += chunk.toString('utf-8');
     });
     const guardTeardown = guardChildProcessStreams(child, (error, source) => {
+      if (abortSignal?.aborted) return;
       rejectOnce(
         source === 'process'
           ? error

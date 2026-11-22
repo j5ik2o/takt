@@ -79,9 +79,11 @@ it('restores Epic definitions and retained history larger than 16 MiB saved by t
     expect(epicReads).toHaveBeenCalledOnce();
     expect(await source.hasWork(new DaemonPersistedFiles(directory))).toBe(true);
     expect(epicReads).toHaveBeenCalledOnce();
-    expect(await source.patrols()).toMatchObject([{ workspaceId: workspace.id, epicIds: [updated.id] }]);
+    const patrols = await source.patrols();
+    expect(errors, errors.mock.calls.map(([error]) => error instanceof Error ? error.stack : String(error)).join('\n'))
+      .not.toHaveBeenCalled();
+    expect(patrols).toMatchObject([{ workspaceId: workspace.id, epicIds: [updated.id] }]);
     expect(epicReads).toHaveBeenCalledOnce();
-    expect(errors).not.toHaveBeenCalled();
   } finally {
     await source.close();
     await conversations.close();

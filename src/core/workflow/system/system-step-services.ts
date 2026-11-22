@@ -108,6 +108,7 @@ export interface SystemStepGitProvider {
   listOpenPrs(cwd?: string): SystemStepPrListItem[];
   findExistingPr(branch: string, cwd?: string): SystemStepExistingPr | undefined;
   commentOnPr(prNumber: number, body: string, cwd?: string): SystemStepCommentResult;
+  commentOnPrAsync?(prNumber: number, body: string, cwd: string, options: PrStatusFetchOptions): Promise<SystemStepCommentResult>;
   closePr(prNumber: number, cwd?: string): SystemStepMergeResult;
   mergePr(prNumber: number, cwd?: string, method?: MergeMethod, expectedHeadSha?: string): SystemStepMergeResult;
   fetchPrStatus?(prNumber: number, cwd?: string, options?: PrStatusFetchOptions): Promise<PrStatus>;

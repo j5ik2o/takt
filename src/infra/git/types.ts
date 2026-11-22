@@ -170,6 +170,8 @@ export interface GitProvider {
   createPullRequest(options: CreatePrOptions, cwd?: string): CreatePrResult;
 
   commentOnPr(prNumber: number, body: string, cwd?: string): CommentResult;
+  commentOnPrAsync?(prNumber: number, body: string, cwd: string,
+    options: import('../../core/workflow/system/pr-execution-context.js').PrStatusFetchOptions): Promise<CommentResult>;
 
   commentOnIssue(issueNumber: number, body: string, cwd?: string): IssueCommentResult;
 

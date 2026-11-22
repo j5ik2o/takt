@@ -1,8 +1,11 @@
-import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFile, execFileSync, spawn } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { stringify } from 'yaml';
+import { delimiter, join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
+import { GitHubProvider } from '../infra/github/GitHubProvider.js';
+import { PrStatusTimeoutError } from '../core/workflow/system/pr-execution-context.js';
+import { parse, stringify } from 'yaml';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runAgent } from '../agents/runner.js';
 import { invalidateResolvedConfigCache } from '../infra/config/index.js';
@@ -11,10 +14,10 @@ import type { CacciaInput, CacciaResult } from '../features/caccia/index.js';
 
 const mocks = vi.hoisted(() => ({
   caccia: vi.fn<(input: CacciaInput) => Promise<CacciaResult>>(),
-  details: vi.fn(), status: vi.fn(), comment: vi.fn(), merge: vi.fn(), review: vi.fn(),
+  details: vi.fn(), status: vi.fn(), comment: vi.fn(), commentAsync: vi.fn(), merge: vi.fn(), review: vi.fn(),
   threat: vi.fn(), execution: vi.fn(), metadataAvailable: true,
   reviewStatus: vi.fn(), threads: vi.fn(), resolveThread: vi.fn(),
-  gitlab: false, glab: vi.fn(), gitlabUrl: 'https://gitlab.example/org/repo.git', localRemote: '',
+  gitlab: false, realComments: false, glab: vi.fn(), gitlabUrl: 'https://gitlab.example/org/repo.git', localRemote: '',
 }));
 vi.mock('node:child_process', async (original) => {
   const actual = await original<typeof import('node:child_process')>();
@@ -48,16 +51,20 @@ vi.mock('../infra/git/index.js', async (original) => ({
   ...await original<typeof import('../infra/git/index.js')>(),
   getGitProvider: () => mocks.gitlab ? new GitLabProvider() : ({ checkCliStatus: () => ({ available: true }),
     fetchPrDetails: mocks.metadataAvailable ? mocks.details : undefined, fetchPrStatus: mocks.status, fetchPrReviewComments: mocks.review,
-    commentOnPr: mocks.comment, mergePr: mocks.merge }),
+    commentOnPr: mocks.comment, commentOnPrAsync: mocks.commentAsync, mergePr: mocks.merge }),
 }));
-vi.mock('../infra/github/pr.js', async (original) => ({
-  ...await original<typeof import('../infra/github/pr.js')>(),
+vi.mock('../infra/github/pr.js', async (original) => {
+  const actual = await original<typeof import('../infra/github/pr.js')>();
+  return {
+  ...actual,
+  commentOnPrAsync: (...args: Parameters<typeof actual.commentOnPrAsync>) => mocks.realComments
+    ? actual.commentOnPrAsync(...args) : mocks.commentAsync(...args),
   fetchPrDetails: mocks.details, fetchPrStatus: mocks.status, fetchPrReviewComments: mocks.review,
   fetchCacciaPullRequestDetails: mocks.details,
   fetchCacciaPullRequestHeadSha: async () => (await mocks.details()).headSha,
   fetchCodeRabbitReviewStatus: mocks.reviewStatus,
   fetchCodeRabbitReviewThreads: mocks.threads, resolveReviewThread: mocks.resolveThread,
-}));
+}; });
 vi.mock('../features/merge/threat-check.js', async (original) => ({
   ...await original<typeof import('../features/merge/threat-check.js')>(), checkForkThreats: mocks.threat,
 }));
@@ -86,9 +93,18 @@ import { createDefaultSystemStepServices } from '../infra/workflow/system/Defaul
 import { TaskRunner } from '../infra/task/index.js';
 import { GitLabProvider } from '../infra/gitlab/GitLabProvider.js';
 import type { WorkflowState } from '../core/models/types.js';
+import * as runTaskExecution from '../features/tasks/execute/runTaskExecution.js';
+import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
+import type { TaskInfo } from '../infra/task/index.js';
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
 }
 
 describe('Caccia effect through PR workflow execution', () => {
@@ -179,7 +195,9 @@ describe('Caccia effect through PR workflow execution', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    mocks.commentAsync.mockImplementation(async (...args: unknown[]) => mocks.comment(...args.slice(0, 3)));
     mocks.gitlab = false;
+    mocks.realComments = false;
     mocks.gitlabUrl = 'https://gitlab.example/org/repo.git';
     mocks.metadataAvailable = true;
     root = mkdtempSync(join(tmpdir(), 'takt-caccia-effect-'));
@@ -263,7 +281,9 @@ describe('Caccia effect through PR workflow execution', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -348,6 +368,379 @@ describe('Caccia effect through PR workflow execution', () => {
       }
     });
   }
+
+  function commentCli(mode: 'success' | 'failure' | 'auth' | 'post') {
+    mocks.realComments = true;
+    const bin = join(root, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'gh'), `#!${process.execPath}
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const stage = args[0] === 'auth' ? 'auth' : args[0] === 'pr' ? 'post' : 'version';
+const path = ${JSON.stringify(root)} + '/' + stage + '.json';
+const repeated = fs.existsSync(path);
+fs.appendFileSync(${JSON.stringify(join(root, 'cli-calls.jsonl'))}, JSON.stringify({ stage, pid: process.pid, args, cwd: process.cwd() }) + '\\n');
+if (!repeated) {
+  fs.writeFileSync(path + '.tmp', JSON.stringify({ pid: process.pid, args, cwd: process.cwd() }));
+  fs.renameSync(path + '.tmp', path);
+}
+if (!repeated && stage === ${JSON.stringify(mode)}) setInterval(() => {}, 1000);
+else process.exit(stage === 'post' && ${JSON.stringify(mode)} === 'failure' ? 1 : 0);
+`, { mode: 0o755 });
+    vi.stubEnv('PATH', bin + delimiter + process.env.PATH);
+    mocks.commentAsync.mockImplementation((...args: Parameters<GitHubProvider['commentOnPrAsync']>) => new GitHubProvider().commentOnPrAsync(...args));
+    return {
+      async started(stage: string) {
+        for (let attempt = 0; attempt < 500 && !existsSync(join(root, stage + '.json')); attempt++) await delay(10);
+        expect(existsSync(join(root, stage + '.json'))).toBe(true);
+      },
+      calls() {
+        const path = join(root, 'cli-calls.jsonl');
+        return (existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n') : [])
+          .map((line) => JSON.parse(line) as { stage: string; pid: number; args: string[]; cwd: string });
+      },
+    };
+  }
+
+  it.each(['auth', 'post'] as const)('times out a rejected fork notification stalled in %s', async (stage) => {
+    sameRepository = false;
+    let checks = 0;
+    mocks.threat.mockImplementation(async () => ++checks === 1 ? { passed: true } : { passed: false, comment: 'Rejected fork change' });
+    const cli = commentCli(stage);
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const completed = vi.fn();
+    const running = run('merge').then((value) => { completed(value); return value; });
+    try {
+      await cli.started(stage);
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(completed).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      vi.useRealTimers();
+      expect(await running).toMatchObject({ success: false });
+      expect(mocks.merge).not.toHaveBeenCalled();
+      await vi.waitFor(() => {
+        for (const { pid } of cli.calls()) expect(() => process.kill(pid, 0)).toThrow();
+      });
+      if (stage === 'auth') expect(cli.calls().some((call) => call.stage === 'post' && call.args.join(' ').includes('Rejected fork change'))).toBe(false);
+      else expect(cli.calls().find((call) => call.stage === 'post')?.args).toEqual([
+        'pr', 'comment', '123', '--body', expect.stringContaining('Rejected fork change'),
+      ]);
+    } finally {
+      vi.useRealTimers();
+      for (const { pid } of cli.calls()) { try { process.kill(pid, 'SIGKILL'); } catch { /* Reaped. */ } }
+    }
+  });
+
+  it.each(['success', 'failure', 'auth', 'post'] as const)(
+    'preserves a Caccia failure and releases its slot after notification %s', async (mode) => {
+      const reason = 'Caccia review could not complete';
+      mocks.caccia.mockRejectedValueOnce(new Error(reason));
+      const cli = commentCli(mode);
+      const other = deferred<boolean>();
+      const queued = deferred<void>();
+      vi.spyOn(runTaskExecution, 'executeRunTaskAndComplete').mockImplementation(async (task) => {
+        if (task.name === 'merge') return (await run('merge')).success;
+        if (task.name === 'other') return other.promise;
+        queued.resolve(); return true;
+      });
+      const task = (name: string): TaskInfo => ({ name, content: name, status: 'running',
+        createdAt: new Date().toISOString(), filePath: workflowFile, data: { task: name, workflow: workflowFile } });
+      vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+      const done = vi.fn();
+      const pool = runWithWorkerPool(new TaskRunner(project), ['merge', 'other', 'queued'].map(task), 2, project,
+        { provider: 'mock' }, undefined, 1_000_000, 'run', {
+          schedulingSignal: new AbortController().signal, taskAbortSignal: new AbortController().signal,
+        }).then((value) => { done(); return value; });
+      try {
+        await cli.started(mode === 'auth' ? 'auth' : 'post');
+        if (mode === 'auth' || mode === 'post') {
+          await vi.advanceTimersByTimeAsync(59_999);
+          expect(done).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        vi.useRealTimers();
+        await Promise.race([queued.promise, delay(5_000).then(() => { throw new Error('Queued task did not start'); })]);
+        expect(done).not.toHaveBeenCalled();
+        const yaml: unknown = parse(readFileSync(join(project, '.takt', 'tasks.yaml'), 'utf8'));
+        expect(yaml).toMatchObject({ tasks: expect.arrayContaining([expect.objectContaining({ status: 'failed', owner_pid: null })]) });
+        const failed = new TaskRunner(project).listTaskStateItems().find((item) => item.kind === 'failed');
+        expect(failed?.completion?.failureReason).toBe(reason);
+        for (const { pid } of cli.calls()) expect(() => process.kill(pid, 0)).toThrow();
+        if (mode === 'auth') expect(cli.calls().some((call) => call.stage === 'post')).toBe(false);
+      } finally {
+        vi.useRealTimers();
+        for (const { pid } of cli.calls()) { try { process.kill(pid, 'SIGKILL'); } catch { /* Reaped. */ } }
+        other.resolve(true);
+        await Promise.race([pool, delay(5_000).then(() => { throw new Error('Pool did not terminate'); })]);
+      }
+      expect(await pool).toMatchObject({ success: 2, fail: 1 });
+    });
+
+  it.each(['success', 'error', 'timeout'] as const)('retains the saved Caccia reason after final status %s', async (mode) => {
+    const reason = 'Caccia review failed before final status';
+    let failed = false;
+    mocks.caccia.mockImplementationOnce(async () => { failed = true; throw new Error(reason); });
+    const status = mocks.status.getMockImplementation()!;
+    mocks.status.mockImplementation(async (...args) => {
+      if (failed && mode !== 'success') throw mode === 'timeout' ? new PrStatusTimeoutError() : new Error('Status unavailable');
+      return status(...args);
+    });
+    expect(await run('merge')).toMatchObject({ success: false, merged: false });
+    const saved = new TaskRunner(project).listTaskStateItems().find((item) => item.kind === 'failed');
+    expect(saved?.completion?.failureReason).toBe(reason);
+    expect(mocks.merge).not.toHaveBeenCalled();
+  });
+
+  it('does not hide a final status error after a successful workflow', async () => {
+    const status = mocks.status.getMockImplementation()!;
+    mocks.status.mockImplementation(async (...args) => {
+      if (merged) throw new Error('Final status unavailable');
+      return status(...args);
+    });
+    await expect(run('merge')).rejects.toThrow('Final status unavailable');
+    const saved = new TaskRunner(project).listTaskStateItems().find((item) => item.kind === 'failed');
+    expect(saved?.completion?.failureReason).toContain('Final status unavailable');
+  });
+
+  it('cancels a real commit hook through the Caccia inactivity deadline and removes its clone', async () => {
+    await useRealCaccia([remote]);
+    const configPath = join(project, '.takt', 'config.yaml');
+    writeFileSync(configPath, stringify({ ...parse(readFileSync(configPath, 'utf8')), allow_git_hooks: true }));
+    invalidateResolvedConfigCache(project);
+    const marker = join(root, 'commit-hook.json');
+    const execute = vi.mocked(runAgent).getMockImplementation()!;
+    vi.mocked(runAgent).mockImplementation(async (...args) => {
+      const response = await execute(...args);
+      const options = args[2];
+      if (options?.cwd !== activeClone && options?.permissionMode !== 'readonly') {
+        const hook = join(options!.cwd!, '.git', 'hooks', 'pre-commit');
+        mkdirSync(join(options!.cwd!, '.git', 'hooks'), { recursive: true });
+        writeFileSync(hook, `#!${process.execPath}
+const fs = require('node:fs');
+process.on('SIGINT', () => {});
+const marker = ${JSON.stringify(marker)};
+fs.writeFileSync(marker + '.tmp', JSON.stringify({ pid: process.pid, gitPid: process.ppid, cwd: process.cwd() }));
+fs.renameSync(marker + '.tmp', marker);
+setInterval(() => {}, 1000);
+`, { mode: 0o755 });
+      }
+      return response;
+    });
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const completed = vi.fn();
+    const running = run('merge').then((value) => { completed(value); return value; });
+    let hook: { pid: number; gitPid: number; cwd: string } | undefined;
+    try {
+      for (let attempt = 0; attempt < 1000 && !existsSync(marker); attempt++) await delay(10);
+      hook = JSON.parse(readFileSync(marker, 'utf8')) as { pid: number; gitPid: number; cwd: string };
+      expect(hook.pid).toBeGreaterThan(0);
+      const signal = mocks.caccia.mock.calls[0]![0].abortSignal;
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(completed).not.toHaveBeenCalled();
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signal?.aborted).toBe(true);
+      await vi.advanceTimersByTimeAsync(500);
+      vi.useRealTimers();
+      expect(await Promise.race([running, delay(5_000).then(() => { throw new Error('Caccia did not fail'); })]))
+        .toMatchObject({ success: false });
+      await vi.waitFor(() => {
+        expect(() => process.kill(hook!.pid, 0)).toThrow();
+        expect(() => process.kill(hook!.gitPid, 0)).toThrow();
+        expect(existsSync(hook!.cwd)).toBe(false);
+      }, { timeout: 5_000 });
+      expect(mocks.merge).not.toHaveBeenCalled();
+      expect(mocks.resolveThread).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      if (hook === undefined && existsSync(marker)) hook = JSON.parse(readFileSync(marker, 'utf8')) as { pid: number; gitPid: number; cwd: string };
+      if (hook !== undefined && Number.isSafeInteger(hook.pid) && hook.pid > 0) {
+        try { process.kill(hook.pid, 'SIGKILL'); } catch { /* Reaped. */ }
+      }
+    }
+  });
+
+  it('persists a Caccia timeout, stops its child, and starts the queued task in the same run', async () => {
+    await useRealCaccia([remote]);
+    const agent = vi.mocked(runAgent).getMockImplementation()!;
+    const entered = deferred<void>();
+    const childClosed = deferred<void>();
+    const otherTask = deferred<boolean>();
+    const thirdStarted = vi.fn();
+    let child: ReturnType<typeof spawn> | undefined;
+    let childSignal: AbortSignal | undefined;
+    let childCwd: string | undefined;
+    let forcedCleanup = false;
+    vi.mocked(runAgent).mockImplementation(async (...args) => {
+      const agentOptions = args[2];
+      if (activeClone === '' || agentOptions?.cwd === activeClone) return agent(...args);
+      childSignal = agentOptions?.abortSignal;
+      childCwd = agentOptions?.cwd;
+      child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000); process.stdout.write("ready");'],
+        { cwd: childCwd, stdio: ['ignore', 'pipe', 'pipe'], signal: childSignal });
+      child.stdout!.once('data', () => entered.resolve());
+      return new Promise<never>((_resolve, reject) => {
+        child!.on('error', (error) => {
+          if (error.name !== 'AbortError') reject(error);
+        });
+        child!.once('close', () => {
+          childClosed.resolve();
+          reject(childSignal?.aborted ? childSignal.reason : new Error('Caccia child required test cleanup'));
+        });
+      });
+    });
+    const task = (name: string): TaskInfo => ({ name, content: name, status: 'running',
+      createdAt: new Date().toISOString(), filePath: workflowFile, data: { task: name, workflow: workflowFile } });
+    vi.spyOn(runTaskExecution, 'executeRunTaskAndComplete').mockImplementation(async (task) => {
+      if (task.name === 'merge') return (await run('merge')).success;
+      if (task.name === 'other') return otherTask.promise;
+      thirdStarted();
+      return true;
+    });
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const completed = vi.fn();
+    const scheduling = new AbortController();
+    const caller = new AbortController();
+    const pool = runWithWorkerPool(new TaskRunner(project), [task('merge'), task('other'), task('queued')],
+      2, project, { provider: 'mock' }, undefined, 1_000_000, 'run', {
+        schedulingSignal: scheduling.signal, taskAbortSignal: caller.signal,
+      }).then((result) => { completed(result); return result; });
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(59_999);
+      expect(thirdStarted).not.toHaveBeenCalled();
+      expect(completed).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect.soft(childSignal?.aborted).toBe(true);
+      vi.useRealTimers();
+      let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+      const stopped = await Promise.race([
+        childClosed.promise.then(() => true),
+        new Promise<false>((resolve) => { cleanupTimer = setTimeout(() => resolve(false), 2_000); }),
+      ]);
+      clearTimeout(cleanupTimer);
+      if (!stopped) {
+        forcedCleanup = true;
+        child!.kill('SIGKILL');
+        await childClosed.promise;
+      }
+      await vi.waitFor(() => expect(thirdStarted).toHaveBeenCalledOnce());
+      expect(completed).not.toHaveBeenCalled();
+      expect(caller.signal.aborted).toBe(false);
+      const savedYaml: unknown = parse(readFileSync(join(project, '.takt', 'tasks.yaml'), 'utf8'));
+      expect(savedYaml).toMatchObject({ tasks: expect.arrayContaining([
+        expect.objectContaining({ status: 'failed', owner_pid: null }),
+      ]) });
+      const failed = new TaskRunner(project).listTaskStateItems().find((item) => item.kind === 'failed');
+      const execution = await mocks.execution.mock.calls[0]![0];
+      expect(execution).toMatchObject({ success: false, reason: expect.stringMatching(/\S/u) });
+      expect(failed?.completion?.failureReason).toBe(execution.reason);
+      expect(mocks.merge).not.toHaveBeenCalled();
+      expect(forcedCleanup).toBe(false);
+      expect(child!.exitCode !== null || child!.signalCode !== null).toBe(true);
+      expect(childCwd).toEqual(expect.any(String));
+      await vi.waitFor(() => expect(existsSync(childCwd!)).toBe(false), { timeout: 5_000 });
+    } finally {
+      vi.useRealTimers();
+      if (child && child.exitCode === null && child.signalCode === null) {
+        child.kill('SIGKILL');
+        await childClosed.promise;
+      }
+      otherTask.resolve(true);
+      await pool;
+    }
+    expect(await pool).toMatchObject({ success: 2, fail: 1 });
+    expect([...(await pool).executedTaskNames].sort()).toEqual(['merge', 'other', 'queued']);
+  });
+
+  it('exits its process naturally after timing out an unresponsive PR lookup', async () => {
+    const moduleUrl = new URL('../../dist/features/caccia/system-effect.js', import.meta.url).href;
+    const input = { cwd: author, projectCwd: project, task: 'Review', prExecutionContext: {
+      prNumber: 123, headBranch: 'feature/pr', baseBranch: 'main', headSha: initialHead,
+      headRepositoryUrl: remote, headRepositoryPushUrls: [remote],
+    } };
+    const script = `
+      import { cacciaEffect } from ${JSON.stringify(moduleUrl)};
+      const schedule = globalThis.setTimeout;
+      // Boundary timing is covered by the unit test; this process checks event-loop termination.
+      globalThis.setTimeout = (callback, delay, ...args) => schedule(callback, delay === 60000 ? 1000 : delay, ...args);
+      let fetched = false;
+      const result = await cacciaEffect({ ...${JSON.stringify(input)},
+        gitProvider: { fetchPrDetails: () => { fetched = true; return new Promise(() => {}); } } }, 123);
+      process.stdout.write(JSON.stringify({ result, fetched }));
+    `;
+    const output = await new Promise<string>((resolve, reject) => {
+      execFile(process.execPath, ['--input-type=module', '-e', script], { timeout: 10_000, encoding: 'utf8' },
+        (error, stdout) => { if (error) reject(error); else resolve(stdout); });
+    });
+    expect(JSON.parse(output)).toMatchObject({ fetched: true,
+      result: { success: false, failed: true, error: expect.stringMatching(/\S/u) } });
+  });
+
+  it('keeps a child workflow alive beyond 60 seconds while it produces provider output', async () => {
+    await useRealCaccia([remote]);
+    const agent = vi.mocked(runAgent).getMockImplementation()!;
+    const entered = deferred<void>();
+    const finish = deferred<void>();
+    let progress!: () => void;
+    vi.mocked(runAgent).mockImplementation(async (...args) => {
+      if (activeClone === '' || args[2]?.cwd === activeClone) return agent(...args);
+      progress = () => args[2]?.onStream?.({ type: 'text', data: { text: 'Reviewing the next finding' } });
+      entered.resolve();
+      await finish.promise;
+      return agent(...args);
+    });
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const completed = vi.fn();
+    const running = run('merge').then((result) => { completed(result); return result; });
+    try {
+      await entered.promise;
+      for (let response = 0; response < 3; response += 1) {
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(completed).not.toHaveBeenCalled();
+        progress();
+      }
+      finish.resolve();
+      vi.useRealTimers();
+      expect(await running).toMatchObject({ success: true, outcome: 'merged' });
+    } finally {
+      finish.resolve();
+      vi.useRealTimers();
+      await running;
+    }
+  });
+
+  it('keeps waiting beyond 60 seconds while real Caccia receives PR status responses', async () => {
+    await useRealCaccia([remote]);
+    configure({ enabled: true, wait_timeout_ms: 180_000, max_iterations: 2, workflow: 'unused' });
+    const entered = deferred<void>();
+    let reviewed = false;
+    mocks.reviewStatus.mockImplementation(async () => {
+      const headSha = (await mocks.details()).headSha;
+      entered.resolve();
+      return { headSha, hasCodeRabbitPost: reviewed, reviewedHeadShas: reviewed ? [headSha] : [] };
+    });
+    mocks.threads.mockResolvedValue([]);
+    mocks.merge.mockImplementation(() => { merged = true; return { success: true }; });
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    const completed = vi.fn();
+    const running = run('merge').then((result) => { completed(result); return result; });
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(completed).not.toHaveBeenCalled();
+      expect(mocks.reviewStatus.mock.calls.length).toBeGreaterThan(2);
+      reviewed = true;
+      await vi.advanceTimersByTimeAsync(30_000);
+      vi.useRealTimers();
+      expect(await running).toMatchObject({ success: true, outcome: 'merged' });
+    } finally {
+      reviewed = true;
+      if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(30_000);
+      vi.useRealTimers();
+      await running;
+    }
+  });
 
   it.each([
     ['merge', false, false], ['merge', false, true], ['merge', true, false], ['merge', true, true],

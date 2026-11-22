@@ -104,7 +104,7 @@ interface ChildExit {
   signal: NodeJS.Signals | null;
 }
 
-function createCacciaProjectFixture(testRoot: string): CacciaProjectFixture {
+function createCacciaProjectFixture(testRoot: string, allowHooks = false): CacciaProjectFixture {
   const projectCwd = join(testRoot, 'project');
   const bareRemote = join(testRoot, 'remote.git');
   const branch = 'caccia/pr-42';
@@ -118,6 +118,7 @@ function createCacciaProjectFixture(testRoot: string): CacciaProjectFixture {
   mkdirSync(join(projectCwd, '.takt'), { recursive: true });
   writeFileSync(join(projectCwd, '.takt', 'config.yaml'), [
     'vcs_provider: github',
+    ...(allowHooks ? ['allow_git_hooks: true'] : []),
     'caccia:',
     '  enabled: true',
     '  wait_timeout_ms: 1000',
@@ -207,6 +208,7 @@ function startForcedExitChild(
     route: 'worker-pool' | 'standalone' | 'linked';
     cloneCount: number;
     failFirstCleanup: boolean;
+    hangCommit?: boolean;
   },
 ): { child: ChildProcess; output: { stdout: string; stderr: string }; exit: Promise<ChildExit> } {
   const root = fileURLToPath(new URL('../..', import.meta.url));
@@ -235,6 +237,7 @@ function startForcedExitChild(
       TAKT_CACCIA_ROUTE: options.route,
       TAKT_CACCIA_CLONE_COUNT: String(options.cloneCount),
       TAKT_CACCIA_FAIL_FIRST_CLEANUP: String(options.failFirstCleanup),
+      TAKT_CACCIA_HANG_COMMIT: String(options.hangCommit === true),
     },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
@@ -253,18 +256,20 @@ async function expectForcedExitCleanup(options: {
   route?: 'worker-pool' | 'standalone' | 'linked';
   cloneCount?: number;
   failFirstCleanup?: boolean;
+  hangCommit?: boolean;
 }): Promise<void> {
   const testRoot = mkdtempSync(join(tmpdir(), 'takt-caccia-forced-exit-'));
   temporaryRoots.push(testRoot);
   const globalConfigDir = join(testRoot, 'global-config');
   mkdirSync(globalConfigDir, { recursive: true });
-  const fixture = createCacciaProjectFixture(testRoot);
+  const fixture = createCacciaProjectFixture(testRoot, options.hangCommit === true);
   const cloneCount = options.cloneCount ?? 1;
   const route = options.route ?? 'worker-pool';
   const childProcess = startForcedExitChild(fixture, globalConfigDir, {
     route,
     cloneCount,
     failFirstCleanup: options.failFirstCleanup ?? false,
+    hangCommit: options.hangCommit,
   });
   const { child, output, exit } = childProcess;
   let clonePaths: string[] = [];
@@ -274,7 +279,7 @@ async function expectForcedExitCleanup(options: {
     const handlerRegistration = route === 'worker-pool'
       ? waitForChildMessages(child, 'shutdown-handler-registered', 1)
       : undefined;
-    const started = await waitForChildMessages(child, 'workflow-started', cloneCount);
+    const started = await waitForChildMessages(child, options.hangCommit ? 'commit-started' : 'workflow-started', cloneCount);
     clonePaths = started.map((message) => {
       if (message.cwd === undefined) {
         throw new Error('The child did not report the temporary clone path');
@@ -339,6 +344,14 @@ async function expectForcedExitCleanup(options: {
     clearTimeout(exitWatchdog);
     exitWatchdog = undefined;
     expect(result).toEqual({ code: 130, signal: null });
+    if (options.hangCommit) {
+      const events = readFileSync(fixture.reportPath + '.order', 'utf8').trim().split('\n');
+      expect(events.indexOf('git-kill')).toBeGreaterThanOrEqual(0);
+      expect(events.indexOf('git-kill')).toBeLessThan(events.indexOf('clone-remove'));
+      const pid = Number(readFileSync(fixture.reportPath + '.pid', 'utf8'));
+      expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
+      await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 5_000 });
+    }
     if (options.mode === 'timeout') {
       expect(existsSync(fixture.timeoutMarkerPath)).toBe(true);
       expect(readFileSync(fixture.timeoutMarkerPath, 'utf8')).toContain('5000ms');
@@ -372,6 +385,12 @@ async function expectForcedExitCleanup(options: {
       child.kill('SIGKILL');
     }
     await exit;
+    if (options.hangCommit && existsSync(fixture.reportPath + '.pid')) {
+      const pid = Number(readFileSync(fixture.reportPath + '.pid', 'utf8'));
+      if (Number.isSafeInteger(pid) && pid > 0) {
+        try { process.kill(pid, 'SIGKILL'); } catch { /* Reaped. */ }
+      }
+    }
   }
 }
 
@@ -443,6 +462,10 @@ describe('Caccia real Git isolation', () => {
 
   it('removes the active clone after the standalone Caccia SIGINT listener is consumed', async () => {
     await expectForcedExitCleanup({ mode: 'second-sigint', route: 'standalone' });
+  });
+
+  it('kills the active Git group before removing its clone on a repeated standalone SIGINT', async () => {
+    await expectForcedExitCleanup({ mode: 'second-sigint', route: 'standalone', hangCommit: true });
   });
 
   it('removes the active clone after the explicit Caccia SIGINT listener is consumed', async () => {

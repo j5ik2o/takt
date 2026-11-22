@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { execFileSync } from 'node:child_process';
 
 const sourceRoot = process.env.TAKT_SOURCE_ROOT;
 const projectCwd = process.env.TAKT_CACCIA_PROJECT_CWD;
@@ -15,6 +16,20 @@ const cloneCount = Number(process.env.TAKT_CACCIA_CLONE_COUNT);
 const route = process.env.TAKT_CACCIA_ROUTE;
 const failFirstCleanup = process.env.TAKT_CACCIA_FAIL_FIRST_CLEANUP === 'true';
 const activeClonePaths = new Set();
+const hangCommit = process.env.TAKT_CACCIA_HANG_COMMIT === 'true';
+if (hangCommit) {
+  const originalRm = fs.rmSync.bind(fs);
+  fs.rmSync = (path, options) => {
+    if (activeClonePaths.has(path)) fs.appendFileSync(reportPath + '.order', 'clone-remove\n');
+    return originalRm(path, options);
+  };
+  const originalKill = process.kill.bind(process);
+  process.kill = (pid, signal) => {
+    if (pid < 0 && signal === 'SIGKILL') fs.appendFileSync(reportPath + '.order', 'git-kill\n');
+    return originalKill(pid, signal);
+  };
+  syncBuiltinESMExports();
+}
 
 function reportGracefulStart() {
   const clonePaths = [...activeClonePaths];
@@ -110,6 +125,22 @@ mock.module(workflowModule, {
       }
       fs.mkdirSync(join(projectCwd, '.takt', 'runs', 'caccia-forced-exit'), { recursive: true });
       fs.writeFileSync(reportPath, 'workflow reached before forced exit\n', 'utf8');
+      if (hangCommit) {
+        const directory = join(projectCwd, '.takt', 'runs', 'caccia-forced-exit');
+        fs.writeFileSync(join(directory, 'caccia-decisions.json'), JSON.stringify({ outcome: 'complete', reason: '',
+          decisions: [{ thread_id: 'thread-42', valid: true, reason: 'Fixed' }] }));
+        fs.writeFileSync(join(options.cwd, 'fix.txt'), 'change');
+        execFileSync('git', ['config', 'user.name', 'Test'], { cwd: options.cwd });
+        execFileSync('git', ['config', 'user.email', 'test@example.test'], { cwd: options.cwd });
+        fs.mkdirSync(join(options.cwd, '.git', 'hooks'), { recursive: true });
+        fs.writeFileSync(join(options.cwd, '.git', 'hooks', 'pre-commit'), `#!${process.execPath}\nconst fs = require('node:fs');\nprocess.on('SIGINT', () => {});\nfs.writeFileSync(${JSON.stringify(reportPath + '.pid')}, String(process.pid));\nsetInterval(() => {}, 1000);\n`, { mode: 0o755 });
+        const timer = setInterval(() => {
+          if (!fs.existsSync(reportPath + '.pid') || fs.readFileSync(reportPath + '.pid', 'utf8').trim() === '') return;
+          clearInterval(timer);
+          process.send?.({ type: 'commit-started', cwd: options.cwd });
+        }, 10);
+        return { success: true, reportDirectory: directory };
+      }
       process.send?.({ type: 'workflow-started', cwd: options.cwd });
       return new Promise(() => undefined);
     },

@@ -429,8 +429,16 @@ async function runPrMergeWorkflow(
     skipWorktreeRuntimeProtection: true,
   }, ...(request.pullRequest === undefined ? [] : [{ gitProvider: provider }]));
   if (!result.success) log.error('PR workflow failed', { prNumber: request.prNumber });
-  const { merged, headSha: publishedHeadSha } = await provider.fetchPrStatus(request.prNumber, request.projectCwd,
-    { signal: request.abortSignal });
+  let status;
+  try {
+    status = await provider.fetchPrStatus(request.prNumber, request.projectCwd, { signal: request.abortSignal });
+  } catch (error) {
+    request.abortSignal?.throwIfAborted();
+    if (result.success || result.reason === undefined) throw error;
+    log.error('Final PR status unavailable after workflow failure', { prNumber: request.prNumber, error: sanitizeSensitiveText(getErrorMessage(error)) });
+    return { success: false, merged: false, outcome: 'unresolved', failureReason: sanitizeSensitiveText(result.reason) };
+  }
+  const { merged, headSha: publishedHeadSha } = status;
   return { success: result.success, merged, headSha: publishedHeadSha,
     ...(!result.success && result.reason !== undefined ? { failureReason: sanitizeSensitiveText(result.reason) } : {}),
     outcome: result.success ? (merged ? 'merged' : 'prepared') : 'unresolved' };

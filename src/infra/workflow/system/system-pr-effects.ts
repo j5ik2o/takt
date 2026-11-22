@@ -2,10 +2,11 @@ import type { SystemStepServicesOptions } from '../../../core/workflow/system/sy
 import { getGitProvider } from '../../git/index.js';
 import { execFileSync } from 'node:child_process';
 
-export function commentPrEffect(
+export async function commentPrEffect(
   options: SystemStepServicesOptions,
   payload: { pr: number; body: string; body_format?: 'plain_text' },
-): Record<string, unknown> {
+  cacciaFailureNotification: boolean,
+): Promise<Record<string, unknown>> {
   const gitProvider = options.gitProvider ?? getGitProvider();
   let body = payload.body;
   if (payload.body_format === 'plain_text') {
@@ -14,7 +15,14 @@ export function commentPrEffect(
     const fence = '`'.repeat(fenceLength);
     body = `${fence}text\n${body}\n${fence}`;
   }
-  const result = gitProvider.commentOnPr(payload.pr, body, options.projectCwd);
+  const result = cacciaFailureNotification
+    ? gitProvider.commentOnPrAsync === undefined
+      ? { success: false, error: 'Cancellable PR comments are not supported by this Git provider' }
+      : await gitProvider.commentOnPrAsync(payload.pr, body, options.projectCwd, {
+        signal: AbortSignal.any([AbortSignal.timeout(60_000), ...(options.abortSignal === undefined ? [] : [options.abortSignal])]),
+        timeoutMs: 60_000,
+      }).catch((error: unknown) => ({ success: false, error: String(error) }))
+    : gitProvider.commentOnPr(payload.pr, body, options.projectCwd);
   return {
     success: result.success,
     failed: result.success !== true,

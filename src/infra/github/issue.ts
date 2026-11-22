@@ -18,9 +18,13 @@ import type {
 } from '../git/types.js';
 import { normalizePublicIssueUrl } from '../git/types.js';
 import { parseIssueNumberFromUrl } from '../git/format.js';
+import { runPrCommand } from './pr-command.js';
+import type { PrStatusFetchOptions } from '../../core/workflow/system/pr-execution-context.js';
 
 const log = createLogger('github');
 const OPEN_ISSUES_PER_PAGE = 100;
+const GH_AUTH_REQUIRED = 'gh CLI is installed but not authenticated. Run `gh auth login` first.';
+const GH_INSTALL_REQUIRED = 'gh CLI is not installed. Install it from https://cli.github.com/';
 
 interface GhIssueListResponseItem {
   number: number;
@@ -42,13 +46,29 @@ export function checkGhCli(cwd: string): CliStatus {
       execFileSync('gh', ['--version'], { cwd, stdio: 'pipe' });
       return {
         available: false,
-        error: 'gh CLI is installed but not authenticated. Run `gh auth login` first.',
+        error: GH_AUTH_REQUIRED,
       };
     } catch {
       return {
         available: false,
-        error: 'gh CLI is not installed. Install it from https://cli.github.com/',
+        error: GH_INSTALL_REQUIRED,
       };
+    }
+  }
+}
+
+export async function checkGhCliAsync(cwd: string, options: PrStatusFetchOptions): Promise<CliStatus> {
+  try {
+    await runPrCommand(['auth', 'status'], cwd, options);
+    return { available: true };
+  } catch {
+    options.signal?.throwIfAborted();
+    try {
+      await runPrCommand(['--version'], cwd, options);
+      return { available: false, error: GH_AUTH_REQUIRED };
+    } catch {
+      options.signal?.throwIfAborted();
+      return { available: false, error: GH_INSTALL_REQUIRED };
     }
   }
 }

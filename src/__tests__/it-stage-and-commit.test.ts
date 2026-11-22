@@ -22,6 +22,7 @@ import {
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import { stageAndCommit } from '../infra/task/git.js';
 import { buildSafeGitEnvironment } from '../infra/task/git-environment.js';
 import { getProjectWorkflowsDir, getProjectFacetDir } from '../infra/config/paths.js';
@@ -31,6 +32,39 @@ import { ensureWorktreeTaktRuntimeProtection } from '../infra/task/projectLocalT
 const dotgitignorePath = join(__dirname, '..', '..', 'builtins', 'project', 'dotgitignore');
 
 let testDir: string;
+
+async function bounded<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([operation, new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('Process observation deadline exceeded')), timeoutMs);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
+function recoverHook(marker: string): number | undefined {
+  if (!existsSync(marker)) return undefined;
+  const pid = Number(readFileSync(marker, 'utf8'));
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid hook PID');
+  try { process.kill(pid, 'SIGKILL'); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+  }
+  return pid;
+}
+
+async function collectHook(marker: string): Promise<void> {
+  const pid = recoverHook(marker);
+  if (pid !== undefined) {
+    await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow(), { timeout: 2_000 });
+  }
+}
+
+function installStoppedHook(marker: string): void {
+  const hook = join(testDir, '.git', 'hooks', 'pre-commit');
+  mkdirSync(dirname(hook), { recursive: true });
+  writeFileSync(hook, `#!${process.execPath}\nconst fs = require('node:fs');\nprocess.on('SIGINT', () => {});\nconst marker = ${JSON.stringify(marker)};\nfs.writeFileSync(marker + '.tmp', String(process.pid));\nfs.renameSync(marker + '.tmp', marker);\nsetInterval(() => {}, 1000);\n`, { mode: 0o755 });
+  writeFileSync(join(testDir, 'change.txt'), 'change');
+}
 
 beforeEach(() => {
   testDir = join(tmpdir(), `takt-stage-commit-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -54,6 +88,94 @@ afterEach(() => {
 });
 
 describe('stageAndCommit', () => {
+  it('does not leave a commit hook running when its CLI exits during cancellation', async () => {
+    const marker = join(testDir, '.git', 'exiting-hook-pid');
+    installStoppedHook(marker);
+    const moduleUrl = pathToFileURL(join(__dirname, '../../dist/infra/task/git.js')).href;
+    const script = `
+      import { readFileSync } from 'node:fs';
+      import { stageAndCommit } from ${JSON.stringify(moduleUrl)};
+      const controller = new AbortController();
+      void stageAndCommit(${JSON.stringify(testDir)}, 'stalled hook', { allowGitHooks: true }, controller.signal).catch(() => {});
+      setInterval(() => {
+        let pid;
+        try { pid = Number(readFileSync(${JSON.stringify(marker)}, 'utf8')); } catch { return; }
+        if (!Number.isSafeInteger(pid) || pid <= 0) return;
+        controller.abort();
+        process.exit(0);
+      }, 10);
+    `;
+    let pid: number | undefined;
+    try {
+      execFileSync(process.execPath, ['--input-type=module', '-e', script], { timeout: 10_000, stdio: 'pipe' });
+      pid = Number(readFileSync(marker, 'utf8'));
+      expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
+      await vi.waitFor(() => expect(() => process.kill(pid!, 0)).toThrow(), { timeout: 5_000 });
+    } finally {
+      await collectHook(marker);
+    }
+  });
+
+  it('cancels a hanging commit hook and waits for its process to exit', async () => {
+    const marker = join(testDir, '.git', 'hook-pid');
+    installStoppedHook(marker);
+    const controller = new AbortController();
+    const result = stageAndCommit(testDir, 'stalled hook', { allowGitHooks: true }, controller.signal)
+      .then(() => ({ failed: false }), () => ({ failed: true }));
+    let pid: number | undefined;
+    try {
+      await vi.waitFor(() => {
+        const recordedPid = Number(readFileSync(marker, 'utf8'));
+        expect(Number.isSafeInteger(recordedPid) && recordedPid > 0).toBe(true);
+        pid = recordedPid;
+      }, { timeout: 5_000 });
+      controller.abort(new Error('Commit cancelled'));
+      expect(await bounded(result, 2_000)).toEqual({ failed: true });
+      expect(() => process.kill(pid!, 0)).toThrow();
+      expect(execFileSync('git', ['log', '-1', '--format=%s'], { cwd: testDir, encoding: 'utf8' }).trim())
+        .toBe('Initial commit');
+    } finally {
+      controller.abort();
+      await collectHook(marker);
+      await bounded(result, 2_000);
+    }
+  });
+  it('recovers an already started hook when product completion observation times out', async () => {
+    const marker = join(testDir, '.git', 'observation-hook-pid');
+    installStoppedHook(marker);
+    const product = stageAndCommit(testDir, 'stalled hook', { allowGitHooks: true }).catch(() => undefined);
+    let pid: number | undefined;
+    await expect((async () => {
+      try {
+        await vi.waitFor(() => { pid = Number(readFileSync(marker, 'utf8')); expect(pid).toBeGreaterThan(0); });
+        await bounded(new Promise<never>(() => {}), 10);
+      } finally {
+        await collectHook(marker);
+        await bounded(product, 2_000);
+      }
+    })()).rejects.toThrow('Process observation deadline exceeded');
+    expect(() => process.kill(pid!, 0)).toThrow();
+  });
+
+  it('recovers the hook marker even when its parent fails before returning a result', async () => {
+    const marker = join(testDir, '.git', 'failed-parent-hook-pid');
+    installStoppedHook(marker);
+    const moduleUrl = pathToFileURL(join(__dirname, '../../dist/infra/task/git.js')).href;
+    const script = `
+      import { existsSync } from 'node:fs';
+      import { stageAndCommit } from ${JSON.stringify(moduleUrl)};
+      void stageAndCommit(${JSON.stringify(testDir)}, 'stalled hook', { allowGitHooks: true });
+      setInterval(() => { if (existsSync(${JSON.stringify(marker)})) throw new Error('Fixture parent failed'); }, 10);
+    `;
+    await expect((async () => {
+      try {
+        execFileSync(process.execPath, ['--input-type=module', '-e', script], { timeout: 10_000, stdio: 'pipe' });
+      } finally { await collectHook(marker); }
+    })()).rejects.toThrow('Fixture parent failed');
+    const pid = Number(readFileSync(marker, 'utf8'));
+    expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
+    expect(() => process.kill(pid, 0)).toThrow();
+  });
   it('should not commit gitignored .takt/runs/ files', async () => {
     // Setup: .takt/ is gitignored
     writeFileSync(join(testDir, '.gitignore'), '.takt/\n');

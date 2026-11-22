@@ -38,6 +38,14 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 }));
 
 import { execFile, execFileSync } from 'node:child_process';
+// Preserve the command-level fixtures for both synchronous inspection and abortable commits.
+vi.mock('../infra/task/clone-exec.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../infra/task/clone-exec.js')>(),
+  runGitCommandAbortable: async (cwd: string, args: string[], _signal: AbortSignal | undefined, env: NodeJS.ProcessEnv) => ({
+    stdout: execFileSync('git', args, { cwd, stdio: 'pipe', env }).toString(),
+    stderr: '',
+  }),
+}));
 const mockExecFile = vi.mocked(execFile);
 const mockExecFileSync = vi.mocked(execFileSync);
 

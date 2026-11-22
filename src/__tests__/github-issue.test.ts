@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { commentOnIssue, listOpenIssues } from '../infra/github/issue.js';
+import { checkGhCliAsync, commentOnIssue, listOpenIssues } from '../infra/github/issue.js';
 
 const execFileSync = vi.hoisted(() => vi.fn());
 const mockLogError = vi.hoisted(() => vi.fn());
+const runPrCommand = vi.hoisted(() => vi.fn());
+
+vi.mock('../infra/github/pr-command.js', () => ({ runPrCommand }));
 
 vi.mock('node:child_process', () => ({
   execFileSync: (...args: unknown[]) => execFileSync(...args),
@@ -17,6 +20,22 @@ function apiResponse(body: unknown, next?: string): string {
   const link = next ? `\nlink: <https://api.github.com${next}>; rel="next"` : '';
   return `HTTP/2 200 OK\ncontent-type: application/json${link}\n\n${JSON.stringify(body)}`;
 }
+
+describe('asynchronous GitHub authentication diagnostics', () => {
+  it.each([
+    [true, 'gh CLI is installed but not authenticated. Run `gh auth login` first.'],
+    [false, 'gh CLI is not installed. Install it from https://cli.github.com/'],
+  ] as const)('preserves the existing diagnostic when version availability is %s', async (installed, error) => {
+    runPrCommand.mockReset().mockRejectedValueOnce(new Error('Authentication failed'));
+    if (installed) runPrCommand.mockResolvedValueOnce('gh version');
+    else runPrCommand.mockRejectedValueOnce(new Error('Executable unavailable'));
+    const options = { signal: new AbortController().signal, timeoutMs: 60_000 };
+    expect(await checkGhCliAsync('/project', options)).toEqual({ available: false, error });
+    expect(runPrCommand.mock.calls).toEqual([
+      [['auth', 'status'], '/project', options], [['--version'], '/project', options],
+    ]);
+  });
+});
 
 describe('listOpenIssues GitHub boundary', () => {
   beforeEach(() => {

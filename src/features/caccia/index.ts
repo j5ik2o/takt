@@ -68,7 +68,6 @@ function cleanupOwnedTemporaryClonesOnExit(): void {
 }
 
 function forceExitAfterRepeatedSigint(): void {
-  cleanupOwnedTemporaryClonesOnExit();
   void forceExitAfterOpenCodeCleanup();
 }
 
@@ -114,6 +113,7 @@ export interface CacciaResult {
 
 interface CacciaInputBase extends CacciaDisplayOptions {
   eventSink?: WorkflowExecutionEventSink;
+  onProgress?: () => void;
   projectCwd: string;
   settings: CacciaSettings;
   abortSignal?: AbortSignal;
@@ -205,6 +205,7 @@ async function waitForCodeRabbitReview(
   options: CacciaReviewWaitOptions,
   signal: AbortSignal | undefined,
   out: CacciaOutput,
+  onProgress: (() => void) | undefined,
   target?: GitHubPullRequestTarget,
 ): Promise<CacciaReviewWaitResult | { rateLimited: true; headSha: string } | undefined> {
   const targetArguments = target === undefined ? [] as const : [target] as const;
@@ -224,6 +225,7 @@ async function waitForCodeRabbitReview(
       throw error;
     }
     assertNotAborted(signal);
+    if (status !== undefined) onProgress?.();
     if (status === undefined || deadline - Date.now() <= 0) {
       return rateLimitedHeadSha === undefined ? undefined : { rateLimited: true, headSha: rateLimitedHeadSha };
     }
@@ -334,6 +336,8 @@ async function createTemporaryClone(
   assertNotAborted(input.abortSignal);
   const targetArguments = input.entry === 'linked' && input.pullRequest !== undefined ? [input.pullRequest] as const : [] as const;
   const pullRequest = await fetchCacciaPullRequestDetails(prNumber, input.projectCwd, input.abortSignal, ...targetArguments);
+  assertNotAborted(input.abortSignal);
+  input.onProgress?.();
   if (pullRequest.headSha !== expectedHeadSha) {
     throw new Error(`Pull request #${prNumber} head changed before creating its temporary clone`);
   }
@@ -356,7 +360,7 @@ async function createTemporaryClone(
     await cloneGit.operations.fetch(toLocalBranchRef(pullRequest.headBranch));
     const checkoutEnvironment = await buildSafeGitEnvironment(cloneCwd, {
       allowGitHooks: autoCommitOptions.allowGitHooks, allowGitFilters: false,
-    });
+    }, input.abortSignal);
     await runGitCommandAbortable(
       cloneCwd,
       ['checkout', '-B', pullRequest.headBranch, 'FETCH_HEAD'],
@@ -409,6 +413,10 @@ async function executeCacciaWorkflow(
       ...display,
       eventSink: (event) => {
         if (event.type === 'run_started') reportDirectory = event.reportDirectory;
+        if (event.type === 'output' || event.type === 'tool_started' || event.type === 'tool_completed'
+          || event.type === 'step_completed') {
+          input.onProgress?.();
+        }
         if (event.type === 'progress' && event.level === 'warn') {
           return input.eventSink?.(event);
         }
@@ -416,6 +424,7 @@ async function executeCacciaWorkflow(
       abortSignal: input.abortSignal,
     });
   } catch (error) {
+    assertNotAborted(input.abortSignal);
     if (reportDirectory === undefined) throw error;
     let report: CacciaWorkflowReport;
     try {
@@ -453,12 +462,14 @@ async function commitAndPush(
   onPushedHead: CacciaPushedHeadListener | undefined,
 ): Promise<{ headSha: string; pushed: boolean }> {
   assertNotAborted(signal);
-  const commitHash = await stageAndCommit(cwd, 'fix: address CodeRabbit review', resolveAutoCommitOptions(projectCwd));
+  const commitHash = await stageAndCommit(cwd, 'fix: address CodeRabbit review', resolveAutoCommitOptions(projectCwd), signal);
+  assertNotAborted(signal);
   const headSha = (await runGitCommandAbortable(cwd, ['rev-parse', 'HEAD'], signal)).stdout.trim();
   if (commitHash !== undefined) {
     const branch = (await runGitCommandAbortable(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], signal)).stdout.trim();
     let notified = false;
     await operations.push(`HEAD:${toLocalBranchRef(branch)}`, () => {
+      assertNotAborted(signal);
       if (!notified) {
         onPushedHead?.(headSha);
         notified = true;
@@ -478,7 +489,7 @@ function createProductionDependencies(
   const targetArguments = target === undefined ? [] as const : [target] as const;
   return {
     waitForCodeRabbitReview: (prNumber, options) =>
-      waitForCodeRabbitReview(prNumber, input.projectCwd, options, input.abortSignal, out, target),
+      waitForCodeRabbitReview(prNumber, input.projectCwd, options, input.abortSignal, out, input.onProgress, target),
     fetchCodeRabbitReviewThreads: (prNumber, projectCwd, expectedHeadSha, signal) =>
       fetchCodeRabbitReviewThreads(prNumber, projectCwd, expectedHeadSha, signal, ...targetArguments),
     createTemporaryClone: async (prNumber, expectedHeadSha) => {
@@ -624,6 +635,8 @@ async function runCacciaWithDependencies(
     ...(input.entry === 'linked' && input.expectedInitialHeadSha !== undefined
       ? { afterHeadSha: input.expectedInitialHeadSha } : {}),
   });
+  assertNotAborted(input.abortSignal);
+  input.onProgress?.();
   if (initialReview === undefined) {
     return finishResult(input, createResult(input, 'skipped', 0,
       'CodeRabbit did not post within the wait limit', undefined, 'initial_review_unavailable'), dependencies, out);
@@ -648,6 +661,8 @@ async function runCacciaWithDependencies(
     reviewedHeadSha,
     input.abortSignal,
   );
+  assertNotAborted(input.abortSignal);
+  input.onProgress?.();
   out.threads(threads.length);
   if (threads.length === 0) {
     return finishResult(input, createResult(input, 'success', 0, undefined, reviewedHeadSha), dependencies, out);
@@ -660,6 +675,8 @@ async function runCacciaWithDependencies(
     const clone = await dependencies.createTemporaryClone(prNumber, reviewedHeadSha);
     const pushed = await (async () => {
       try {
+        assertNotAborted(input.abortSignal);
+        input.onProgress?.();
         const threadIds = threads.map((thread) => thread.id);
         const workflowResult = await dependencies.executeWorkflow({
           prNumber,
@@ -670,9 +687,12 @@ async function runCacciaWithDependencies(
           threadIds,
         });
         assertNotAborted(input.abortSignal);
+        input.onProgress?.();
         assertCacciaWorkflowComplete(workflowResult, threadIds, workflowResult.workflowFailure);
         const pushResult = await dependencies.commitAndPush(clone.cwd,
           input.entry === 'linked' ? input.onPushedHead : undefined);
+        assertNotAborted(input.abortSignal);
+        input.onProgress?.();
         if (pushResult.pushed) {
           out.pushed(pushResult.headSha);
         }
@@ -694,6 +714,8 @@ async function runCacciaWithDependencies(
             const currentHeadSha = await dependencies.fetchCurrentPullRequestHeadSha(
               prNumber, input.projectCwd, input.abortSignal,
             );
+            assertNotAborted(input.abortSignal);
+            input.onProgress?.();
             if (currentHeadSha !== pushResult.headSha) {
               throw new Error(
                 `Pull request #${prNumber} head changed before resolving review thread ${thread.id}`
@@ -701,7 +723,10 @@ async function runCacciaWithDependencies(
               );
             }
           }
+          assertNotAborted(input.abortSignal);
           await dependencies.resolveReviewThread(thread.id, input.projectCwd, input.abortSignal);
+          assertNotAborted(input.abortSignal);
+          input.onProgress?.();
           out.resolved(thread.id);
         }
         return pushResult;
@@ -715,6 +740,8 @@ async function runCacciaWithDependencies(
       timeoutMs: input.settings.waitTimeoutMs,
       afterHeadSha: pushed.headSha,
     });
+    assertNotAborted(input.abortSignal);
+    input.onProgress?.();
     if (review === undefined) {
       throw new Error(`Timed out waiting for CodeRabbit to review pushed commit ${pushed.headSha}`);
     }
@@ -734,6 +761,8 @@ async function runCacciaWithDependencies(
       reviewedHeadSha,
       input.abortSignal,
     );
+    assertNotAborted(input.abortSignal);
+    input.onProgress?.();
     out.threads(threads.length);
     if (threads.length === 0) {
       return finishResult(input, createResult(input, 'success', 0, undefined, reviewedHeadSha), dependencies, out);

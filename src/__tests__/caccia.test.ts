@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockForceExitAfterOpenCodeCleanup } = vi.hoisted(() => ({
   mockForceExitAfterOpenCodeCleanup: vi.fn(() => Promise.resolve()),
@@ -21,7 +21,7 @@ import {
   resolveCacciaSettings,
   runCaccia,
 } from '../features/caccia/index.js';
-import { createCacciaAbortScope } from '../features/caccia/abortSignal.js';
+import { createCacciaAbortScope, createCacciaInactivityScope, waitForCacciaOperation } from '../features/caccia/abortSignal.js';
 import { CacciaWorkflowError, assertCacciaWorkflowComplete } from '../features/caccia/workflow-report.js';
 import type { CacciaConfig } from '../core/models/config-types.js';
 import { stripAnsi } from '../shared/utils/text.js';
@@ -644,6 +644,60 @@ describe('Caccia configuration defaults', () => {
 });
 
 describe('Caccia abort scope', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('renews inactivity only on progress and stops accepting progress after disposal', async () => {
+    vi.useFakeTimers();
+    const scope = createCacciaInactivityScope(undefined);
+    await vi.advanceTimersByTimeAsync(40_000);
+    scope.progress();
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(scope.signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(scope.signal.aborted).toBe(true);
+    scope.progress();
+    expect(vi.getTimerCount()).toBe(0);
+    scope.dispose();
+    const finished = createCacciaInactivityScope(undefined);
+    finished.dispose();
+    finished.progress();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('preserves an earlier caller reason and clears the inactivity timer', async () => {
+    vi.useFakeTimers();
+    const caller = new AbortController();
+    const scope = createCacciaInactivityScope(caller.signal);
+    const reason = new Error('Caller stopped');
+    caller.abort(reason);
+    expect(scope.signal.reason).toBe(reason);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(scope.signal.reason).toBe(reason);
+    expect(vi.getTimerCount()).toBe(0);
+    scope.dispose();
+  });
+
+  it('settles waiting on abort even when the operation rejects later', async () => {
+    const caller = new AbortController();
+    let fail!: (error: Error) => void;
+    const operation = new Promise<void>((_resolve, reject) => { fail = reject; });
+    const pending = waitForCacciaOperation(operation, caller.signal);
+    const reason = new Error('Stopped');
+    caller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    fail(new Error('Late failure'));
+    await Promise.resolve();
+  });
+
+  it('preserves synchronous values, fulfilled values, and operation failures', async () => {
+    const signal = new AbortController().signal;
+    await expect(waitForCacciaOperation(42, signal)).resolves.toBe(42);
+    await expect(waitForCacciaOperation(Promise.resolve(43), signal)).resolves.toBe(43);
+    const failure = new Error('Operation failed');
+    await expect(waitForCacciaOperation(Promise.reject(failure), signal)).rejects.toBe(failure);
+    const aborted = AbortSignal.abort(failure);
+    await expect(waitForCacciaOperation(Promise.resolve(44), aborted)).rejects.toBe(failure);
+  });
   it('converts one SIGINT to an abort signal and removes the listener after execution', () => {
     const runtime = new EventEmitter();
     const scope = createCacciaAbortScope(undefined, runtime);
@@ -706,6 +760,15 @@ describe('Caccia forced shutdown', () => {
 });
 
 describe('Caccia loop', () => {
+  it('reports a completed review-thread response as progress', async () => {
+    const { dependencies, events } = createHarness();
+    const observed: string[] = [];
+    await runCaccia({ entry: 'linked', prNumber: 42, projectCwd: '/project',
+      settings: { ...standaloneInput().settings, enabled: true },
+      onProgress: () => { observed.push(events[events.length - 1]!); },
+    }, dependencies);
+    expect(observed).toContain('fetch');
+  });
   it('linked実行の初回レビューをpushしたheadに固定する', async () => {
     const { dependencies } = createHarness([[thread('finding-1')], []]);
     const input: CacciaInput = {

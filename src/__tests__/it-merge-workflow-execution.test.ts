@@ -381,6 +381,10 @@ describe('Builtin PR merge workflow execution', () => {
     });
     const githubProvider = new GitHubProvider();
     const rerunPrCi = vi.fn(githubProvider.rerunPrCi.bind(githubProvider));
+    const commentOnPr = vi.fn((_pr: number, body: string) => {
+      comments.push(body);
+      return scenario.commentFails ? { success: false, error: 'comment denied' } : { success: true };
+    });
     const recoveryServices = createDefaultSystemStepServices({ cwd: cloneCwd, projectCwd: project, task: 'Review PR',
       runPaths: buildRunPaths(project, 'merge-workflow-report'),
       prExecutionContext: { prNumber, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
@@ -388,10 +392,8 @@ describe('Builtin PR merge workflow execution', () => {
         ...{ mergeConcurrency: scenario.concurrency ?? 2 } },
       gitProvider: { checkCliStatus: vi.fn(), fetchIssue: vi.fn(), createIssue: vi.fn(), closeIssue: vi.fn(),
         fetchPrReviewComments: vi.fn(), listOpenIssues: vi.fn(), listOpenPrs: vi.fn(), findExistingPr: vi.fn(),
-        commentOnPr: vi.fn((_pr, body: string) => {
-          comments.push(body);
-          return scenario.commentFails ? { success: false, error: 'comment denied' } : { success: true };
-        }), closePr: vi.fn(), mergePr: vi.fn(), ...{ fetchPrCiFailure, rerunPrCi },
+        commentOnPr, commentOnPrAsync: async (pr, body) => commentOnPr(pr, body),
+        closePr: vi.fn(), mergePr: vi.fn(), ...{ fetchPrCiFailure, rerunPrCi },
         fetchPrStatus: githubProvider.fetchPrStatus.bind(githubProvider),
       },
     });

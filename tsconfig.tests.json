@@ -428,6 +428,7 @@
     "src/__tests__/it-resume-report-input.test.ts",
     "src/__tests__/it-review-remediation-routing.test.ts",
     "src/__tests__/it-runAllTasks-auto-requeue.test.ts",
+    "src/__tests__/it-stage-and-commit.test.ts",
     "src/__tests__/it-step-structured-output-fallback.test.ts",
     "src/__tests__/it-system-command-input-config.test.ts",
     "src/__tests__/it-system-command-input-entrypoints.test.ts",

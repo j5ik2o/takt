@@ -10,7 +10,9 @@ import { PrHeadObservationMismatchError, type PrDetails } from '../../core/workf
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
 import { fetchPaginatedApi } from '../git/paginated-api.js';
 import { isTaktManagedPrBody } from '../git/format.js';
-import { checkGhCli } from './issue.js';
+import { checkGhCli, checkGhCliAsync } from './issue.js';
+import { runPrCommand } from './pr-command.js';
+import { PR_STATUS_TIMEOUT_MS, type PrStatusFetchOptions } from '../../core/workflow/system/pr-execution-context.js';
 import { resolveRepositoryNameWithOwner } from './repository.js';
 import { assertGitHubPullRequestTarget, resolvePublishedPrRepositoryUrl, type GitHubPullRequestTarget } from './pull-request-target.js';
 import type {
@@ -269,6 +271,27 @@ export function commentOnPr(prNumber: number, body: string, cwd: string, target?
     log.error('PR comment failed', { error: errorMessage });
     return { success: false, error: errorMessage };
   }
+}
+
+export async function commentOnPrAsync(
+  prNumber: number, body: string, cwd: string, options: PrStatusFetchOptions, target?: GitHubPullRequestTarget,
+): Promise<CommentResult> {
+  const controller = new AbortController();
+  const signal = options.signal === undefined ? controller.signal : AbortSignal.any([options.signal, controller.signal]);
+  const timeoutMs = options.timeoutMs ?? PR_STATUS_TIMEOUT_MS;
+  const timer = setTimeout(() => controller.abort(new Error('PR comment timed out')), timeoutMs);
+  try {
+    signal.throwIfAborted();
+    const commandOptions = { signal, timeoutMs };
+    const status = await checkGhCliAsync(cwd, commandOptions);
+    if (!status.available) return { success: false, error: status.error };
+    await runPrCommand(['pr', 'comment', target?.url ?? String(prNumber), '--body', body], cwd, commandOptions);
+    return { success: true };
+  } catch (error) {
+    const message = getErrorMessage(error);
+    log.error('PR comment failed', { error: message });
+    return { success: false, error: message };
+  } finally { clearTimeout(timer); }
 }
 
 /** JSON fields requested from `gh pr view` for review data */
