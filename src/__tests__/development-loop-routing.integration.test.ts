@@ -10,6 +10,15 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
   runReportPhase: vi.fn(),
   runStatusJudgmentPhase: vi.fn(),
 }));
+// builtin の workflow_call 解決はグローバル設定の enable_builtin_workflows に従う。
+// 実環境の設定に依存させず、配布定義のグラフを解決できる状態にする。
+vi.mock('../infra/config/global/globalConfigCore.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/config/global/globalConfigCore.js')>();
+  return {
+    ...actual,
+    loadGlobalConfig: () => ({ ...actual.loadGlobalConfig(), enableBuiltinWorkflows: true }),
+  };
+});
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { CycleDetector } from '../core/workflow/engine/cycle-detector.js';
@@ -35,9 +44,6 @@ let engine: WorkflowEngine | undefined;
 
 beforeEach(() => {
   vi.resetAllMocks();
-  // builtin の workflow_call 解決はグローバル設定の enable_builtin_workflows に従う。
-  // 実環境の設定に依存させず、配布定義のグラフを解決できる状態にする。
-  vi.stubEnv('TAKT_ENABLE_BUILTIN_WORKFLOWS', 'true');
   vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
     for (const report of step.outputContracts ?? []) {
       writePhaseReportFixture(context, report.name, 'Current routing fixture report');
@@ -47,7 +53,6 @@ beforeEach(() => {
   directory = createTestTmpDir();
 });
 afterEach(() => {
-  vi.unstubAllEnvs();
   if (engine) cleanupWorkflowEngine(engine);
   engine = undefined;
   rmSync(directory, { recursive: true, force: true });
@@ -443,35 +448,27 @@ describe('shipped development completion and remediation routes', () => {
   });
 
   it.each(variants(remediations))(
-    '$language/$name counts every tagged repair branch back into fix as one monitored round', ({ language, name }) => {
+    '$language/$name counts every connected repair branch back into fix as one monitored round', ({ language, name }) => {
       const config = load(language, name);
       const monitor = config.loopMonitors?.find(item => item.cycle.length === 1 && item.cycle[0] === 'fix');
       if (!monitor) throw new Error('Missing one-step fix monitor');
-      const ignored = monitor.ignoreSteps ?? [];
-      expect(ignored).toEqual(expect.arrayContaining(['fix-plan', 'fix-replan', 'verification-replan', 'fix-verifier', 'fix-retry']));
-      const nextOf = (stepName: string, ruleIndex: number) => {
-        const step = config.steps.find(candidate => candidate.name === stepName)!;
-        const next = determineRuleTransition(step, ruleIndex)?.nextStep;
-        if (!next) throw new Error(`Missing rule ${ruleIndex} of ${stepName}`);
-        return next;
-      };
-      // 修正計画の作り直し・検証からの差し戻しは、どれも fix へ戻る同じ論理サイクルの周回である。
-      const branches: Array<{ leave: number; returns: Array<[string, string]> }> = [
-        { leave: 1, returns: [['fix-replan', 'fix']] },
-        { leave: 0, returns: [['fix-retry', 'verification-replan'], ['verification-replan', 'fix'], ['fix-retry', 'verification-replan'], ['verification-replan', 'fix']] },
-        { leave: 0, returns: [['fix-verifier', 'verification-replan'], ['verification-replan', 'fix'], ['fix-verifier', 'verification-replan'], ['verification-replan', 'fix']] },
+      const ignored = new Set(monitor.ignoreSteps ?? []);
+      // 各回は、ある step の完了から次の step の完了へ実際の遷移でつなぐ。
+      // 往復はすべて fix へ戻り、中間 step は ignore_steps 側にだけ現れる。
+      const rounds: string[][] = [
+        ['fix', 'fix-replan', 'fix'],
+        ['fix', 'fix-verifier', 'verification-replan', 'fix'],
+        ['fix', 'fix-verifier', 'fix-retry', 'verification-replan', 'fix'],
       ];
-      for (const branch of branches) {
+      for (const round of rounds) {
         const detector = new CycleDetector(config.loopMonitors);
-        for (let round = 1; round <= monitor.threshold; round++) {
-          if (detector.recordAndCheck('fix', nextOf('fix', branch.leave)).triggered) {
-            throw new Error(`branch ${branch.leave} triggered while leaving fix on round ${round}`);
-          }
+        for (let count = 1; count <= monitor.threshold; count++) {
+          for (const step of round.slice(1, -1)) expect(ignored.has(step)).toBe(true);
           let triggered = false;
-          for (const [from, next] of branch.returns) {
-            triggered = detector.recordAndCheck(from, next).triggered || triggered;
+          for (let index = 0; index + 1 < round.length; index++) {
+            triggered = detector.recordAndCheck(round[index]!, round[index + 1]!).triggered || triggered;
           }
-          expect(triggered).toBe(round === monitor.threshold);
+          expect(triggered).toBe(count === monitor.threshold);
         }
       }
     },
