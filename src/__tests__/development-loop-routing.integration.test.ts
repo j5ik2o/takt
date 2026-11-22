@@ -35,6 +35,9 @@ let engine: WorkflowEngine | undefined;
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // builtin の workflow_call 解決はグローバル設定の enable_builtin_workflows に従う。
+  // 実環境の設定に依存させず、配布定義のグラフを解決できる状態にする。
+  vi.stubEnv('TAKT_ENABLE_BUILTIN_WORKFLOWS', 'true');
   vi.mocked(runReportPhase).mockImplementation(async (step, _iteration, context, onReportWritten) => {
     for (const report of step.outputContracts ?? []) {
       writePhaseReportFixture(context, report.name, 'Current routing fixture report');
@@ -44,6 +47,7 @@ beforeEach(() => {
   directory = createTestTmpDir();
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   if (engine) cleanupWorkflowEngine(engine);
   engine = undefined;
   rmSync(directory, { recursive: true, force: true });
@@ -512,23 +516,29 @@ describe('shipped development completion and remediation routes', () => {
   );
 
   it.each(variants(['merge-review-fix-simple']))(
-    '$language/$name leaves the nested review remediation to the review-remediation monitor', ({ language, name }) => {
+    '$language/$name leaves the nested review remediation to the child monitor', ({ language, name }) => {
       const config = load(language, name);
       const review = config.steps.find(step => step.name === 'review');
       if (review?.kind !== 'workflow_call') throw new Error('Missing nested review call');
-      const child = resolverFor(config)({ parentWorkflow: config, step: review, projectCwd: directory, lookupCwd: directory });
-      if (!child) throw new Error('Missing review-fix-simple');
-      expect(child.name).toBe('review-fix-simple');
-      const peer = child.steps.find(step => step.name === 'reviewers');
+      // ここで解決できなければテストが空振りするため、明示的に失敗させる。
+      const reviewFix = resolverFor(config)({ parentWorkflow: config, step: review, projectCwd: directory, lookupCwd: directory });
+      if (!reviewFix) throw new Error('Missing review-fix-simple');
+      expect(reviewFix.name).toBe('review-fix-simple');
+      const peer = reviewFix.steps.find(step => step.name === 'reviewers');
       if (peer?.kind !== 'workflow_call') throw new Error('Missing peer-review call');
-      const peerReview = peer.kind === 'workflow_call' ? resolverFor(child)({ parentWorkflow: child, step: peer, projectCwd: directory, lookupCwd: directory }) : null;
+      const peerReview = resolverFor(reviewFix)({ parentWorkflow: reviewFix, step: peer, projectCwd: directory, lookupCwd: directory });
       expect(peerReview?.name).toBe('peer-review');
-      const remediation = peerReview?.steps.find(step => step.name === 'remediation');
-      expect(remediation?.kind).toBe('workflow_call');
-      // リポジトリ・同期・Caccia・CI は指定 PR に対する単一工程である。レビュー指摘の往復は
-      // peer-review（3 周）配下の review-remediation（4 周）で監視されている。
+      const remediation = peerReview!.steps.find(step => step.name === 'remediation');
+      if (remediation?.kind !== 'workflow_call') throw new Error('Missing remediation call');
+      const child = resolverFor(peerReview!)({ parentWorkflow: peerReview!, step: remediation, projectCwd: directory, lookupCwd: directory });
+      // 修正は review-remediation ではなく development-remediation-dynamic が担い、その内側の
+      // fix 4 周 monitor が指摘の往復を監視する。review-remediation の 4 周 monitor は
+      // review-fix-* 系（reviewer → final-gate → remediation）用で、この経路では走らない。
+      expect(child?.name).toBe('development-remediation-dynamic');
+      expect(child?.loopMonitors?.some(item => item.cycle[0] === 'fix')).toBe(true);
+      expect(peerReview?.loopMonitors?.some(item => item.cycle[0] === 'reviewers')).toBe(true);
+      // リポジトリ・同期・Caccia・CI は指定 PR に対する単一工程である。
       expect(config.loopMonitors ?? []).toHaveLength(0);
-      expect(peerReview?.loopMonitors?.length).toBeGreaterThan(0);
     },
   );
 

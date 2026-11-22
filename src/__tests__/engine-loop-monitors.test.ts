@@ -11,8 +11,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { WorkflowConfig, WorkflowStep, LoopMonitorConfig, LoopMonitorRule } from '../core/models/index.js';
 
 // --- Mock setup (must be before imports that use these modules) ---
@@ -47,6 +48,7 @@ import { runAgent } from '../agents/runner.js';
 import { runReportPhase } from '../core/workflow/phase-runner.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { CycleDetector } from '../core/workflow/engine/cycle-detector.js';
+import { loadWorkflowFromFile } from '../infra/config/loaders/workflowLoader.js';
 import { compileRuntimeProviderEnvironment } from '../infra/config/runtime-provider/environment.js';
 import { invalidateGlobalConfigCache } from '../infra/config/global/globalConfigCore.js';
 import { writeReportFile } from '../core/workflow/report-writer.js';
@@ -2610,22 +2612,67 @@ describe('Replan-family judge transitions (runtime)', () => {
  * simple の外側反復は review → remediation（子）→ follow-up-review と supervise → remediation。
  * remediation は workflow_call なので、子engine で起きた step は親engine の CycleDetector 履歴に
  * 入らず、親が観測できるのは戻ってきた workflow_call step の完了だけである。
- * 子の内側（review-remediation 4 周・peer-review 3 周）の monitor は、この外側の往復を数えない。
+ *
+ * 子の内側（review-remediation 4 周・development-remediation-dynamic の fix 4 周）の monitor は、
+ * 呼び出しごとに新しい子engine で 0 周から始まるため、親の外側往復を数えない。
+ * ここでは定義から実際に往復する閉路（cycle）を求め、simple に monitor が無いこと、
+ * それでも外側往復を閾値より多く繰り返すと judge に届くこと、子内の monitor が 0 周から
+ * 始まることを同時に確認する。
  */
 describe('Outer loop over nested workflow_call steps (simple)', () => {
-  const simpleLoopMonitors = (threshold: number): LoopMonitorConfig[] => [
-    {
-      cycle: ['review', 'remediation', 'follow-up-review'],
-      threshold,
-      judge: {
-        persona: 'supervisor',
-        rules: [
-          normalizeRule({ condition: 'Healthy outer progress', next: 'remediation' }) as LoopMonitorRule,
-          normalizeRule({ condition: 'Same findings repeat with no new evidence', next: 'ABORT' }) as LoopMonitorRule,
-        ],
-      },
-    },
-    {
+  const repoRoot = join(fileURLToPath(new URL('../../', import.meta.url)), 'builtins');
+
+  function loadShipped(language: string, name: string): WorkflowConfig {
+    const directory = createTestTmpDir();
+    try {
+      mkdirSync(join(directory, '.takt'), { recursive: true });
+      writeFileSync(join(directory, '.takt/config.yaml'), `language: ${language}\n`);
+      return loadWorkflowFromFile(join(repoRoot, language, 'workflows', `${name}.yaml`), directory);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+
+  function outgoing(config: WorkflowConfig, stepName: string): string[] {
+    const step = config.steps.find(candidate => candidate.name === stepName);
+    return (step?.rules ?? []).flatMap(rule => (rule.next === undefined ? [] : [rule.next]));
+  }
+
+  // 実定義の遷移をたどり、同じ step へ戻る最短の閉路だけを外側の候補にする。
+  function simpleCycles(config: WorkflowConfig): string[][] {
+    const found = new Map<string, string[]>();
+    const walk = (path: string[]): void => {
+      const nexts = outgoing(config, path[path.length - 1]!);
+      for (const next of nexts) {
+        if (next === path[0] && path.length > 1) {
+          const key = path.join('>');
+          if (!found.has(key)) found.set(key, [...path]);
+        } else if (!path.includes(next) && next !== 'COMPLETE' && next !== 'ABORT') {
+          walk([...path, next]);
+        }
+      }
+    };
+    for (const step of config.steps) walk([step.name]);
+    return [...found.values()];
+  }
+
+  it.each(['ja', 'en'] as const)('%s: simple leaves its outer round trips unmonitored', (language) => {
+    const simple = loadShipped(language, 'simple');
+    expect(simple.loopMonitors ?? []).toHaveLength(0);
+    const cycles = simpleCycles(simple).map(cycle => cycle.join('>'));
+    // 実際に往復する外側の閉路で、monitor の対象になっていないもの。
+    expect(cycles).toEqual(expect.arrayContaining([
+      'supervise>remediation',
+      'follow-up-review>remediation',
+      'remediation>follow-up-review',
+    ]));
+  });
+
+  it.each(['ja', 'en'] as const)('%s: the outer round trip triggers only once a monitor is added', (language) => {
+    const simple = loadShipped(language, 'simple');
+    expect(simpleCycles(simple).map(cycle => cycle.join('>'))).toContain('supervise>remediation');
+    const threshold = 3;
+    const monitor: LoopMonitorConfig = {
       cycle: ['supervise', 'remediation'],
       threshold,
       judge: {
@@ -2635,27 +2682,29 @@ describe('Outer loop over nested workflow_call steps (simple)', () => {
           normalizeRule({ condition: 'Same findings repeat with no new evidence', next: 'ABORT' }) as LoopMonitorRule,
         ],
       },
-    },
-  ];
-
-  it.each([2, 3, 4])('does not trigger any outer monitor after %i identical review and supervise round trips', (threshold) => {
-    const detector = new CycleDetector(simpleLoopMonitors(threshold));
-    let outerTriggers = 0;
-    for (let roundTrip = 1; roundTrip <= threshold + 2; roundTrip += 1) {
-      for (const [step, next] of [
-        ['review', 'remediation'],
-        ['remediation', 'follow-up-review'],
-        ['follow-up-review', 'remediation'],
-        ['remediation', 'supervise'],
-        ['supervise', 'remediation'],
-      ] as const) {
-        // workflow_call の子engine は独立した CycleDetector を持ち、子の内側 step は
-        // 親の履歴に入らない。親は remediation の完了を見るだけである。
-        if (detector.recordAndCheck(step, next).triggered) outerTriggers += 1;
-      }
+    };
+    const detector = new CycleDetector([monitor]);
+    const reentry = (): boolean => {
+      expect(detector.recordAndCheck('supervise', 'remediation').triggered).toBe(false);
+      return detector.recordAndCheck('remediation', 'supervise').triggered;
+    };
+    for (let round = 1; round <= threshold; round += 1) {
+      expect(reentry()).toBe(round === threshold);
     }
-    // 同じ往復を閾値より十分多く繰り返しても、外側の monitor は一度も judge を呼ばない。
-    expect(outerTriggers).toBe(0);
   });
 
+  it.each(['ja', 'en'] as const)('%s: a child loop starts from zero on every call', (language) => {
+    const simple = loadShipped(language, 'simple');
+    const remediation = simple.steps.find(step => step.name === 'remediation');
+    expect(remediation?.kind).toBe('workflow_call');
+    const child = loadShipped(language, 'review-remediation');
+    const childMonitor = child.loopMonitors?.find(item => item.cycle.length === 1 && item.cycle[0] === 'fix');
+    if (!childMonitor) throw new Error('Missing child fix monitor');
+    for (let call = 1; call <= childMonitor.threshold; call += 1) {
+      // 呼び出しごとに子engine が作り直すため、1 回ずつの修正は子の 4 周に合算されない。
+      const detector = new CycleDetector(child.loopMonitors);
+      expect(detector.recordAndCheck('fix', 'fix-verifier').triggered).toBe(false);
+      expect(detector.recordAndCheck('fix-verifier', 'COMPLETE').triggered).toBe(false);
+    }
+  });
 });
