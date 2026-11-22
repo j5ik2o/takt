@@ -10,10 +10,20 @@ vi.mock('../core/workflow/phase-runner.js', () => ({
   runReportPhase: vi.fn(),
   runStatusJudgmentPhase: vi.fn(),
 }));
+// builtin の workflow_call 解決はグローバル設定の enable_builtin_workflows に従う。
+// 実環境の設定に依存させず、配布定義のグラフを解決できる状態にする。
+vi.mock('../infra/config/global/globalConfigCore.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../infra/config/global/globalConfigCore.js')>();
+  return {
+    ...actual,
+    loadGlobalConfig: () => ({ ...actual.loadGlobalConfig(), enableBuiltinWorkflows: true }),
+  };
+});
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { CycleDetector } from '../core/workflow/engine/cycle-detector.js';
 import { determineRuleTransition } from '../core/workflow/engine/transitions.js';
+import { formatWorkflowRuleCondition } from '../core/models/workflow-rule-condition.js';
 import { validateWorkflowReportReferences } from '../core/workflow/instruction/report-reference-validation.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { writePhaseReportFixture } from './helpers/phase-report-fixture.js';
@@ -436,6 +446,98 @@ describe('shipped development completion and remediation routes', () => {
     expect(result.status).toBe('aborted');
     expect(vi.mocked(runStatusJudgmentPhase).mock.lastCall?.[0].internalPromptContext?.kind).toBe('loop_monitor');
   });
+
+  it.each(variants(remediations))(
+    '$language/$name counts every connected repair branch back into fix as one monitored round', ({ language, name }) => {
+      const config = load(language, name);
+      const monitor = config.loopMonitors?.find(item => item.cycle.length === 1 && item.cycle[0] === 'fix');
+      if (!monitor) throw new Error('Missing one-step fix monitor');
+      const ignored = new Set(monitor.ignoreSteps ?? []);
+      // 各回は、ある step の完了から次の step の完了へ実際の遷移でつなぐ。
+      // 往復はすべて fix へ戻り、中間 step は ignore_steps 側にだけ現れる。
+      const rounds: string[][] = [
+        ['fix', 'fix-replan', 'fix'],
+        ['fix', 'fix-verifier', 'verification-replan', 'fix'],
+        ['fix', 'fix-verifier', 'fix-retry', 'verification-replan', 'fix'],
+      ];
+      for (const round of rounds) {
+        const detector = new CycleDetector(config.loopMonitors);
+        for (let count = 1; count <= monitor.threshold; count++) {
+          for (const step of round.slice(1, -1)) expect(ignored.has(step)).toBe(true);
+          let triggered = false;
+          for (let index = 0; index + 1 < round.length; index++) {
+            triggered = detector.recordAndCheck(round[index]!, round[index + 1]!).triggered || triggered;
+          }
+          expect(triggered).toBe(count === monitor.threshold);
+        }
+      }
+    },
+  );
+
+  it.each(variants(remediations))(
+    '$language/$name does not count leaving the repair loop as a new round', ({ language, name }) => {
+      const config = load(language, name);
+      const monitor = config.loopMonitors?.find(item => item.cycle.length === 1 && item.cycle[0] === 'fix');
+      if (!monitor) throw new Error('Missing one-step fix monitor');
+      const detector = new CycleDetector(config.loopMonitors);
+      for (let round = 1; round <= monitor.threshold + 1; round++) {
+        // 修正が完了して検証・完了へ抜ける遷移は、同じ論理サイクルへ戻る再入ではない。
+        expect(detector.recordAndCheck('fix', 'fix-verifier').triggered).toBe(false);
+        expect(detector.recordAndCheck('fix-verifier', 'COMPLETE').triggered).toBe(false);
+      }
+    },
+  );
+
+  it.each(['ja', 'en'] as const)(
+    '%s: peer-review re-planning inside its own loop never hands a partial justification to a child-owned step', (language) => {
+      const config = load(language, 'peer-review');
+      const monitor = config.loopMonitors?.find(item => item.cycle[0] === 'reviewers' && item.cycle.at(-1) === 'remediation');
+      if (!monitor) throw new Error('Missing reviewers → remediation monitor');
+      const replanRule = monitor.judge.rules.find(rule => rule.next === 'remediation');
+      expect(replanRule?.condition.kind).toBe('semantic');
+      // remediation は remediation_workflow（既定 development-remediation-dynamic）の子engine が
+      // 所有する。子engine の step は親の CycleDetector 履歴にも judge の入力にも入らないため、
+      // 同じ原因・同じ証拠を再計画してもこのループからは見直せない。子へ渡す再計画より先に、
+      // 子ループの無進展をループ停止として扱う ABORT 経路を置く。
+      const abortRules = monitor.judge.rules.filter(rule => rule.next === 'ABORT');
+      const childOwnedAbort = abortRules.filter(rule =>
+        formatWorkflowRuleCondition(rule.condition).includes('remediation_workflow'));
+      expect(abortRules.length).toBeGreaterThanOrEqual(2);
+      expect(childOwnedAbort).toHaveLength(1);
+      const abortIndex = monitor.judge.rules.indexOf(childOwnedAbort[0]!);
+      const replanIndex = monitor.judge.rules.indexOf(replanRule!);
+      // ABORT は再計画の規則より後ろ、かつ最後の打開手段なし ABORT より前にある。
+      expect(abortIndex).toBeGreaterThan(replanIndex);
+      expect(abortIndex).toBeLessThan(monitor.judge.rules.length - 1);
+    },
+  );
+
+  it.each(variants(['merge-review-fix-simple']))(
+    '$language/$name leaves the nested review remediation to the child monitor', ({ language, name }) => {
+      const config = load(language, name);
+      const review = config.steps.find(step => step.name === 'review');
+      if (review?.kind !== 'workflow_call') throw new Error('Missing nested review call');
+      // ここで解決できなければテストが空振りするため、明示的に失敗させる。
+      const reviewFix = resolverFor(config)({ parentWorkflow: config, step: review, projectCwd: directory, lookupCwd: directory });
+      if (!reviewFix) throw new Error('Missing review-fix-simple');
+      expect(reviewFix.name).toBe('review-fix-simple');
+      const peer = reviewFix.steps.find(step => step.name === 'reviewers');
+      if (peer?.kind !== 'workflow_call') throw new Error('Missing peer-review call');
+      const peerReview = resolverFor(reviewFix)({ parentWorkflow: reviewFix, step: peer, projectCwd: directory, lookupCwd: directory });
+      expect(peerReview?.name).toBe('peer-review');
+      const remediation = peerReview!.steps.find(step => step.name === 'remediation');
+      if (remediation?.kind !== 'workflow_call') throw new Error('Missing remediation call');
+      const child = resolverFor(peerReview!)({ parentWorkflow: peerReview!, step: remediation, projectCwd: directory, lookupCwd: directory });
+      // 修正は review-remediation ではなく development-remediation-dynamic が担い、その内側の
+      // fix 4 周 monitor が指摘の往復を監視する。review-remediation の 4 周 monitor は
+      // review-fix-* 系（reviewer → final-gate → remediation）用で、この経路では走らない。
+      expect(child?.name).toBe('development-remediation-dynamic');
+      expect(child?.loopMonitors?.some(item => item.cycle[0] === 'fix')).toBe(true);
+      expect(peerReview?.loopMonitors?.some(item => item.cycle[0] === 'reviewers')).toBe(true);
+      // リポジトリ・同期・Caccia・CI は指定 PR に対する単一工程である。
+      expect(config.loopMonitors ?? []).toHaveLength(0);
+    },
+  );
 
   it.each(variants(remediations))('$language/$name monitors repeated fix-plan revisions', ({ language, name }) => {
     const config = load(language, name);

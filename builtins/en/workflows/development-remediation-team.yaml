@@ -71,6 +71,7 @@ loop_monitors:
   - cycle:
       - fix
     ignore_steps:
+      - fix-plan
       - fix-replan
       - verification-replan
       - fix-verifier
