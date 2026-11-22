@@ -285,6 +285,8 @@
     "src/__tests__/globalConfig-defaults.test.ts",
     "src/__tests__/goal-abort-monitor.test.ts",
     "src/__tests__/goal-activity.test.ts",
+    "src/__tests__/goal-cli-registration.test.ts",
+    "src/__tests__/goal-cli-run.test.ts",
     "src/__tests__/goal-execution-operations.test.ts",
     "src/__tests__/goal-execution.test.ts",
     "src/__tests__/goal-git-command.test.ts",

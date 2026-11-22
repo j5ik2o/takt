@@ -44,7 +44,16 @@ describe('CLI command registration', () => {
       'repertoire',
       'caccia',
       'install',
+      'goal',
     ]));
+  });
+
+  it('registers goal register with a required --input option instead of reading stdin implicitly', () => {
+    const goal = program.commands.find((command) => command.name() === 'goal');
+    const register = goal?.commands.find((command) => command.name() === 'register');
+
+    expect(register).toBeDefined();
+    expect(register?.options.some((option) => option.long === '--input' && option.mandatory)).toBe(true);
   });
 
   it('should require a PR number for caccia', () => {
