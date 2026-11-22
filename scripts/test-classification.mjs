@@ -23,6 +23,7 @@ const legacyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-manager-workspaces.test.ts',
   'src/__tests__/it-goal-task-retry.test.ts',
   'src/__tests__/it-goal-mcp-stdio.test.ts',
+  'src/__tests__/goal-cli-registration.test.ts',
   'src/__tests__/it-merge-workflow-execution.test.ts',
   'src/__tests__/caccia-system-effect.integration.test.ts',
   'src/__tests__/it-system-step-wait.test.ts',

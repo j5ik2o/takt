@@ -719,6 +719,53 @@ repertoire
     await repertoireListCommand();
   });
 
+const goal = program
+  .command('goal')
+  .description('Manage goals');
+
+goal
+  .command('register')
+  .description('Register a goal from a JSON description (use - to read standard input)')
+  .requiredOption('--input <path>', 'JSON file containing the goal fields, or - for standard input')
+  .action(async (opts: { input: string }) => {
+    const { getCliExecutionContext } = await import('./initialization.js');
+    const { runGoalRegister } = await import('../../features/goals/cli.js');
+    const { readFile } = await import('node:fs/promises');
+    const { info, error: logError } = await import('../../shared/ui/index.js');
+    const { getErrorMessage } = await import('../../shared/utils/error.js');
+    const { sanitizeTerminalText } = await import('../../shared/utils/text.js');
+    // 端末/セッション切断(SIGHUP)を登録 action の境界で受ける。Node 既定では
+    // SIGHUP で即死し、登録の成果物も失敗状態も残らない。ここで受け止めることで
+    // 他サブコマンドのシグナル挙動を変えずに、登録の成功または明示的非ゼロ終了にする。
+    // 受信時は stdin の EOF 待ちを打ち切る。切断後は入力が届かないため、
+    // 登録完了なら exit 0、未完了なら中断メッセージ付きの明示的非ゼロ終了にする。
+    let hangupReceived = false;
+    const onHangup = () => {
+      hangupReceived = true;
+      // バッファ済みの入力は保持しつつ EOF を通知し、`readAll` の待機を打ち切る。
+      // destroy() は未完のチャンクを捨てるため使わない。
+      process.stdin.push(null);
+    };
+    process.on('SIGHUP', onHangup);
+    try {
+      const registered = await runGoalRegister(
+        getCliExecutionContext().cwd,
+        { input: opts.input },
+        process.stdin,
+        { readFile: (path) => readFile(path, 'utf8') },
+      );
+      info(registered.id);
+    } catch (error) {
+      // 失敗の外部表現は例外を基準に一度だけ決め、SIGHUP 受信は付加情報として
+      // 併記する。受信有無で元の失敗理由を破棄しない。
+      const reason = sanitizeTerminalText(getErrorMessage(error));
+      logError(hangupReceived ? `${reason} (Goal registration was interrupted by hangup)` : reason);
+      process.exitCode = 1;
+    } finally {
+      process.off('SIGHUP', onHangup);
+    }
+  });
+
 function formatRoutingTelemetryStatus(status: RoutingTelemetryStatus): string {
   const state = status.localRecordingEnabled ? 'enabled' : 'disabled';
   return `Routing decision recording is local only and writes to .takt/events. Local recording: ${state}.`;

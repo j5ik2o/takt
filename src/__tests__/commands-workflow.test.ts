@@ -22,6 +22,7 @@ const { rootCommand, commandActions, commandMocks } = vi.hoisted(() => {
       description: vi.fn().mockReturnThis(),
       argument: vi.fn().mockReturnThis(),
       allowExcessArguments: vi.fn().mockReturnThis(),
+      requiredOption: vi.fn().mockReturnThis(),
       option: vi.fn().mockReturnThis(),
       opts: vi.fn(() => ({})),
       optsWithGlobals: vi.fn(() => ({})),
