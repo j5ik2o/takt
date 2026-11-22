@@ -198,7 +198,8 @@ export async function executePersistedPrMergeTask(
       }
     }
     if (!execution.ok) throw execution.error;
-    const { cacciaGitHubTimedOut: _cacciaGitHubTimedOut, ...result } = execution.result;
+    const result = { ...execution.result };
+    delete result.cacciaGitHubTimedOut;
     monitor?.check();
     signal?.throwIfAborted();
     const completion: GoalTaskResult = {
