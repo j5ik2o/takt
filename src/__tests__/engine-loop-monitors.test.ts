@@ -2700,11 +2700,22 @@ describe('Outer loop over nested workflow_call steps (simple)', () => {
     const child = loadShipped(language, 'review-remediation');
     const childMonitor = child.loopMonitors?.find(item => item.cycle.length === 1 && item.cycle[0] === 'fix');
     if (!childMonitor) throw new Error('Missing child fix monitor');
+    // 出荷済み定義の往復をそのまま再入として記録する。cycle[0] に戻る遷移だけが周回になる。
+    const replayRound = (detector: CycleDetector): boolean => {
+      let triggered = false;
+      for (const [from, next] of [['fix', 'fix-verifier'], ['fix-verifier', 'verification-replan'], ['verification-replan', 'fix']]) {
+        triggered = detector.recordAndCheck(from!, next!).triggered || triggered;
+      }
+      return triggered;
+    };
+    const shared = new CycleDetector(child.loopMonitors);
+    for (let round = 1; round <= childMonitor.threshold; round += 1) {
+      expect(replayRound(shared)).toBe(round === childMonitor.threshold);
+    }
     for (let call = 1; call <= childMonitor.threshold; call += 1) {
       // 呼び出しごとに子engine が作り直すため、1 回ずつの修正は子の 4 周に合算されない。
       const detector = new CycleDetector(child.loopMonitors);
-      expect(detector.recordAndCheck('fix', 'fix-verifier').triggered).toBe(false);
-      expect(detector.recordAndCheck('fix-verifier', 'COMPLETE').triggered).toBe(false);
+      expect(replayRound(detector)).toBe(false);
     }
   });
 });
