@@ -33,6 +33,7 @@ Goal operations use the target cwd and goalId. Each tool's arguments and return 
 - takt_tell_run sends additional instructions using cwd, goalId, taskName, and content and saves the original text in the work log.
 - takt_pause_goal / takt_resume_goal / takt_abort_goal use cwd and goalId; aborting takes a reason. Tasks stopped by a pause remain as failures with `Goal <id> was paused`; interruptions before startup may have empty position or run information. After resuming, the same task can continue according to its saved state. Aborting invalidates unstarted work, interrupts running work, and retains records and branches. completed identifies a completed record available for reference.
 - takt_list_standalone_inquiries returns unanswered inquiries without a goal for the current assignment. takt_withdraw_standalone_inquiry withdraws unanswered inquiries by id and reason and preserves answered records.
+- takt_verify_goal_specification runs the same formal specification verification as the TUI /verify command over a goal's saved Quint and Alloy specifications. Pass cwd, goalId, and optionally specifications (`quint`, `alloy`, or both); omitting specifications verifies every saved formal specification. It returns the verdict, per-stage results, and artifact and log locations. A goal without a saved formal specification is an error.
 
 ## Integration and PRs
 

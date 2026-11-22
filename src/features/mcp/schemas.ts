@@ -191,6 +191,15 @@ export const notifyGoalInputSchema = goalWriteInputSchema.extend({
 export type AskGoalQuestionInput = z.input<typeof askGoalQuestionInputSchema>;
 export type GetGoalQuestionInput = z.infer<typeof getGoalQuestionInputSchema>;
 export type NotifyGoalInput = z.infer<typeof notifyGoalInputSchema>;
+export const goalSpecificationVerificationInputSchema = goalWriteInputSchema.extend({
+  specifications: z.array(z.enum(['quint', 'alloy'])).min(1).max(2)
+    .refine((values) => new Set(values).size === values.length, {
+      message: 'specifications must not contain duplicate notations',
+    })
+    .optional()
+    .describe('Saved formal specification notations to verify. Omission verifies every saved Quint and Alloy specification.'),
+});
+export type GoalSpecificationVerificationInput = z.infer<typeof goalSpecificationVerificationInputSchema>;
 const reviewedShaSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 const goalTaskNameSchema = z.string().min(1).max(1024);
 export const mergeGoalTaskInputSchema = goalWriteInputSchema.extend({

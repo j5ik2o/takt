@@ -271,6 +271,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/facet-resolution.test.ts',
   'src/__tests__/formalSpecVerifier.test.ts',
   'src/__tests__/global-workflowCategories.test.ts',
+  'src/__tests__/goalSpecificationVerification.test.ts',
   'src/__tests__/image-attachment-store-seal.test.ts',
   'src/__tests__/imageAttachmentReferences.test.ts',
   'src/__tests__/initialization-noninteractive.test.ts',
@@ -427,6 +428,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-manager-conversation-plan.test.ts',
   'src/__tests__/it-manager-goal-specifications.test.ts',
   'src/__tests__/it-manager-verification-interruption.test.ts',
+  'src/__tests__/it-mcp-goal-specification-verification.test.ts',
   'src/__tests__/it-mcp-http-transport-shared.test.ts',
   'src/__tests__/it-mcp-task-cleanup.test.ts',
   'src/__tests__/it-opencode-task-state-mcp.test.ts',
@@ -485,6 +487,7 @@ export const heavyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-cli-react-production.test.ts',
   'src/__tests__/it-goal-task-pause-retry.test.ts',
   'src/__tests__/it-daemon-worktree-run-log.test.ts',
+  'src/__tests__/it-mcp-goal-specification-verification-real.test.ts',
   ...legacyParallelIntegrationTestFiles,
   ...auditedIntegrationBoundaryTestFiles,
   // Measured slow suites dominate the serial light gate; CI shards this gate.
