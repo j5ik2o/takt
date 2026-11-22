@@ -12,6 +12,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -20,6 +21,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { spawn as spawnPty } from 'node-pty';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { stageAndCommit } from '../infra/task/git.js';
@@ -54,6 +57,84 @@ afterEach(() => {
 });
 
 describe('stageAndCommit', () => {
+  it.skipIf(process.platform === 'win32').each(['complete', 'interrupt'] as const)(
+    'keeps the controlling terminal for a signed commit and can %s it',
+    async (mode) => {
+      const signer = join(testDir, '.git', 'fixture-signer');
+      const signerPid = join(testDir, '.git', 'fixture-signer-pid');
+      writeFileSync(signer, `#!/bin/sh
+echo "$$" > "$TAKT_TEST_SIGNER_PID"
+printf 'Fixture signer ready\\n' >/dev/tty || exit 1
+IFS= read -r answer </dev/tty || exit 1
+test "$answer" = fixture || exit 1
+cat >/dev/null
+printf '[GNUPG:] SIG_CREATED D 1 2 00 0 fixture\\n' >&2
+printf '%s\\n' '-----BEGIN PGP SIGNATURE-----' 'fixture' '-----END PGP SIGNATURE-----'
+`);
+      chmodSync(signer, 0o755);
+      const git = (args: string[]): string => execFileSync('git', args, { cwd: testDir, encoding: 'utf8' });
+      git(['config', 'commit.gpgsign', 'true']);
+      git(['config', 'gpg.format', 'openpgp']);
+      git(['config', 'gpg.program', signer]);
+      writeFileSync(join(testDir, 'signed.txt'), 'signed content\n');
+      const root = join(import.meta.dirname, '..', '..');
+      const source = (path: string): string => JSON.stringify(pathToFileURL(join(root, 'src', 'infra', 'task', path)).href);
+      const child = spawnPty(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
+        import { stageAndCommit } from ${source('git.ts')};
+        import { registerCacciaCloneGit } from ${source('caccia-git-processes.ts')};
+        const clone = ${JSON.stringify(testDir)};
+        const release = registerCacciaCloneGit(clone);
+        const controller = new AbortController();
+        process.once('SIGINT', () => controller.abort());
+        try {
+          const commit = await stageAndCommit(clone, 'Signed fixture', {}, controller.signal);
+          console.log('fixture commit ' + commit);
+        } catch (error) {
+          if (!controller.signal.aborted) throw error;
+          console.log('fixture interrupted');
+        } finally {
+          release();
+        }
+      `], {
+        cwd: root,
+        env: { ...process.env, TAKT_TEST_SIGNER_PID: signerPid },
+      });
+      let output = '';
+      let responded = false;
+      const listener = child.onData((chunk) => {
+        output += chunk;
+        if (!responded && output.includes('Fixture signer ready')) {
+          responded = true;
+          if (mode === 'complete') child.write('fixture\r');
+          else process.kill(child.pid, 'SIGINT');
+        }
+      });
+      const exit = await new Promise<number>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          child.kill('SIGKILL');
+          reject(new Error(`Signed commit fixture timed out: ${output}`));
+        }, 15_000);
+        child.onExit(({ exitCode }) => {
+          clearTimeout(timer);
+          resolve(exitCode);
+        });
+      }).finally(() => listener.dispose());
+      expect(exit, output).toBe(0);
+      expect(responded, output).toBe(true);
+      if (mode === 'complete') {
+        expect(git(['cat-file', '-p', 'HEAD'])).toContain('gpgsig -----BEGIN PGP SIGNATURE-----');
+        expect(output).toMatch(/fixture commit [0-9a-f]+/u);
+      } else {
+        expect(output).toContain('fixture interrupted');
+        expect(git(['log', '-1', '--format=%s']).trim()).toBe('Initial commit');
+        const pid = Number(readFileSync(signerPid, 'utf8'));
+        const state = execFileSync('ps', ['-axo', 'pid=,stat='], { encoding: 'utf8' }).split('\n')
+          .map((line) => line.trim().split(/\s+/u)).find(([value]) => Number(value) === pid)?.[1];
+        expect(state === undefined || state.startsWith('Z')).toBe(true);
+      }
+    },
+  );
+
   it('should not commit gitignored .takt/runs/ files', async () => {
     // Setup: .takt/ is gitignored
     writeFileSync(join(testDir, '.gitignore'), '.takt/\n');

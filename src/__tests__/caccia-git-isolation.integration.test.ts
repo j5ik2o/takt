@@ -207,14 +207,14 @@ function startForcedExitChild(
     route: 'worker-pool' | 'standalone' | 'linked';
     cloneCount: number;
     failFirstCleanup: boolean;
-    gitBinDir?: string;
+    gitFixture?: { binDir: string; logDir: string };
   },
 ): { child: ChildProcess; output: { stdout: string; stderr: string }; exit: Promise<ChildExit> } {
   const root = fileURLToPath(new URL('../..', import.meta.url));
   const childScript = fileURLToPath(new URL('./fixtures/caccia-forced-exit-child.mjs', import.meta.url));
-  const gitPathPrefix = options.gitBinDir === undefined
+  const gitPathPrefix = options.gitFixture === undefined
     ? ''
-    : `${options.gitBinDir}${delimiter}`;
+    : `${options.gitFixture.binDir}${delimiter}`;
   const child = spawn(process.execPath, [
     '--experimental-test-module-mocks',
     '--import',
@@ -240,7 +240,7 @@ function startForcedExitChild(
       TAKT_CACCIA_ROUTE: options.route,
       TAKT_CACCIA_CLONE_COUNT: String(options.cloneCount),
       TAKT_CACCIA_FAIL_FIRST_CLEANUP: String(options.failFirstCleanup),
-      TAKT_CACCIA_SPAWN_GIT: String(options.gitBinDir !== undefined),
+      TAKT_CACCIA_GIT_LOG_DIR: options.gitFixture?.logDir ?? '',
     },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
@@ -287,8 +287,11 @@ async function waitForProcessExit(pid: number, timeoutMs = 10_000): Promise<bool
 
 // A fake `git` that blocks on `fetch` while leaving a long-lived descendant, recording both pids so
 // the parent can confirm the forced-exit path stopped the whole tree before removing the clone.
-function writeBlockingFakeGit(binDir: string, logDir: string, realGitPath: string): void {
+function writeBlockingFakeGit(binDir: string, logDir: string, realGitPath: string, exitLeader: boolean): void {
   const fakeGitPath = join(binDir, 'git');
+  const hold = `process.on('SIGINT', () => undefined);
+    require('node:fs').writeFileSync(process.argv[1], String(process.pid));
+    setInterval(() => undefined, 1000);`;
   writeFileSync(fakeGitPath, `#!/usr/bin/env node
 const { spawn, spawnSync } = require('node:child_process');
 const { writeFileSync } = require('node:fs');
@@ -304,11 +307,14 @@ if (!(args.length === 1 && args[0] === 'fetch')) {
 }
 // Survive the first SIGINT so termination must come from the forced-exit wait, not the abort signal.
 process.on('SIGINT', () => undefined);
-const child = spawn('/bin/sh', ['-c', 'trap "" INT; exec "$1" hash-object --stdin', 'git-fixture', realGit],
-  { stdio: ['pipe', 'ignore', 'ignore'] });
+const child = spawn(process.execPath, ['-e', ${JSON.stringify(hold)}, path.join(logDir, 'grandchild-pid')],
+  { stdio: 'ignore' });
 writeFileSync(path.join(logDir, 'git-pid'), String(process.pid), 'utf8');
-writeFileSync(path.join(logDir, 'grandchild-pid'), String(child.pid), 'utf8');
-setInterval(() => undefined, 1000);
+if (${exitLeader}) {
+  child.unref();
+} else {
+  setInterval(() => undefined, 1000);
+}
 `, 'utf8');
   chmodSync(fakeGitPath, 0o755);
 }
@@ -318,7 +324,7 @@ async function expectForcedExitCleanup(options: {
   route?: 'worker-pool' | 'standalone' | 'linked';
   cloneCount?: number;
   failFirstCleanup?: boolean;
-  spawnGit?: boolean;
+  gitLeader?: 'running' | 'exited';
 }): Promise<void> {
   const testRoot = mkdtempSync(join(tmpdir(), 'takt-caccia-forced-exit-'));
   temporaryRoots.push(testRoot);
@@ -328,19 +334,20 @@ async function expectForcedExitCleanup(options: {
   const cloneCount = options.cloneCount ?? 1;
   const route = options.route ?? 'worker-pool';
   let spawnGit: { binDir: string; logDir: string } | undefined;
-  if (options.spawnGit === true) {
+  if (options.gitLeader !== undefined) {
     const binDir = join(testRoot, 'fake-git-bin');
     const logDir = join(testRoot, 'fake-git-log');
     mkdirSync(binDir, { recursive: true });
     mkdirSync(logDir, { recursive: true });
-    writeBlockingFakeGit(binDir, logDir, execFileSync('which', ['git'], { encoding: 'utf8' }).trim());
+    writeBlockingFakeGit(binDir, logDir, execFileSync('which', ['git'], { encoding: 'utf8' }).trim(),
+      options.gitLeader === 'exited');
     spawnGit = { binDir, logDir };
   }
   const childProcess = startForcedExitChild(fixture, globalConfigDir, {
     route,
     cloneCount,
     failFirstCleanup: options.failFirstCleanup ?? false,
-    gitBinDir: spawnGit?.binDir,
+    gitFixture: spawnGit,
   });
   const { child, output, exit } = childProcess;
   const unrelated = spawnGit === undefined ? undefined : spawn(
@@ -387,7 +394,12 @@ async function expectForcedExitCleanup(options: {
       // so the second SIGINT happens while Git is genuinely alive.
       runningGitPid = await waitForPidFile(join(spawnGit.logDir, 'git-pid'));
       runningGitDescendantPid = await waitForPidFile(join(spawnGit.logDir, 'grandchild-pid'));
-      expect(isProcessAlive(runningGitPid), 'registered git should be alive before forced exit').toBe(true);
+      if (options.gitLeader === 'exited') {
+        await waitForPidFile(join(spawnGit.logDir, 'git-closed'));
+        expect(await waitForProcessExit(runningGitPid)).toBe(true);
+      } else {
+        expect(isProcessAlive(runningGitPid), 'registered git should be alive before forced exit').toBe(true);
+      }
       expect(isProcessAlive(runningGitDescendantPid), 'git descendant should be alive before forced exit').toBe(true);
     }
 
@@ -410,7 +422,7 @@ async function expectForcedExitCleanup(options: {
     expect(gracefulMessage.clonePaths).toEqual(expect.arrayContaining(clonePaths));
     expect(gracefulMessage.cloneExists).toEqual(Array.from({ length: cloneCount }, () => true));
     expect(child.exitCode).toBeNull();
-    if (runningGitPid !== undefined) expect(isProcessAlive(runningGitPid)).toBe(true);
+    if (runningGitPid !== undefined && options.gitLeader === 'running') expect(isProcessAlive(runningGitPid)).toBe(true);
     if (runningGitDescendantPid !== undefined) expect(isProcessAlive(runningGitDescendantPid)).toBe(true);
     for (const clonePath of clonePaths) {
       expect(existsSync(clonePath)).toBe(true);
@@ -461,7 +473,7 @@ async function expectForcedExitCleanup(options: {
     }
 
     if (runningGitPid !== undefined && runningGitDescendantPid !== undefined) {
-      // The forced-exit path must stop the running Git and its descendant before removing the clone.
+      expect(JSON.parse(readFileSync(join(spawnGit!.logDir, 'before-clone-removal'), 'utf8'))).toEqual([]);
       expect(await waitForProcessExit(runningGitPid), 'registered git should be stopped by forced exit').toBe(true);
       expect(await waitForProcessExit(runningGitDescendantPid), 'git descendant should be stopped by forced exit').toBe(true);
     }
@@ -488,6 +500,8 @@ async function expectForcedExitCleanup(options: {
     }
     await exit;
     await unrelatedExit;
+    if (runningGitDescendantPid !== undefined) await waitForProcessExit(runningGitDescendantPid);
+    for (const clonePath of clonePaths) rmSync(clonePath, { recursive: true, force: true });
   }
 }
 
@@ -553,9 +567,12 @@ describe('Caccia real Git isolation', () => {
     await expectForcedExitCleanup({ mode: 'second-sigint' });
   });
 
-  it('stops running Git before removing the clone on a second SIGINT', async () => {
-    await expectForcedExitCleanup({ mode: 'second-sigint', spawnGit: true });
-  });
+  it.each(['running', 'exited'] as const)(
+    'stops the owned Git group with a %s leader before deleting the clone on a second SIGINT',
+    async (gitLeader) => {
+      await expectForcedExitCleanup({ mode: 'second-sigint', gitLeader });
+    },
+  );
 
   it('removes the active clone when the registered worker-pool SIGINT handler is invoked twice', async () => {
     await expectForcedExitCleanup({ mode: 'second-handler-input' });

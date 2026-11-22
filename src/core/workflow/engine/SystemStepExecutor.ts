@@ -158,7 +158,12 @@ export class SystemStepExecutor {
   ): Promise<Record<string, unknown>> {
     const payload = resolveEffectPayload(effect, state);
     const services = this.requireServices(cwd, step);
-    return services.executeEffect(effect, payload, state);
+    const result = await services.executeEffect(effect, payload, state);
+    // Apply the default before persisting and evaluating results from any Caccia service.
+    if (effect.type === 'caccia' && typeof result.success === 'boolean' && result.timedOut === undefined) {
+      return { ...result, timedOut: false };
+    }
+    return result;
   }
 
   async run(

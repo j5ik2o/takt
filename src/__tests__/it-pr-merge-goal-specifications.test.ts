@@ -9,6 +9,9 @@ import { invalidateAllResolvedConfigCache } from '../infra/config/index.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { DebugLogger } from '../shared/utils/debug.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { CacciaGitHubTimeoutError, fetchPrStatus } from '../infra/github/pr.js';
+import { synchronizeGoalBranch } from '../infra/goals/branch-sync.js';
+import { runCaccia } from '../features/caccia/index.js';
 
 const headSha = 'a'.repeat(40);
 const repositoryUrl = 'https://github.com/example/repo.git';
@@ -19,10 +22,15 @@ const specifications = {
 };
 
 vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
-vi.mock('../infra/github/pr.js', () => ({
+vi.mock('../infra/github/pr.js', async (original) => ({
+  ...await original<typeof import('../infra/github/pr.js')>(),
   fetchPrDetails: vi.fn(async () => ({ number: 42, headBranch: goalRecord().branch, baseBranch: 'main',
     headSha, headRepositoryUrl: repositoryUrl, headRepositoryPushUrls: [repositoryUrl], sameRepository: true })),
   fetchPrStatus: vi.fn(async () => ({ merged: false, headSha })),
+}));
+vi.mock('../features/caccia/index.js', async (original) => ({
+  ...await original<typeof import('../features/caccia/index.js')>(),
+  runCaccia: vi.fn(),
 }));
 vi.mock('../infra/task/clone-exec.js', () => ({
   cloneAndIsolateAbortable: vi.fn(async (_source: string, target: string) => { mkdirSync(target, { recursive: true }); }),
@@ -30,6 +38,7 @@ vi.mock('../infra/task/clone-exec.js', () => ({
     if (args[0] === 'remote' && args.length === 1) return { stdout: 'origin\n' };
     if (args[0] === 'remote' && args[1] === 'get-url') return { stdout: repositoryUrl };
     if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { stdout: headSha };
+    if (args[0] === 'symbolic-ref') return { stdout: goalRecord().branch };
     if (args[0] === 'remote' || args[0] === 'checkout') return { stdout: '' };
     throw new Error(`Unexpected Git command: ${args.join(' ')}`);
   }),
@@ -75,8 +84,7 @@ afterEach(() => {
   invalidateAllResolvedConfigCache();
 });
 
-it('delivers saved specifications to the reviewer when a queued finishing task runs through the task entry point', async () => {
-  const writeLog = vi.spyOn(DebugLogger.prototype, 'writeLog');
+async function claimMergeTask(workflow: string) {
   const goal = { ...goalRecord(), specifications, status: 'awaiting_merge' as const,
     pullRequest: { number: 42, url: 'https://github.com/example/repo/pull/42' },
     completion: { goalBranch: goalRecord().branch, goalSha: headSha, targetBranch: 'main', summary: 'Evidence',
@@ -85,9 +93,14 @@ it('delivers saved specifications to the reviewer when a queued finishing task r
   const runner = new TaskRunner(project);
   runner.enqueuePrMergeTask({ goalId: goal.id, prNumber: 42, prUrl: goal.pullRequest.url,
     headBranch: goal.branch, baseBranch: 'main', headSha, headRepositoryUrl: repositoryUrl,
-    headRepositoryPushUrls: [repositoryUrl], until: 'prepare', workflow: 'spec-review', method: 'squash',
+    headRepositoryPushUrls: [repositoryUrl], until: 'prepare', workflow, method: 'squash',
     worktreePath: join(project, '.takt', 'worktrees', 'clone'), threatCheckMaxDiffBytes: 1024 });
-  const task = runner.claimNextTasks(1)[0]!;
+  return { runner, task: runner.claimNextTasks(1)[0]! };
+}
+
+it('delivers saved specifications to the reviewer when a queued finishing task runs through the task entry point', async () => {
+  const writeLog = vi.spyOn(DebugLogger.prototype, 'writeLog');
+  const { runner, task } = await claimMergeTask('spec-review');
   for (const body of Object.values(specifications)) expect(task.content).not.toContain(body);
 
   expect(await executeAndCompleteTask(task, runner, project, undefined, { outputMode: 'silent' })).toBe(true);
@@ -114,4 +127,26 @@ it('delivers saved specifications to the reviewer when a queued finishing task r
     expect(prompt).not.toContain(marker);
     expect(task.content).not.toContain(marker);
   }
+});
+
+it('releases a queued goal merge on Caccia timeout without looking up PR or goal branch status again', async () => {
+  writeFileSync(join(project, '.takt', 'config.yaml'), 'provider: mock\nlanguage: en\nvcs_provider: github\ncaccia:\n  enabled: true\n');
+  invalidateAllResolvedConfigCache();
+  writeFileSync(join(project, '.takt', 'workflows', 'caccia-timeout.yaml'), [
+    'name: caccia-timeout', 'initial_step: caccia', 'steps:', '  - name: caccia', '    mode: system',
+    '    effects:', '      - type: caccia', '        pr: 42',
+    '    rules:', '      - condition: when(effect.caccia.caccia.timedOut == true)', '        next: ABORT',
+    '      - condition: when(true)', '        next: COMPLETE',
+  ].join('\n'));
+  const error = 'Timed out waiting for pull request #42 head after Caccia review';
+  vi.mocked(runCaccia).mockRejectedValueOnce(new CacciaGitHubTimeoutError(error));
+  const { runner, task } = await claimMergeTask('caccia-timeout');
+
+  expect(await executeAndCompleteTask(task, runner, project, undefined, { outputMode: 'silent' })).toBe(false);
+  expect(runCaccia).toHaveBeenCalledOnce();
+  expect(fetchPrStatus).not.toHaveBeenCalled();
+  expect(synchronizeGoalBranch).not.toHaveBeenCalled();
+  const saved = runner.listTaskStateItems().find((item) => item.name === task.name);
+  expect(saved?.kind).toBe('failed');
+  expect(saved?.completion).toMatchObject({ mergeOutcome: 'unresolved', failureReason: error });
 });

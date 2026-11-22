@@ -43,7 +43,12 @@ export async function stageAndCommit(
   const env = await buildSafeGitEnvironment(cwd, options, signal);
   const git = signal === undefined
     ? (args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe', encoding: 'utf-8', env })
-    : async (args: string[]) => (await runGitCommandAbortable(cwd, args, signal, env)).stdout;
+    : async (args: string[]) => {
+      // Signing programs can prompt on the controlling terminal, even with pipes for stdio.
+      const preserveTerminal = args[0] === 'commit'
+        && (process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY);
+      return (await runGitCommandAbortable(cwd, args, signal, env, undefined, { preserveTerminal })).stdout;
+    };
 
   await git(['add', '-A']);
 

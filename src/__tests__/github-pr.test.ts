@@ -2078,6 +2078,13 @@ describe('GitHub PR command boundary', () => {
     expect(execFile).toHaveBeenCalledTimes(3);
   });
 
+  it('reports a timed-out post-push head command as a GitHub timeout', async () => {
+    queueAsyncGhResponses(Object.assign(new Error('gh killed'), { killed: true, signal: 'SIGKILL' }));
+    await expect(fetchCacciaPullRequestHeadSha(7, '/project', undefined, Date.now() + 30_000))
+      .rejects.toBeInstanceOf(CacciaGitHubTimeoutError);
+    expect(execFile.mock.calls[0]?.[2]).toMatchObject({ killSignal: 'SIGKILL' });
+  });
+
   it('reads the current Caccia PR head with an abortable, bounded locator request', async () => {
     const abortController = new AbortController();
     const deadlineAt = Date.now() + 30_000;

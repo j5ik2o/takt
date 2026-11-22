@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveConfigValue } from '../../infra/config/index.js';
 import {
+  CacciaGitHubTimeoutError,
   fetchCacciaPullRequestDetails,
   fetchCacciaPullRequestHeadSha,
   fetchCodeRabbitReviewStatus,
@@ -12,9 +13,9 @@ import {
 } from '../../infra/github/pr.js';
 import {
   cloneAndIsolateAbortable,
-  registerCacciaCloneGit,
   runGitCommandAbortable,
 } from '../../infra/task/clone-exec.js';
+import { registerCacciaCloneGit } from '../../infra/task/caccia-git-processes.js';
 import { resolveAutoCommitOptions } from '../../infra/task/autoCommit.js';
 import { buildSafeGitEnvironment } from '../../infra/task/git-environment.js';
 import { stageAndCommit } from '../../infra/task/git.js';
@@ -286,24 +287,28 @@ async function waitForPushedPullRequestHead(
 ): Promise<void> {
   const deadline = Date.now() + PUSHED_HEAD_WAIT_MS;
   let lastObservedHeadSha: string | undefined;
-  const timeoutError = (cause?: unknown): Error => new Error(
-    `Timed out waiting for pull request #${prNumber} head to reflect ${pushedHeadSha}`
-    + ` before resolving review thread ${threadId}`
-    + ` (${lastObservedHeadSha === undefined
-      ? 'no PR head was fetched'
-      : `last successfully observed ${lastObservedHeadSha}`})`
-    + (cause === undefined ? '' : '; last HEAD lookup failed'),
-    { cause },
-  );
+  const timeoutError = (cause?: unknown): Error => {
+    const TimeoutError = cause instanceof CacciaGitHubTimeoutError ? CacciaGitHubTimeoutError : Error;
+    return new TimeoutError(
+      `Timed out waiting for pull request #${prNumber} head to reflect ${pushedHeadSha}`
+      + ` before resolving review thread ${threadId}`
+      + ` (${lastObservedHeadSha === undefined
+        ? 'no PR head was fetched'
+        : `last successfully observed ${lastObservedHeadSha}`})`
+      + (cause === undefined ? '' : '; last HEAD lookup failed'),
+      { cause },
+    );
+  };
   while (true) {
     assertNotAborted(signal);
+    if (Date.now() >= deadline) throw timeoutError();
     try {
       lastObservedHeadSha = await dependencies.fetchCurrentPullRequestHeadSha(
         prNumber, projectCwd, signal, deadline,
       );
     } catch (error) {
       assertNotAborted(signal);
-      if (Date.now() < deadline) {
+      if (!(error instanceof CacciaGitHubTimeoutError) && Date.now() < deadline) {
         throw error;
       }
       throw timeoutError(error);

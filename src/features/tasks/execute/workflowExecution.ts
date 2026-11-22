@@ -365,7 +365,7 @@ async function executeWorkflowInternal(
   let engine: WorkflowEngine | null = null;
   let openCodeExternalDirectories: readonly string[] | undefined;
   let eventBridge: WorkflowExecutionEventBridge | undefined;
-  let cacciaFailure: { step: string; reason: string } | undefined;
+  let cacciaFailure: { step: string; reason: string; timedOut: boolean } | undefined;
   let activeStep: WorkflowStep;
   let runExecution: Pick<WorkflowRunExecutionHandle, 'run'> | undefined;
   let runExecutionControl: WorkflowRunExecutionControl | undefined;
@@ -562,7 +562,7 @@ async function executeWorkflowInternal(
                   taskColorIndex: options.taskColorIndex, taskDisplayLabel: options.taskDisplayLabel,
                 }, prNumber);
                 cacciaFailure = result.failed === true && typeof result.error === 'string'
-                  ? { step: stepName, reason: result.error } : undefined;
+                  ? { step: stepName, reason: result.error, timedOut: result.timedOut === true } : undefined;
                 return result;
               },
             } }),
@@ -647,6 +647,8 @@ async function executeWorkflowInternal(
         success: finalState.status === 'completed',
         workflowHasCaccia: [...startedWorkflows].some((workflow) => hasCacciaEffect(workflow.steps)),
         reason: eventBridge.state.failure?.error ?? eventBridge.state.abortReason,
+        ...(eventBridge.state.abortKind === 'step_transition' && cacciaFailure?.timedOut
+          ? { cacciaGitHubTimedOut: true } : {}),
         ...(eventBridge.state.abortKind === undefined ? {} : { abortKind: eventBridge.state.abortKind }),
         lastStep: eventBridge.state.failure?.step ?? eventBridge.state.lastStepName,
         lastMessage: eventBridge.state.lastStepContent,

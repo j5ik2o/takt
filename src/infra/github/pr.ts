@@ -1670,8 +1670,15 @@ export async function fetchCacciaPullRequestHeadSha(
   deadlineAt?: number,
   target?: GitHubPullRequestTarget,
 ): Promise<string> {
-  const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal, target);
-  return locator.headSha;
+  try {
+    const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal, target);
+    return locator.headSha;
+  } catch (error) {
+    if (error instanceof ReviewStatusDeadlineExceededError) {
+      throw new CacciaGitHubTimeoutError(`GitHub did not return the head of pull request #${prNumber} by the deadline`, { cause: error });
+    }
+    throw error;
+  }
 }
 
 /** Resolves the supplied GitHub review thread through its GraphQL thread ID. */

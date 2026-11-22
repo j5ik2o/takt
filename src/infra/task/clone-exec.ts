@@ -11,6 +11,7 @@ import {
 import { loadProjectConfig } from '../config/index.js';
 import { isTaskAbortError, TASK_EXECUTION_ABORTED_MESSAGE } from './clone-errors.js';
 import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
+import { trackCacciaCloneGit } from './caccia-git-processes.js';
 
 const log = createLogger('clone');
 const CLONE_FAILED_MESSAGE = 'Git clone failed';
@@ -122,7 +123,7 @@ function runIsolatedGitCommandAbortable(
   abortSignal?: AbortSignal,
   ownerCwd?: string,
 ): Promise<{ stdout: string; stderr: string }> {
-  return runGitCommandAbortable(gitCwd, args, abortSignal, isolatedGitEnv(), undefined, ownerCwd);
+  return runGitCommandAbortable(gitCwd, args, abortSignal, isolatedGitEnv(), undefined, { ownerCwd });
 }
 
 // A destination that already holds files was not created by this clone attempt, so a failed attempt
@@ -381,26 +382,13 @@ function terminateProcessGroup(child: ReturnType<typeof spawn>, signal: NodeJS.S
   return child.kill(signal);
 }
 
-const cacciaCloneProcesses = new Map<string, Set<ReturnType<typeof spawn>>>();
-
-/** Track detached Git process groups started for this temporary clone until cleanup. */
-export function registerCacciaCloneGit(cwd: string): () => void {
-  const children = new Set<ReturnType<typeof spawn>>();
-  cacciaCloneProcesses.set(cwd, children);
-  return () => {
-    for (const child of children) terminateProcessGroup(child, 'SIGKILL');
-    children.clear();
-    cacciaCloneProcesses.delete(cwd);
-  };
-}
-
 export function runGitCommandAbortable(
   gitCwd: string,
   args: string[],
   abortSignal?: AbortSignal,
   env?: NodeJS.ProcessEnv,
   timeoutMs?: number,
-  ownerCwd = gitCwd,
+  options: { ownerCwd?: string; preserveTerminal?: boolean } = {},
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     if (abortSignal?.aborted) {
@@ -408,14 +396,16 @@ export function runGitCommandAbortable(
       return;
     }
 
+    const detached = options.preserveTerminal !== true;
     const child = spawn('git', args, {
       cwd: gitCwd,
       stdio: 'pipe',
-      detached: true,
+      detached,
       env,
     });
-    const ownedChildren = cacciaCloneProcesses.get(ownerCwd);
-    if (child.pid !== undefined) ownedChildren?.add(child);
+    const terminate = trackCacciaCloneGit(options.ownerCwd ?? gitCwd, child, detached)
+      ?? (!detached ? (signal: NodeJS.Signals) => child.kill(signal)
+        : (signal: NodeJS.Signals) => terminateProcessGroup(child, signal));
 
     let stdout = '';
     let stderr = '';
@@ -448,17 +438,17 @@ export function runGitCommandAbortable(
       }
       settled = true;
       if (terminateChild) {
-        terminateProcessGroup(child, 'SIGTERM');
+        terminate('SIGTERM');
       }
       cleanup();
       reject(error);
     };
 
     const onAbort = (): void => {
-      terminateProcessGroup(child, 'SIGINT');
+      terminate('SIGINT');
       const killTimer = setTimeout(() => {
         if (!settled) {
-          terminateProcessGroup(child, 'SIGKILL');
+          terminate('SIGKILL');
         }
       }, 500);
       killTimer.unref?.();
@@ -467,7 +457,7 @@ export function runGitCommandAbortable(
 
     const onTimeout = (): void => {
       timeoutKillTimer = setTimeout(() => {
-        terminateProcessGroup(child, 'SIGKILL');
+        terminate('SIGKILL');
       }, 500);
       timeoutKillTimer.unref?.();
       rejectOnce(new Error(`git ${args[0]} timed out after ${timeoutMs} ms`), true);
@@ -489,7 +479,6 @@ export function runGitCommandAbortable(
       );
     });
     child.on('close', (code) => {
-      ownedChildren?.delete(child);
       if (timeoutKillTimer) {
         clearTimeout(timeoutKillTimer);
       }

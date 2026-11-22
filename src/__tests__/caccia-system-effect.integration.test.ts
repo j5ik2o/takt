@@ -85,6 +85,7 @@ import { addTask } from '../features/tasks/add/index.js';
 import { createDefaultSystemStepServices } from '../infra/workflow/system/DefaultSystemStepServices.js';
 import { TaskRunner } from '../infra/task/index.js';
 import { GitLabProvider } from '../infra/gitlab/GitLabProvider.js';
+import { CacciaGitHubTimeoutError } from '../infra/github/pr.js';
 import type { WorkflowState } from '../core/models/types.js';
 
 function git(cwd: string, ...args: string[]): string {
@@ -150,6 +151,7 @@ describe('Caccia effect through PR workflow execution', () => {
             { condition: 'when(true)', next: 'ABORT' }] },
         { name: 'external_review', kind: 'system', effects: [{ type: 'caccia', pr: '{context:identify.pr.number}' }],
           rules: [
+            { condition: 'when(effect.external_review.caccia.timedOut == true)', next: 'ABORT' },
             { condition: 'when(effect.external_review.caccia.success == false)', next: 'error' },
             { condition: `when(effect.external_review.caccia.outcome == "${outcome}" && effect.external_review.caccia.unresolvedCount == ${unresolvedCount} && effect.external_review.caccia.skipReason == ${skip} && ${reasonCondition})`, next: 'report' },
             { condition: 'when(true)', next: 'ABORT' },
@@ -961,6 +963,22 @@ describe('Caccia effect through PR workflow execution', () => {
     expect(await run('merge')).toMatchObject({ success: false, merged: false, outcome: 'unresolved' });
     expect(mocks.comment).toHaveBeenCalledWith(123, expect.stringContaining(error), project);
     expect(mocks.merge).not.toHaveBeenCalled();
+  });
+
+  it('releases a merge execution after a Caccia GitHub timeout while preserving the original error', async () => {
+    const error = 'Timed out waiting for pull request #123 head after Caccia push';
+    let statusCallsAtTimeout = -1;
+    mocks.caccia.mockImplementationOnce(async () => {
+      statusCallsAtTimeout = mocks.status.mock.calls.length;
+      throw new CacciaGitHubTimeoutError(error);
+    });
+    expect(await run('merge')).toMatchObject({ success: false, merged: false, outcome: 'unresolved' });
+    expect(statusCallsAtTimeout).toBeGreaterThanOrEqual(0);
+    expect(mocks.status).toHaveBeenCalledTimes(statusCallsAtTimeout);
+    expect(mocks.comment).not.toHaveBeenCalled();
+    expect(mocks.merge).not.toHaveBeenCalled();
+    const saved = new TaskRunner(project).listTaskStateItems().find((task) => task.kind === 'failed');
+    expect(saved?.completion?.failureReason).toBe(error);
   });
 
   it.each(['unchanged', 'initial_head', 'clone_head', 'external_head', 'fetch_head', 'fast_forward'] as const)(

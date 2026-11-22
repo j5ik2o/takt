@@ -198,12 +198,9 @@ async function runEffect(
   switch (effect.type) {
     case 'rerun_ci':
       return rerunCiEffect(options, payload, state);
-    case 'caccia': {
+    case 'caccia':
       if (!options.cacciaService) throw new Error('Caccia execution service is required');
-      const result = await options.cacciaService.execute(payload.pr as number);
-      // Workflow rules require this field even when the service omits it on success.
-      return { ...result, timedOut: result.timedOut === true };
-    }
+      return options.cacciaService.execute(payload.pr as number);
     case 'commit_and_push':
       return commitAndPushEffect(options, payload as Parameters<typeof commitAndPushEffect>[1]);
     case 'enqueue_task':
