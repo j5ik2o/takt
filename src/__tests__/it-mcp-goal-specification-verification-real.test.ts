@@ -69,7 +69,7 @@ afterEach(() => {
 
 const savedGoal = (overrides: Partial<Goal> = {}): Goal => GoalSchema.parse({ ...goalRecord(), ...overrides });
 
-it('runs the real Quint and Alloy verifiers over saved goal specifications and returns stage results and artifacts', async () => {
+it('runs Quint parsing and typechecking with a real subprocess and collects Alloy fixture results', async () => {
   await new GoalStore(cwd).create(savedGoal({ specifications: { quint: quintSpecification, alloy: alloySpecification } }));
 
   const result = await verifyTaktGoalSpecification(

@@ -419,7 +419,6 @@
     "src/__tests__/it-manager-workspaces.test.ts",
     "src/__tests__/it-mcp-goal-specification-verification-real.test.ts",
     "src/__tests__/it-mcp-goal-specification-verification.test.ts",
-    "src/__tests__/it-mcp-http-transport-shared.test.ts",
     "src/__tests__/it-mcp-task-cleanup.test.ts",
     "src/__tests__/it-merge-gate-script.test.ts",
     "src/__tests__/it-merge-review-ci.test.ts",

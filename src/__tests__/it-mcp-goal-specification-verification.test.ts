@@ -1,12 +1,14 @@
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { createTaktMcpServer, TAKT_MCP_MANAGER_TOOL_NAMES } from '../features/mcp/server.js';
+import { MCP_RESPONSE_MAX_BYTES } from '../features/mcp/response.js';
+import { runFormalSpecVerification } from '../features/interactive/formalSpecVerification.js';
 import { goalSpecificationVerificationInputSchema } from '../features/mcp/schemas.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { GoalSchema, type Goal } from '../infra/goals/schema.js';
@@ -117,9 +119,9 @@ function installAlloyCommandsFixture(commandCount: number): void {
   });
 }
 
-function installAlloyChecksFixture(checkCount: number): void {
+function installAlloyChecksFixture(checkCount: number, timeoutCommands: number[] = []): void {
   const commands = Array.from({ length: checkCount }, (_, index) => `${index} . check a`).join('\n');
-  mockSpawnManagedProcess.mockImplementation((command: string, args: readonly string[]) => {
+  mockSpawnManagedProcess.mockImplementation((command: string, args: readonly string[], _options: unknown, signal: AbortSignal) => {
     const stdout = new MockStream();
     const stderr = new MockStream();
     const wait = async () => {
@@ -128,6 +130,11 @@ function installAlloyChecksFixture(checkCount: number): void {
       } else if (args.includes('commands')) {
         stdout.emit('data', commands);
       } else if (args.includes('exec')) {
+        const number = Number(args[args.indexOf('--command') + 1]);
+        if (timeoutCommands.includes(number)) {
+          await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+          return { code: null, signal: 'SIGTERM' };
+        }
         const outputDirectory = args[args.indexOf('--output') + 1]!;
         writeFileSync(join(outputDirectory, 'receipt.json'), JSON.stringify({ commands: { a: {
           name: 'a', type: 'check', source: 'check a',
@@ -317,7 +324,7 @@ it('keeps every artifact path and the verdict when the response exceeds 64 KiB',
   expect(body.omissions).toBeUndefined();
   // The complete verification exceeded 64 KiB before trimming (the tool had to bound it), yet the
   // response still carries every path, which the generic shortener would have sliced at 50.
-  expect(Buffer.byteLength(firstTextContent(result.content))).toBeLessThanOrEqual(64 * 1024);
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
 });
 
 it('summarizes the artifact path list with counts and a run-directory location when even the paths exceed 64 KiB', async () => {
@@ -347,7 +354,7 @@ it('summarizes the artifact path list with counts and a run-directory location w
   expect(summary.returnedCount + summary.omittedCount).toBe(commandCount * 2);
   expect(summary.complete).toBe(false);
   expect(summary.retrieval).toContain('verification.artifacts.runDirectory');
-  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(64 * 1024);
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
 });
 
 it('keeps the verdict and artifact location when a large quint invariants list would exceed 64 KiB', async () => {
@@ -368,7 +375,7 @@ it('keeps the verdict and artifact location when a large quint invariants list w
   expect(body.truncated).toBeUndefined();
   expect(body.omissions).toBeUndefined();
   expect(text).not.toContain('takt_get_goal');
-  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(64 * 1024);
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
 });
 
 it('summarizes quint invariants with counts and a parse-artifact location when they exceed 64 KiB', async () => {
@@ -396,7 +403,7 @@ it('summarizes quint invariants with counts and a parse-artifact location when t
   expect(summary.returnedCount + summary.omittedCount).toBe(invariantCount);
   expect(summary.complete).toBe(false);
   expect(summary.retrieval).toContain('verification.artifacts.parseJson');
-  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(64 * 1024);
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
 });
 
 it('keeps the verdict and artifact location when a large alloy checks list would exceed 64 KiB', async () => {
@@ -416,7 +423,7 @@ it('keeps the verdict and artifact location when a large alloy checks list would
   expect(body.truncated).toBeUndefined();
   expect(body.omissions).toBeUndefined();
   expect(text).not.toContain('takt_get_goal');
-  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(64 * 1024);
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
 });
 
 it('summarizes alloy checks with counts and an artifact location when they exceed 64 KiB', async () => {
@@ -444,7 +451,7 @@ it('summarizes alloy checks with counts and an artifact location when they excee
   expect(summary.returnedCount + summary.omittedCount).toBe(checkCount);
   expect(summary.complete).toBe(false);
   expect(summary.retrieval).toContain('verification.artifacts.runDirectory');
-  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(64 * 1024);
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
 });
 
 it('does not add notes or a checks summary when the alloy run response fits within 64 KiB', async () => {
@@ -506,32 +513,7 @@ it('keeps the statuses without truncation when two stage messages are near the 8
   expect(body.truncated).toBeUndefined();
   expect(body.omissions).toBeUndefined();
   expect(text).not.toContain('takt_get_goal');
-  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(64 * 1024);
-});
-
-it('keeps every per-stage log key even when the response exceeds 64 KiB', async () => {
-  installAlloyCommandsFixture(110);
-  await seedGoal(cwd, savedGoal({ specifications: { alloy: 'sig Goal {}\nrun Scenario for 3' } }));
-
-  const result = await withManagerServer((client) => client.callTool({
-    name: toolName, arguments: { cwd, goalId: goalRecord().id, specifications: ['alloy'] },
-  }));
-
-  expect(result.isError).not.toBe(true);
-  const text = firstTextContent(result.content);
-  const body = JSON.parse(text);
-  const logs = body.verification.artifacts.logs as Record<string, unknown>;
-  const keys = Object.keys(logs);
-  expect(body.truncated).toBeUndefined();
-  expect(body.omissions).toBeUndefined();
-  expect(keys).toContain('alloy-commands');
-  expect(keys).toContain('alloy-run-109');
-  // More than the previous 8-stage cap was retained, and every key carries both log locations.
-  expect(keys.length).toBeGreaterThan(8);
-  for (const key of ['alloy-run-0', 'alloy-run-109']) {
-    expect(logs[key]).toBeDefined();
-  }
-  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(64 * 1024);
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
 });
 
 it('summarizes log stage keys with names and counts when the key set exceeds the budget', async () => {
@@ -554,13 +536,12 @@ it('summarizes log stage keys with names and counts when the key set exceeds the
   expect(body.omissions).toBeUndefined();
   expect(text).not.toContain('takt_get_goal');
   expect(Object.keys(logs)).toHaveLength(summary.returnedCount);
-  expect(summary.returnedCount + summary.omittedCount).toBe(Object.keys(logs).length + summary.omittedCount);
   expect(summary.returnedCount + summary.omittedCount).toBe(602);
   expect(summary.complete).toBe(false);
   expect(summary.firstOmittedStage).toMatch(/^alloy-run-/u);
   expect(summary.lastOmittedStage).toBe('alloy-run-599');
   expect(summary.retrieval).toContain('verification.artifacts.runDirectory');
-  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(64 * 1024);
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
 });
 
 it('does not claim log truncation when only short log paths are present but the response exceeds 64 KiB', async () => {
@@ -610,7 +591,7 @@ it('does not claim log truncation when only short log paths are present but the 
   const truncatedAny = Object.values(logs).some((entry) => !entry.stdout.endsWith('.stdout.log') || !entry.stderr.endsWith('.stderr.log'));
   expect(truncatedAny).toBe(false);
   expect(notes.some((note) => note.includes('Log stream contents were truncated'))).toBe(false);
-  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(64 * 1024);
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
 });
 
 it('keeps the whole response within 64 KiB when many commands and outputs combine', async () => {
@@ -629,89 +610,87 @@ it('keeps the whole response within 64 KiB when many commands and outputs combin
   expect(body.truncated).toBeUndefined();
   expect(body.omissions).toBeUndefined();
   expect(text).not.toContain('takt_get_goal');
-  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(64 * 1024);
+  expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
 });
 
-// A single Quint run stage whose stdout is the only variable field, so the test can straddle the
-// 64 KiB response limit exactly through the published MCP response.
-function installQuintRunOutputFixture(output: string): void {
-  mockSpawnManagedProcess.mockImplementation((command: string, args: readonly string[]) => {
-    const stdout = new MockStream();
-    const stderr = new MockStream();
-    const wait = async () => {
-      if (command.includes('java')) {
-        stderr.emit('data', 'openjdk version "17.0.1"');
-      } else if (args.includes('parse')) {
-        const parseJson = JSON.stringify({ modules: [{ name: 'goalSpec', declarations: [
-          { kind: 'def', qualifier: 'action', name: 'init' },
-          { kind: 'def', qualifier: 'action', name: 'step' },
-        ] }] });
-        writeFileSync(join(args[args.indexOf('--out') + 1]!), parseJson);
-        stdout.emit('data', parseJson);
-      } else if (args.includes('typecheck')) {
-        stdout.emit('data', '{}');
-      } else if (args.includes('run')) {
-        stdout.emit('data', output);
-      }
-      return { code: 0, signal: null };
-    };
-    return { child: { stdout, stderr }, wait, waitForExit: wait };
-  });
-}
+type RawVerification = Awaited<ReturnType<typeof runFormalSpecVerification>>;
 
-async function verifyQuintThroughMcp(): Promise<{ text: string; bytes: number; body: {
-  truncated?: unknown; notes?: string[]; omissions?: unknown; verifiedSpecifications: string[];
-  verification: {
-    verdict: string;
-    quint: { run: { status: string } };
-    artifacts: { runDirectory: string; logs: Record<string, { stdout: string; stderr: string }> };
-  };
-} }> {
+async function verifyAlloyThroughMcp() {
   const result = await withManagerServer((client) => client.callTool({
-    name: toolName, arguments: { cwd, goalId: goalRecord().id, specifications: ['quint'] },
+    name: toolName, arguments: { cwd, goalId: goalRecord().id, specifications: ['alloy'] },
   }));
   expect(result.isError).not.toBe(true);
-  const text = firstTextContent(result.content);
-  return { text, bytes: Buffer.byteLength(text), body: JSON.parse(text) as Awaited<ReturnType<typeof verifyQuintThroughMcp>>['body'] };
+  return {
+    body: JSON.parse(firstTextContent(result.content)) as {
+      notes?: string[];
+      verificationResultPath?: string;
+      verification: RawVerification;
+    },
+    bytes: Buffer.byteLength(JSON.stringify(result)),
+  };
 }
 
-it('returns the verification unchanged just below the 64 KiB boundary, with no truncation marker', async () => {
-  const output = 'Q'.repeat(44 * 1024);
-  installQuintRunOutputFixture(output);
-  await seedGoal(cwd, savedGoal({ specifications: { quint: 'module goalSpec {}' } }));
+async function rawAlloyVerification(alloy: string) {
+  await seedGoal(cwd, savedGoal({ specifications: { alloy } }));
+  const verification = await runFormalSpecVerification(
+    `\`\`\`alloy\n${alloy}\n\`\`\``, cwd, { modelCheckTimeoutSeconds: 1 },
+  );
+  const body = { goalId: goalRecord().id, verifiedSpecifications: ['alloy'], verification };
+  const bytes = Buffer.byteLength(JSON.stringify({ content: [{ type: 'text', text: JSON.stringify(body) }] }));
+  return { body, bytes };
+}
 
-  const { text, bytes, body } = await verifyQuintThroughMcp();
+it('returns the full verifier result when the MCP envelope fits within 64 KiB', async () => {
+  installAlloyChecksFixture(40);
+  const { body: raw, bytes: rawBytes } = await rawAlloyVerification('sig Goal {}\ncheck a');
 
-  expect(bytes).toBeLessThan(64 * 1024);
-  expect(body.truncated).toBeUndefined();
-  expect(body.notes).toBeUndefined();
-  expect(text).not.toContain('takt_get_goal');
-  expect(body.verification.quint.run.status).toBe('passed');
-  const artifacts = body.verification.artifacts;
-  const logPath = join(artifacts.runDirectory, 'logs', 'quint-run.stdout.log');
-  expect(artifacts.logs['quint-run']?.stdout).toBe(logPath);
-  expect(readFileSync(logPath, 'utf8')).toBe(output);
+  const { body, bytes } = await verifyAlloyThroughMcp();
+
+  expect(rawBytes).toBeLessThan(MCP_RESPONSE_MAX_BYTES);
+  expect(bytes).toBe(rawBytes);
+  expect(body).toEqual(JSON.parse(JSON.stringify(raw).replaceAll(
+    raw.verification.artifacts!.runDirectory, body.verification.artifacts!.runDirectory,
+  )));
 });
 
-it('bounds the response when it first crosses 64 KiB, keeping the verdict, run status and full log location', async () => {
-  // The untrimmed response here is ~104 KiB, so the tool must bound it rather than return it whole.
-  installQuintRunOutputFixture('Q'.repeat(100 * 1024));
-  await seedGoal(cwd, savedGoal({ specifications: { quint: 'module goalSpec {}' } }));
+it('bounds an oversized envelope while preserving usable log paths and all Alloy timeout results', async () => {
+  installAlloyChecksFixture(220, [3, 210]);
+  mkdirSync(join(cwd, '.takt'), { recursive: true });
+  writeFileSync(join(cwd, '.takt', 'config.yaml'), 'assistant:\n  formal_spec:\n    model_check_timeout_seconds: 1\n');
+  const { bytes: rawBytes } = await rawAlloyVerification('sig Goal {}\ncheck a');
 
-  const { text, bytes, body } = await verifyQuintThroughMcp();
+  const { body, bytes } = await verifyAlloyThroughMcp();
 
-  expect(bytes).toBeLessThanOrEqual(64 * 1024);
-  expect(text).not.toContain('takt_get_goal');
-  expect(body.verifiedSpecifications).toEqual(['quint']);
-  expect(body.verification.verdict).toBe('passed');
-  expect(body.verification.quint.run.status).toBe('passed');
-  const artifacts = body.verification.artifacts as {
-    runDirectory: string;
-    logs: Record<string, { stdout: string; stderr: string }>;
-  };
-  expect(artifacts.runDirectory).toMatch(/verify-\w+$/u);
-  // The retained path still points at the complete, untruncated verifier log on disk.
-  const logPath = join(artifacts.runDirectory, 'logs', 'quint-run.stdout.log');
-  expect(artifacts.logs['quint-run']?.stdout).toBe(logPath);
-  expect(readFileSync(logPath, 'utf8')).toBe('Q'.repeat(100 * 1024));
+  expect(rawBytes).toBeGreaterThan(MCP_RESPONSE_MAX_BYTES);
+  expect(bytes).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+  expect(body.verification.alloy.commandResults).toBeUndefined();
+  const artifacts = body.verification.artifacts!;
+  expect(Object.keys(artifacts.logs).length).toBeGreaterThan(0);
+  for (const [stage, paths] of Object.entries(artifacts.logs)) {
+    expect(paths.stdout).toBe(join(artifacts.runDirectory, 'logs', `${stage}.stdout.log`));
+    expect(paths.stderr).toBe(join(artifacts.runDirectory, 'logs', `${stage}.stderr.log`));
+    expect(() => readFileSync(paths.stdout)).not.toThrow();
+    expect(() => readFileSync(paths.stderr)).not.toThrow();
+  }
+  expect(body.verificationResultPath).toBe(join(artifacts.runDirectory, 'verification-result.json'));
+  const complete: RawVerification = JSON.parse(readFileSync(body.verificationResultPath!, 'utf8'));
+  expect(complete.verdict).toBe(body.verification.verdict);
+  expect(complete.alloy.commandResults?.filter((command) => command.timedOut)
+    .map((command) => command.number)).toEqual([3, 210]);
+  expect(readFileSync(complete.artifacts!.logs['alloy-check-210']!.stdout, 'utf8')).toBe('');
+});
+
+it('keeps successful verification logs readable until the stale-run cleanup', async () => {
+  await seedGoal(cwd, savedGoal({ specifications: { alloy: specifications.alloy } }));
+
+  const { body } = await verifyAlloyThroughMcp();
+
+  const runDirectory = body.verification.artifacts!.runDirectory;
+  expect(existsSync(join(runDirectory, '.active'))).toBe(false);
+  expect(readFileSync(join(runDirectory, 'logs', 'alloy-run-0.stdout.log'), 'utf8')).toBeTypeOf('string');
+
+  const stale = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  utimesSync(runDirectory, stale, stale);
+  await verifyAlloyThroughMcp();
+  expect(existsSync(runDirectory)).toBe(false);
 });

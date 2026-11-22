@@ -303,7 +303,7 @@ export function createTaktMcpServer(
     }, (input) => workspaceOperation(async () => renameManagerWorkspace(await currentAssignment(), input.name, globalConfigDirectory)));
     server.registerTool('takt_verify_goal_specification', {
       title: 'Verify a goal formal specification',
-      description: 'Run the same formal specification verification as the TUI /verify command over the goal\'s saved Quint and Alloy specifications. specifications selects quint, alloy or both; omission verifies every saved formal specification. Returns the verdict, each stage result, and artifact and log locations. Goals without a saved formal specification are errors. Responses fit 64 KiB, with explicit truncation.',
+      description: 'Run the same formal specification verification as the TUI /verify command over the goal\'s saved Quint and Alloy specifications. specifications selects quint, alloy or both; omission verifies every saved formal specification. Returns the verdict, each stage result, and artifact and log locations. Goals without a saved formal specification are errors. Oversized responses are summarized within 64 KiB and provide verificationResultPath for the full result.',
       inputSchema: goalSpecificationVerificationInputSchema,
     }, (input, extra) => operation(input.cwd, 'Goal specification verification failed', (deps) => verifyTaktGoalSpecification(projectInput(input, deps), deps, turnSignal(extra.signal)), false));
   }

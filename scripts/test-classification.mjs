@@ -433,8 +433,6 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-manager-conversation-plan.test.ts',
   'src/__tests__/it-manager-goal-specifications.test.ts',
   'src/__tests__/it-manager-verification-interruption.test.ts',
-  'src/__tests__/it-mcp-goal-specification-verification.test.ts',
-  'src/__tests__/it-mcp-http-transport-shared.test.ts',
   'src/__tests__/it-mcp-task-cleanup.test.ts',
   'src/__tests__/it-opencode-task-state-mcp.test.ts',
   'src/__tests__/it-opencode-v2-assistant-mcp.test.ts',
@@ -495,6 +493,7 @@ export const heavyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-goal-task-pause-retry.test.ts',
   'src/__tests__/it-daemon-worktree-run-log.test.ts',
   'src/__tests__/it-mcp-goal-specification-verification-real.test.ts',
+  'src/__tests__/it-mcp-goal-specification-verification.test.ts',
   ...legacyParallelIntegrationTestFiles,
   ...auditedIntegrationBoundaryTestFiles,
   // Runs real `git init` / `git remote` processes for repository identity.

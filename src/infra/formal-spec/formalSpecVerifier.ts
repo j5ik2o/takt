@@ -826,6 +826,16 @@ export function cleanupFormalSpecVerificationArtifacts(result: FormalSpecVerific
   }
 }
 
+/** Release successful artifacts to the stale-run cleanup while keeping them readable. */
+export function releaseFormalSpecVerificationArtifacts(result: FormalSpecVerificationResult): void {
+  if (result.verdict !== 'passed' || !result.artifacts) return;
+  try {
+    rmSync(join(result.artifacts.runDirectory, ACTIVE_VERIFY_RUN_MARKER), { force: true });
+  } catch {
+    // Artifact cleanup is best effort.
+  }
+}
+
 function writeSpecification(directory: string, name: string, blocks: readonly string[]): string {
   const path = join(directory, 'specs', name);
   writeFileSync(path, `${blocks.join('\n\n')}\n`, { encoding: 'utf8', mode: 0o600 });
