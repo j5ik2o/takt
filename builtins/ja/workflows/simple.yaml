@@ -33,9 +33,9 @@ loop_monitors:
       instruction: loop-monitor-reviewers-fix
       rules:
         - condition: 健全（修正進捗があり、報告内容も収束している）
-          next: remediation
+          next: supervise
         - condition: 修正指摘が新しい差分・検証結果・知見で解消へ進んでおり、もう一度確認する必要がある
-          next: remediation
+          next: supervise
         - condition: >-
             同じ指摘と原因が、新しい関連差分・検証結果・知見を伴わずに繰り返され、
             このループから見て進展がない。
@@ -59,9 +59,9 @@ loop_monitors:
       instruction: loop-monitor-reviewers-fix
       rules:
         - condition: 健全（修正進捗があり、報告内容も収束している）
-          next: remediation
+          next: follow-up-review
         - condition: 修正指摘が新しい差分・検証結果・知見で解消へ進んでおり、もう一度確認する必要がある
-          next: remediation
+          next: follow-up-review
         - condition: 同じ指摘が新しい関連差分・検証結果・知見なしに繰り返されている
           next: ABORT
         - condition: 要件を満たす実現可能な打開手段がない

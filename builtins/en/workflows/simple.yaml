@@ -33,9 +33,9 @@ loop_monitors:
       instruction: loop-monitor-reviewers-fix
       rules:
         - condition: 'Healthy: fixes are progressing and the reports are converging'
-          next: remediation
+          next: supervise
         - condition: The finding is progressing toward resolution with new diffs, verification results, or knowledge, so another confirmation is needed
-          next: remediation
+          next: supervise
         - condition: >-
             The same finding and cause repeat without new related diffs, verification results, or knowledge,
             so this loop sees no progress.
@@ -59,9 +59,9 @@ loop_monitors:
       instruction: loop-monitor-reviewers-fix
       rules:
         - condition: 'Healthy: fixes are progressing and the reports are converging'
-          next: remediation
+          next: follow-up-review
         - condition: The finding is progressing toward resolution with new diffs, verification results, or knowledge, so another confirmation is needed
-          next: remediation
+          next: follow-up-review
         - condition: The same finding repeats with no new related diffs, verification results, or knowledge
           next: ABORT
         - condition: No feasible remedy exists that satisfies the requirements

@@ -162,9 +162,9 @@ loop_monitors:
       instruction: loop-monitor-reviewers-fix
       rules:
         - condition: 'Healthy: test design is progressing and the reports are converging'
-          next: write_tests
+          next: plan
         - condition: Re-planning produced new information, verification results, or knowledge, so test writing can be retried
-          next: write_tests
+          next: plan
         - condition: The same reason repeats without new information, verification results, or knowledge, so test writing does not progress
           next: ABORT
         - condition: No feasible remedy exists that satisfies the requirements
@@ -187,9 +187,9 @@ loop_monitors:
       instruction: loop-monitor-reviewers-fix
       rules:
         - condition: 'Healthy: implementation is progressing and the reports are converging'
-          next: implement
+          next: replan
         - condition: The new re-plan has concrete diffs or verification results that let implementation proceed
-          next: implement
+          next: replan
         - condition: The same gap repeats with no new diffs, verification results, or knowledge
           next: ABORT
         - condition: No feasible remedy exists that satisfies the requirements
@@ -210,9 +210,9 @@ loop_monitors:
       instruction: loop-monitor-reviewers-fix
       rules:
         - condition: 'Healthy: review findings are being resolved and the reports are converging'
-          next: peer-review
+          next: replan
         - condition: The new re-plan has concrete diffs or verification results that can resolve the review findings
-          next: peer-review
+          next: replan
         - condition: The same finding repeats with no new related diffs, verification results, or knowledge
           next: ABORT
         - condition: No feasible remedy exists that satisfies the requirements

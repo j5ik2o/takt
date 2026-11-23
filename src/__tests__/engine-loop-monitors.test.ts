@@ -46,7 +46,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
-import { runReportPhase } from '../core/workflow/phase-runner.js';
+import { runReportPhase, runStatusJudgmentPhase } from '../core/workflow/phase-runner.js';
 import { reportInputEntries } from '../core/models/workflow-report-input.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { CycleDetector } from '../core/workflow/engine/cycle-detector.js';
@@ -2691,10 +2691,15 @@ describe('Outer loop over nested workflow_call steps (simple)', () => {
     expect(simpleCycles(simple).map(cycle => cycle.join('>'))).toContain('supervise>remediation');
     const monitor = simple.loopMonitors?.find(item => item.cycle.join('>') === 'supervise>remediation');
     if (!monitor) throw new Error('Missing supervise>remediation monitor');
-    // 進展対照は、監視そのものが進展を続行に導く規則を先に選ぶ。実モデルの判断は DGX 検証で別途取得する。
-    const progressRule = monitor.judge.rules.findIndex(rule => rule.next === 'remediation');
-    if (progressRule < 0) throw new Error('Missing continue rule');
+    // 続行する規則はサイクル先頭（待機中の supervise）へ戻す。末尾（終えたばかりの remediation）へ
+    // 戻すと、閾値到達時に自然遷移で始まるはずの supervise を飛ばして修正を繰り返す。
+    const continueRules = monitor.judge.rules.filter(rule => rule.next !== 'ABORT');
+    expect(continueRules.length).toBeGreaterThan(0);
+    for (const rule of continueRules) expect(rule.next).toBe(monitor.cycle[0]);
     const detector = new CycleDetector(simple.loopMonitors);
+    // 実走では先に remediation が実行される（runDir に前回 remediation が入る）。周回は
+    // supervise → remediation → supervise の順で記録し、先頭へ戻る遷移で検出する。
+    expect(detector.recordAndCheck('remediation', 'supervise').triggered).toBe(false);
     const reentry = (): boolean => {
       expect(detector.recordAndCheck('supervise', 'remediation').triggered).toBe(false);
       return detector.recordAndCheck('remediation', 'supervise').triggered;
@@ -2702,12 +2707,17 @@ describe('Outer loop over nested workflow_call steps (simple)', () => {
     for (let round = 1; round <= monitor.threshold; round += 1) {
       expect(reentry()).toBe(round === monitor.threshold);
     }
-    // 子の修正 monitor を親の履歴に混ぜても、外側 monitor の発火は変わらない（二重計数しない）。
+    // 親は子 workflow_call の内側 step を履歴に入れない。子の内側往復だけを親と同じ detector に
+    // 記録しても外側 monitor は発火しない。
     const childOnly = new CycleDetector(simple.loopMonitors);
+    childOnly.recordAndCheck('remediation', 'supervise');
     for (let round = 1; round <= monitor.threshold; round += 1) {
-      expect(childOnly.recordAndCheck('remediation', 'supervise').triggered).toBe(false);
-      expect(childOnly.recordAndCheck('supervise', 'remediation').triggered).toBe(false);
+      for (const [from, next] of [['fix', 'fix-verifier'], ['fix-verifier', 'verification-replan'], ['verification-replan', 'fix']]) {
+        expect(childOnly.recordAndCheck(from!, next!).triggered).toBe(false);
+      }
     }
+    childOnly.recordAndCheck('supervise', 'remediation');
+    expect(childOnly.recordAndCheck('remediation', 'supervise').triggered).toBe(false);
   });
 
   it.each(['ja', 'en'] as const)('%s: development-core monitors its re-planning round trips', (language) => {
@@ -2722,6 +2732,12 @@ describe('Outer loop over nested workflow_call steps (simple)', () => {
     const core = loadShipped(language, 'development-core');
     const monitored = (core.loopMonitors ?? []).map(monitor => monitor.cycle.join('>'));
     expect(monitored).toEqual(expect.arrayContaining(['plan>write_tests', 'replan>implement', 'replan>peer-review']));
+    for (const monitor of core.loopMonitors ?? []) {
+      // 続行は待機中の先頭 step（plan / replan）を実行し、終えた末尾 step をやり直さない。
+      for (const rule of monitor.judge.rules.filter(candidate => candidate.next !== 'ABORT')) {
+        expect(rule.next, monitor.cycle.join('>')).toBe(monitor.cycle[0]);
+      }
+    }
     const implement = core.steps.find(step => step.name === 'implement');
     // 子 workflow_call の内側は子 monitor が所有し、親の外側 monitor とは履歴を共有しない。
     expect(implement?.kind).toBe('workflow_call');

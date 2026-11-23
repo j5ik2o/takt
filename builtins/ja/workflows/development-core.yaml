@@ -173,9 +173,9 @@ loop_monitors:
       instruction: loop-monitor-reviewers-fix
       rules:
         - condition: 健全（テスト設計の進捗があり、報告内容も収束している）
-          next: write_tests
+          next: plan
         - condition: 再計画で新しい情報・検証結果・知見が得られ、テスト作成を再試行できる
-          next: write_tests
+          next: plan
         - condition: 同じ理由が新しい情報・検証結果・知見なしに繰り返され、テスト作成が進展しない
           next: ABORT
         - condition: 要件を満たす実現可能な打開手段がない
@@ -198,9 +198,9 @@ loop_monitors:
       instruction: loop-monitor-reviewers-fix
       rules:
         - condition: 健全（実装進捗があり、報告内容も収束している）
-          next: implement
+          next: replan
         - condition: 新しい再計画で実装を進められる具体的な差分・検証結果がある
-          next: implement
+          next: replan
         - condition: 同じ不足が新しい差分・検証結果・知見なしに繰り返されている
           next: ABORT
         - condition: 要件を満たす実現可能な打開手段がない
@@ -221,9 +221,9 @@ loop_monitors:
       instruction: loop-monitor-reviewers-fix
       rules:
         - condition: 健全（レビュー指摘の解決が進み、報告内容も収束している）
-          next: peer-review
+          next: replan
         - condition: 新しい再計画でレビュー指摘を解消できる具体的な差分・検証結果がある
-          next: peer-review
+          next: replan
         - condition: 同じ指摘が新しい関連差分・検証結果・知見なしに繰り返されている
           next: ABORT
         - condition: 要件を満たす実現可能な打開手段がない
