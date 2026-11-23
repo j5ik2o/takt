@@ -56,14 +56,48 @@ afterEach(() => {
   }
 });
 
+function isFixtureProcessRunning(pidFile: string): boolean {
+  const pid = Number(readFileSync(pidFile, 'utf8'));
+  const state = execFileSync('ps', ['-axo', 'pid=,stat='], { encoding: 'utf8' }).split('\n')
+    .map((line) => line.trim().split(/\s+/u)).find(([value]) => Number(value) === pid)?.[1];
+  return state !== undefined && !state.startsWith('Z');
+}
+
 describe('stageAndCommit', () => {
-  it.skipIf(process.platform === 'win32').each(['complete', 'interrupt'] as const)(
-    'keeps the controlling terminal for a signed commit and can %s it',
+  it.skipIf(process.platform === 'win32').each(['complete', 'interrupt', 'redirected with a reparented hook child'] as const)(
+    'keeps the controlling terminal for a signed commit (%s)',
     async (mode) => {
       const signer = join(testDir, '.git', 'fixture-signer');
       const signerPid = join(testDir, '.git', 'fixture-signer-pid');
+      const redirected = mode === 'redirected with a reparented hook child';
+      const childPidFile = join(testDir, '.git', 'fixture-hook-child');
+      const redirectedLog = join(testDir, '.git', 'redirected.log');
+      if (redirected) {
+        const helper = join(testDir, '.git', 'fixture-hook-helper.cjs');
+        writeFileSync(helper, `
+const { spawn } = require('node:child_process');
+const { writeFileSync } = require('node:fs');
+const code = "process.on('SIGHUP', () => undefined); process.on('SIGINT', () => undefined); "
+  + "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => undefined, 1000);";
+const child = spawn(process.execPath, ['-e', code, process.env.TAKT_TEST_HOOK_CHILD], { stdio: 'ignore' });
+writeFileSync(process.env.TAKT_TEST_HOOK_CHILD + '-parent', String(process.pid));
+child.unref();
+`);
+        const hook = join(testDir, '.git', 'hooks', 'pre-commit');
+        mkdirSync(dirname(hook), { recursive: true });
+        writeFileSync(hook, `#!/bin/sh
+"$TAKT_TEST_NODE" "$TAKT_TEST_HOOK_HELPER" || exit 1
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  test -s "$TAKT_TEST_HOOK_CHILD" && exit 0
+  sleep 0.1
+done
+exit 1
+`);
+        chmodSync(hook, 0o755);
+      }
       writeFileSync(signer, `#!/bin/sh
 echo "$$" > "$TAKT_TEST_SIGNER_PID"
+test -c "$GPG_TTY" || exit 1
 printf 'Fixture signer ready\\n' >/dev/tty || exit 1
 IFS= read -r answer </dev/tty || exit 1
 test "$answer" = fixture || exit 1
@@ -79,7 +113,9 @@ printf '%s\\n' '-----BEGIN PGP SIGNATURE-----' 'fixture' '-----END PGP SIGNATURE
       writeFileSync(join(testDir, 'signed.txt'), 'signed content\n');
       const root = join(import.meta.dirname, '..', '..');
       const source = (path: string): string => JSON.stringify(pathToFileURL(join(root, 'src', 'infra', 'task', path)).href);
-      const child = spawnPty(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
+      const args = ['--import', 'tsx', '--input-type=module', '-e', `
+        import { existsSync, readFileSync } from 'node:fs';
+        import { execFileSync } from 'node:child_process';
         import { stageAndCommit } from ${source('git.ts')};
         import { registerCacciaCloneGit } from ${source('caccia-git-processes.ts')};
         const clone = ${JSON.stringify(testDir)};
@@ -87,7 +123,21 @@ printf '%s\\n' '-----BEGIN PGP SIGNATURE-----' 'fixture' '-----END PGP SIGNATURE
         const controller = new AbortController();
         process.once('SIGINT', () => controller.abort());
         try {
-          const commit = await stageAndCommit(clone, 'Signed fixture', {}, controller.signal);
+          const commit = await stageAndCommit(clone, 'Signed fixture', { allowGitHooks: ${redirected} }, controller.signal);
+          if (${redirected}) {
+            if ([process.stdin, process.stdout, process.stderr].some((stream) => stream.isTTY)) {
+              throw new Error('Fixture expected redirected standard streams');
+            }
+            const file = process.env.TAKT_TEST_HOOK_CHILD;
+            if (!existsSync(file)) throw new Error('Hook did not start a child');
+            const pid = Number(readFileSync(file, 'utf8'));
+            const parent = Number(readFileSync(file + '-parent', 'utf8'));
+            const [ppid, state] = execFileSync('ps', ['-o', 'ppid=,stat=', '-p', String(pid)],
+              { encoding: 'utf8' }).trim().split(/\\s+/);
+            if (!state || state.startsWith('Z') || Number(ppid) === parent) {
+              throw new Error('Hook child must survive and be reparented before cleanup');
+            }
+          }
           console.log('fixture commit ' + commit);
         } catch (error) {
           if (!controller.signal.aborted) throw error;
@@ -95,9 +145,13 @@ printf '%s\\n' '-----BEGIN PGP SIGNATURE-----' 'fixture' '-----END PGP SIGNATURE
         } finally {
           release();
         }
-      `], {
+      `];
+      const child = spawnPty(redirected ? '/bin/sh' : process.execPath,
+        redirected ? ['-c', 'exec "$@" </dev/null >"$TAKT_TEST_REDIRECT_LOG" 2>&1', 'fixture', process.execPath, ...args] : args, {
         cwd: root,
-        env: { ...process.env, TAKT_TEST_SIGNER_PID: signerPid },
+        env: { ...process.env, GPG_TTY: '/not-the-inner-pty', TAKT_TEST_SIGNER_PID: signerPid, TAKT_TEST_NODE: process.execPath,
+          TAKT_TEST_HOOK_HELPER: join(testDir, '.git', 'fixture-hook-helper.cjs'), TAKT_TEST_HOOK_CHILD: childPidFile,
+          TAKT_TEST_REDIRECT_LOG: redirectedLog },
       });
       let output = '';
       let responded = false;
@@ -105,8 +159,7 @@ printf '%s\\n' '-----BEGIN PGP SIGNATURE-----' 'fixture' '-----END PGP SIGNATURE
         output += chunk;
         if (!responded && output.includes('Fixture signer ready')) {
           responded = true;
-          if (mode === 'complete') child.write('fixture\r');
-          else process.kill(child.pid, 'SIGINT');
+          child.write(mode === 'interrupt' ? '\x03' : 'fixture\r');
         }
       });
       const exit = await new Promise<number>((resolve, reject) => {
@@ -119,18 +172,17 @@ printf '%s\\n' '-----BEGIN PGP SIGNATURE-----' 'fixture' '-----END PGP SIGNATURE
           resolve(exitCode);
         });
       }).finally(() => listener.dispose());
+      if (redirected && existsSync(redirectedLog)) output += readFileSync(redirectedLog, 'utf8');
       expect(exit, output).toBe(0);
       expect(responded, output).toBe(true);
-      if (mode === 'complete') {
+      if (mode !== 'interrupt') {
         expect(git(['cat-file', '-p', 'HEAD'])).toContain('gpgsig -----BEGIN PGP SIGNATURE-----');
         expect(output).toMatch(/fixture commit [0-9a-f]+/u);
+        if (redirected) expect(isFixtureProcessRunning(childPidFile)).toBe(false);
       } else {
         expect(output).toContain('fixture interrupted');
         expect(git(['log', '-1', '--format=%s']).trim()).toBe('Initial commit');
-        const pid = Number(readFileSync(signerPid, 'utf8'));
-        const state = execFileSync('ps', ['-axo', 'pid=,stat='], { encoding: 'utf8' }).split('\n')
-          .map((line) => line.trim().split(/\s+/u)).find(([value]) => Number(value) === pid)?.[1];
-        expect(state === undefined || state.startsWith('Z')).toBe(true);
+        expect(isFixtureProcessRunning(signerPid)).toBe(false);
       }
     },
   );

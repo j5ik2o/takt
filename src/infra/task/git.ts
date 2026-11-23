@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { createLogger } from '../../shared/utils/index.js';
 import { buildSafeGitEnvironment } from './git-environment.js';
 import { runGitCommandAbortable } from './clone-exec.js';
+import { tryCacciaTerminalCommit } from './caccia-git-terminal.js';
 import {
   toLocalBranchRef,
   toPullRequestBaseRef,
@@ -43,12 +44,7 @@ export async function stageAndCommit(
   const env = await buildSafeGitEnvironment(cwd, options, signal);
   const git = signal === undefined
     ? (args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe', encoding: 'utf-8', env })
-    : async (args: string[]) => {
-      // Signing programs can prompt on the controlling terminal, even with pipes for stdio.
-      const preserveTerminal = args[0] === 'commit'
-        && (process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY);
-      return (await runGitCommandAbortable(cwd, args, signal, env, undefined, { preserveTerminal })).stdout;
-    };
+    : async (args: string[]) => (await runGitCommandAbortable(cwd, args, signal, env)).stdout;
 
   await git(['add', '-A']);
 
@@ -62,7 +58,9 @@ export async function stageAndCommit(
     ? ['commit', '-m', message]
     : ['commit', '--no-verify', '-m', message];
 
-  await git(commitArgs);
+  if (signal === undefined || !await tryCacciaTerminalCommit(cwd, commitArgs, env, signal)) {
+    await git(commitArgs);
+  }
   return (await git(['rev-parse', '--short', 'HEAD'])).trim();
 }
 

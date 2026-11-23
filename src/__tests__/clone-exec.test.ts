@@ -1,12 +1,13 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { afterEach, expect, it, vi } from 'vitest';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { isShallowReferenceError, runGitCommandAbortable } from '../infra/task/clone-exec.js';
+import { registerCacciaCloneGit, trackCacciaCloneGit } from '../infra/task/caccia-git-processes.js';
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
-  return { ...actual, spawn: vi.fn() };
+  return { ...actual, spawn: vi.fn(), execFileSync: vi.fn(actual.execFileSync) };
 });
 
 class FakeChildProcess extends EventEmitter {
@@ -46,6 +47,40 @@ it('preserves the exit status of a failed Git command', async () => {
   const pending = runGitCommandAbortable('/project', ['merge-base', '--is-ancestor', 'a', 'b']);
   child.emit('close', 1);
   await expect(pending).rejects.toMatchObject({ status: 1 });
+});
+
+it('rejects on abort even when signalling Git fails', async () => {
+  const child = new FakeChildProcess();
+  vi.mocked(spawn).mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+  vi.spyOn(process, 'kill').mockImplementation(() => { throw new Error('group signal failed'); });
+  child.kill.mockImplementation(() => { throw new Error('child signal failed'); });
+  const controller = new AbortController();
+  const pending = expect(runGitCommandAbortable('/project', ['fetch'], controller.signal))
+    .rejects.toThrow(/abort/iu);
+
+  controller.abort();
+  await pending;
+});
+
+it.skipIf(process.platform === 'win32')('does not signal a reused Git process group after its owned members leave', () => {
+  const signal = vi.spyOn(process, 'kill').mockReturnValue(true);
+  const snapshot = vi.mocked(execFileSync);
+  snapshot.mockReturnValue('5001 4001 S Mon Nov 23 12:01:00 2026\n')
+    .mockReturnValueOnce('5001 4001 S Mon Nov 23 12:00:00 2026\n');
+  const release = registerCacciaCloneGit('/fixture/caccia-group');
+  let leaderExited: (() => void) | undefined;
+  const terminate = trackCacciaCloneGit('/fixture/caccia-group', 4001, vi.fn(), (callback) => {
+    leaderExited = callback;
+  })!;
+  try {
+    leaderExited!();
+    terminate('SIGINT');
+    expect(signal.mock.calls).toEqual([[-4001, 0]]);
+  } finally {
+    release();
+    snapshot.mockReset();
+  }
+  expect(signal.mock.calls).toEqual([[-4001, 0]]);
 });
 
 it.each([

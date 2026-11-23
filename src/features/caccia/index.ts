@@ -379,7 +379,11 @@ async function createTemporaryClone(
     }
     return { cwd: cloneCwd, title: pullRequest.title, body: pullRequest.body, operations: cloneGit.operations };
   } catch (error) {
-    removeOwnedTemporaryClone(cloneCwd, true);
+    try {
+      removeOwnedTemporaryClone(cloneCwd, true);
+    } catch (cleanupError) {
+      log.error('Could not remove Caccia clone after setup failed', { error: getErrorMessage(cleanupError) });
+    }
     throw error;
   }
 }
@@ -669,6 +673,7 @@ async function runCacciaWithDependencies(
     out.cloning();
     const clone = await dependencies.createTemporaryClone(prNumber, reviewedHeadSha);
     const pushed = await (async () => {
+      let pushResult: Awaited<ReturnType<CacciaDependencies['commitAndPush']>>;
       try {
         const threadIds = threads.map((thread) => thread.id);
         const workflowResult = await dependencies.executeWorkflow({
@@ -681,7 +686,7 @@ async function runCacciaWithDependencies(
         });
         assertNotAborted(input.abortSignal);
         assertCacciaWorkflowComplete(workflowResult, threadIds, workflowResult.workflowFailure);
-        const pushResult = await dependencies.commitAndPush(clone.cwd,
+        pushResult = await dependencies.commitAndPush(clone.cwd,
           input.entry === 'linked' ? input.onPushedHead : undefined);
         if (pushResult.pushed) {
           out.pushed(pushResult.headSha);
@@ -714,10 +719,16 @@ async function runCacciaWithDependencies(
           await dependencies.resolveReviewThread(thread.id, input.projectCwd, input.abortSignal);
           out.resolved(thread.id);
         }
-        return pushResult;
-      } finally {
-        await dependencies.removeTemporaryClone(clone.cwd);
+      } catch (error) {
+        try {
+          await dependencies.removeTemporaryClone(clone.cwd);
+        } catch (cleanupError) {
+          log.error('Could not remove Caccia clone after review failed', { error: getErrorMessage(cleanupError) });
+        }
+        throw error;
       }
+      await dependencies.removeTemporaryClone(clone.cwd);
+      return pushResult;
     })();
 
     out.waitingForReview();

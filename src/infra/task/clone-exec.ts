@@ -388,7 +388,7 @@ export function runGitCommandAbortable(
   abortSignal?: AbortSignal,
   env?: NodeJS.ProcessEnv,
   timeoutMs?: number,
-  options: { ownerCwd?: string; preserveTerminal?: boolean } = {},
+  options: { ownerCwd?: string } = {},
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     if (abortSignal?.aborted) {
@@ -396,16 +396,21 @@ export function runGitCommandAbortable(
       return;
     }
 
-    const detached = options.preserveTerminal !== true;
     const child = spawn('git', args, {
       cwd: gitCwd,
       stdio: 'pipe',
-      detached,
+      detached: true,
       env,
     });
-    const terminate = trackCacciaCloneGit(options.ownerCwd ?? gitCwd, child, detached)
-      ?? (!detached ? (signal: NodeJS.Signals) => child.kill(signal)
-        : (signal: NodeJS.Signals) => terminateProcessGroup(child, signal));
+    const sendSignal = trackCacciaCloneGit(options.ownerCwd ?? gitCwd, child.pid, (signal) => child.kill(signal),
+      (onExit) => { child.once('exit', onExit); }) ?? ((signal) => terminateProcessGroup(child, signal));
+    const terminate = (signal: NodeJS.Signals): void => {
+      try {
+        sendSignal(signal);
+      } catch (error) {
+        log.warn('Could not signal Git process', { signal, error: getErrorMessage(error) });
+      }
+    };
 
     let stdout = '';
     let stderr = '';

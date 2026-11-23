@@ -1638,6 +1638,27 @@ describe('Caccia loop', () => {
     }
   });
 
+  it('keeps the GitHub timeout when clone cleanup also fails', async () => {
+    const { dependencies } = createHarness([[thread('finding-1')]]);
+    const stalled = new githubPr.CacciaGitHubTimeoutError('GitHub stalled');
+    vi.mocked(dependencies.fetchCurrentPullRequestHeadSha).mockRejectedValueOnce(stalled);
+    vi.mocked(dependencies.removeTemporaryClone).mockRejectedValueOnce(new Error('Git cleanup failed'));
+
+    await expect(runCaccia(standaloneInput(), dependencies)).rejects.toMatchObject({
+      constructor: githubPr.CacciaGitHubTimeoutError, cause: stalled,
+    });
+    expect(dependencies.removeTemporaryClone).toHaveBeenCalledWith('/tmp/caccia-clone-1');
+  });
+
+  it('returns a clone cleanup failure after otherwise successful review work', async () => {
+    const { dependencies } = createHarness([[thread('finding-1')], []]);
+    const cleanupError = new Error('Git cleanup failed');
+    vi.mocked(dependencies.removeTemporaryClone).mockRejectedValueOnce(cleanupError);
+
+    await expect(runCaccia(standaloneInput(), dependencies)).rejects.toBe(cleanupError);
+    expect(dependencies.resolveReviewThread).toHaveBeenCalledOnce();
+  });
+
   it('identifies the last fetched PR head when a later locator request reaches its deadline', async () => {
     const { dependencies } = createHarness([[thread('finding-1')]]);
     const fetchError = new Error('locator request timed out');
