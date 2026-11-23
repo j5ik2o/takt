@@ -101,6 +101,40 @@ it.skipIf(process.platform === 'win32')('signals the owned group when ps is miss
   }
 });
 
+it.skipIf(process.platform === 'win32')('finishes cleanup when a terminal Git group exits during signalling', () => {
+  const signal = vi.spyOn(process, 'kill').mockImplementation(() => {
+    throw Object.assign(new Error('kill EPERM'), { code: 'EPERM' });
+  });
+  const snapshot = vi.mocked(execFileSync);
+  snapshot.mockReturnValue('').mockReturnValueOnce('4001 4001 S Mon Nov 23 12:00:00 2026\n');
+  const release = registerCacciaCloneGit('/fixture/caccia-exiting-terminal');
+  trackCacciaCloneGit('/fixture/caccia-exiting-terminal', 4001, vi.fn(), () => undefined);
+  try {
+    expect(release).not.toThrow();
+    expect(signal.mock.calls).toEqual([[-4001, 'SIGKILL']]);
+  } finally {
+    signal.mockReturnValue(true);
+    release();
+    snapshot.mockReset();
+  }
+});
+
+it.skipIf(process.platform === 'win32')('signals the live owned Git group when process inspection is unavailable', () => {
+  const signal = vi.spyOn(process, 'kill').mockReturnValue(true);
+  const snapshot = vi.mocked(execFileSync);
+  snapshot.mockImplementation(() => { throw Object.assign(new Error('spawn ps ENOENT'), { code: 'ENOENT' }); });
+  const release = registerCacciaCloneGit('/fixture/caccia-no-process-table');
+  const terminate = trackCacciaCloneGit('/fixture/caccia-no-process-table', 4001, vi.fn(), () => undefined)!;
+  try {
+    terminate('SIGINT');
+    expect(signal.mock.calls).toEqual([[-4001, 'SIGINT']]);
+  } finally {
+    snapshot.mockReturnValue('');
+    release();
+    snapshot.mockReset();
+  }
+});
+
 it.skipIf(process.platform === 'win32')('retains the clone registration if only unverified group members survive', () => {
   const signal = vi.spyOn(process, 'kill').mockReturnValue(true);
   const snapshot = vi.mocked(execFileSync);

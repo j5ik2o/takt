@@ -51,8 +51,26 @@ class OwnedGitProcess {
       if (!this.closed) this.signalLeader(signal);
       return;
     }
-    // While our child leads its process group, cancellation needs no ps lookup.
-    if (!this.closed || this.remaining(processTable()).length > 0) signalPid(-this.pid, signal);
+    if (!this.shouldSignalGroup()) return;
+    try {
+      signalPid(-this.pid, signal);
+    } catch (error) {
+      // macOS can reject the signal while the last group members are exiting.
+      if (!(error instanceof Error && 'code' in error && error.code === 'EPERM')
+        || this.remaining(processTable()).length > 0) throw error;
+    }
+  }
+
+  private shouldSignalGroup(): boolean {
+    let table: ProcessEntry[];
+    try {
+      table = processTable();
+    } catch (error) {
+      // The live child still owns its group when process inspection is unavailable.
+      if (!this.closed) return true;
+      throw error;
+    }
+    return this.remaining(table).length > 0;
   }
 
   onLeaderExit(): boolean {
