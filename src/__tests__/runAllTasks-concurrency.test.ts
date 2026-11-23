@@ -2,7 +2,7 @@
  * Tests for runAllTasks concurrency support (worker pool)
  */
 
-vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkQueuedTaskProviders: vi.fn(async () => undefined), checkPendingTaskProviders: vi.fn(async () => undefined), checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
+vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkQueuedTaskProviders: vi.fn(async () => undefined), checkPendingTaskProviders: vi.fn(async () => undefined), checkTaskNameProvider: vi.fn(async () => undefined), checkTaskProviders: vi.fn(async () => undefined), runtimeAssignmentUnavailableReason: vi.fn(() => undefined), terminalProviderConfirmation: vi.fn(() => undefined) }));
 import { beforeEach,describe,expect,it,vi } from 'vitest';
 import type { TaskInfo,TaskListItem } from '../infra/task/index.js';
 
@@ -797,6 +797,42 @@ describe('runAllTasks concurrency', () => {
       );
       expect(mockAutoRequeueFailedTask).toHaveBeenCalledWith('eligible', { maxAttempts: 1 });
     });
+
+    it.each(['interrupted-task read', 'read', 'eligibility', 'requeue write'] as const)(
+      'requeues and executes an eligible failed task after a startup %s lock timeout',
+      async (phase) => {
+        mockLoadConfig.mockReturnValue({
+          concurrency: 1, taskPollIntervalMs: 5, autoRequeueMaxAttempts: 1,
+          notificationSound: false,
+        });
+        const task = createTask('deferred-failed-task');
+        const failedTask = { ...task, kind: 'failed' } as TaskListItem;
+        const timeout = () => {
+          throw new TaskClaimLockAcquisitionError(
+            'File lock: timed out waiting for lock: /project/.takt/tasks.yaml.lock', 'TIMEOUT',
+          );
+        };
+        mockListFailedTasks.mockReturnValue([failedTask]);
+        if (phase === 'interrupted-task read') mockFailInterruptedRunningTasks.mockImplementationOnce(timeout);
+        if (phase === 'read') mockListFailedTasks.mockImplementationOnce(timeout);
+        if (phase === 'eligibility') mockIsAutoRequeueEligible.mockImplementationOnce(timeout);
+        if (phase === 'requeue write') mockAutoRequeueFailedTask.mockImplementationOnce(timeout);
+        mockAutoRequeueFailedTask.mockReturnValueOnce({
+          requeued: true, attempt: 1, maxAttempts: 1, reason: 'requeued',
+        });
+        mockClaimNextTasks.mockImplementationOnce(() =>
+          mockAutoRequeueFailedTask.mock.results.some((result) => result.value?.requeued) ? [task] : [],
+        ).mockReturnValue([]);
+        mockExecuteWorkflow.mockResolvedValue({ success: true });
+
+        await runAllTasks('/project');
+
+        expect(checkQueuedTaskProviders).toHaveBeenCalledWith(
+          '/project', failedTask, {}, undefined, expect.any(AbortSignal),
+        );
+        expect(mockStatus).toHaveBeenCalledWith('Success', '1', 'green');
+      },
+    );
 
     it('should not auto-requeue failed tasks when config autoRequeueMaxAttempts is unset', async () => {
       mockLoadConfig.mockReturnValue({

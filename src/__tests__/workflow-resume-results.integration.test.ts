@@ -1605,6 +1605,7 @@ describe('workflow results across resume', () => {
 
     expect(state.status, JSON.stringify({ abort: aborted.mock.calls, outputs: [...state.stepOutputs.values()] })).toBe('completed');
     expect(state.systemContexts.get('identify')).toEqual({ pr: expect.objectContaining({ number: 100 }) });
+    expect(state.effectResults.get('caccia')).toMatchObject({ caccia: { headSha: 'reviewed-head', timedOut: false } });
     expect(resolveSystemInput).toHaveBeenCalledTimes(2);
     expect(runAgent).toHaveBeenCalledOnce();
     expect(executeEffect.mock.calls.map(([effect]) => effect.type))

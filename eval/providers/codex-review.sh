@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # promptfoo exec provider: run a read-only Codex review in a fixture.
-# Usage: codex-review.sh <model> [reasoning-effort] <work-dir>
+# Usage: codex-review.sh <model> [reasoning-effort] <work-dir> <prompt>
+#        codex-review.sh --spark <work-dir> <prompt>
 set -euo pipefail
 
 model="$1"
-if [ "$#" -ge 4 ]; then
+if [ "$model" = '--spark' ]; then
+  work_dir="$2"
+  prompt="$3"
+elif [ "$#" -ge 4 ]; then
   reasoning_effort="$2"
   work_dir="$3"
   prompt="$4"
@@ -44,7 +48,8 @@ cleanup() {
     wait "$codex_pid" 2>/dev/null || true
     codex_pid=''
   fi
-  rm -rf "$tmp_dir"
+  rm -rf -- "$tmp_dir" 2>/dev/null ||
+    printf 'codex review temporary directory cleanup failed (exit %s)\n' "$?" >&2 || true
 }
 
 trap cleanup EXIT
@@ -54,9 +59,17 @@ trap 'cleanup; exit 143' TERM
 cd "$(dirname "$0")/../${work_dir}"
 printf '%s' "$prompt" > "$prompt_file"
 
+if [ "$model" = '--spark' ]; then
+  mkdir "$tmp_dir/codex-home"
+  # The launcher supplies the model and connection. Disable its MCP server for fixture reviews.
+  command=(env CODEX_HOME="$tmp_dir/codex-home" CODEX_SPARK_LOG_DIR="$tmp_dir/spark-logs"
+    codex-spark -c 'mcp_servers.searxng.enabled=false' exec --ephemeral)
+else
+  command=(codex exec -m "$model" -c "model_reasoning_effort=$reasoning_effort")
+fi
+
 set -m
-codex exec -m "$model" -s read-only --skip-git-repo-check \
-  -c "model_reasoning_effort=$reasoning_effort" --json -o "$out" - \
+"${command[@]}" -s read-only --skip-git-repo-check --json -o "$out" - \
   < "$prompt_file" >"$event_log" 2>&1 &
 codex_pid=$!
 set +m

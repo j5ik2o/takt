@@ -9,6 +9,7 @@ import { mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync,writeFileSync } 
 import { createServer,type Server } from 'node:http';
 import { basename,join } from 'node:path';
 import { createElement } from 'react';
+import { stringify as stringifyYaml } from 'yaml';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
 import { z } from 'zod/v4';
 import { connectTaktMcpServerToStdio } from '../app/mcp/index.js';
@@ -449,7 +450,7 @@ describe('standalone inquiries through manager MCP tools', () => {
 });
 
 describe('manager goal execution tools through MCP', () => {
-  const names = ['takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal'];
+  const names = ['takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal', 'takt_finish_goal'];
   let cwd: string;
   let store: GoalStore;
   let client: Client;
@@ -489,7 +490,7 @@ describe('manager goal execution tools through MCP', () => {
     }
   });
 
-  it('exposes all three state operations to the manager without adding approval passthroughs', async () => {
+  it('exposes all four state operations to the manager without adding approval passthroughs', async () => {
     const tools = (await client.listTools()).tools;
     expect(tools.map(({ name }) => name)).toEqual(expect.arrayContaining(names));
     for (const name of names) expect(TAKT_MCP_MANAGER_TOOL_NAMES.some((allowed) => allowed === name)).toBe(false);
@@ -513,6 +514,7 @@ describe('manager goal execution tools through MCP', () => {
     { name: 'takt_pause_goal', executionStatus: 'active' },
     { name: 'takt_resume_goal', executionStatus: 'paused' },
     { name: 'takt_abort_goal', executionStatus: 'active' },
+    { name: 'takt_finish_goal', executionStatus: 'aborted' },
   ] as const)('rejects $name through the public entrypoint despite the former enable flag', async ({ name, executionStatus }) => {
     await store.update(goalId, (goal) => ({ ...goal, executionStatus }));
     vi.stubEnv(MANAGER_ASSIGNMENT_ENV, JSON.stringify({ kind: 'repository', repositoryDirectory: cwd }));
@@ -532,7 +534,7 @@ describe('manager goal execution tools through MCP', () => {
       expect(goals.isError).not.toBe(true);
       for (const operation of names) expect(tools).not.toContain(operation);
       const result = await reader.callTool({ name, arguments: {
-        cwd, goalId, ...(name === 'takt_abort_goal' ? { reason: '作業を取りやめます' } : {}),
+        cwd, goalId, ...(['takt_abort_goal', 'takt_finish_goal'].includes(name) ? { reason: '作業を取りやめます' } : {}),
       } });
       expect(result.isError).toBe(true);
       expect((await store.get(goalId)).executionStatus).toBe(executionStatus);
@@ -638,7 +640,7 @@ describe('manager goal execution tools through MCP', () => {
       expect((await client.listTools()).tools.map(({ name }) => name)).toEqual(expect.arrayContaining(names));
       for (const name of names) {
         const result = await client.callTool({ name, arguments: {
-          cwd: outside, goalId, ...(name === 'takt_abort_goal' ? { reason: '中止します' } : {}),
+          cwd: outside, goalId, ...(['takt_abort_goal', 'takt_finish_goal'].includes(name) ? { reason: '中止します' } : {}),
         } });
         expect(result.isError).toBe(true);
       }
@@ -647,6 +649,67 @@ describe('manager goal execution tools through MCP', () => {
       expect(ensureDaemon).not.toHaveBeenCalled();
       expect(autoRun.ensureManagerRun).not.toHaveBeenCalled();
     } finally { rmSync(outside, { recursive: true, force: true }); }
+  });
+
+  it('finishes an aborted created goal with its reason in the work log without starting daemon or manager work', async () => {
+    await store.update(goalId, (goal) => ({ ...goal, executionStatus: 'aborted' }));
+    const branchSha = execFileSync('git', ['rev-parse', goalRecord().branch], { cwd, encoding: 'utf8' }).trim();
+    const reason = '成果は上流 PR で確定したため終了する';
+
+    const result = await client.callTool({ name: 'takt_finish_goal', arguments: { cwd, goalId, reason } });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    const output = JSON.parse(firstTextContent(result.content)) as Record<string, unknown>;
+
+    const saved = await store.get(goalId);
+    expect(saved).toMatchObject({ status: 'completed', executionStatus: 'aborted' });
+    expect(branchSha).toBe(saved.completion?.goalSha);
+    expect(saved.completion?.targetSha).toBe(branchSha);
+    const read = await client.callTool({ name: 'takt_get_goal', arguments: {
+      cwd, goalId, path: 'workLog.summary', recordId: output.workLogEntryId,
+    } });
+    expect(JSON.parse(firstTextContent(read.content))).toMatchObject({ content: reason });
+    expect(execFileSync('git', ['rev-parse', goalRecord().branch], { cwd, encoding: 'utf8' }).trim()).toBe(branchSha);
+    expect(ensureDaemon).not.toHaveBeenCalled();
+  });
+
+  it('finishes an aborted awaiting_merge goal with a saved closed PR even when PR lookup is unavailable', async () => {
+    const pullRequest = { number: 57, url: 'https://github.com/example/project/pull/57' };
+    const branchTip = execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+    await store.update(goalId, (goal) => ({ ...goal, executionStatus: 'aborted', status: 'awaiting_merge', pullRequest,
+      completion: { goalBranch: goalRecord().branch, goalSha: branchTip, targetBranch: 'main', summary: '完了根拠を保存済み',
+        changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+        instructions: ['以前の案内'] } }));
+    execFileSync('git', ['remote', 'add', 'origin', join(cwd, 'missing-origin.git')], { cwd, stdio: 'pipe' });
+
+    const result = await client.callTool({ name: 'takt_finish_goal', arguments: { cwd, goalId, reason: 'PR は未マージで閉じられた' } });
+
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    expect(await store.get(goalId)).toMatchObject({ status: 'completed', executionStatus: 'aborted', pullRequest,
+      completion: { summary: '完了根拠を保存済み', targetSha: branchTip } });
+  });
+
+  it.each(['active', 'paused'] as const)('rejects finishing a %s goal through MCP without saving', async (executionStatus) => {
+    await store.update(goalId, (goal) => ({ ...goal, executionStatus }));
+    const before = await store.get(goalId);
+
+    const result = await client.callTool({ name: 'takt_finish_goal', arguments: { cwd, goalId, reason: '終了する' } });
+
+    expect(result.isError).toBe(true);
+    expect(await store.get(goalId)).toEqual(before);
+    expect(ensureDaemon).not.toHaveBeenCalled();
+    expect(autoRun.ensureManagerRun).not.toHaveBeenCalled();
+  });
+
+  it('keeps complete, check_completion and reopen rejecting an aborted goal after adding finishing', async () => {
+    await store.update(goalId, (goal) => ({ ...goal, executionStatus: 'aborted' }));
+    const before = await store.get(goalId);
+
+    for (const name of ['takt_complete_goal', 'takt_check_goal_completion', 'takt_reopen_goal']) {
+      const result = await client.callTool({ name, arguments: { cwd, goalId, reason: '理由' } });
+      expect(result.isError, name).toBe(true);
+    }
+
+    expect(await store.get(goalId)).toEqual(before);
   });
 });
 
@@ -980,6 +1043,7 @@ describe('manager questions, answers and notifications through production bounda
       await reader.connect(a);
       expect((await reader.listTools()).tools.map(({ name }) => name).sort()).toEqual([
         'takt_list_tasks', 'takt_get_run', 'takt_list_goals', 'takt_get_goal', 'takt_list_goal_registration_proposals',
+        'takt_get_goal_registration_proposal',
       ].sort());
     } finally { try { await reader.close(); } finally { await server.close(); } }
   });
@@ -1303,4 +1367,252 @@ describe('manager questions, answers and notifications through production bounda
       expect(frame).not.toContain(blockedHeading);
     });
   }, 30_000);
+});
+
+describe('default stdio manager runtime assignment candidates', () => {
+  let root: string;
+  let cwd: string;
+  let globalConfigDirectory: string;
+  let originalCwd: string;
+  let originalArgv: string[];
+  let originalConfigDir: string | undefined;
+  let client: Client | undefined;
+  let transport: { close: () => Promise<void> } | undefined;
+
+  function git(args: string[]): string {
+    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: 'pipe' }).trim();
+  }
+
+  function writeProjectRuntimeAssignments(candidates: string[]): void {
+    writeFileSync(join(cwd, '.takt', 'config.yaml'), [
+      'language: en', 'branch_name_strategy: romaji', 'base_branch: main',
+      'manager:', '  auto_run: false', '  workflows: [safe]', '  runtime_assignments:',
+      ...candidates.map((name) => `    - ${name}`),
+    ].join('\n'));
+    writeFileSync(join(cwd, '.takt', 'runtime.yaml'), stringifyYaml({
+      version: 1,
+      provider: {
+        defaults: { profile: 'base' },
+        profiles: {
+          base: { provider: 'mock', model: 'base-model' },
+          localFast: { provider: 'mock', model: 'local-fast-model' },
+          localSlow: { provider: 'mock', model: 'local-slow-model' },
+        },
+        targets: { internal_agents: { selector: { profile: 'base' } } },
+        assignments: {
+          'local-fast': { defaults: { profile: 'localFast' } },
+          'local-slow': { defaults: { profile: 'localSlow' } },
+        },
+      },
+    }));
+    invalidateResolvedConfigCache(cwd);
+  }
+
+  async function connectThroughDefaultStdio(): Promise<Client> {
+    const reader = new Client({ name: 'default-stdio-runtime-assignment-test', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    stdioTransport.mockImplementationOnce(function StdioServerTransport() {
+      return serverTransport;
+    });
+    await connectTaktMcpServerToStdio();
+    await reader.connect(clientTransport);
+    client = reader;
+    transport = serverTransport;
+    return reader;
+  }
+
+  async function enqueue(reader: Client, extra: Record<string, unknown> = {}) {
+    return reader.callTool({ name: 'takt_enqueue_goal_task', arguments: {
+      cwd, goalId, purpose: '入力検証を追加する', task: 'input-validation', workflow: 'safe', ...extra,
+    } });
+  }
+
+  function pendingTaskNames(): string[] {
+    return new TaskRunner(cwd).listPendingTaskItems().map(({ name }) => name);
+  }
+
+  beforeEach(async () => {
+    originalCwd = process.cwd();
+    originalArgv = [...process.argv];
+    originalConfigDir = process.env.TAKT_CONFIG_DIR;
+    vi.mocked(ensureDaemon).mockReset().mockResolvedValue(undefined);
+    vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
+    root = realpathSync(mkdtempSync(join(process.cwd(), '.tmp', 'default-stdio-runtime-')));
+    cwd = join(root, 'project');
+    globalConfigDirectory = join(root, 'global-config');
+    mkdirSync(cwd, { recursive: true });
+    mkdirSync(globalConfigDirectory, { recursive: true });
+    process.env.TAKT_CONFIG_DIR = globalConfigDirectory;
+    initializeGitFixture(cwd, []);
+    mkdirSync(join(cwd, '.takt', 'workflows'), { recursive: true });
+    writeFileSync(join(cwd, '.takt', 'workflows', 'safe.yaml'), [
+      'name: safe', 'description: stdio runtime fixture', 'max_steps: 2', 'initial_step: work', 'steps:',
+      '  - name: work', '    instruction: "{task}"', '    rules:',
+      '      - condition: when(true)', '        next: COMPLETE',
+    ].join('\n'));
+    const sha = git(['-c', 'user.name=TAKT test', '-c', 'user.email=takt-test@example.invalid', 'commit-tree', 'HEAD^{tree}', '-m', 'stdio runtime fixture base']);
+    git(['branch', '-f', goalRecord().branch, sha]);
+    await new GoalStore(cwd).create(goalRecord());
+  });
+
+  afterEach(async () => {
+    try { await client?.close(); }
+    finally {
+      await transport?.close();
+      client = undefined;
+      transport = undefined;
+      process.chdir(originalCwd);
+      process.argv = originalArgv;
+      if (originalConfigDir === undefined) delete process.env.TAKT_CONFIG_DIR;
+      else process.env.TAKT_CONFIG_DIR = originalConfigDir;
+      stdioTransport.mockReset();
+      vi.restoreAllMocks();
+      invalidateResolvedConfigCache(cwd);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('lists the intersection of manager and runtime assignments through the default stdio launch', async () => {
+    writeProjectRuntimeAssignments(['local-fast']);
+    process.chdir(cwd);
+    process.argv = originalArgv.slice(0, 2);
+    const reader = await connectThroughDefaultStdio();
+    const result = await reader.callTool({ name: 'takt_list_runtime_assignments', arguments: { cwd } });
+    expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+    expect(JSON.parse(firstTextContent(result.content)).runtimeAssignments).toEqual([{ name: 'local-fast' }]);
+    expect(pendingTaskNames()).toEqual([]);
+  });
+
+  it('rejects a runtime assignment outside the resolved candidates through the default stdio launch', async () => {
+    writeProjectRuntimeAssignments(['local-fast']);
+    process.chdir(cwd);
+    process.argv = originalArgv.slice(0, 2);
+    const reader = await connectThroughDefaultStdio();
+    const result = await enqueue(reader, { workKey: 'outside-default-stdio', runtimeAssignment: 'local-slow' });
+    expect(result.isError).toBe(true);
+    const reason = firstTextContent(result.content);
+    expect(reason).toContain('is not allowed for manager tasks');
+    expect(reason).toContain('local-fast');
+    expect(pendingTaskNames()).toEqual([]);
+  });
+
+  it('rejects an out-of-candidate runtime assignment resubmitted with an existing work key', async () => {
+    writeProjectRuntimeAssignments(['local-fast']);
+    process.chdir(cwd);
+    process.argv = originalArgv.slice(0, 2);
+    const reader = await connectThroughDefaultStdio();
+    const created = await enqueue(reader, { workKey: 'repeated', runtimeAssignment: 'local-fast' });
+    expect(created.isError, firstTextContent(created.content)).toBeUndefined();
+    const createdName = (JSON.parse(firstTextContent(created.content)) as { taskName: string }).taskName;
+    expect(pendingTaskNames()).toEqual([createdName]);
+
+    const repeated = await enqueue(reader, { workKey: 'repeated', runtimeAssignment: 'local-slow' });
+    expect(repeated.isError).toBe(true);
+    const reason = firstTextContent(repeated.content);
+    expect(reason).toContain('is not allowed for manager tasks');
+    expect(reason).toContain('local-fast');
+    expect(pendingTaskNames()).toEqual([createdName]);
+  });
+
+  it('returns the existing task on a resubmission with an allowed runtime assignment without creating a duplicate', async () => {
+    writeProjectRuntimeAssignments(['local-fast']);
+    process.chdir(cwd);
+    process.argv = originalArgv.slice(0, 2);
+    const reader = await connectThroughDefaultStdio();
+    const created = await enqueue(reader, { workKey: 'allowed-repeated', runtimeAssignment: 'local-fast' });
+    expect(created.isError, firstTextContent(created.content)).toBeUndefined();
+    const createdName = (JSON.parse(firstTextContent(created.content)) as { taskName: string }).taskName;
+
+    const repeated = await enqueue(reader, { workKey: 'allowed-repeated', runtimeAssignment: 'local-fast' });
+
+    expect(repeated.isError, firstTextContent(repeated.content)).toBeUndefined();
+    expect(JSON.parse(firstTextContent(repeated.content))).toMatchObject({ taskName: createdName, workflow: 'safe' });
+    expect(pendingTaskNames()).toEqual([createdName]);
+  });
+
+  it('lists workflows through the default stdio launch even when runtime.yaml is malformed', async () => {
+    writeProjectRuntimeAssignments(['local-fast']);
+    writeFileSync(join(cwd, '.takt', 'runtime.yaml'), 'provider: [unterminated\n');
+    invalidateResolvedConfigCache(cwd);
+    process.chdir(cwd);
+    process.argv = originalArgv.slice(0, 2);
+    const reader = await connectThroughDefaultStdio();
+    const result = await reader.callTool({ name: 'takt_list_workflows', arguments: { cwd } });
+    expect(result.isError, firstTextContent(result.content)).toBeUndefined();
+    expect(JSON.parse(firstTextContent(result.content)).workflows.map((workflow: { name: string }) => workflow.name)).toContain('safe');
+    expect(pendingTaskNames()).toEqual([]);
+  });
+});
+
+describe('standalone inquiries through a shared non-manager MCP server', () => {
+  let root: string;
+  let projectA: string;
+  let projectB: string;
+  let configDirectory: string;
+  let client: Client;
+  let server: ReturnType<typeof createTaktMcpServer>;
+
+  beforeEach(() => {
+    vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
+    configDirectory = process.env.TAKT_CONFIG_DIR!;
+    const temporaryRoot = join(process.cwd(), '.tmp');
+    mkdirSync(temporaryRoot, { recursive: true });
+    root = realpathSync(mkdtempSync(join(temporaryRoot, 'standalone-shared-mcp-')));
+    projectA = join(root, 'project-a');
+    projectB = join(root, 'project-b');
+    for (const directory of [projectA, projectB]) {
+      mkdirSync(directory);
+      initializeGitFixture(directory, []);
+    }
+  });
+
+  afterEach(async () => {
+    try { await client?.close(); }
+    finally {
+      try { await server?.close(); }
+      finally {
+        vi.restoreAllMocks();
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  async function connect() {
+    server = createTaktMcpServer({}, { toolSet: 'all', allowedProjectRoot: root });
+    client = new Client({ name: 'standalone-inquiry-shared-test', version: '1' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await server.connect(b);
+    await client.connect(a);
+  }
+
+  async function listInquiries(cwd: string) {
+    const result = await client.callTool({ name: 'takt_list_standalone_inquiries', arguments: { cwd } });
+    expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+    const value: Record<string, unknown> = JSON.parse(firstTextContent(result.content));
+    return z.array(standaloneItemSchema).parse(value.inquiries);
+  }
+
+  it('lists, creates and withdraws the inquiries of the project given by cwd, not of the server root', async () => {
+    const ownerB: InquiryOwner = { kind: 'repository', repositoryDirectory: projectB };
+    const seeded = await new StandaloneInquiryStore(configDirectory, ownerB).create({ body: 'プロジェクトBの相談' });
+    await connect();
+
+    expect((await listInquiries(projectB)).map(({ id }) => id)).toEqual([seeded.id]);
+    expect(await listInquiries(projectA)).toEqual([]);
+
+    const askResult = await client.callTool({ name: 'takt_ask_standalone_question',
+      arguments: { cwd: projectA, body: 'プロジェクトAの相談' } });
+    expect(askResult.isError, firstTextContent(askResult.content)).not.toBe(true);
+    const questionId = z.object({ questionId: z.uuid() }).parse(JSON.parse(firstTextContent(askResult.content))).questionId;
+    const ownerA: InquiryOwner = { kind: 'repository', repositoryDirectory: projectA };
+    expect(await new StandaloneInquiryStore(configDirectory, ownerA).get(questionId))
+      .toMatchObject({ id: questionId, status: 'pending', body: 'プロジェクトAの相談' });
+    expect((await listInquiries(projectA)).map(({ id }) => id)).toEqual([questionId]);
+    expect((await listInquiries(projectB)).map(({ id }) => id)).toEqual([seeded.id]);
+
+    const withdrawResult = await client.callTool({ name: 'takt_withdraw_standalone_inquiry',
+      arguments: { cwd: projectB, id: seeded.id, reason: '解決済み' } });
+    expect(withdrawResult.isError, firstTextContent(withdrawResult.content)).not.toBe(true);
+    expect(await listInquiries(projectB)).toEqual([]);
+  });
 });

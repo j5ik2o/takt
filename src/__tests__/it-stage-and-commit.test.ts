@@ -12,6 +12,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -20,6 +21,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { spawn as spawnPty } from 'node-pty';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { stageAndCommit } from '../infra/task/git.js';
@@ -53,7 +56,172 @@ afterEach(() => {
   }
 });
 
+function isFixtureProcessRunning(pidFile: string): boolean {
+  const pid = Number(readFileSync(pidFile, 'utf8'));
+  const state = execFileSync('ps', ['-axo', 'pid=,stat='], { encoding: 'utf8' }).split('\n')
+    .map((line) => line.trim().split(/\s+/u)).find(([value]) => Number(value) === pid)?.[1];
+  return state !== undefined && !state.startsWith('Z');
+}
+
 describe('stageAndCommit', () => {
+  it.skipIf(process.platform === 'win32')('can commit unsigned changes from a terminal without node-pty', async () => {
+    const root = join(import.meta.dirname, '..', '..');
+    const gitModule = pathToFileURL(join(root, 'src/infra/task/git.ts')).href;
+    execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: testDir });
+    writeFileSync(join(testDir, 'unsigned.txt'), 'unsigned content\n');
+    const child = spawnPty(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
+      import { registerHooks } from 'node:module';
+      import { stageAndCommit } from ${JSON.stringify(gitModule)};
+      registerHooks({
+        resolve(specifier, context, next) {
+          if (specifier === 'node-pty') throw Object.assign(new Error('optional add-on absent'), { code: 'ERR_MODULE_NOT_FOUND' });
+          return next(specifier, context);
+        },
+      });
+      await stageAndCommit(${JSON.stringify(testDir)}, 'Unsigned fixture', {}, new AbortController().signal);
+    `], { cwd: root });
+    let output = '';
+    child.onData((chunk) => { output += chunk; });
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        reject(new Error(`Unsigned commit fixture timed out: ${output}`));
+      }, 15_000);
+      child.onExit(({ exitCode, signal }) => {
+        clearTimeout(timer);
+        if (exitCode === 0 && !signal) resolve();
+        else reject(new Error(`Unsigned commit fixture exited (${exitCode}, ${signal}): ${output}`));
+      });
+    });
+    const subject = execFileSync('git', ['log', '-1', '--format=%s'], { cwd: testDir, encoding: 'utf8' });
+    expect(subject.trim()).toBe('Unsigned fixture');
+  });
+
+  it.skipIf(process.platform === 'win32').each(['complete', 'interrupt', 'redirected with a reparented hook child'] as const)(
+    'keeps the controlling terminal for a signed commit (%s)',
+    async (mode) => {
+      const signer = join(testDir, '.git', 'fixture-signer');
+      const signerPid = join(testDir, '.git', 'fixture-signer-pid');
+      const redirected = mode === 'redirected with a reparented hook child';
+      const childPidFile = join(testDir, '.git', 'fixture-hook-child');
+      const redirectedLog = join(testDir, '.git', 'redirected.log');
+      if (redirected) {
+        const helper = join(testDir, '.git', 'fixture-hook-helper.cjs');
+        writeFileSync(helper, `
+const { spawn } = require('node:child_process');
+const { writeFileSync } = require('node:fs');
+const code = "process.on('SIGHUP', () => undefined); process.on('SIGINT', () => undefined); "
+  + "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => undefined, 1000);";
+const child = spawn(process.execPath, ['-e', code, process.env.TAKT_TEST_HOOK_CHILD], { stdio: 'ignore' });
+writeFileSync(process.env.TAKT_TEST_HOOK_CHILD + '-parent', String(process.pid));
+child.unref();
+`);
+        const hook = join(testDir, '.git', 'hooks', 'pre-commit');
+        mkdirSync(dirname(hook), { recursive: true });
+        writeFileSync(hook, `#!/bin/sh
+"$TAKT_TEST_NODE" "$TAKT_TEST_HOOK_HELPER" || exit 1
+for attempt in 1 2 3 4 5 6 7 8 9 10; do
+  test -s "$TAKT_TEST_HOOK_CHILD" && exit 0
+  sleep 0.1
+done
+exit 1
+`);
+        chmodSync(hook, 0o755);
+      }
+      writeFileSync(signer, `#!/bin/sh
+echo "$$" > "$TAKT_TEST_SIGNER_PID"
+test -c "$GPG_TTY" || exit 1
+printf 'Fixture signer ready\\n' >/dev/tty || exit 1
+IFS= read -r answer </dev/tty || exit 1
+test "$answer" = fixture || exit 1
+cat >/dev/null
+printf '[GNUPG:] SIG_CREATED D 1 2 00 0 fixture\\n' >&2
+printf '%s\\n' '-----BEGIN PGP SIGNATURE-----' 'fixture' '-----END PGP SIGNATURE-----'
+`);
+      chmodSync(signer, 0o755);
+      const git = (args: string[]): string => execFileSync('git', args, { cwd: testDir, encoding: 'utf8' });
+      git(['config', 'commit.gpgsign', 'true']);
+      git(['config', 'gpg.format', 'openpgp']);
+      git(['config', 'gpg.program', signer]);
+      writeFileSync(join(testDir, 'signed.txt'), 'signed content\n');
+      const root = join(import.meta.dirname, '..', '..');
+      const source = (path: string): string => JSON.stringify(pathToFileURL(join(root, 'src', 'infra', 'task', path)).href);
+      const args = ['--import', 'tsx', '--input-type=module', '-e', `
+        import { existsSync, readFileSync } from 'node:fs';
+        import { execFileSync } from 'node:child_process';
+        import { stageAndCommit } from ${source('git.ts')};
+        import { registerCacciaCloneGit } from ${source('caccia-git-processes.ts')};
+        const clone = ${JSON.stringify(testDir)};
+        const release = registerCacciaCloneGit(clone);
+        const controller = new AbortController();
+        process.once('SIGINT', () => controller.abort());
+        try {
+          const commit = await stageAndCommit(clone, 'Signed fixture', { allowGitHooks: ${redirected} }, controller.signal);
+          if (${redirected}) {
+            if ([process.stdin, process.stdout, process.stderr].some((stream) => stream.isTTY)) {
+              throw new Error('Fixture expected redirected standard streams');
+            }
+            const file = process.env.TAKT_TEST_HOOK_CHILD;
+            if (!existsSync(file)) throw new Error('Hook did not start a child');
+            const pid = Number(readFileSync(file, 'utf8'));
+            const parent = Number(readFileSync(file + '-parent', 'utf8'));
+            const [ppid, state] = execFileSync('ps', ['-o', 'ppid=,stat=', '-p', String(pid)],
+              { encoding: 'utf8' }).trim().split(/\\s+/);
+            if (!state || state.startsWith('Z') || Number(ppid) === parent) {
+              throw new Error('Hook child must survive and be reparented before cleanup');
+            }
+          }
+          console.log('fixture commit ' + commit);
+        } catch (error) {
+          if (!controller.signal.aborted) throw error;
+          console.log('fixture interrupted');
+        } finally {
+          release();
+        }
+      `];
+      const child = spawnPty(redirected ? '/bin/sh' : process.execPath,
+        // Keep the outer PTY's slave open on Linux while redirecting all three standard fds.
+        redirected ? ['-c', 'exec "$@" 3<>/dev/tty </dev/null >"$TAKT_TEST_REDIRECT_LOG" 2>&1', 'fixture', process.execPath, ...args] : args, {
+        cwd: root,
+        env: { ...process.env, GPG_TTY: '/not-the-inner-pty', TAKT_TEST_SIGNER_PID: signerPid, TAKT_TEST_NODE: process.execPath,
+          TAKT_TEST_HOOK_HELPER: join(testDir, '.git', 'fixture-hook-helper.cjs'), TAKT_TEST_HOOK_CHILD: childPidFile,
+          TAKT_TEST_REDIRECT_LOG: redirectedLog },
+      });
+      let output = '';
+      let responded = false;
+      const listener = child.onData((chunk) => {
+        output += chunk;
+        if (!responded && output.includes('Fixture signer ready')) {
+          responded = true;
+          child.write(mode === 'interrupt' ? '\x03' : 'fixture\r');
+        }
+      });
+      const exit = await new Promise<{ exitCode: number; signal?: number }>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          child.kill('SIGKILL');
+          reject(new Error(`Signed commit fixture timed out: ${output}`));
+        }, 15_000);
+        child.onExit((event) => {
+          clearTimeout(timer);
+          resolve(event);
+        });
+      }).finally(() => listener.dispose());
+      if (redirected && existsSync(redirectedLog)) output += readFileSync(redirectedLog, 'utf8');
+      expect(exit.signal || 0, output).toBe(0);
+      expect(exit.exitCode, output).toBe(0);
+      expect(responded, output).toBe(true);
+      if (mode !== 'interrupt') {
+        expect(git(['cat-file', '-p', 'HEAD'])).toContain('gpgsig -----BEGIN PGP SIGNATURE-----');
+        expect(output).toMatch(/fixture commit [0-9a-f]+/u);
+        if (redirected) expect(isFixtureProcessRunning(childPidFile)).toBe(false);
+      } else {
+        expect(output).toContain('fixture interrupted');
+        expect(git(['log', '-1', '--format=%s']).trim()).toBe('Initial commit');
+        expect(isFixtureProcessRunning(signerPid)).toBe(false);
+      }
+    },
+  );
+
   it('should not commit gitignored .takt/runs/ files', async () => {
     // Setup: .takt/ is gitignored
     writeFileSync(join(testDir, '.gitignore'), '.takt/\n');

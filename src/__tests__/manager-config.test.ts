@@ -6,6 +6,27 @@ import { resolveManagerConfig } from '../infra/config/managerConfig.js';
 import { resolveDirectorConfig } from '../infra/config/directorConfig.js';
 import { GlobalConfigSchema, ProjectConfigSchema } from '../core/models/config-schemas.js';
 beforeEach(() => { vi.resetAllMocks(); doubles.project.mockReturnValue({}); doubles.global.mockReturnValue({}); });
+it.each([true, false])('accepts verify_on_register=%s at both scopes', (verify_on_register) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.parse({ manager: { verify_on_register } }).manager).toHaveProperty('verify_on_register', verify_on_register);
+  }
+});
+it.each([null, 'true', 1])('rejects invalid verify_on_register=%j at both scopes', (verify_on_register) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.safeParse({ manager: { verify_on_register } }).success).toBe(false);
+  }
+});
+it.each([
+  { global: undefined, project: undefined, expected: false },
+  { global: true, project: undefined, expected: true },
+  { global: false, project: undefined, expected: false },
+  { global: true, project: false, expected: false },
+  { global: false, project: true, expected: true },
+])('resolves registration verification with explicit project precedence: %j', ({ global, project, expected }) => {
+  doubles.global.mockReturnValue({ manager: { verifyOnRegister: global } });
+  doubles.project.mockReturnValue({ manager: { verifyOnRegister: project } });
+  expect(resolveManagerConfig('/project')).toHaveProperty('verifyOnRegister', expected);
+});
 it.each([
   { global: ['default', { simple: 'Small changes' }], project: undefined, expected: ['default', { simple: 'Small changes' }] },
   { global: ['default'], project: ['simple'], expected: ['simple'] },
@@ -253,4 +274,21 @@ it('serializes manager patrol configuration while leaving director patrol disabl
   expect(parsed.manager).toMatchObject({ auto_run: false, preserve_goal_worktree: true });
   expect(parsed.manager).toHaveProperty('patrol_interval', 1800);
   expect(parsed.director).not.toHaveProperty('patrol_interval');
+});
+it.each([2000, 1, 2147483647])('accepts refresh_interval_ms=%s at both scopes', (refresh_interval_ms) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.parse({ manager: { refresh_interval_ms } }).manager?.refresh_interval_ms).toBe(refresh_interval_ms);
+  }
+});
+it.each([0, -100, 1.5, 2147483648, '2000', null])('rejects invalid refresh_interval_ms=%j at both scopes', (refresh_interval_ms) => {
+  for (const schema of [ProjectConfigSchema, GlobalConfigSchema]) {
+    expect(schema.safeParse({ manager: { refresh_interval_ms } }).success).toBe(false);
+  }
+});
+it('resolves the manager refresh interval with project before global and a 500ms default', () => {
+  expect(resolveManagerConfig('/project').refreshIntervalMs).toBe(500);
+  doubles.global.mockReturnValue({ manager: { refreshIntervalMs: 2000 } });
+  expect(resolveManagerConfig('/project').refreshIntervalMs).toBe(2000);
+  doubles.project.mockReturnValue({ manager: { refreshIntervalMs: 3000 } });
+  expect(resolveManagerConfig('/project').refreshIntervalMs).toBe(3000);
 });

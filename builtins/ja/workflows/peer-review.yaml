@@ -136,6 +136,12 @@ loop_monitors:
           next: reviewers
         - condition: 修正方針の前提を変える必要があり、再計画が実行可能である
           next: remediation
+        - condition: >-
+            子の修正ループ（development-remediation-dynamic などの remediation_workflow）が子 workflow_call として実行され、
+            その内側の step がこのループの判定から見えない場合。子のループ内で同じ原因と証拠が結果を変えずに繰り返され、
+            このループから見て新しい検証結果・知見・関連差分も増えていないなら、再計画（remediation）を選ばず、
+            このループを続けない選択肢を選んでください。
+          next: ABORT
         - condition: 要件を満たす実現可能な打開手段がない
           next: ABORT
   - cycle:
@@ -161,6 +167,12 @@ loop_monitors:
           next: reviewers
         - condition: 修正方針の前提を変える必要があり、再計画が実行可能である
           next: remediation
+        - condition: >-
+            子の修正ループ（development-remediation-dynamic などの remediation_workflow）が子 workflow_call として実行され、
+            その内側の step がこのループの判定から見えない場合。子のループ内で同じ原因と証拠が結果を変えずに繰り返され、
+            このループから見て新しい検証結果・知見・関連差分も増えていないなら、再計画（remediation）を選ばず、
+            このループを続けない選択肢を選んでください。
+          next: ABORT
         - condition: 要件を満たす実現可能な打開手段がない
           next: ABORT
 steps:

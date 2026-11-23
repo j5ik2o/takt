@@ -1,6 +1,6 @@
 import * as privateFiles from '../shared/utils/private-file.js';
-import { mkdirSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { GoalStore } from '../infra/goals/store.js';
@@ -52,7 +52,7 @@ it('restores Epic definitions and retained history larger than 16 MiB saved by t
     changes: { objective: `${objective} updated` }, reason: 'Retain the previous definition' });
   expect(statSync(path).size).toBeGreaterThan(16 * 1024 * 1024);
   const identity = { kind: 'workspace' as const, workspaceId: workspace.id };
-  const project = () => collect(conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), identity, () => false));
+  const project = () => collect(conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), identity));
   for (const _attempt of [1, 2]) {
     const items = await project();
     expect(items.filter((item) => item.kind === 'epic')).toEqual([
@@ -70,7 +70,7 @@ it('restores Epic definitions and retained history larger than 16 MiB saved by t
   expect(businessContext).not.toContain(updated.objective);
   const errors = vi.fn();
   const conversations = new DaemonConversations(new ConversationStateStore(directory), new DaemonRouting(directory),
-    new DaemonNotifications(directory), async () => {}, errors);
+    new DaemonNotifications(directory), async () => {}, errors, { readTurns: async () => [] });
   const source = new FileDaemonWatchSource(conversations, async () => {}, errors);
   const epicReads = vi.spyOn(DaemonEpicFiles.prototype, 'get');
   try {
@@ -89,7 +89,28 @@ it('restores Epic definitions and retained history larger than 16 MiB saved by t
   expect(await getEpic({ ...owner, epicId: original.id })).toEqual(updated);
 });
 
-it('projects each Epic on demand and preserves cancellation and later read failures', async () => {
+it('puts only open goals in the turn preamble and counts finished goals without their contents', async () => {
+  const open = { ...goalRecord(), objective: 'Open goal objective' };
+  const paused: Goal = { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000001', objective: 'Paused goal objective', executionStatus: 'paused' };
+  const completed: Goal = { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000002', objective: 'Completed goal objective', status: 'completed',
+    completion: { goalBranch: open.branch, goalSha: 'a'.repeat(40), targetBranch: 'main', targetSha: 'b'.repeat(40), summary: 'Done', instructions: [],
+      changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false } } };
+  const aborted: Goal = { ...goalRecord(), id: '650e8400-e29b-41d4-a716-000000000003', objective: 'Aborted goal objective', executionStatus: 'aborted' };
+  for (const goal of [open, paused, completed, aborted]) save(goal);
+
+  const businessContext = await buildTurnBusinessContext(assignment(), null, directory);
+
+  const memory = JSON.parse(businessContext).goals;
+  expect(memory.repositories).toEqual([expect.objectContaining({ repositoryDirectory: repository, goalCount: 2, finishedGoalCount: 2 })]);
+  expect(memory.repositories[0].goals.map((goal: { id: string }) => goal.id)).toEqual([open.id, paused.id]);
+  expect(memory.truncated).toBe(false);
+  for (const goal of [completed, aborted]) {
+    expect(businessContext).not.toContain(goal.id);
+    expect(businessContext).not.toContain(goal.objective);
+  }
+});
+
+it('projects each Epic on demand and preserves later read failures', async () => {
   const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'Epics', repositoryDirectories: [] });
   const records = [epicRecord(), { ...epicRecord(), id: secondGoalId }]
     .map((epic) => ({ ...epic, workspaceId: workspace.id })).sort((a, b) => a.id.localeCompare(b.id));
@@ -97,7 +118,7 @@ it('projects each Epic on demand and preserves cancellation and later read failu
   for (const record of records) await store.create(record);
   const get = vi.spyOn(DaemonEpicFiles.prototype, 'get');
   const identity = { kind: 'workspace' as const, workspaceId: workspace.id };
-  const read = () => conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), identity, () => false);
+  const read = () => conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), identity);
   const iterator = read();
   expect((await iterator.next()).value).toMatchObject({ kind: 'assignment' });
   expect(get).not.toHaveBeenCalled();
@@ -107,14 +128,6 @@ it('projects each Epic on demand and preserves cancellation and later read failu
   expect(get).toHaveBeenCalledTimes(2);
   expect((await iterator.next()).done).toBe(true);
   writeFileSync(join(directory, 'workspaces', workspace.id, 'epics', records[1]!.id, 'epic.json'), '{');
-  let cancelled = false;
-  const stopped = conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), identity, () => cancelled);
-  await stopped.next();
-  await stopped.next();
-  get.mockClear();
-  cancelled = true;
-  expect((await stopped.next()).done).toBe(true);
-  expect(get).not.toHaveBeenCalled();
   const failed = read();
   await failed.next();
   await failed.next();
@@ -133,7 +146,7 @@ it('reports corrupt tasks while projecting goals and inquiries with awaiting-mer
   const tasksPath = join(repository, '.takt', 'tasks.yaml');
   writeFileSync(tasksPath, 'tasks: [');
 
-  const items = await collect(conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), assignment(), () => false));
+  const items = await collect(conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), assignment()));
 
   expect(items.filter((item) => item.kind === 'goal')).toEqual([active, waiting].map((goal) => ({ kind: 'goal', goal: {
     id: goal.id, objective: goal.objective, status: goal.status, executionStatus: goal.executionStatus,
@@ -144,6 +157,23 @@ it('reports corrupt tasks while projecting goals and inquiries with awaiting-mer
   expect(items.filter((item) => item.kind === 'display_event')).toEqual([{ kind: 'display_event', event: {
     id: JSON.stringify(['diagnostic', tasksPath]), message: expect.stringContaining(tasksPath),
   } }]);
+});
+
+it.each(['the goal directory', 'goal.json'] as const)('skips a goal whose %s disappears after listing without a diagnostic', async (target) => {
+  const kept = goalRecord();
+  const deleted = { ...goalRecord(), id: '650e8400-e29b-41d4-a716-446655440000' };
+  save(kept); save(deleted);
+  const files = new DaemonDisplayFiles();
+  const read = files.goal.bind(files);
+  vi.spyOn(files, 'goal').mockImplementation(async (path) => {
+    if (basename(dirname(path)) === deleted.id) rmSync(target === 'goal.json' ? path : dirname(path), { recursive: true });
+    return read(path);
+  });
+
+  const items = await collect(conversationProjection(new DaemonRouting(directory), files, assignment()));
+
+  expect(items.filter((item) => item.kind === 'goal').map((item) => item.goal.id)).toEqual([kept.id]);
+  expect(items.filter((item) => item.kind === 'display_event')).toEqual([]);
 });
 
 it('reads only the demanded goal payload and reports corruption discovered before the next pull', async () => {

@@ -23,7 +23,7 @@ import { ShutdownManager } from './shutdownManager.js';
 import { forceExitAfterOpenCodeCleanup } from './forceShutdown.js';
 import { isInputWaiting } from './inputWait.js';
 import type { TaskExecutionOptions } from './types.js';
-import { claimTasksWithGoalCompletions, TaskClaimLockUnavailableError } from './claimTasks.js';
+import { claimTasksWithGoalCompletions, isClaimLockTimeoutFailure, TaskClaimLockUnavailableError } from './claimTasks.js';
 import { checkQueuedTaskProviders, checkPendingTaskProviders } from './providerPreflight.js';
 
 const log = createLogger('worker-pool');
@@ -145,6 +145,7 @@ export async function runWithWorkerPool(
   const colorCounter = { value: 0 };
   let preparationFailure: { error: unknown } | undefined;
   let claimRetryAt: number | undefined;
+  let claimRetryCode: TaskClaimLockUnavailableError['code'] | undefined;
 
   const reportPreparationFailure = (error: unknown): void => {
     preparationFailure = { error };
@@ -162,25 +163,33 @@ export async function runWithWorkerPool(
       if (claimRetryAt !== undefined) {
         if (attempted) {
           claimRetryAt = undefined;
-          info('Task claiming resumed after disk space became available.');
-          log.info('Task claiming resumed after ENOSPC');
+          if (claimRetryCode === 'TIMEOUT') {
+            info('Task claiming resumed after the task store lock became available.');
+            log.info('Task claiming resumed after lock timeout');
+          } else {
+            info('Task claiming resumed after disk space became available.');
+            log.info('Task claiming resumed after ENOSPC');
+          }
         } else {
           claimRetryAt = Date.now() + CLAIM_RETRY_INTERVAL_MS;
         }
       }
     } catch (error) {
       if (schedulingSignal.aborted && error === schedulingSignal.reason) return;
-      if (error instanceof TaskClaimLockUnavailableError) {
+      const code = error instanceof TaskClaimLockUnavailableError
+        ? error.code : isClaimLockTimeoutFailure(error) ? 'TIMEOUT' : undefined;
+      if (code !== undefined) {
         if (claimRetryAt === undefined) {
-          if (error.code === 'TIMEOUT') {
+          if (code === 'TIMEOUT') {
             warn('Cannot claim pending tasks because the task store lock is held. Waiting to retry.');
-            log.warn('Task claim lock acquisition timed out; waiting to retry', { error: sanitizeSensitiveText(error.message) });
+            log.warn('Task claim lock acquisition timed out; waiting to retry', { error: sanitizeSensitiveText(getErrorMessage(error)) });
           } else {
             warn('Cannot claim pending tasks because the disk is full. Waiting to retry.');
             log.warn('Task claim lock creation failed with ENOSPC; waiting to retry');
           }
         }
         claimRetryAt = Date.now() + CLAIM_RETRY_INTERVAL_MS;
+        claimRetryCode = code;
       } else {
         reportPreparationFailure(error);
       }

@@ -19,7 +19,7 @@ const CLASSIFICATIONS = [
   },
   {
     tier: 'active',
-    reason: 'manager の作業分割・同時投入・結合後の確認・作業の制約の保持と引き継ぎ・人の対応が必要な場合の停止を86ケース・日英172入力（再生82ケース・164入力、SDK実行4ケース・8入力）で測る（Python データ処理と Web アプリを含む）',
+    reason: 'manager の作業分割・同時投入・結合後の確認・作業の制約の保持と引き継ぎ・人の対応が必要な場合の停止を87ケース・日英174入力（再生83ケース・166入力、SDK実行4ケース・8入力）で測る（Python データ処理と Web アプリを含む）',
     suites: ['manager-work-split'],
   },
   {
@@ -110,6 +110,7 @@ const CLASSIFICATIONS = [
       'fix-verifier-state-routing',
       'fix-verifier-model-matrix',
       'fix-verifier-routing-model-matrix',
+      'fix-verifier-routing-codex-spark',
       'fix-verification-scope',
       'fix-verification-current-diff-regression',
       'fix-verification-preserved-condition',
@@ -266,7 +267,7 @@ const EXECUTION_OVERRIDES = {
   },
   'manager-work-split': {
     defaultEligible: false, credentials: ['claude', 'codex'], cost: 'high',
-    reason: 'Sol Low、Opus 5、Terra Medium、Luna Max で86ケース・日英172入力（再生82ケース・164入力、SDK実行4ケース・8入力）の操作選択・引数・一時停止後の再開・人への質問・環境差による確認失敗への run の判断の尊重・権限審査拒否後の判断を比較する明示選択の評価',
+    reason: 'Sol Low、Opus 5、Terra Medium、Luna Max で87ケース・日英174入力（再生83ケース・166入力、SDK実行4ケース・8入力）の操作選択・引数・一時停止後の再開・人への質問・環境差による確認失敗への run の判断の尊重・権限審査拒否後の判断を比較する明示選択の評価',
   },
   'phase-awareness': {
     defaultEligible: false, credentials: ['codex', 'claude'], cost: 'high',
@@ -574,6 +575,10 @@ const EXECUTION_OVERRIDES = {
     defaultEligible: false, credentials: ['claude', 'codex', 'opencode'], cost: 'high',
     reason: 'Claude・Codex・opencode の複数モデル比較を要する',
   },
+  'fix-verifier-routing-codex-spark': {
+    defaultEligible: false, credentials: ['codex'], cost: 'standard',
+    reason: 'ローカルの codex-spark ランチャーと接続環境を要する',
+  },
   'review-impact-path-coverage': {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
@@ -775,6 +780,7 @@ const PREPARE_TARGET_OVERRIDES = {
   'remediation-evidence': [],
   'fix-verifier-model-matrix': ['fix-verifier-state-closure'],
   'fix-verifier-routing-model-matrix': ['fix-verifier-state-routing'],
+  'fix-verifier-routing-codex-spark': ['fix-verifier-state-routing'],
   'completion-scope-routing': [],
   'evidence-judgment': [],
   coding: ['coding-review'],

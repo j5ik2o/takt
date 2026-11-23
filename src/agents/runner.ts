@@ -24,7 +24,10 @@ import {
   providerSupportsStrictMcpConfig,
 } from '../infra/providers/provider-capabilities.js';
 import type { AgentResponse, CustomAgentConfig } from '../core/models/index.js';
+import type { ProviderUsageSnapshot } from '../core/models/response.js';
+import { USAGE_MISSING_REASONS } from '../core/logging/contracts.js';
 import { resolveAgentProviderModel } from '../core/workflow/provider-resolution.js';
+import { composeRecoveryInstruction } from '../core/workflow/progress-notes.js';
 import { mergeGlobalPermissionProfiles, resolveStepPermissionMode } from '../core/workflow/permission-profile-resolution.js';
 import { createLogger, getErrorMessage } from '../shared/utils/index.js';
 import type { RunAgentOptions } from './types.js';
@@ -38,10 +41,49 @@ import {
 } from '../infra/providers/mcp/index.js';
 import { type ResolvedMcpServers } from '../infra/config/runtime-provider/mcp-assignment.js';
 import { redactMcpServerForLog, buildMcpServerSetIdentity } from '../infra/config/runtime-provider/mcp-schema.js';
+import { startProgressNotes } from '../infra/progress-notes/session.js';
+import type { StreamEvent } from '../shared/types/provider.js';
 
 export type { RunAgentOptions, StreamCallback } from './types.js';
 
 const log = createLogger('runner');
+const MAX_COMPACTION_RECOVERIES_WITHOUT_PROGRESS = 3;
+
+function withCompactionUsage(response: AgentResponse, usages: readonly (ProviderUsageSnapshot | undefined)[]): AgentResponse {
+  if (usages.length === 1) return response;
+  const known = usages.filter((usage): usage is ProviderUsageSnapshot => usage !== undefined);
+  if (known.length === 0) return response;
+  const complete = known.length === usages.length && known.every((usage) =>
+    !usage.usageMissing
+    && Number.isFinite(usage.inputTokens)
+    && Number.isFinite(usage.outputTokens)
+    && Number.isFinite(usage.totalTokens));
+  if (!complete) {
+    const reason = known.find((usage) => usage.usageMissing)?.reason ?? USAGE_MISSING_REASONS.NOT_AVAILABLE;
+    return { ...response, providerUsage: { usageMissing: true, reason } };
+  }
+  const sum = (field: 'inputTokens' | 'outputTokens' | 'totalTokens'): number =>
+    known.reduce((total, usage) => total + (usage[field] ?? 0), 0);
+  const sumOptional = (field: 'cachedInputTokens' | 'cacheCreationInputTokens' | 'cacheReadInputTokens'): number | undefined =>
+    known.every((usage) => Number.isFinite(usage[field]))
+      ? known.reduce((total, usage) => total + usage[field]!, 0)
+      : undefined;
+  const cachedInputTokens = sumOptional('cachedInputTokens');
+  const cacheCreationInputTokens = sumOptional('cacheCreationInputTokens');
+  const cacheReadInputTokens = sumOptional('cacheReadInputTokens');
+  return {
+    ...response,
+    providerUsage: {
+      usageMissing: false,
+      inputTokens: sum('inputTokens'),
+      outputTokens: sum('outputTokens'),
+      totalTokens: sum('totalTokens'),
+      ...(cachedInputTokens === undefined ? {} : { cachedInputTokens }),
+      ...(cacheCreationInputTokens === undefined ? {} : { cacheCreationInputTokens }),
+      ...(cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens }),
+    },
+  };
+}
 type RunnerHandoffOptions = RunAgentOptions;
 type AgentExecutionResolution = {
   readonly provider: ProviderType;
@@ -215,6 +257,9 @@ export class AgentRunner {
       sessionId: options.sessionId,
       internalAgentIsolation: options.internalAgentIsolation,
       executionPhase: options.executionPhase,
+      ...(options.workflowMeta?.context === undefined ? {} : {
+        compactionAssignment: options.workflowMeta.context.assignment.stepName,
+      }),
       allowedTools: options.allowedTools,
       mcpServers: options.mcpServers,
       ...(preparedMcp !== undefined ? { preparedMcp } : {}),
@@ -241,64 +286,110 @@ export class AgentRunner {
     agent: ProviderAgent,
     task: string,
     options: ProviderCallOptions,
+    recorder: RunAgentOptions['progressNotesRecorder'],
   ): Promise<AgentResponse> {
     const recoverFromCompaction = agent.recoverFromCompaction;
-    if (options.executionPhase !== 1 || recoverFromCompaction === undefined) {
-      return agent.call(task, options);
+    if (options.executionPhase !== 1 || recoverFromCompaction === undefined || recorder === undefined) {
+      const observedOptions = recorder === undefined ? options : {
+        ...options,
+        onStream: (event: Parameters<NonNullable<ProviderCallOptions['onStream']>>[0]) => {
+          recorder.observe(event);
+          options.onStream?.(event);
+        },
+      };
+      const response = await agent.call(task, observedOptions);
+      recorder?.finish(response);
+      return response;
     }
 
-    const maxCompactionRecoveries = 3;
-    let recoveryCount = 0;
+    let recovering = false;
+    let recoveriesWithoutProgress = 0;
     let currentOptions = options;
+    const usages: (ProviderUsageSnapshot | undefined)[] = [];
     while (true) {
       let compactionDetected = false;
       let compactionSessionId: string | undefined;
+      let resultEvent: StreamEvent | undefined;
+      let calledTool = false;
       const callOptions = {
         ...currentOptions,
         onStream: (event: Parameters<NonNullable<ProviderCallOptions['onStream']>>[0]) => {
+          recorder.observe(event);
+          if (event.type === 'tool_use') {
+            calledTool = true;
+          }
           if (event.type === 'context_compacted') {
             compactionDetected = true;
             compactionSessionId = event.data.sessionId;
           }
-          if (
-            compactionDetected
-            && event.type === 'result'
-            && event.data.success
-            && (compactionSessionId === undefined || event.data.sessionId === compactionSessionId)
-          ) {
+          if (event.type === 'result') {
+            resultEvent = event;
             return;
           }
           currentOptions.onStream?.(event);
         },
       };
-      const response = recoveryCount === 0
-        ? await agent.call(task, callOptions)
-        : await recoverFromCompaction.call(agent, task, callOptions);
+      const instruction = recovering ? recorder.recoveryInstruction() : task;
+      const response = recovering
+        ? await recoverFromCompaction.call(agent, instruction, callOptions)
+        : await agent.call(instruction, callOptions);
+      recorder.finish(response);
+      usages.push(response.providerUsage);
       const responseSessionId = response.sessionId ?? currentOptions.sessionId;
       const compactionMatchesResponse = compactionSessionId === undefined
         || compactionSessionId === responseSessionId;
-      if (!compactionDetected || !compactionMatchesResponse || response.status !== 'done') {
-        return response;
+      if (response.status !== 'done' || !compactionDetected || !compactionMatchesResponse) {
+        if (resultEvent !== undefined) currentOptions.onStream?.(resultEvent);
+        return withCompactionUsage(response, usages);
+      }
+      if (recovering) {
+        recoveriesWithoutProgress = calledTool ? 0 : recoveriesWithoutProgress + 1;
       }
 
-      currentOptions = {
-        ...currentOptions,
-        sessionId: responseSessionId,
-      };
-      if (recoveryCount === maxCompactionRecoveries) {
+      let needsRecovery: boolean = true;
+      if (agent.assessCompactedResponse !== undefined && responseSessionId !== undefined) {
+        let assessment: Awaited<ReturnType<NonNullable<ProviderAgent['assessCompactedResponse']>>>;
+        try {
+          assessment = await agent.assessCompactedResponse(instruction, response, callOptions);
+        } catch (cause) {
+          assessment = {
+            decision: 'error',
+            error: getErrorMessage(cause),
+            failureCategory: currentOptions.abortSignal?.aborted ? 'external_abort' : 'provider_error',
+          };
+        }
+        usages.push(assessment.usage);
+        if (assessment.decision === 'error') {
+          const error = assessment.error ?? 'Compaction completion assessment failed';
+          const failureCategory = assessment.failureCategory ?? 'provider_error';
+          currentOptions.onStream?.({
+            type: 'result',
+            data: { result: error, sessionId: responseSessionId ?? 'unknown', success: false, error, failureCategory },
+          });
+          return withCompactionUsage({ ...response, status: 'error', content: error, error, failureCategory }, usages);
+        }
+        needsRecovery = assessment.decision === 'needs_recovery';
+      }
+      if (!needsRecovery) {
+        if (resultEvent !== undefined) currentOptions.onStream?.(resultEvent);
+        return withCompactionUsage(response, usages);
+      }
+      if (recoveriesWithoutProgress === MAX_COMPACTION_RECOVERIES_WITHOUT_PROGRESS) {
         const error = 'Provider compaction recovery limit reached';
         currentOptions.onStream?.({
           type: 'result',
           data: {
             result: error,
-            sessionId: currentOptions.sessionId ?? 'unknown',
+            sessionId: responseSessionId ?? 'unknown',
             success: false,
             error,
+            failureCategory: 'provider_error',
           },
         });
-        return { ...response, status: 'error', error };
+        return withCompactionUsage({ ...response, status: 'error', content: error, error, failureCategory: 'provider_error' }, usages);
       }
-      recoveryCount += 1;
+      currentOptions = { ...currentOptions, sessionId: responseSessionId };
+      recovering = true;
     }
   }
 
@@ -403,7 +494,7 @@ export class AgentRunner {
       });
 
       options.onDispatch?.(resolution.permissionMode);
-      return await AgentRunner.callAgent(agent, task, callOptions);
+      return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
     } finally {
       await AgentRunner.disposePreparedMcp(preparedMcp);
     }
@@ -464,7 +555,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: options.internalAgentName ?? 'takt-internal', systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await AgentRunner.callAgent(agent, task, callOptions);
+        return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
       }
 
       if (options.personaPath) {
@@ -483,7 +574,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: personaName, systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await AgentRunner.callAgent(agent, task, callOptions);
+        return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
       }
 
       if (personaSpec) {
@@ -507,7 +598,7 @@ export class AgentRunner {
         });
         const agent = setupAgent({ name: personaName, systemPrompt });
         options.onDispatch?.(resolution.permissionMode);
-        return await AgentRunner.callAgent(agent, task, callOptions);
+        return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
       }
 
       const systemPrompt = buildWrappedSystemPrompt('', {
@@ -518,12 +609,9 @@ export class AgentRunner {
         systemPrompt,
         userInstruction: task,
       });
-      const agentSetup = systemPrompt
-        ? { name: personaName, systemPrompt }
-        : { name: personaName };
-      const agent = setupAgent(agentSetup);
+      const agent = setupAgent({ name: personaName, systemPrompt });
       options.onDispatch?.(resolution.permissionMode);
-      return await AgentRunner.callAgent(agent, task, callOptions);
+      return await AgentRunner.callAgent(agent, task, callOptions, options.progressNotesRecorder);
     } finally {
       await AgentRunner.disposePreparedMcp(preparedMcp);
     }
@@ -623,5 +711,27 @@ export async function runAgent(
 ): Promise<AgentResponse> {
   // Provider dispatch is an attempt boundary even when the provider emits no stream events.
   options.onActivity?.();
-  return defaultRunner.run(personaSpec, task, options);
+  if (options.executionPhase !== 1 || options.progressNotes === undefined) {
+    return defaultRunner.run(personaSpec, task, options);
+  }
+  const originalInstruction = options.progressNotesInstruction ?? task;
+  const recoveryInstruction = options.progressNotesRecoveryInstruction
+    ?? composeRecoveryInstruction(originalInstruction, task);
+  const requestInstruction = options.sessionId === undefined ? recoveryInstruction : task;
+  // Storage availability must not change the step's compaction recovery eligibility: without notes,
+  // recovery resends the original instruction and the agent checks the current state.
+  // The same language as the system prompt's progress notes guidance (buildWrappedSystemPrompt).
+  const notes = await startProgressNotes(options.cwd, options.progressNotes, originalInstruction, options.language ?? 'en');
+  try {
+    return await defaultRunner.run(personaSpec, notes.instruction(requestInstruction), {
+      ...options,
+      progressNotesRecorder: {
+        observe: notes.observe,
+        finish: notes.finish,
+        recoveryInstruction: () => notes.instruction(recoveryInstruction),
+      },
+    });
+  } finally {
+    notes.flush();
+  }
 }

@@ -5,6 +5,8 @@
 import { execFileSync } from 'node:child_process';
 import { createLogger } from '../../shared/utils/index.js';
 import { buildSafeGitEnvironment } from './git-environment.js';
+import { runGitCommandAbortable } from './clone-exec.js';
+import { tryCacciaTerminalCommit } from './caccia-git-terminal.js';
 import {
   toLocalBranchRef,
   toPullRequestBaseRef,
@@ -21,9 +23,10 @@ export interface StageAndCommitOptions {
   allowGitFilters?: boolean;
 }
 
-export function getCurrentBranch(cwd: string): string {
+export function getCurrentBranch(cwd: string, env?: NodeJS.ProcessEnv): string {
   return execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
     cwd,
+    env,
     encoding: 'utf-8',
     stdio: 'pipe',
   }).trim();
@@ -36,17 +39,16 @@ export async function stageAndCommit(
   cwd: string,
   message: string,
   options: StageAndCommitOptions = {},
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
-  const env = await buildSafeGitEnvironment(cwd, options);
+  const env = await buildSafeGitEnvironment(cwd, options, signal);
+  const git = signal === undefined
+    ? (args: string[]) => execFileSync('git', args, { cwd, stdio: 'pipe', encoding: 'utf-8', env })
+    : async (args: string[]) => (await runGitCommandAbortable(cwd, args, signal, env)).stdout;
 
-  execFileSync('git', ['add', '-A'], { cwd, stdio: 'pipe', env });
+  await git(['add', '-A']);
 
-  const stagedChanges = execFileSync('git', ['diff', '--cached', '--name-only'], {
-    cwd,
-    stdio: 'pipe',
-    encoding: 'utf-8',
-    env,
-  });
+  const stagedChanges = await git(['diff', '--cached', '--name-only']);
 
   if (!stagedChanges.trim()) {
     return undefined;
@@ -56,14 +58,10 @@ export async function stageAndCommit(
     ? ['commit', '-m', message]
     : ['commit', '--no-verify', '-m', message];
 
-  execFileSync('git', commitArgs, { cwd, stdio: 'pipe', env });
-
-  return execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
-    cwd,
-    stdio: 'pipe',
-    encoding: 'utf-8',
-    env,
-  }).trim();
+  if (signal === undefined || !await tryCacciaTerminalCommit(cwd, commitArgs, env, signal)) {
+    await git(commitArgs);
+  }
+  return (await git(['rev-parse', '--short', 'HEAD'])).trim();
 }
 
 /**

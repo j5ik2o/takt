@@ -225,7 +225,7 @@ it.each(['claude', 'claude-sdk'] as const)('auto-approves manager MCP tools with
     assignment: undefined })).toMatchObject(structured);
   const sdk = queryMock.mock.calls[0]![0].options;
   expect(sdk.allowedTools).toEqual([
-    ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal',
+    ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal', 'takt_finish_goal',
   ].map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`));
   expect(sdk.tools).toBeUndefined();
   expect(sdk.mcpServers).toHaveProperty('external');
@@ -678,6 +678,33 @@ describe('QueryExecutor — structuredOutput 抽出', () => {
     expect(result.success).toBe(true);
     expect(result.content).toBe('final text');
     expect(result.structuredOutput).toEqual({ step: 1, reason: 'approved' });
+  });
+
+  it('成功 result が空なら、進捗メモを含む前の assistant message ではなく最後の message を content にする', async () => {
+    queryMock.mockReturnValue(createMockQuery([
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Checked input.ts. Remaining: answer.' }] } },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: 'a.ts' } }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'read-1', content: 'ok' }] } },
+      { type: 'assistant', message: { content: [{ type: 'text', text: '{"step": 1}' }] } },
+      { type: 'result', subtype: 'success', result: '', structured_output: { step: 1 } },
+    ]));
+
+    const result = await new QueryExecutor().execute('test', { cwd: '/tmp' });
+
+    expect(result).toMatchObject({ success: true, content: '{"step": 1}', structuredOutput: { step: 1 } });
+  });
+
+  it('成功 result が空でツール呼び出しの後に本文がなければ、ツール前の進捗メモを content にせず空にする', async () => {
+    queryMock.mockReturnValue(createMockQuery([
+      { type: 'assistant', message: { content: [{ type: 'text', text: 'Progress note: editing retry.ts.' }] } },
+      { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'edit-1', name: 'Edit', input: { file_path: 'retry.ts' } }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'edit-1', content: 'ok' }] } },
+      { type: 'result', subtype: 'success', result: '' },
+    ]));
+
+    const result = await new QueryExecutor().execute('test', { cwd: '/tmp' });
+
+    expect(result).toMatchObject({ success: true, content: '' });
   });
 
   it('result メッセージの usage を providerUsage として抽出する', async () => {

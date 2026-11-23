@@ -44,7 +44,9 @@
 `--runtime-assignment` はインタラクティブ起動、直接実行、pipeline、`run`、`watch`、その他のサブコマンドで使えます。
 選択により変わるのは defaults/targets だけで、共通 section と既存 provider/model/auto-strategy override の優先順位は維持します。
 未定義名や有効な runtime provider section がない場合は agent 起動前に停止し、指定名と候補一覧（または定義なし）を表示します。
-選択は設定やタスクレコードへ保存せず、requeue/retry/instruct で過去の指定を復元しません。
+`--runtime-assignment` の選択は設定ファイルにもタスクレコードにも書かれません。この点は変わりません。
+タスクが `runtime_assignment` を持つのは、manager が `takt_enqueue_goal_task` で指定したときだけです。
+`--runtime-assignment` を指定した起動では、その指定がタスクに保存された `runtime_assignment` より優先されます。
 未指定時は従来の directories 選択を使います。
 
 ```sh
@@ -80,9 +82,9 @@ takt update codex     # 指定対象だけを更新
 
 ## manager（実験的）
 
-manager の TUI では、`Ctrl+R` で問い合わせ、`Ctrl+G` で進行中のゴールを開きます。この2つのキーは manager が処理中でも使えます。入力欄に `/make-goal` と打って `Enter` を押すと、現在の会話からゴールの登録案を作ります。案が表示済みでも作り直すだけで、登録はしません。案は `↑↓` で「登録する」または「登録せずに会話に戻る」を選び、`Enter` で決定します。既定では会話に戻り、登録案を取り下げます。登録には「登録する」を選びます。材料不足の場合はその旨を表示し、会話を続けられます。入力欄で `/` を打つと `/make-goal` が補完候補に出て、`Tab` で確定できます。`/make-goal` 以外の `/` で始まる入力は普通の発言として manager に送ります。メニューの操作は[ゴール管理ガイド](./goal-management.ja.md)を参照してください。
+manager の TUI では、`Ctrl+R` で問い合わせ、`Ctrl+G` で進行中のゴールを開きます。この2つのキーは manager が処理中でも使えます。入力欄に `/make-goal` と打って `Enter` を押すと、現在の会話からゴールの登録案を作ります。案が表示済みでも作り直すだけで、登録はしません。案は `↑↓` で「登録する」または「登録せずに会話に戻る」を選び、`Enter` で決定します。既定では会話に戻り、登録案を取り下げます。登録には「登録する」を選びます。材料不足の場合はその旨を表示し、会話を続けられます。入力欄で `/` を打つと `/make-goal` が補完候補に出て、`Tab` で確定できます。`/clear` を送ると会話を新しく始めます。manager の AI は新しいセッションで応答し、それより前の会話は表示しませんが、ゴールや登録案はそのまま残ります。`/make-goal` と `/clear` 以外の `/` で始まる入力は普通の発言として manager に送ります。メニューの操作は[ゴール管理ガイド](./goal-management.ja.md)を参照してください。
 
-manager を開くと、必要なら daemon を起動し、準備が整うまで待ちます。TUI は会話の要求を daemon に送り、結果を表示します。受け付けたターンは TUI を閉じても続きます。同じリポジトリや workspace を担当先として開き直す場合も、同じ担当先で2つ目の TUI を開く場合も、同じ会話につながり、承認待ちの要約があれば再表示されます。前の画面の発言や返事は再表示されません。処理中の発言の受付・待機、保存する情報、daemon 再起動後の中断は[ゴール管理ガイド](./goal-management.ja.md)を参照してください。
+manager を開くと、必要なら daemon を起動し、準備が整うまで待ちます。TUI は会話の要求を daemon に送り、結果を表示します。受け付けたターンは TUI を閉じても続きます。同じリポジトリや workspace を担当先として開き直す場合も、同じ担当先で2つ目の TUI を開く場合も、同じ会話につながり、承認待ちの要約があれば再表示されます。前の発言、完了したツールの履歴、返事も、ターンごとにこの順で会話ログに再表示されます（Thinking とツールの合間に出た本文は除きます）。処理中の発言の受付・待機、保存する情報、daemon 再起動後の中断は[ゴール管理ガイド](./goal-management.ja.md)を参照してください。
 
 `takt daemon stop` で manager 用のバックグラウンド daemon を明示的に停止できます。自動終了するのは、対象プロジェクトに未完了のゴール、処理待ちのイベント、待機中・実行中のタスクがなく、プロジェクトの確認処理もなく、TUI の接続と会話の操作（初期化・実行・後片付け）がすべてなくなったときだけです。保存された承認待ちの要約だけでは daemon は起動し続けません。
 
@@ -259,11 +261,30 @@ ACP prompt がタスクを作成または直接実行する場合、会話結果
 
 ## MCP Server
 
-`takt-mcp` は TAKT を stdio Model Context Protocol server として起動します。MCP client から shell 経由で TAKT command を直接呼ばずにタスクの enqueue、task/run 状態の確認、実行中 worktree clone への追加指示を行いたい場合に登録します。
+`takt-mcp` は TAKT を Model Context Protocol server として起動します。既定は stdio で、`--http` を付けると同じ tool を loopback 上の常駐 Streamable HTTP server として提供します。MCP client から shell 経由で TAKT command を直接呼ばずにタスクの enqueue、task/run 状態の確認、実行中 worktree clone への追加指示を行いたい場合に登録します。
 
 ```bash
 takt-mcp
 ```
+
+### HTTP transport
+
+`takt-mcp --http` を実行すると、stdio の代わりに常駐 Streamable HTTP server を起動します。待ち受けは `127.0.0.1` に限定され、中断されるまで動作し続けるため、複数 client が 1 つのプロセスへ接続できます。
+
+```bash
+takt-mcp --http --http-port 7000
+```
+
+| フラグ | 説明 |
+|--------|------|
+| `--http` | stdio の代わりに `127.0.0.1` 上の Streamable HTTP で提供する。 |
+| `--http-port <n>` | `127.0.0.1` で待ち受ける TCP port（既定 `0` で OS が空き port を選ぶ）。 |
+| `--http-token <token>` | client が送る必要がある Bearer token。省略時は TAKT が生成し起動時に表示する。 |
+
+待ち受け URL は `http://127.0.0.1:<port>/` です。各リクエストは `Authorization: Bearer <token>` を送る必要があり、token が一致しないリクエストは `403`、`/` 以外のパスは `404` を返します。`--http-token` を省略した場合、stderr の起動出力に待ち受け URL と生成された `Authorization: Bearer <token>` が表示されるので、client 設定へそのままコピーできます。`--tool-set` と `--include-reference-markers` は stdio と同じように HTTP transport にも適用されます。
+
+固定の URL を MCP client に登録する場合は `--http-port` を明示してください。既定の `0` では OS が port を割り当てるため、登録する URL と実際に待ち受けた port が一致しません。省略した場合は stderr の起動出力に表示される port を読み取ってください。HTTP に対応した MCP client からその URL を指定し、Bearer header を送ってください。たとえば `takt-mcp --http --http-port 7000` で起動した場合、HTTP server エントリは `url = "http://127.0.0.1:7000/"` と `Authorization: Bearer <token>` header を持ちます。
+
 
 Codex では`~/.codex/config.toml`、または trusted project の project-scoped `.codex/config.toml` に stdio MCP server を追加します。
 
@@ -335,7 +356,7 @@ MCP はタスクの enqueue、task/run 状態の確認、実行中 clone への�
 
 ### `takt_list_tasks`、`takt_get_run`、`takt_tell_run`
 
-3つの tool は絶対パスの project `cwd` を必須とし、server が許可した project root 内に制限されます。`takt_list_tasks` は名前、要約、状態、workflow、run slug、取得できる現在 step を返しますが、ログ・レポート本文は返しません。`takt_get_run` は一覧の `runSlug` を指定し、その run の step log、レポート、追加指示の配信状況を返します。`takt_tell_run` は空でない `content` を受け取り、書き込み直前に指定 slug が実行中の worktree clone タスクを指すことを再確認します。完了、削除、slug 不一致、clone でない run には書き込まず、理由を返します。
+3つの tool は絶対パスの project `cwd` を必須とし、server が許可した project root 内に制限されます。`takt_list_tasks` は名前、要約、状態、workflow、run slug、取得できる現在 step を返しますが、ログ・レポート本文は返しません。`takt_get_run` は一覧の `runSlug` を指定し、その run の step log、レポート、追加指示の配信状況を返します。`currentStep` は run の記録上の現在 step で、通常はトップレベルの step ですが、トップレベルの parallel の step の分岐が子の workflow の step を開始するとその分岐の step になります。`currentStepPath` はトップレベルの workflow から実行中の末端の step までの workflow と step を順に返し、最後の要素だけが末端の `startedAt` と `executionCount` を持ちます。末端はトップレベルの step 自体、子の workflow の step、parallel の step 自体、または loop monitor の判定 step（判定を起こした step と同じ workflow の `_loop_judge_` で始まる step）です。`currentStep` がトップレベルの parallel の step の分岐を指し、その parallel の step の今回の実行で分岐が最後に開始した step が実行中のときは、parallel の step、その分岐の step、分岐が呼んだ子の workflow の step の順に並びます。分岐のその step が完了した後や分岐の子の workflow が終わった後は、分岐の次の開始が記録されるまで parallel の step 自体が今回の実行の開始の値を持って末端になります。`executionCount` は最新のログで同じ呼出箇所の末端が開始された回数で、`0` は現在の step の開始がまだ記録されていないこと（このとき `currentStepPath` は `currentStep` だけを持つ）、`null` は不明であることを表します。run が終了していて（たとえば status が `completed`）`currentStep` が残っている場合、`currentStepPath` は最後に記録した位置（最後に完了した step の末端など）を示し、その step が実行中であることを意味しません。`takt_tell_run` は空でない `content` を受け取り、書き込み直前に指定 slug が実行中の worktree clone タスクを指すことを再確認します。完了、削除、slug 不一致、clone でない run には書き込まず、理由を返します。
 
 `takt_list_tasks` は個別タスクの worktree 検証や run メタデータ取得に失敗しても全件を返します。問題の項目には取得できた基本情報と sanitize 済みの `error` 文字列を付け、ほかの項目は従来どおり返します。検証に失敗した worktree から run 情報は読みません。キュー自体を読めない場合や `cwd` が許可範囲外の場合はツール全体のエラーとなり、タスク配列は返しません。
 

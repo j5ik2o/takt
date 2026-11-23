@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +15,7 @@ import { DaemonNotifications } from '../infra/daemon/notifications.js';
 import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
 import { GoalSchema, type Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
+import { GoalStore } from '../infra/goals/store.js';
 import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
 import { EpicStore } from '../infra/epics/store.js';
 import { abortEpic, completeEpic, getEpic, recordEpicVerificationResult, startEpicVerification } from '../infra/epics/index.js';
@@ -40,7 +41,7 @@ async function watchSource(onError: (error: unknown) => void) {
   const globalDirectory = join(directory, 'global');
   await registerProject({ globalConfigDirectory: globalDirectory, projectDirectory: directory, command: 'manager', managerUsed: true });
   conversations = new DaemonConversations(new ConversationStateStore(globalDirectory), new DaemonRouting(globalDirectory),
-    new DaemonNotifications(globalDirectory), async () => {}, onError);
+    new DaemonNotifications(globalDirectory), async () => {}, onError, { readTurns: async () => [] });
   source = new FileDaemonWatchSource(conversations, async () => {}, onError);
   return { source, files: new DaemonPersistedFiles(globalDirectory) };
 }
@@ -99,14 +100,34 @@ it('reports invalid goals and continues observing valid goals', async () => {
   expect(await reader.read(directory, valid.id)).toMatchObject({ id: valid.id });
 });
 
-it.each(['missing', 'invalid JSON', 'invalid schema'] as const)('keeps the daemon alive and reports a goal with %s', async (failure) => {
+it.each(['the goal directory', 'goal.json'] as const)('skips a goal whose %s disappears after listing without reporting an error', async (target) => {
+  const kept = goalRecord();
+  const deleted = { ...goalRecord(), id: randomUUID() };
+  for (const goal of [kept, deleted]) {
+    const path = join(directory, '.takt', 'goals', goal.id);
+    await mkdir(path, { recursive: true }); await writeFile(join(path, 'goal.json'), JSON.stringify(goal));
+  }
+  const read = reader.read.bind(reader);
+  vi.spyOn(reader, 'read').mockImplementation(async (cwd, id) => {
+    const path = join(directory, '.takt', 'goals', id);
+    if (id === deleted.id) await rm(target === 'goal.json' ? join(path, 'goal.json') : path, { recursive: true });
+    return read(cwd, id);
+  });
+  const errors = vi.fn();
+  const ids = [];
+  for await (const goal of readWatchGoals(directory, errors, reader)) ids.push(goal.id);
+  expect(ids).toEqual([kept.id]);
+  expect(errors).not.toHaveBeenCalled();
+});
+
+it.each(['invalid JSON', 'invalid schema'] as const)('keeps the daemon alive and reports a goal with %s', async (failure) => {
   const goal = GoalSchema.parse({ ...goalRecord(), executionStatus: 'aborted' });
   const inactivePath = join(directory, '.takt', 'goals', goal.id);
   const unreadablePath = join(directory, '.takt', 'goals', randomUUID());
   await mkdir(inactivePath, { recursive: true });
   await writeFile(join(inactivePath, 'goal.json'), JSON.stringify(goal));
   await mkdir(unreadablePath);
-  if (failure !== 'missing') await writeFile(join(unreadablePath, 'goal.json'), failure === 'invalid JSON' ? '{invalid' : '{}');
+  await writeFile(join(unreadablePath, 'goal.json'), failure === 'invalid JSON' ? '{invalid' : '{}');
   const errors = vi.fn();
   const { source, files } = await watchSource(errors);
   expect(await source.hasWork(files)).toBe(true);
@@ -310,4 +331,38 @@ it.each(['missing', 'invalid JSON', 'wrong workspace'] as const)('keeps the daem
   expect(await source.patrolGoalIds(directory)).toEqual([]);
   expect(await source.hasWork(files)).toBe(true);
   expect(errors).toHaveBeenCalledWith(expect.any(Error));
+});
+
+it('republishes only goal answers left pending for publication and clears their marks', async () => {
+  const savedAnswer = { text: 'CSV', source: 'mcp' as const, answeredAt: '2026-11-01T00:00:00.000Z' };
+  const pendingId = randomUUID();
+  const target = GoalSchema.parse({ ...goalRecord(), questions: [
+    { id: pendingId, body: 'Which format?', recipient: 'human', status: 'answered', answer: savedAnswer, answerPublicationPending: true },
+    { id: randomUUID(), body: 'Which branch?', recipient: 'human', status: 'answered', answer: savedAnswer },
+  ] });
+  const other = GoalSchema.parse({ ...goalRecord(), id: randomUUID(), questions: [
+    { id: randomUUID(), body: 'Which owner?', recipient: 'human', status: 'answered', answer: savedAnswer },
+  ] });
+  for (const goal of [target, other]) {
+    const path = join(directory, '.takt', 'goals', goal.id);
+    await mkdir(path, { recursive: true });
+    await writeFile(join(path, 'goal.json'), JSON.stringify(goal));
+  }
+  const otherPath = join(directory, '.takt', 'goals', other.id, 'goal.json');
+  const otherBefore = await readFile(otherPath, 'utf8');
+  const errors = vi.fn();
+  const { source, files } = await watchSource(errors);
+
+  await source.inquiries();
+  await source.inquiries();
+
+  expect(errors).not.toHaveBeenCalled();
+  const inboxNames = await readdir(await files.inboxDirectory(directory));
+  expect(await Promise.all(inboxNames.map((name) => files.readInboxEvent(directory, name)))).toEqual([
+    expect.objectContaining({ kind: 'answer', goalId: target.id, questionId: pendingId, answer: savedAnswer }),
+  ]);
+  const stored = await new GoalStore(directory).get(target.id);
+  expect(stored.questions!.map((question) => question.answerPublicationPending)).toEqual([undefined, undefined]);
+  expect(stored.questions!.map((question) => question.answer)).toEqual([savedAnswer, savedAnswer]);
+  expect(await readFile(otherPath, 'utf8')).toBe(otherBefore);
 });

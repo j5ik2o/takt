@@ -1,4 +1,5 @@
-import { closeSync, fstatSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync, type Stats } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { closeSync, fstatSync, linkSync, openSync, readFileSync, statSync, unlinkSync, writeFileSync, type Stats } from 'node:fs';
 import { resolve } from 'node:path';
 import {
   getProcessIdentity, getSelfProcessIdentity, hasProcessIdentityMismatch, isProcessAlive,
@@ -110,9 +111,20 @@ function recoverStaleLock(lockPath: string): void {
 function acquireLock(lockPath: string, content: string, timeoutMs: number): LockSnapshot {
   const deadline = Date.now() + timeoutMs;
   while (true) {
+    const temporaryPath = `${lockPath}.${process.pid}.${randomUUID()}.tmp`;
     let descriptor: number;
     try {
-      descriptor = openSync(lockPath, 'wx', 0o600);
+      descriptor = openSync(temporaryPath, 'wx', 0o600);
+      try {
+        writeFileSync(descriptor, content, 'utf8');
+        const snapshot = { stat: fstatSync(descriptor), content };
+        // A killed writer must never publish a lock without its owner record.
+        // link is exclusive like 'wx'; rename would replace an existing holder.
+        linkSync(temporaryPath, lockPath);
+        return snapshot;
+      } finally {
+        closeSync(descriptor);
+      }
     } catch (error) {
       if (!hasCode(error, 'EEXIST')) throw error;
       recoverStaleLock(lockPath);
@@ -120,24 +132,10 @@ function acquireLock(lockPath: string, content: string, timeoutMs: number): Lock
         throw new Error(`${LOCK_TIMEOUT_MESSAGE_PREFIX}: ${lockPath}`);
       }
       Atomics.wait(waitBuffer, 0, 0, Math.min(RETRY_MS, deadline - Date.now()));
-      continue;
-    }
-    try {
-      writeFileSync(descriptor, content, 'utf8');
-      return { stat: fstatSync(descriptor), content };
-    } catch (error) {
-      try {
-        const stat = fstatSync(descriptor);
-        const partial = readSnapshot(lockPath);
-        if (partial !== undefined && partial.stat.dev === stat.dev && partial.stat.ino === stat.ino) {
-          unlinkSnapshot(lockPath, partial);
-        }
-      } catch {
-        // Cleanup failures must not hide the original acquisition error.
-      }
-      throw error;
     } finally {
-      closeSync(descriptor);
+      try { unlinkSync(temporaryPath); } catch {
+        // An unpublished temporary file must not hide an acquisition error.
+      }
     }
   }
 }

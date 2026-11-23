@@ -31,6 +31,8 @@ steps:
       - type: caccia
         pr: "{context:identify.pr.number}"
     rules:
+      - condition: when(effect.caccia.caccia.timedOut == true)
+        next: ABORT
       - condition: when(effect.caccia.caccia.success == false)
         next: caccia_failed
       - condition: when(effect.caccia.caccia.outcome == "success")

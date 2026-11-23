@@ -144,11 +144,15 @@ describe('manager conversation configuration and provider boundary', () => {
     );
   });
 
-  it('does not warn about a manager runtime assignment that runtime.yaml defines', () => {
-    saveProjectConfig(cwd, { language: 'en', manager: { runtimeAssignments: ['defined-assignment'] } });
+  it('passes configured runtime assignment names and usage to the manager prompt', () => {
+    saveProjectConfig(cwd, { language: 'en', manager: { runtimeAssignments: [{ 'defined-assignment': 'Explicit low priority' }] } });
     writeRuntimeAssignmentFixture(cwd, 'defined-assignment');
     const warning = vi.spyOn(ui, 'warn').mockImplementation(() => {});
-    expect(createManagerConversationPlan(cwd, {}).ctx.providerType).toBe('mock');
+    const plan = createManagerConversationPlan(cwd, {});
+    expect(plan.strategy.systemPrompt).toContain(JSON.stringify([{
+      repositoryDirectory: cwd,
+      assignments: [{ name: 'defined-assignment', usageDescription: 'Explicit low priority' }],
+    }]));
     expect(warning).not.toHaveBeenCalled();
   });
 
@@ -610,7 +614,7 @@ describe('manager conversation configuration and provider boundary', () => {
       });
       expect(sdkOptions.config?.hooks).toBeUndefined();
       const manager = (sdkOptions.config!.mcp_servers as Record<string, Record<string, unknown>>)[TAKT_MANAGER_MCP_SERVER_NAME]!;
-      expect(manager.tools).toEqual(Object.fromEntries([...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal'].map((name) => [name, { approval_mode: 'approve' }])));
+      expect(manager.tools).toEqual(Object.fromEntries([...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal', 'takt_finish_goal'].map((name) => [name, { approval_mode: 'approve' }])));
       expect(manager.tools).toHaveProperty('takt_ask_standalone_question', { approval_mode: 'approve' });
       expect(manager.default_tools_approval_mode).toBeUndefined();
       const browser = (sdkOptions.config!.mcp_servers as Record<string, Record<string, unknown>>).browser!;
@@ -677,7 +681,7 @@ describe('manager conversation configuration and provider boundary', () => {
       expect(options.mcpServers).toEqual(servers);
       expect(options.hooks?.PreToolUse?.filter(({ matcher }) => matcher === undefined)).toHaveLength(0);
       expect(options.allowedTools).toEqual([
-        ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal',
+        ...TAKT_MCP_MANAGER_TOOL_NAMES, 'takt_pause_goal', 'takt_resume_goal', 'takt_abort_goal', 'takt_finish_goal',
       ].map((name) => `mcp__${TAKT_MANAGER_MCP_SERVER_NAME}__${name}`));
       expect(options.tools).toBeUndefined();
     }

@@ -214,6 +214,7 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 | `sync_project_local_takt_on_retry` | boolean | `true` | Sync the root project-local `.takt` into a reused worktree before selecting a retry position or checking SDKs. Synced files remain if SDK installation is declined or the selection is cancelled. Set `false` to keep the worktree copy. |
 | `worktree_dir` | string | - | Directory for shared clones (defaults to `../{clone-name}`) |
 | `manager.preserve_goal_worktree` | boolean | `false` | Preserve goal task worktrees and their run artifacts after manager integrates them; see [Goal task worktree retention](#goal-task-worktree-retention). |
+| `manager.verify_on_register` | boolean | `false` | Automatically verify Quint/Alloy specifications before goal registration completes; see [Verification on goal registration](#verification-on-goal-registration). |
 | `allow_git_hooks` | boolean | `false` | Allow git hooks during TAKT-managed auto-commit |
 | `allow_git_filters` | boolean | `false` | Allow git filters during TAKT-managed auto-commit |
 | `auto_pr` | boolean | - | Auto-create PR after worktree execution |
@@ -250,7 +251,7 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 | `auto_fetch` | boolean | `false` | Fetch remote before cloning to keep clones up-to-date |
 | `base_branch` | string | - | Base branch for clone creation (defaults to remote default branch) |
 | `workflow_categories_file` | string | - | Path to categories file (see [Workflow categories](#workflow-categories); default overlay path uses `workflow-categories.yaml`) |
-| `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (auto-detected from git remote URL) |
+| `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider. Auto-detected only for `github.com` and `gitlab.com` remotes; set it for any other host, including `*.ghe.com` and self-hosted instances (see [Repository identity in clones](#repository-identity-in-clones)) |
 | `takt_providers` | object | - | TAKT internal provider overrides. `assistant` routes assistant conversations (interactive planning, instruct on existing tasks, and retry dialogue) and is also used as the Report phase fallback provider after an OpenCode report retry fails. Project `takt_providers.assistant` overrides global `takt_providers.assistant`; if neither is set, Report phase fallback is disabled and top-level `provider` / `model` are not used as an implicit fallback. |
 | `telemetry` | object | `{ routing_decisions: false }` | Local-only routing decision recording, disabled by default (opt-in). Enable with `takt telemetry enable` or `routing_decisions: true`; auto-routing decisions are then written as NDJSON under the project `.takt/events/` directory. TAKT does not upload routing decisions. |
 | `analytics` | object | disabled | Local-only analytics collection. `enabled` turns it on, `events_path` sets a custom events directory (default `~/.takt/analytics/events`), `retention_days` sets the retention period applied by `takt purge` (default: 30 days). TAKT does not upload analytics events. |
@@ -423,7 +424,7 @@ The project's `.takt/config.yaml` can override many global settings, including `
 | `assistant.formal_spec` | boolean \| `"Y/n"` \| `"y/N"` \| object | mode `"y/N"`, comments `true` (from global/default) | Project override for Alloy/Quint guidance that expresses requirements in both notations. The structured form accepts independent `mode`, `comments`, and `model_check_timeout_seconds` fields; `comments: false` removes only the natural-language meaning-comment instruction while retaining formal specification amount, requirement coverage, and syntax/correctness guidance. Project and global object fields resolve independently, with project values taking precedence; omitted fields fall through to the lower layer or defaults. Answers to `"Y/n"` or `"y/N"` prompts are session-local and are resolved again when a conversation is resumed; ACP and non-TTY execution never prompt and use the configured default answer. Gherkin guidance applies only to development and implementation tasks. The deprecated `assistant.gherkin` key produces a warning and is ignored without conversion, persistence, or file modification. The manager also uses this setting without prompting: `true`/`"Y/n"` include both notations, and `false`/`"y/N"` omit them. `/verify` is also available in manager conversations in TUI and Slack. |
 | `provider_options` | object | - | Provider-specific options |
 | `provider_profiles` | object | - | Provider-specific permission profiles |
-| `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (overrides global) |
+| `vcs_provider` | `"github"` \| `"gitlab"` | auto-detect | VCS provider (overrides global and auto-detection) |
 | `takt_providers` | object | - | TAKT internal provider overrides. Project `takt_providers.assistant` overrides the global assistant provider/model and is used for assistant conversations (interactive planning, instruct on existing tasks, and retry dialogue) and Report phase fallback after an OpenCode report retry fails. If project and global assistant are both unset, Report phase fallback is disabled and top-level `provider` / `model` are not used as an implicit fallback. |
 | `workflow_mcp_servers` | object | - | MCP server transport policy (overrides global) |
 | `workflow_arpeggio` | object | - | Arpeggio custom code policy (overrides global) |
@@ -492,6 +493,18 @@ A separate clone uses the original project configuration. Each run resolves perm
 
 When a pipeline or interactive session checks out a PR in the current directory, it resolves permission before switching branches. The interactive session retains that permission for the directory, including after switching to an Issue. A project setting added by the PR alone does not grant permission.
 
+## Repository identity in clones
+
+A task with `worktree: true` runs in a clone without an `origin` remote, so `gh` and `glab` cannot find the repository from git remotes there. A workflow that declares [`repository_identity: true`](workflows.md#repository_identity) has TAKT read the project root's `origin` and name the repository for its agent steps, command quality gates, and system `command` inputs. Without that declaration nothing is named, so a workflow that does not operate on the repository is left alone:
+
+- GitHub: `GH_REPO=HOST/OWNER/REPO`. The host is always named, `github.com` included, because gh's default host is not necessarily `github.com`. When `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN` is set, a GitHub Enterprise Server host is named only if `GH_HOST` names the same host, so that token is not aimed at a host the caller did not configure for it.
+- GitLab: `GITLAB_REPO=SCHEME://HOST/GROUP/.../PROJECT`, where the scheme is the origin's (`http` stays `http`; an ssh origin gives `https`). When `GITLAB_TOKEN`, `GITLAB_ACCESS_TOKEN`, `OAUTH_TOKEN`, or `JOB_TOKEN` is set, `GITLAB_REPO` is added only if `GITLAB_HOST` (or `GITLAB_URI` / `GL_HOST`) names the same scheme, host, and effective port (80 for `http`, 443 for `https`; a value without a scheme is read as `https`), so that TAKT never names a host other than the one configured for the token. This compares the environment only: glab takes the protocol and the API host from its own configuration (`api_protocol`, `api_host`), not from the scheme in these variables, and TAKT cannot see that configuration.
+- The repository is always the project root's `origin`, and the host must be a plain DNS name (or a bracketed IPv6 address); anything else is ignored. If `origin` is a fork and you point `gh` at the upstream repository with `gh repo set-default`, TAKT does not read that choice (`remote.<name>.gh-resolved`) and would name the fork: set `GH_REPO` yourself, and it is passed on as is.
+
+A variable you already set is never overridden. No remote and no credential is added, and the URL's user name or token is never used. Nothing is added for a workflow without `repository_identity`, for a task that runs in the project root, when `origin` is missing or not a recognised URL, or when the provider is unknown. System `command` inputs run without `HOME`, so `gh` / `glab` there still need their own authentication.
+
+The provider is `vcs_provider` when set (project overrides global), otherwise detected from the `origin` hostname: `github.com` is GitHub and `gitlab.com` is GitLab. Any other host, such as GitHub Enterprise Cloud under `*.ghe.com`, GitHub Enterprise Server, or a self-hosted GitLab, is not detected; set `vcs_provider` for it. If the `origin` host does not serve the web or the API, such as an ssh-only host (`ssh.github.com`, `altssh.gitlab.com`) or an alias from `~/.ssh/config` (`github.com-work`), setting `vcs_provider` does not give a correct value either: set `GH_REPO` / `GITLAB_REPO` yourself, which is passed on as is (see above).
+
 ## Environment Variable Overrides
 
 Most config keys can be overridden with an environment variable named `TAKT_` plus the config key path, uppercased and joined with underscores: `logging.debug` becomes `TAKT_LOGGING_DEBUG`, `telemetry.routing_decisions` becomes `TAKT_TELEMETRY_ROUTING_DECISIONS`. Common examples: `TAKT_PROVIDER`, `TAKT_MODEL`, `TAKT_CONCURRENCY`, `TAKT_LOGGING_DEBUG`, `TAKT_TELEMETRY_ROUTING_DECISIONS`, `TAKT_OBSERVABILITY_ENABLED`. An environment value overrides the corresponding file value and is applied at the layer that owns the key: global-only keys (e.g. `logging`, `disabled_builtins`) resolve at the global `~/.takt/config.yaml` layer, while project-overridable keys (e.g. `concurrency`, `telemetry.routing_decisions`) also resolve at the project `.takt/config.yaml` layer.
@@ -515,6 +528,24 @@ manager:
 
 The worktree, its clone metadata, and its `.takt/runs` reports and logs remain in place. Completed task records also remain; no task-history cleanup is added. The default `false` keeps the existing worktree and clone-metadata cleanup, including `cleanupWarning` behavior. This setting does not change ordinary `completeTask` cleanup, manual merge or deletion from List Tasks, PR merge tasks, or unintegrated tasks.
 
+## Verification on goal registration
+
+Set the following in project `.takt/config.yaml` or global `~/.takt/config.yaml`:
+
+```yaml
+manager:
+  verify_on_register: true
+assistant:
+  formal_spec:
+    mode: true
+```
+
+The default for `manager.verify_on_register` is `false`. Precedence is `TAKT_MANAGER_VERIFY_ON_REGISTER` (a boolean), project configuration, global configuration, then the default. An explicit `false` overrides a lower-priority `true`.
+
+Before `takt_create_goal` or approval of a registration proposal (including the manager TUI dialog) completes a registration, the Quint and Alloy fields are verified together once, before the goal is saved. Both this setting and the non-interactive value of `assistant.formal_spec.mode` must be enabled (`true` or `"Y/n"`). Goals with neither language, including Gherkin-only goals, register normally without verification. This does not generate specifications or verify task registrations.
+
+Verification uses the existing verifier and `assistant.formal_spec.model_check_timeout_seconds`. Registration only completes when the verdict is `passed`; the verdict is then stored in the goal's `registrationVerification`, and the verdict and language results are recorded in its work log. A `failed` verdict (the specifications did not pass) or an `error` verdict (verification could not be completed) rejects the registration: no goal and no goal branch are created, and the error reports the verdict and language results. The registration proposal is kept, so the specifications can be fixed and registered again. Cancellation before the goal is saved also rejects the registration.
+
 ## Manager task workflows
 
 Set `manager.workflows` in global `~/.takt/config.yaml` or project `.takt/config.yaml` to choose the workflows manager may use for new development tasks. A project value replaces the entire global list. Each entry is a name or a single `{ name: usage description }` pair, using the same notation as `workflow_categories.workflows`.
@@ -530,6 +561,23 @@ manager:
 When `manager.workflows` is omitted at both project and global scopes, the candidates are `default` and `simple`. Manager receives the usage descriptions above in English or their Japanese equivalents according to `language` and selects a workflow suited to the task. Explicit name-only entries have no usage description. Set `workflows: all` to allow all workflows, as before. Missing workflow names produce a warning when the manager conversation plan is created and are ignored; malformed entries, including blank names or objects with multiple keys, are rejected when configuration is loaded.
 
 Manager's `takt_list_workflows` returns only allowed candidates, with the workflow's own `description` and an optional configured `usageDescription`. New submissions through `takt_enqueue_goal_task` are rejected by the tool if the workflow is outside this selection; the error lists allowed candidates and configuration paths. Existing tasks can still resume, requeue or retry with their saved workflow. PR finishing through `takt_merge_goal_pr` (`merge.prepare_workflow` or `merge.workflow`) is outside this restriction, as are child `workflow_call` targets, non-manager MCP servers and manual CLI use. Workspace managers apply each assigned repository's selection when listing or submitting its tasks.
+
+## Manager runtime assignments
+
+Set `manager.runtime_assignments` in global `~/.takt/config.yaml` or project `.takt/config.yaml` to list the runtime assignments manager may choose for each task. A project value replaces the entire global list. Each entry is a name or a single `{ name: usage description }` pair; `all` is not supported.
+
+```yaml
+manager:
+  runtime_assignments:
+    - slow: Tasks of a goal that is not urgent and may take longer to finish.
+    - fast
+```
+
+When `manager.runtime_assignments` is omitted at both project and global scopes, the candidates are empty and manager cannot specify a runtime assignment. Names refer to assignments defined in `provider.assignments` of `runtime.yaml`. A name that is not defined produces a warning when the manager conversation plan is created and is ignored.
+
+Manager reads the candidates and their usage descriptions with `takt_list_runtime_assignments` and passes a name as `runtimeAssignment` to `takt_enqueue_goal_task`. A name outside the candidates is rejected by the tool with an error. The specified name is saved on the task as `runtime_assignment`, and requeue and retry use the saved value. When a run is started with `--runtime-assignment`, the command-line selection takes precedence over the task's saved `runtime_assignment`. Resubmitting a task that already exists with a different valid candidate name does not change the saved `runtime_assignment`: the tool validates the name and returns the existing task without creating a new one.
+
+If a name is removed from `provider.assignments` in `runtime.yaml`, a task that saved that name cannot run under that saved value. While that task remains pending, `takt run`'s pre-run provider check stops before any task starts, so the other pending tasks in the project are not executed either. There are three ways to recover: restore the name in `runtime.yaml`; start a run with a valid candidate name via `--runtime-assignment`, which applies to that run only and does not repair the saved `runtime_assignment` (see the `--runtime-assignment` selection below); or remove the pending task with `takt_remove_goal_task` and then have manager enqueue the task again with a valid name through `takt_enqueue_goal_task` (`runtimeAssignment`). When you use this third path and the goal is paused (`executionStatus` is `paused`), resume the goal before enqueueing again: `takt_enqueue_goal_task` rejects a paused goal, so use `takt_resume_goal`, or press Ctrl+G in the TUI and select the goal to resume. `takt_remove_goal_task` removes the task's worktree without checking it for uncommitted changes except on the merge-task and unintegrated-completed-result paths, so inspect the worktree and save any needed changes before removing the task; re-enqueueing does not restore changes that were deleted. `takt_remove_goal_task` can cancel a pending task only while the goal status is `created`; a PR merge task may also be cancelled while the goal is `awaiting_merge`, and a running task cannot be removed. The saved `runtime_assignment` is not repaired by requeue, retry, or additional instructions: requeue and retry leave a pending task unchanged, and additional instructions (`takt_tell_run`) apply only to a running task. To change the saved value, remove the task and enqueue it again. Confirm the currently available candidates with `takt_list_runtime_assignments`. If `provider.defaults.assignment` or `provider.directories` in `runtime.yaml` still references a name that is not in `provider.assignments`, assignment resolution fails on that reference whether you start with `--runtime-assignment` or remove and re-enqueue the task with `takt_remove_goal_task` and `takt_enqueue_goal_task`. Fix those references to valid names before trying any recovery path.
 
 ## Manager tool permissions
 
@@ -1144,9 +1192,11 @@ In this example, `cost` uses low effort by default and medium effort for the rev
 
 The option applies to interactive startup, direct execution, pipeline, `run`, `watch`, and
 other subcommands. All tasks in one `run`, tasks added later to the same `watch`, internal
-agents, and loop-analysis use the same selection. Selection does not write configuration
-files or add a field to task records; requeue, retry, and instruct do not restore a past
-invocation's choice. Ordinary task execution still updates task status. Without the option,
+agents, and loop-analysis use the same selection. The `--runtime-assignment` selection is not written
+to configuration files or to task records; this does not change. A task carries `runtime_assignment`
+only when manager specified it through `takt_enqueue_goal_task`. When a run is started with
+`--runtime-assignment`, that selection takes precedence over the task's saved `runtime_assignment`.
+Ordinary task execution still updates task status. Without the option,
 existing directory matching and top-level resolution are unchanged.
 
 An unknown name, missing assignments, or no active runtime provider section stops before
@@ -1751,7 +1801,11 @@ legacy mode it can also be set through `provider_routing`, deprecated
 
 #### Codex context compaction recovery
 
-When Codex records a `compacted` event in its transport or session rollout during Phase 1, TAKT waits for the current turn to finish, then resumes the same thread and re-injects the original Phase 1 instruction with context explaining that compaction occurred. Recovery turns are sequential and capped at three per provider call. A failed recovery, or another compaction after that cap, is returned as a failure rather than a successful step. TAKT does not infer compaction from assistant text. Providers that do not emit the event or do not support recovery keep their existing behavior. This automatic recovery is separate from the workflow-level `session: compact` behavior, which remains unchanged.
+Codex receives a stable developer contract that gives TAKT's current turn instructions priority. TAKT sends the current assignment, persona, and phase in `taktCurrentInstructions`, and the task input in `userInstruction`. The current assignment takes precedence over earlier assignments and progress notes. The developer contract overrides an existing user `developer_instructions` setting without changing the configuration file. Workflow sessions created before this contract use a different session key, so a new session starts with the current instructions. The report phase includes saved work results in that new request.
+
+When Codex records a `compacted` event during Phase 1 and the same session returns a completed turn, TAKT checks whether that response completes the assigned step. The check runs in a separate, read-only structured Codex session without MCP tools. A completed review, including a concrete REJECT finding, is returned as the original response. If the agent has lost its assignment, TAKT resumes the working thread with the original Phase 1 instruction, current assignment and permissions. A failed or invalid check fails the provider call rather than accepting the candidate.
+
+The call fails after three consecutive recovery turns that use no tools, compact again, and still require recovery. Tool use during a recovery turn resets this count, so there is no limit on the total number of recovery turns. Progress notes remain available to the resumed step, but their availability does not change the count. TAKT does not infer compaction from assistant text. Providers without the event or recovery capability keep their existing behavior. This automatic recovery is separate from workflow-level `session: compact`.
 
 #### Codex fast mode (`fast_mode`)
 

@@ -1370,6 +1370,55 @@ describe('CodexClient retry', () => {
     expect(result.structuredOutput).toEqual(expect.objectContaining({ step: 1 }));
   });
 
+  it('進捗メモの後に続く、拒否文を引用した structured output も拒否として扱わない', async () => {
+    const judgment = '{"step": 1, "reason": "前回の実行は flagged for possible cybersecurity risk という拒否で失敗したため再レビューが必要"}';
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'item.completed', item: { id: 'note', type: 'agent_message', text: 'Checked the previous run log. Remaining: judgment.' } },
+          { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: judgment } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+    ];
+
+    const result = await new CodexClient().call('judge', 'prompt', {
+      cwd: '/tmp',
+      outputSchema: { type: 'object', properties: { step: { type: 'number' } } },
+    });
+
+    expect(startThreadCalls).toHaveLength(1);
+    expect(result).toMatchObject({ status: 'done', content: judgment, structuredOutput: { step: 1 } });
+  });
+
+  it('ツール呼び出しで終わるターンは、その前の進捗メモを回答にせず空の成功結果と session ID を返す', async () => {
+    runPlans = [
+      {
+        type: 'events',
+        events: [
+          { type: 'thread.started', thread_id: 'thread-1' },
+          { type: 'item.completed', item: { id: 'note', type: 'agent_message', text: 'Checked input.ts. Remaining: tests.' } },
+          { type: 'item.started', item: { id: 'cmd', type: 'command_execution', command: 'npm test', status: 'in_progress' } },
+          { type: 'item.completed', item: { id: 'cmd', type: 'command_execution', command: 'npm test', aggregated_output: 'ok', exit_code: 0, status: 'completed' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 2 } },
+        ],
+      },
+    ];
+    const onStream = vi.fn();
+
+    const result = await new CodexClient().call('coder', 'prompt', { cwd: '/tmp', onStream });
+
+    expect(startThreadCalls).toHaveLength(1);
+    expect(result).toMatchObject({ status: 'done', content: '', sessionId: 'thread-1' });
+    expect(onStream).toHaveBeenCalledWith({ type: 'text', data: { text: 'Checked input.ts. Remaining: tests.' } });
+    expect(onStream).toHaveBeenCalledWith({
+      type: 'result',
+      data: expect.objectContaining({ result: '', success: true, sessionId: 'thread-1' }),
+    });
+  });
+
   it('拒否文で始まり末尾にJSONが続く応答は structured output があっても拒否として扱う', async () => {
     vi.useFakeTimers();
 
@@ -2022,7 +2071,7 @@ describe('CodexClient retry', () => {
     });
   });
 
-  it('rollout の compacted 検出後に同一 thread・同一 options で元の Phase 1 指示を再投入する', async () => {
+  it.each([false, true])('rollout の compacted 検出後に同一 thread・同一 options で元の Phase 1 指示を再投入する (explicit new_context=%s)', async (explicitNewContext) => {
     const now = new Date();
     const directory = path.join(
       projectDirectory,
@@ -2032,14 +2081,23 @@ describe('CodexClient retry', () => {
       String(now.getDate()).padStart(2, '0'),
     );
     fs.mkdirSync(directory, { recursive: true });
-    fs.writeFileSync(
-      path.join(directory, 'rollout-current-thread-compacted.jsonl'),
-      `${JSON.stringify({
+    const records = [
+      ...(explicitNewContext ? [{
         timestamp: now.toISOString(),
-        ordinal: 0,
+        ordinal: 27,
+        type: 'response_item',
+        payload: { type: 'function_call', name: 'new_context', arguments: '{}', call_id: 'call-context' },
+      }] : []),
+      {
+        timestamp: now.toISOString(),
+        ordinal: 31,
         type: 'compacted',
         payload: { message: '', replacement_history: [] },
-      })}\n`,
+      },
+    ];
+    fs.writeFileSync(
+      path.join(directory, 'rollout-current-thread-compacted.jsonl'),
+      records.map((record) => JSON.stringify(record)).join('\n') + '\n',
     );
     vi.stubEnv('CODEX_HOME', projectDirectory);
     runPlans = [
@@ -2048,6 +2106,13 @@ describe('CodexClient retry', () => {
         events: [
           { type: 'thread.started', thread_id: 'thread-compacted' },
           { type: 'item.completed', item: { id: 'lost', type: 'agent_message', text: '作業依頼を教えてください' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
+          { type: 'item.completed', item: { id: 'assessment-1', type: 'agent_message', text: '{"decision":"needs_recovery"}' } },
           { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
         ],
       },
@@ -2078,6 +2143,7 @@ describe('CodexClient retry', () => {
         },
         permissionMode: 'readonly',
       },
+      progressNotesRecorder: { observe: vi.fn(), finish: vi.fn(), recoveryInstruction: () => 'original Phase 1 instruction' },
     });
 
     expect(response).toMatchObject({
@@ -2085,19 +2151,20 @@ describe('CodexClient retry', () => {
       content: 'verification completed',
       sessionId: 'thread-compacted',
     });
-    expect(runPlanIndex).toBe(2);
-    expect(startThreadCalls).toHaveLength(1);
+    expect(runPlanIndex).toBe(3);
+    expect(startThreadCalls).toHaveLength(2);
     expect(resumeThreadCalls).toEqual([{
       threadId: 'thread-compacted',
       options: startThreadCalls[0],
     }]);
-    expect(codexConstructorCalls[1]).toEqual(codexConstructorCalls[0]);
-    expect(runStreamedInputs).toHaveLength(2);
-    expect(runStreamedInputs[0]).toBe('original Phase 1 instruction');
-    expect(runStreamedInputs[1]).toContain(
-      'context が compact されたため、Phase 1 の指示を再注入します。前の依頼を継続してください',
-    );
-    expect(runStreamedInputs[1]).toContain('original Phase 1 instruction');
+    expect(codexConstructorCalls[2]).toEqual(codexConstructorCalls[0]);
+    expect(runStreamedInputs).toHaveLength(3);
+    const firstInput = JSON.parse(runStreamedInputs[0] as string) as { taktCurrentInstructions: string; userInstruction: string };
+    const recoveryInput = JSON.parse(runStreamedInputs[2] as string) as { taktCurrentInstructions: string; userInstruction: string };
+    expect(firstInput.userInstruction).toBe('original Phase 1 instruction');
+    expect(recoveryInput.userInstruction).toContain('original Phase 1 instruction');
+    expect(recoveryInput.taktCurrentInstructions).toBe(firstInput.taktCurrentInstructions);
+    expect(codexConstructorCalls[0]?.config).toHaveProperty('developer_instructions');
     expect(onStream).toHaveBeenCalledWith({
       type: 'context_compacted',
       data: { sessionId: 'thread-compacted' },
@@ -2147,6 +2214,7 @@ describe('CodexClient retry', () => {
         providerOptions: { codex: { networkAccess: false } },
         permissionMode: 'readonly',
       },
+      progressNotesRecorder: { observe: vi.fn(), finish: vi.fn(), recoveryInstruction: () => 'original Phase 1 instruction' },
     });
     await vi.advanceTimersByTimeAsync(1000);
     const response = await pending;
@@ -2211,6 +2279,13 @@ describe('CodexClient retry', () => {
       {
         type: 'events',
         events: [
+          { type: 'item.completed', item: { id: 'assessment', type: 'agent_message', text: '{"decision":"needs_recovery"}' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
           { type: 'item.completed', item: { id: 'recovered', type: 'agent_message', text: 'new thread recovered' } },
           { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
         ],
@@ -2231,6 +2306,7 @@ describe('CodexClient retry', () => {
         providerOptions: { codex: { networkAccess: false } },
         permissionMode: 'readonly',
       },
+      progressNotesRecorder: { observe: vi.fn(), finish: vi.fn(), recoveryInstruction: () => 'original Phase 1 instruction' },
     });
     await vi.advanceTimersByTimeAsync(1000);
     const response = await pending;
@@ -2240,8 +2316,8 @@ describe('CodexClient retry', () => {
       content: 'new thread recovered',
       sessionId: 'thread-b',
     });
-    expect(runPlanIndex).toBe(3);
-    expect(startThreadCalls).toHaveLength(2);
+    expect(runPlanIndex).toBe(4);
+    expect(startThreadCalls).toHaveLength(3);
     expect(resumeThreadCalls).toEqual([{
       threadId: 'thread-b',
       options: startThreadCalls[1],
@@ -2282,6 +2358,13 @@ describe('CodexClient retry', () => {
       {
         type: 'events',
         events: [
+          { type: 'item.completed', item: { id: 'assessment', type: 'agent_message', text: '{"decision":"needs_recovery"}' } },
+          { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+        ],
+      },
+      {
+        type: 'events',
+        events: [
           { type: 'item.completed', item: { id: 'recovered', type: 'agent_message', text: 'same thread recovered' } },
           { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
         ],
@@ -2303,6 +2386,7 @@ describe('CodexClient retry', () => {
         providerOptions: { codex: { networkAccess: false } },
         permissionMode: 'readonly',
       },
+      progressNotesRecorder: { observe: vi.fn(), finish: vi.fn(), recoveryInstruction: () => 'original Phase 1 instruction' },
     });
     await vi.advanceTimersByTimeAsync(1000);
     const response = await pending;
@@ -2312,8 +2396,8 @@ describe('CodexClient retry', () => {
       content: 'same thread recovered',
       sessionId: 'thread-a',
     });
-    expect(runPlanIndex).toBe(3);
-    expect(startThreadCalls).toHaveLength(0);
+    expect(runPlanIndex).toBe(4);
+    expect(startThreadCalls).toHaveLength(1);
     expect(resumeThreadCalls).toHaveLength(3);
     expect(resumeThreadCalls.every((call) => call.threadId === 'thread-a')).toBe(true);
     expect(onStream.mock.calls.filter(([event]) => (
@@ -2403,6 +2487,52 @@ describe('CodexClient retry', () => {
     expect(onStream.mock.calls.filter(([event]) => event.type === 'context_compacted')).toHaveLength(0);
   });
 
+  it('進捗メモ保存中の TypeError を provider エラーにせず、新規 session で Phase 1 を再実行しない', async () => {
+    const failure = new TypeError('Cannot read properties of undefined');
+    const turn = (id: string): RunPlan => ({ type: 'events', events: [
+      { type: 'thread.started', thread_id: id },
+      { type: 'item.completed', item: { id: 'note', type: 'agent_message', text: 'Changed input.ts. Remaining: tests.' } },
+      { type: 'item.started', item: { id: 'cmd', type: 'command_execution', command: 'npm test', status: 'in_progress' } },
+      { type: 'item.completed', item: { id: 'cmd', type: 'command_execution', command: 'npm test', aggregated_output: 'ok', exit_code: 0, status: 'completed' } },
+      { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'Implementation complete.' } },
+      { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+    ] });
+    runPlans = [turn('thread-edit'), turn('thread-fresh')];
+    const { runAgent } = await import('../agents/runner.js');
+    const { runPhase1WithEmptyRecovery } = await import('../core/workflow/engine/phase1-empty-recovery.js');
+    const { ProgressNotesStore } = await import('../infra/progress-notes/store.js');
+    const append = vi.spyOn(ProgressNotesStore.prototype, 'append').mockImplementation(() => { throw failure; });
+    const execute = vi.fn((attempt: { instruction: string; sessionId: string | undefined }) => runAgent(undefined, attempt.instruction, {
+      cwd: projectDirectory,
+      executionPhase: 1,
+      edit: true,
+      sessionId: attempt.sessionId,
+      childProcessEnv: { CODEX_HOME: projectDirectory },
+      resolvedExecution: {
+        provider: 'codex',
+        model: 'gpt-test',
+        providerOptions: { codex: { networkAccess: false } },
+        permissionMode: 'edit',
+      },
+      progressNotes: {
+        reportDir: path.join(projectDirectory, '.takt', 'runs', 'run', 'reports'),
+        task: 'implement validation',
+        stepName: 'implement',
+        definition: 'editing step',
+        bindsSourceRevision: false,
+      },
+    }));
+
+    try {
+      await expect(runPhase1WithEmptyRecovery({
+        instruction: 'Implement validation.', initialSessionId: undefined, discardSession: vi.fn(), execute,
+      })).rejects.toBe(failure);
+      expect(append).toHaveBeenCalledOnce();
+      expect(execute).toHaveBeenCalledOnce();
+      expect(runPlanIndex).toBe(1);
+    } finally { append.mockRestore(); }
+  });
+
   it('session ID がない compaction 復帰は失敗応答と result event を返し新規 thread を開始しない', async () => {
     startThreadId = undefined;
     runPlans = [{
@@ -2428,6 +2558,7 @@ describe('CodexClient retry', () => {
         providerOptions: { codex: { networkAccess: false } },
         permissionMode: 'readonly',
       },
+      progressNotesRecorder: { observe: vi.fn(), finish: vi.fn(), recoveryInstruction: () => 'original Phase 1 instruction' },
     });
 
     expect(response).toMatchObject({

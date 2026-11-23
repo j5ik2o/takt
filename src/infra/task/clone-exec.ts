@@ -11,6 +11,7 @@ import {
 import { loadProjectConfig } from '../config/index.js';
 import { isTaskAbortError, TASK_EXECUTION_ABORTED_MESSAGE } from './clone-errors.js';
 import { buildChildProcessEnv } from '../../shared/utils/child-process-env.js';
+import { trackCacciaCloneGit } from './caccia-git-processes.js';
 
 const log = createLogger('clone');
 const CLONE_FAILED_MESSAGE = 'Git clone failed';
@@ -120,8 +121,9 @@ function runIsolatedGitCommandAbortable(
   gitCwd: string,
   args: string[],
   abortSignal?: AbortSignal,
+  ownerCwd?: string,
 ): Promise<{ stdout: string; stderr: string }> {
-  return runGitCommandAbortable(gitCwd, args, abortSignal, isolatedGitEnv());
+  return runGitCommandAbortable(gitCwd, args, abortSignal, isolatedGitEnv(), undefined, { ownerCwd });
 }
 
 // A destination that already holds files was not created by this clone attempt, so a failed attempt
@@ -386,6 +388,7 @@ export function runGitCommandAbortable(
   abortSignal?: AbortSignal,
   env?: NodeJS.ProcessEnv,
   timeoutMs?: number,
+  options: { ownerCwd?: string } = {},
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     if (abortSignal?.aborted) {
@@ -399,6 +402,15 @@ export function runGitCommandAbortable(
       detached: true,
       env,
     });
+    const sendSignal = trackCacciaCloneGit(options.ownerCwd ?? gitCwd, child.pid, (signal) => child.kill(signal),
+      (onExit) => { child.once('exit', onExit); }) ?? ((signal) => terminateProcessGroup(child, signal));
+    const terminate = (signal: NodeJS.Signals): void => {
+      try {
+        sendSignal(signal);
+      } catch (error) {
+        log.warn('Could not signal Git process', { signal, error: getErrorMessage(error) });
+      }
+    };
 
     let stdout = '';
     let stderr = '';
@@ -431,17 +443,17 @@ export function runGitCommandAbortable(
       }
       settled = true;
       if (terminateChild) {
-        terminateProcessGroup(child, 'SIGTERM');
+        terminate('SIGTERM');
       }
       cleanup();
       reject(error);
     };
 
     const onAbort = (): void => {
-      terminateProcessGroup(child, 'SIGINT');
+      terminate('SIGINT');
       const killTimer = setTimeout(() => {
         if (!settled) {
-          terminateProcessGroup(child, 'SIGKILL');
+          terminate('SIGKILL');
         }
       }, 500);
       killTimer.unref?.();
@@ -450,7 +462,7 @@ export function runGitCommandAbortable(
 
     const onTimeout = (): void => {
       timeoutKillTimer = setTimeout(() => {
-        terminateProcessGroup(child, 'SIGKILL');
+        terminate('SIGKILL');
       }, 500);
       timeoutKillTimer.unref?.();
       rejectOnce(new Error(`git ${args[0]} timed out after ${timeoutMs} ms`), true);
@@ -498,8 +510,9 @@ function runGitCloneAbortable(
   gitCwd: string,
   args: string[],
   abortSignal?: AbortSignal,
+  clonePath?: string,
 ): Promise<void> {
-  return runIsolatedGitCommandAbortable(gitCwd, args, abortSignal).then(() => undefined);
+  return runIsolatedGitCommandAbortable(gitCwd, args, abortSignal, clonePath).then(() => undefined);
 }
 
 export async function cloneAndIsolateAbortable(
@@ -531,7 +544,7 @@ export async function cloneAndIsolateAbortable(
   const destinationHadContent = destinationHasContent(clonePath);
 
   try {
-    await runGitCloneAbortable(projectDir, referenceCloneArgs, abortSignal);
+    await runGitCloneAbortable(projectDir, referenceCloneArgs, abortSignal, clonePath);
   } catch (err) {
     if (isTaskAbortError(err)) {
       throw err;
@@ -542,7 +555,7 @@ export async function cloneAndIsolateAbortable(
       log.info('Reference repository is shallow, retrying clone without --reference');
       cleanupPartialClone(clonePath);
       try {
-        await runGitCloneAbortable(projectDir, fallbackCloneArgs, abortSignal);
+        await runGitCloneAbortable(projectDir, fallbackCloneArgs, abortSignal, clonePath);
       } catch (fallbackErr) {
         if (isTaskAbortError(fallbackErr)) {
           throw fallbackErr;

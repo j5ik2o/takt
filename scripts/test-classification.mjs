@@ -122,6 +122,8 @@ export const auditedIntegrationBoundaryTestFiles = Object.freeze([
   'src/__tests__/globalConfig-defaults.test.ts',
   'src/__tests__/globalConfig-resolvers.test.ts',
   'src/__tests__/globalConfig.test.ts',
+  // Finishes goals against a real Git repository to resolve the saved branch tip.
+  'src/__tests__/goal-finish-operations.test.ts',
   'src/__tests__/imageAttachments.test.ts',
   'src/__tests__/instructMode.test.ts',
   'src/__tests__/interactive-mode.test.ts',
@@ -270,6 +272,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/facet-resolution.test.ts',
   'src/__tests__/formalSpecVerifier.test.ts',
   'src/__tests__/global-workflowCategories.test.ts',
+  'src/__tests__/goalSpecificationVerification.test.ts',
   'src/__tests__/image-attachment-store-seal.test.ts',
   'src/__tests__/imageAttachmentReferences.test.ts',
   'src/__tests__/initialization-noninteractive.test.ts',
@@ -292,6 +295,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/lstatIfExists.test.ts',
   'src/__tests__/managed-provider-retry-preflight.test.ts',
   'src/__tests__/managed-sdk-version-alignment.test.ts',
+  'src/__tests__/manager-refresh-interval.test.ts',
   'src/__tests__/mcp-entrypoint.test.ts',
   'src/__tests__/mock-scenario.test.ts',
   'src/__tests__/monitorJsonMetricExporter.test.ts',
@@ -371,7 +375,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/workflow-init.test.ts',
   'src/__tests__/workflow-inspect.test.ts',
   'src/__tests__/workflowExecution-ask-user-question.test.ts',
-  'src/__tests__/workflowExecution-session-loading.test.ts',
   'src/__tests__/workflowExecution-structured-caller.test.ts',
   'src/__tests__/workflowExecutionEvents.test.ts',
 ]);
@@ -387,6 +390,8 @@ export const publicContractIntegrationTestFiles = Object.freeze([
 export const lightContractIntegrationTestFiles = Object.freeze([
   'src/__tests__/analytics-workflowExecution.test.ts',
   'src/__tests__/cancellable-prompt-pipe.test.ts',
+  'src/__tests__/compaction-recovery-progress.test.ts',
+  'src/__tests__/daemon-conversation-delivery.integration.test.ts',
   'src/__tests__/daemon-dispatcher.integration.test.ts',
   'src/__tests__/daemon-manager-patrol.integration.test.ts',
   'src/__tests__/daemon-reachability.integration.test.ts',
@@ -406,6 +411,8 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/director-foundation.integration.test.ts',
   'src/__tests__/epic-storage.integration.test.ts',
   'src/__tests__/exec-workflowRunner.integration.test.ts',
+  'src/__tests__/facet-content-deduplication.test.ts',
+  'src/__tests__/facet-deduplication.test.ts',
   'src/__tests__/facet-includes-integration.test.ts',
   'src/__tests__/interactive-resume-records.integration.test.ts',
   'src/__tests__/it-acp-workflow-bridge.test.ts',
@@ -448,6 +455,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/manager-conversation-sequential-reads.integration.test.ts',
   'src/__tests__/manager-conversation-service.integration.test.ts',
   'src/__tests__/manager-turn-failure-webhook.integration.test.ts',
+  'src/__tests__/mcp-entrypoint-http.integration.test.ts',
   'src/__tests__/merge-caccia.test.ts',
   'src/__tests__/merge-pagination.integration.test.ts',
   'src/__tests__/merge-settings.integration.test.ts',
@@ -457,6 +465,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/pi-sdk-compat.integration.test.ts',
   'src/__tests__/repertoire/add-integration.test.ts',
   'src/__tests__/repertoire/remove-integration.test.ts',
+  'src/__tests__/runtime-assignment-missing-goal-task.integration.test.ts',
   'src/__tests__/runtime-assignment.integration.test.ts',
   'src/__tests__/runtime-provider-aux-entry.integration.test.ts',
   'src/__tests__/runtime-provider-internal-agents.integration.test.ts',
@@ -474,6 +483,8 @@ export const lightIntegrationTestFiles = Object.freeze([
 ]);
 
 export const heavyParallelIntegrationTestFiles = Object.freeze([
+  'src/__tests__/it-goal-run-specifications.test.ts',
+  'src/__tests__/it-pr-merge-goal-specifications.test.ts',
   'src/__tests__/tool-activity-runner-exit.integration.test.ts',
   'src/__tests__/tool-activity-workflow.integration.test.ts',
   'src/__tests__/daemon-wait-command.integration.test.ts',
@@ -482,8 +493,12 @@ export const heavyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-goal-task-pause-retry.test.ts',
   'src/__tests__/it-goal-task-pr-retry.test.ts',
   'src/__tests__/it-daemon-worktree-run-log.test.ts',
+  'src/__tests__/it-mcp-goal-specification-verification-real.test.ts',
+  'src/__tests__/it-mcp-goal-specification-verification.test.ts',
   ...legacyParallelIntegrationTestFiles,
   ...auditedIntegrationBoundaryTestFiles,
+  // Runs real `git init` / `git remote` processes for repository identity.
+  'src/__tests__/workflowExecution-session-loading.test.ts',
   // Measured slow suites dominate the serial light gate; CI shards this gate.
   'src/__tests__/deepseek-harness-error-mapping.test.ts',
   'src/__tests__/it-issue-dispatch-notification.test.ts',

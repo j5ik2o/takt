@@ -47,7 +47,9 @@ The global config directory (default: `~/.takt/`) can be changed with the `TAKT_
 and other subcommands. It changes only the assignment's defaults/targets; shared sections and
 existing provider/model/auto-strategy override priority stay unchanged. A missing name or no active
 runtime provider section fails before any agent starts and reports available names (or no definitions).
-The selection is not written to configuration or task records and is not restored by requeue/retry/instruct.
+The `--runtime-assignment` selection is not written to configuration or task records; this does not change.
+A task carries `runtime_assignment` only when manager specified it through `takt_enqueue_goal_task`.
+When a run is started with `--runtime-assignment`, that selection takes precedence over the task's saved `runtime_assignment`.
 Without this option, directory selection works as before.
 
 ```sh
@@ -83,9 +85,9 @@ Approximate sizes are 250 MB for Claude SDK, 340 MB for Codex, 60 MB for OpenCod
 
 ## Manager (experimental)
 
-In the manager TUI, `Ctrl+R` opens inquiries and `Ctrl+G` opens ongoing goals. Both keys work while manager is processing. Type `/make-goal` in the input box and press `Enter` to create a goal proposal from the current conversation. Even when a proposal is already displayed, this only regenerates it; it does not register the goal. Use `↑↓` to choose **Register goal** or **Return to conversation without registering**, then press `Enter`. The default returns to the conversation and dismisses the proposal. Select **Register goal** to register it. Insufficient material is reported so you can continue the conversation. Typing `/` in the input box shows `/make-goal` as a completion candidate; press `Tab` to accept it. Input starting with `/` other than `/make-goal` is sent to manager as a regular message. See [Managing goals](./goal-management.md) for menu operations.
+In the manager TUI, `Ctrl+R` opens inquiries and `Ctrl+G` opens ongoing goals. Both keys work while manager is processing. Type `/make-goal` in the input box and press `Enter` to create a goal proposal from the current conversation. Even when a proposal is already displayed, this only regenerates it; it does not register the goal. Use `↑↓` to choose **Register goal** or **Return to conversation without registering**, then press `Enter`. The default returns to the conversation and dismisses the proposal. Select **Register goal** to register it. Insufficient material is reported so you can continue the conversation. Typing `/` in the input box shows `/make-goal` as a completion candidate; press `Tab` to accept it. Send `/clear` to start the conversation over: manager's AI begins a new session and earlier messages are no longer shown, while goals and proposals stay as they are. Input starting with `/` other than `/make-goal` and `/clear` is sent to manager as a regular message. See [Managing goals](./goal-management.md) for menu operations.
 
-Opening manager starts the daemon if needed and waits until it is ready. The TUI sends conversation requests to the daemon and displays results. Accepted turns continue after the TUI closes. Reopening for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation and restores any summary awaiting approval, without redisplaying previous messages and replies. See [Managing goals](./goal-management.md) for message acceptance and waiting, storage, and interruption after a daemon restart.
+Opening manager starts the daemon if needed and waits until it is ready. The TUI sends conversation requests to the daemon and displays results. Accepted turns continue after the TUI closes. Reopening for the same repository or workspace, or opening a second TUI for that assignment, connects to the same conversation and restores any summary awaiting approval. Previous messages, completed tool history, and replies are also shown again in the conversation log, in that order for each turn (Thinking and text shown between tool calls are not). See [Managing goals](./goal-management.md) for message acceptance and waiting, storage, and interruption after a daemon restart.
 
 Use `takt daemon stop` to stop the manager background daemon explicitly. It exits automatically only when its projects have no unfinished goals, pending events, or pending/running tasks, no project inspection is in progress, no TUI is connected, and no conversation operation is initializing, running, or finishing cleanup. A saved pending summary alone does not keep the daemon running.
 
@@ -265,11 +267,30 @@ TAKT currently supports `initialize`, `session/new`, `session/prompt`, `session/
 
 ## MCP Server
 
-`takt-mcp` starts TAKT as a stdio Model Context Protocol server. Register it in an MCP client when you want to enqueue tasks, inspect task/run state, or send an additional instruction to a running worktree-clone task without shelling out to TAKT commands.
+`takt-mcp` starts TAKT as a Model Context Protocol server. By default it uses stdio; pass `--http` to serve the same tools over a resident Streamable HTTP server on the loopback interface. Register it in an MCP client when you want to enqueue tasks, inspect task/run state, or send an additional instruction to a running worktree-clone task without shelling out to TAKT commands.
 
 ```bash
 takt-mcp
 ```
+
+### HTTP transport
+
+Run `takt-mcp --http` to start a resident Streamable HTTP server instead of stdio. The server listens on `127.0.0.1` only and keeps running until it is interrupted, so several clients can connect to one shared process.
+
+```bash
+takt-mcp --http --http-port 7000
+```
+
+| Flag | Description |
+|------|-------------|
+| `--http` | Serve over Streamable HTTP on `127.0.0.1` instead of stdio. |
+| `--http-port <n>` | TCP port to bind on `127.0.0.1` (default `0`, letting the OS pick a free port). |
+| `--http-token <token>` | Bearer token clients must send. When omitted, TAKT generates one and prints it at startup. |
+
+The listen address is `http://127.0.0.1:<port>/`. Every request must send `Authorization: Bearer <token>`; requests without a matching token are rejected with `403`, and paths other than `/` return `404`. When `--http-token` is omitted, the startup output on stderr prints the bound URL and the generated `Authorization: Bearer <token>` value so you can copy it into your client. `--tool-set` and `--include-reference-markers` apply to the HTTP transport exactly as they do to stdio.
+
+To register a fixed URL in your MCP client, pass `--http-port` explicitly. With the default `0` the OS assigns the port, so the URL you register would not match the port actually bound; in that case read the port from the startup output on stderr. Point an HTTP-capable MCP client at that URL and send the Bearer header. For example, when you start with `takt-mcp --http --http-port 7000`, an HTTP server entry carries `url = "http://127.0.0.1:7000/"` plus an `Authorization: Bearer <token>` header.
+
 
 For Codex, add a stdio MCP server to `~/.codex/config.toml`, or to project-scoped `.codex/config.toml` for trusted projects:
 
@@ -341,7 +362,7 @@ MCP can enqueue tasks, inspect task/run state, and send additional instructions 
 
 ### `takt_list_tasks`, `takt_get_run`, and `takt_tell_run`
 
-All three tools require the absolute project `cwd` and are limited to the project root allowed by the server. `takt_list_tasks` returns names, summaries, statuses, workflows, run slugs, and available current steps; it does not return log or report bodies. `takt_get_run` takes a `runSlug` from the list and returns details for that run, including step logs, reports, and live-intervention delivery state. `takt_tell_run` takes a non-empty `content`, verifies that the selected slug still identifies a running worktree-clone task immediately before writing, and returns a rejection reason without writing when the run is finished, missing, mismatched, or not a clone.
+All three tools require the absolute project `cwd` and are limited to the project root allowed by the server. `takt_list_tasks` returns names, summaries, statuses, workflows, run slugs, and available current steps; it does not return log or report bodies. `takt_get_run` takes a `runSlug` from the list and returns details for that run, including step logs, reports, and live-intervention delivery state. `currentStep` is the current step recorded for the run: normally the top-level step, but it becomes the branch step when a branch of a top-level parallel step starts a step of its child workflow. `currentStepPath` lists each workflow and step from the top-level workflow down to the running leaf step, and only the last entry carries the leaf's `startedAt` and `executionCount`. The leaf is the top-level step itself, a step of a child workflow, a parallel step itself, or a loop monitor judge step (a step starting with `_loop_judge_` in the workflow of the step that triggered it). When `currentStep` names a branch of a top-level parallel step and the latest step that branch started in the current run of the parallel step is running, the path lists the parallel step, that branch step, and then the steps of the child workflow the branch calls. Once that step of the branch has completed or the child workflow of the branch has ended, the leaf is the parallel step itself, with the start of its current run, until the branch logs its next start. `executionCount` counts starts of the leaf from the same call site in the latest log; `0` means the start of the current step is not logged yet (`currentStepPath` then holds only `currentStep`), and `null` means unknown. When the run has finished (for example status `completed`) and `currentStep` is still recorded, `currentStepPath` shows the last recorded position, such as the leaf of the last finished step, and does not mean that step is running. `takt_tell_run` takes a non-empty `content`, verifies that the selected slug still identifies a running worktree-clone task immediately before writing, and returns a rejection reason without writing when the run is finished, missing, mismatched, or not a clone.
 
 `takt_list_tasks` returns all tasks even when an individual worktree validation or run metadata read fails. Only the affected entry gains a sanitized `error` string alongside its available basic information; other entries retain their previous contents. Run information is never read from a worktree that failed validation. An unreadable queue or a `cwd` outside the allowed root remains a whole-tool error with no task array.
 

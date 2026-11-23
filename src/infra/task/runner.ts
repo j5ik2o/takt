@@ -104,8 +104,12 @@ export class TaskRunner {
     return this.query.listTasksForProviderPreflight(goalTasksOnly);
   }
 
-  claimNextTasks(count: number): TaskInfo[] {
-    return this.lifecycle.claimNextTasks(count);
+  claimNextTasks(
+    count: number,
+    goalSetupFailure?: (task: TaskInfo) => string | undefined,
+    onSetupFailed?: (task: TaskState) => void,
+  ): TaskInfo[] {
+    return this.lifecycle.claimNextTasks(count, goalSetupFailure, onSetupFailed);
   }
 
   failInterruptedRunningTasks(goalId?: string, onRecovered?: (task: TaskState) => void): number {
@@ -214,6 +218,10 @@ export class TaskRunner {
     cleanup: () => boolean,
   ): boolean {
     return this.deletion.deleteTaskWithCleanup(name, kind, cleanup);
+  }
+
+  deleteFinishedGoalTasks(goalId: string): void {
+    this.deletion.deleteFinishedGoalTasks(goalId);
   }
 
   exceedTask(taskName: string, options: ExceedTaskOptions): void {

@@ -19,10 +19,4 @@ providers:
 evaluateOptions:
   maxConcurrency: 4
 
-tests:
-  - description: 'fix verifier routing: plan defect wins while implementation gap remains recorded'
-    vars:
-      scenario: file://../../cases/fix-verifier-state-routing.md
-    assert:
-      - type: regex
-        value: '\[FIX-VERIFIER:2\]'
+tests: file://../../cases/fix-verifier-state-routing.yaml

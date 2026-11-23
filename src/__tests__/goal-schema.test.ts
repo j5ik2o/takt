@@ -34,6 +34,16 @@ describe('Goal saved record schema', () => {
     expect(GoalSchema.parse(record)).toEqual(record);
   });
 
+  it('restores registration verification completion only with its saved work log record', () => {
+    const workLog = [{ id: goalRecord().id, recordedAt: '2026-11-19T00:00:00Z', summary: 'Formal specification verification: passed' }];
+    const record = { ...goalRecord(), workLog, registrationVerification: { status: 'completed', workLogId: workLog[0]!.id } };
+    expect(GoalSchema.parse(JSON.parse(JSON.stringify(record)))).toEqual(record);
+    expect(GoalSchema.safeParse({ ...record, workLog: [] }).success).toBe(false);
+    for (const status of ['pending', 'not_required']) {
+      expect(GoalSchema.parse({ ...goalRecord(), registrationVerification: { status } }).registrationVerification).toEqual({ status });
+    }
+  });
+
   it.each([
     'id', 'objective', 'outOfScope', 'acceptanceCriteria', 'mode', 'status',
     'branch', 'startBranch', 'integrationBranch', 'constraints', 'workLog',

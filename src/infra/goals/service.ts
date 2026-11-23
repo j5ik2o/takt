@@ -7,23 +7,39 @@ import { TaskRunner } from '../task/runner.js';
 import { getGlobalConfigDir } from '../config/paths.js';
 import { registerProject } from '../config/global/projectRegistry.js';
 import { FileEventStore } from '../daemon/eventStore.js';
+import { initialRegistrationVerification, verifyGoalSpecificationsForRegistration } from './registrationVerification.js';
+import { appendGoalWorkLog } from './workLog.js';
 
 export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): Promise<Goal> {
   signal?.throwIfAborted();
   input = GoalCreateInputSchema.parse(input);
   const store = new GoalStore(input.cwd);
   store.assertAbsent(input.id);
+  const registrationVerification = initialRegistrationVerification(input.cwd, input.specifications);
+  let verificationSummary: string | undefined;
+  if (registrationVerification?.status === 'pending') {
+    verificationSummary = await verifyGoalSpecificationsForRegistration(input.cwd, input.specifications, signal);
+  }
+  signal?.throwIfAborted();
   await registerProject({ globalConfigDirectory: getGlobalConfigDir(), projectDirectory: input.cwd, command: 'manager', managerUsed: true });
   signal?.throwIfAborted();
   const { commit, ...branches } = await prepareGoalBranch(input.cwd, input.id, input.startBranch, input.integrationBranch, signal);
   signal?.throwIfAborted();
-  const goal = GoalSchema.parse({
+  let goal = GoalSchema.parse({
     id: input.id, createdAt: new Date().toISOString(), objective: input.objective, outOfScope: input.outOfScope,
     acceptanceCriteria: input.acceptanceCriteria, constraints: input.constraints,
     ...(input.specifications === undefined ? {} : { specifications: input.specifications }),
+    ...(registrationVerification === undefined ? {} : { registrationVerification }),
     workLog: [], mode: 'local', status: 'created', executionStatus: 'active',
     acceptanceCriteriaVersion: 1, ...branches,
   });
+  if (verificationSummary !== undefined) {
+    const withVerification = appendGoalWorkLog(goal, { summary: verificationSummary });
+    goal = GoalSchema.parse({
+      ...withVerification,
+      registrationVerification: { status: 'completed', verdict: 'passed', workLogId: withVerification.workLog.at(-1)!.id },
+    });
+  }
   createGoalBranch(input.cwd, goal.branch, commit);
   try { await store.create(goal); }
   catch (error) {
@@ -52,24 +68,34 @@ export async function hasGoalRegistrationArtifacts(cwd: string, id: string): Pro
 export async function registerReservedGoal(input: GoalCreateInput, signal?: AbortSignal): Promise<Goal> {
   signal?.throwIfAborted();
   input = GoalCreateInputSchema.parse(input);
-  const existing = new GoalStore(input.cwd).find(input.id);
+  const store = new GoalStore(input.cwd);
+  const existing = store.find(input.id);
   if (existing !== undefined) {
-    if (existing.objective !== input.objective
-      || JSON.stringify(existing.outOfScope) !== JSON.stringify(input.outOfScope)
-      || JSON.stringify(existing.acceptanceCriteria) !== JSON.stringify(input.acceptanceCriteria)
-      || JSON.stringify(existing.specifications) !== JSON.stringify(input.specifications)
-      || JSON.stringify(existing.constraints) !== JSON.stringify(input.constraints)
-      || (input.startBranch !== undefined && existing.startBranch !== input.startBranch)
-      || (input.integrationBranch !== undefined && existing.integrationBranch !== input.integrationBranch)) {
-      throw new GoalRegistrationRecoveryError('Reserved goal conflicts with the approved proposal');
-    }
+    const assertMatchingReservation = (existing: Goal): void => {
+      if (existing.objective !== input.objective
+        || JSON.stringify(existing.outOfScope) !== JSON.stringify(input.outOfScope)
+        || JSON.stringify(existing.acceptanceCriteria) !== JSON.stringify(input.acceptanceCriteria)
+        || JSON.stringify(existing.specifications) !== JSON.stringify(input.specifications)
+        || JSON.stringify(existing.constraints) !== JSON.stringify(input.constraints)
+        || (input.startBranch !== undefined && existing.startBranch !== input.startBranch)
+        || (input.integrationBranch !== undefined && existing.integrationBranch !== input.integrationBranch)) {
+        throw new GoalRegistrationRecoveryError('Reserved goal conflicts with the approved proposal');
+      }
+    };
+    assertMatchingReservation(existing);
     if (!readManagerEvents(input.cwd).some(({ event }) => event.goalId === input.id && event.kind === 'registered')
       && existing.workLog.length === 0 && existing.status === 'created'
       && !new TaskRunner(input.cwd).listTaskStateItems().some((task) => task.goalId === input.id)
       && !await new FileEventStore(getGlobalConfigDir()).hasGoalRegistration(input.cwd, input.id)) {
       throw new GoalRegistrationRecoveryError('Goal exists, but registration event delivery cannot be confirmed');
     }
-    return existing;
+    const latest = store.find(input.id);
+    if (latest === undefined) throw new GoalRegistrationRecoveryError('Reserved goal no longer exists');
+    assertMatchingReservation(latest);
+    if (latest.registrationVerification?.status === 'pending') {
+      throw new GoalRegistrationRecoveryError('Reserved goal verification has not completed');
+    }
+    return latest;
   }
   signal?.throwIfAborted();
   if (await hasGoalRegistrationBranch(input.cwd, input.id, signal)) {

@@ -176,6 +176,7 @@ const ProjectConfigObjectBaseSchema = z.object({
     provider_permissions: z.record(z.string(), ManagerPermissionSchema).optional(),
     auto_run: z.boolean().optional(),
     preserve_goal_worktree: z.boolean().optional(),
+    verify_on_register: z.boolean().optional(),
     workflows: z.union([z.literal('all'), z.array(ManagerWorkflowEntrySchema)]).optional(),
     runtime_assignments: z.array(ManagerRuntimeAssignmentEntrySchema).optional(),
     // Deprecated: accepted for existing configuration files and ignored.
@@ -189,6 +190,8 @@ const ProjectConfigObjectBaseSchema = z.object({
       custom: z.boolean().optional(),
     }).strict().optional(),
     patrol_interval: z.number().int().positive().optional(),
+    // Node.js timers clamp delays above 2^31 - 1 to 1ms, so larger values are rejected.
+    refresh_interval_ms: z.number().int().positive().max(2_147_483_647).optional(),
   }).strict().optional(),
   language: LanguageSchema.optional(),
   provider: ProviderReferenceSchema.optional(),

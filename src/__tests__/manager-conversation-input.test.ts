@@ -18,7 +18,7 @@ function fixture() {
       handleNavigation: vi.fn(() => false), handleInput: vi.fn(() => true) },
     summaryApproval: { pending: null, setPending: vi.fn(), dismiss: vi.fn(), handleInput: vi.fn(() => true) },
     selection: { selection: null, open: vi.fn(() => true), close: vi.fn(), refresh: vi.fn(), handleInput: vi.fn() },
-    selectTarget: vi.fn(), abortGoal: vi.fn(async () => {}), saveAnswer: vi.fn(async () => {}), register: vi.fn(async () => {}),
+    selectTarget: vi.fn(), confirmGoalOperation: vi.fn(async () => {}), saveAnswer: vi.fn(async () => {}), register: vi.fn(async () => {}),
     onInputUnavailable: vi.fn(), openMenu: vi.fn(), slashCompletion: { completions: [], completionIndex: 0, reset: vi.fn(), handleInput: vi.fn(() => false) },
     epicsOpen: false, openEpics: vi.fn(), handleEpicInput: vi.fn(),
   };
@@ -27,17 +27,18 @@ function fixture() {
     return hooks.input.mock.calls.at(-1)![0] as (input: string, key: Key) => void;
   } };
 }
-it('routes history controls without changing the draft, completion selection or active turn', () => {
+it('routes Ctrl+O and history paging without changing the draft, completion selection or active turn', () => {
   const f = fixture(); const input = f.bind();
   f.options.editorRef.current = { ...createEditorState('日本語の下書き'), cursor: 3 };
   const editor = structuredClone(f.options.editorRef.current);
-  input('t', { ...key, ctrl: true });
+  input('o', { ...key, ctrl: true });
   input('', { ...key, pageDown: true });
   input('', { ...key, pageUp: true });
   expect(vi.mocked(f.options.browseTools).mock.calls).toEqual([['toggle'], ['next'], ['previous']]);
   expect(f.options.editorRef.current).toEqual(editor);
   expect(f.options.edit).not.toHaveBeenCalled();
   expect(f.options.submit).not.toHaveBeenCalled();
+  expect(f.options.openEpics).not.toHaveBeenCalled();
   expect(f.options.abortTurn).not.toHaveBeenCalled();
   expect(f.options.slashCompletion.reset).not.toHaveBeenCalled();
   input('', { ...key, escape: true });
@@ -58,13 +59,23 @@ it('accepts and edits an inquiry answer while a model turn is active', () => {
 });
 it('confirms a goal abort during a model turn and routes Escape only to turn interruption', () => {
   const f = fixture();
-  f.options.abortConfirmation.abortTarget = { goal: { id: 'goal', objective: 'Goal', status: 'created', executionStatus: 'active' }, retry: false };
+  f.options.abortConfirmation.abortTarget = { goal: { id: 'goal', objective: 'Goal', status: 'created', executionStatus: 'active' }, retry: false, kind: 'abort' };
   const input = f.bind();
   input('', { ...key, return: true });
   expect(f.options.abortConfirmation.handleInput).toHaveBeenCalledExactlyOnceWith(f.options.abortConfirmation.abortTarget,
-    expect.objectContaining({ return: true }), f.options.abortGoal);
+    expect.objectContaining({ return: true }), f.options.confirmGoalOperation);
   input('', { ...key, escape: true });
   expect(f.options.abortTurn).toHaveBeenCalledOnce();
+});
+it.each(['abort', 'delete'] as const)('reports which %s confirmation blocks typed and pasted text', (kind) => {
+  const f = fixture();
+  f.options.abortConfirmation.abortTarget = { goal: { id: 'goal', objective: 'Goal', status: 'completed', executionStatus: 'active' }, retry: false, kind };
+  const input = f.bind();
+  input('x', key);
+  const paste = hooks.paste.mock.calls.at(-1)![0] as (text: string) => void;
+  paste('pasted');
+  expect(vi.mocked(f.options.onInputUnavailable).mock.calls).toEqual([[kind], [kind]]);
+  expect(f.options.edit).not.toHaveBeenCalled();
 });
 it('submits a new human message and opens read menus during a model turn', () => {
   const f = fixture(); const input = f.bind();
@@ -90,7 +101,7 @@ it('submits /verify from the TUI without dismissing the pending proposal while t
   expect(f.options.submit).toHaveBeenCalledExactlyOnceWith('/verify');
 });
 
-it('routes Epic navigation before turn interruption and blocks pasted conversation input while browsing', () => {
+it('routes Ctrl+T to Epics before turn interruption and blocks pasted conversation input while browsing', () => {
   const f = fixture();
   f.options.epicsOpen = true;
   const input = f.bind();
@@ -100,7 +111,8 @@ it('routes Epic navigation before turn interruption and blocks pasted conversati
   const paste = hooks.paste.mock.calls.at(-1)![0] as (text: string) => void;
   paste('Do not modify the draft');
   expect(f.options.edit).not.toHaveBeenCalled();
-  input('o', { ...key, ctrl: true });
+  input('t', { ...key, ctrl: true });
   expect(f.options.openEpics).toHaveBeenCalledOnce();
+  expect(f.options.browseTools).not.toHaveBeenCalled();
   expect(f.options.submit).not.toHaveBeenCalled();
 });

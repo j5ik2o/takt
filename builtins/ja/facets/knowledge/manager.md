@@ -25,7 +25,7 @@ manager.main_merge はプロジェクト設定から解決されます。approve
 ゴール操作は対象の cwd と goalId を使います。各道具の引数と返却値は公開された定義に従います。
 
 - takt_get_workflow は、名前・scope reference・パスを workflow に受け、段階の名前・説明・種類、wait、system_inputs、effects、rules を返します。workflow_call は解決済みの呼び先と getInput を返し、getInput の workflow と callPath で続けて辿れます。応答は 64 KiB 以内で、省略部分は offset / limit で取得できます。
-- takt_enqueue_goal_task は、ゴールブランチを基点に worktree で実行するタスクを積みます。autoPr と shouldPublishBranchToOrigin の既定値は false です。workflow は名前・scope reference・パスで指定でき、merge_pr / close_pr を含むものも対象です。
+- takt_enqueue_goal_task は、ゴールブランチを基点に worktree で実行するタスクを積みます。autoPr と shouldPublishBranchToOrigin の既定値は false です。workflow は名前・scope reference・パスで指定でき、merge_pr / close_pr を含むものも対象です。runtimeAssignment は省略でき、そのタスクの runtime assignment を選びます。指定する名前は、takt_list_runtime_assignments が返した名前に限ります。
 - takt_requeue_goal_task は failed / exceeded を保存位置から続けます。failed は startStep も指定でき、exceeded は保存位置からの再開を使います。保存位置の利用可否、理由、開始候補が応答に返ります。
 - takt_retry_goal_task は指示を更新し、同じ failed タスクを pending に戻します。
 - takt_publish_pr_failed_goal_task は、ワークフローは成功したが PR 作成か push だけが失敗した pr_failed のタスクを、ワークフローを再実行せず公開し直して completed にします。残りの worktree 変更を commit し、ブランチを公開し、既存の PR があれば再利用し、なければ作成します。失敗した場合は pr_failed のまま理由を返します。pr_failed 以外のタスク、別ゴールの作業、一時停止中・中止済みのゴールは拒否します。
@@ -33,7 +33,9 @@ manager.main_merge はプロジェクト設定から解決されます。approve
 - takt_stop_goal_task は goalId、taskName、executionId、生存 PID を照合して停止要求を保存します。保存済み開始時刻も照合に使われます。worker が要求を観測して停止し、それまでは running が残ります。
 - takt_tell_run は cwd、goalId、taskName、content で追加指示を送り、原文を作業記録に保存します。
 - takt_pause_goal / takt_resume_goal / takt_abort_goal は cwd、goalId を使い、中止には理由を受けます。一時停止で止まったタスクは `Goal <id> was paused` の失敗として残り、開始前なら位置や run の情報が空の場合もあります。再開後は保存状態に応じて同じタスクを続けられます。中止は未実行を無効化し、実行中を中断して記録とブランチを保持します。completed は完成済みの記録として参照します。
+- takt_finish_goal は cwd、goalId、理由を受け、中止済みで status が created または awaiting_merge のゴールを completed に移します。理由は作業記録に保存します。completion がない場合に限り、理由が completion.summary になります。既存の completion がある場合はその summary を保持し、completion.targetSha だけを保存済みゴールブランチ先端へ更新します。未マージで閉じられた PR が保存されていても終了でき、PR は照会しません。中止済みでないゴール、実行中タスクや未取り込みの成果があるゴールは拒否します。成果とは status が completed または pr_failed のタスク、あるいは保存済みの completion SHA か workflowResult completed を持つタスクで、その SHA が統合先ブランチ先端に祖先関係または同一内容で含まれないものを未取り込みとして拒否します。pending タスクは takt_abort_goal が failed にするため終了を妨げません。executionStatus とタスクは変更しません。
 - takt_list_standalone_inquiries は現在の担当のゴールなしの未回答を返します。takt_withdraw_standalone_inquiry は id と理由で未回答を取り下げ、回答済みの記録を保持します。
+- takt_verify_goal_specification は、TUI の /verify と同じ形式仕様の検証をゴールの保存済み Quint / Alloy 仕様に対して実行します。cwd、goalId に加え、必要なら `quint` / `alloy` / 両方を specifications で指定し、省略時は保存済みの形式仕様をすべて検証します。検証の判定、段階ごとの結果、成果物とログの場所を返します。形式仕様が未保存のゴールはエラーになります。
 
 ## 取り込みと PR
 
@@ -68,10 +70,10 @@ manager.notifications は question / awaiting_merge / completed / progress / blo
 
 ## 見張りと仕様の検証
 
-見張りはプロセス消失や PR 状態の変化を配送します。プロセスの生存と開始時刻を照合して状態を判定します。takt_get_run は currentIteration、currentStepStartedAt、currentStepExecutionCount、終了段階の timestamp / iteration を返し、開始時刻は対応ログの有無に応じて値または不明として扱われます。
+見張りはプロセス消失や PR 状態の変化を配送します。プロセスの生存と開始時刻を照合して状態を判定します。takt_get_run は currentIteration、currentStepStartedAt、currentStepExecutionCount、currentStepPath、終了段階の timestamp / iteration を返し、開始時刻は対応ログの有無に応じて値または不明として扱われます。currentStep は run の記録上の現在 step で、通常はトップレベルの step です。ただし、トップレベルの parallel の step の分岐が子の workflow の step を開始すると、その分岐の step の名前になります。currentStepPath はトップレベルの workflow から実行中の末端の step までの workflow と step を順に並べ、最後の要素だけが startedAt と executionCount を持ちます。子の workflow を呼ぶ step の実行中は、その step が途中の要素になり、子の workflow の step が末端になります。parallel の step の実行中は parallel の step 自体が末端で、分岐の step は含みません。例外として、currentStep がトップレベルの parallel の step の分岐を指し、その parallel の step の今回の実行で分岐が最後に開始した step が実行中のときは、parallel の step、その分岐の step、分岐が呼んだ子の workflow の step の順に並び、ほかの分岐は含みません。分岐のその step が完了した後や分岐の子の workflow が終わった後は、分岐が次の step を開始するまで parallel の step 自体が今回の実行の開始の値を持って末端になります。完了した step を実行中とは説明しません。loop monitor の判定中は、判定の step（`_loop_judge_` で始まる名前）が判定を起こした step（parallel の step を含む）に代わって同じ workflow の末端になり、トップレベルでの判定中も currentStep は判定を起こした step のままです。currentStepStartedAt と currentStepExecutionCount はこの末端の step の値で、currentStep の値ではありません。executionCount は、最新のログで同じ呼出箇所の末端の step が開始された回数です。進捗は「takt-default の develop の中で、development-core の write_tests を2回目として実行中」のように、末端の workflow と step に実行回数を対応させて説明します。executionCount が 0 のときは、ログはあるものの現在の step の開始がまだ記録されていない状態で、currentStepPath は currentStep だけを持ちます。これを0回目とは説明せず、開始の記録待ちとして扱います。executionCount が null のときはログに開始記録がなく不明で、currentStepPath が null なのは run metadata に currentStep の記録がないことを意味し、run で step が一度も開始されていないことを意味するわけではありません。run が終了していて（たとえば status が completed）currentStep が残っている場合、currentStepPath は最後に記録した位置（最後に完了した step の末端など）を示し、その step が実行中であることを示しません。
 
 取り込み先との衝突は pr_conflicting で届きます。同じ衝突の通知は状態の変化に対応し、解消後の再発も通知対象です。mergeable の UNKNOWN は判定保留の状態です。
 
-specifications は任意の保存フィールドです。takt_get_goal の path に specifications.gherkin、specifications.quint、specifications.alloy を指定すると各本文を取得できます。PR の最終レビュー用タスクには保存仕様が自動で渡ります。
+specifications は任意の保存フィールドです。takt_get_goal の path に specifications.gherkin、specifications.quint、specifications.alloy を指定すると各本文を取得できます。保存仕様は PR の最終レビューを含むゴールの各タスクの run に TAKT がファイルで自動的に渡し、各ステップの指示にパスを知らせます。指示書には仕様の全文を貼らず、そのタスクが担当する要件の識別子（受け入れ条件の ID など）を書きます。
 
 形式仕様が有効な場合、人が TUI または Slack の会話で /verify を送ると、現在の合意から仕様を生成して検査し、結果を同じ会話へ返します。保存済みのゴールと仕様は検証前の内容で保持されます。形式仕様の設定に応じて、検証の利用可否が応答に返ります。

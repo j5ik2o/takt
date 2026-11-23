@@ -10,6 +10,10 @@ import { requeueGoalTaskInputSchema, retryGoalTaskInputSchema } from './goalTask
 import { publishPrFailedGoalTaskInputSchema } from './goalTaskPrRetrySchemas.js';
 import { removeGoalTaskInputSchema } from './goalTaskRemovalSchemas.js';
 import { stopGoalTaskInputSchema } from './goalTaskStopSchemas.js';
+import { finishGoalInputSchema } from './goalFinishSchemas.js';
+
+// 中止したゴールでも後片付けは必要なので、状態を書き換えずに終了・整理できる操作だけを通す。
+const ABORTED_GOAL_ALLOWED_TOOLS = ['withdraw_question', 'remove', 'finish_aborted'] as const;
 
 const inputSchemas = {
   enqueue: enqueueGoalTaskInputSchema, integrate: mergeGoalTaskInputSchema, complete: completeGoalInputSchema,
@@ -21,6 +25,7 @@ const inputSchemas = {
   stop: stopGoalTaskInputSchema,
   merge_pr: mergeGoalPrInputSchema,
   publish_pr: publishPrFailedGoalTaskInputSchema,
+  finish_aborted: finishGoalInputSchema,
 };
 
 export async function goalWrite(
@@ -34,7 +39,8 @@ export async function goalWrite(
     const store = new GoalStore(input.cwd);
     const previous = await store.get(input.goalId);
     signal.throwIfAborted();
-    if (previous.executionStatus === 'aborted' && tool !== 'withdraw_question' && tool !== 'remove') {
+    if (previous.executionStatus === 'aborted'
+      && !(ABORTED_GOAL_ALLOWED_TOOLS as readonly string[]).includes(tool)) {
       throw new Error('Goal is aborted. Work cannot continue for this goal.');
     }
     if (isGoalPaused(previous) && ['enqueue', 'integrate', 'complete', 'check_completion', 'requeue', 'retry', 'publish_pr', 'reopen', 'tell', 'merge_pr', 'update_branches'].includes(tool)) {

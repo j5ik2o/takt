@@ -170,6 +170,7 @@ export interface GitProvider {
   createPullRequest(options: CreatePrOptions, cwd?: string): CreatePrResult;
 
   commentOnPr(prNumber: number, body: string, cwd?: string): CommentResult;
+  commentOnPrAbortable?(prNumber: number, body: string, cwd: string, signal: AbortSignal): Promise<CommentResult>;
 
   commentOnIssue(issueNumber: number, body: string, cwd?: string): IssueCommentResult;
 

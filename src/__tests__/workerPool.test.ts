@@ -256,6 +256,22 @@ describe('runWithWorkerPool', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('retries a task-store lock timeout during poll preflight', async () => {
+    vi.useFakeTimers();
+    const runner = createRunner([[createTask('pending-after-preflight')]]);
+    vi.mocked(checkPendingTaskProviders).mockRejectedValueOnce(
+      new Error('File lock: timed out waiting for lock: /project/.takt/tasks.yaml.lock'),
+    );
+    const pool = runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100, 'run');
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runner.claimNextTasks).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(pool).resolves.toEqual({ success: 1, fail: 0, executedTaskNames: ['pending-after-preflight'] });
+    expect(executeRunTaskAndComplete).toHaveBeenCalledOnce();
+  });
+
   it('tasks.yaml ロックのタイムアウトは警告1回に留め、毎tick警告を連打しない', async () => {
     vi.useFakeTimers();
     const runner = createRunner();

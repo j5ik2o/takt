@@ -19,10 +19,21 @@ function lockTimeoutFailure(): Error {
 it('publishes task setup failures once when claiming changes their state', () => {
   let status = 'pending';
   const record = () => ({ name: 'task-a', goalId: goalRecord().id, status, runSlug: 'setup-run', completion: { success: false, interrupted: false } });
-  const runner = { listTaskStateItems: () => [record()], claimNextTasks: () => { status = 'failed'; return []; } } as unknown as TaskRunner;
-  expect(claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal)).toEqual({ tasks: [] });
+  const runner = {
+    listTaskStateItems: vi.fn(() => [record()]),
+    claimNextTasks: (_count: number, _check: unknown, onSetupFailed: (task: unknown) => void) => {
+      if (status === 'pending') {
+        status = 'failed';
+        onSetupFailed(record());
+      }
+      return [];
+    },
+  };
+  const taskRunner = runner as unknown as TaskRunner;
+  expect(claimTasksWithGoalCompletions(taskRunner, 1, '/project', new AbortController().signal)).toEqual({ tasks: [] });
+  expect(runner.listTaskStateItems).toHaveBeenCalledOnce();
   expect(save).toHaveBeenCalledExactlyOnceWith('/project', { kind: 'completion', goalId: goalRecord().id, taskName: 'task-a', runSlug: 'setup-run', result: { success: false, interrupted: false } });
-  claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal); expect(save).toHaveBeenCalledOnce();
+  claimTasksWithGoalCompletions(taskRunner, 1, '/project', new AbortController().signal); expect(save).toHaveBeenCalledOnce();
 });
 it('publishes newly interrupted goal tasks while leaving older results untouched', () => {
   let status: TaskState['status'] = 'running';
@@ -153,10 +164,10 @@ describe.each(['private', 'task-store'] as const)('eligible pending tasks for %s
 
 describe('tasks.yaml write-lock timeout failure', () => {
   it.each([
-    { goalTasksOnly: false, goalId: undefined, retry: true },
-    { goalTasksOnly: true, goalId: undefined, retry: false },
-    { goalTasksOnly: true, goalId: goalRecord().id, retry: true },
-  ])('treats a classified write-lock timeout as a recoverable claim failure: %j', ({ goalTasksOnly, goalId, retry }) => {
+    { goalTasksOnly: false, goalId: undefined },
+    { goalTasksOnly: true, goalId: undefined },
+    { goalTasksOnly: true, goalId: goalRecord().id },
+  ])('treats a classified write-lock timeout as a recoverable claim failure: %j', ({ goalTasksOnly, goalId }) => {
     const failure = new TaskClaimLockAcquisitionError(
       'File lock: timed out waiting for lock: /project/.takt/tasks.yaml.lock', 'TIMEOUT',
     );
@@ -165,10 +176,8 @@ describe('tasks.yaml write-lock timeout failure', () => {
       claimNextTasks: () => { throw failure; },
     } as unknown as TaskRunner;
     const claim = () => claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal, goalTasksOnly);
-    if (retry) {
-      expect(claim).toThrow(TaskClaimLockUnavailableError);
-      expect(claim).toThrow(expect.objectContaining({ cause: failure, code: 'TIMEOUT' }));
-    } else expect(claim).toThrow(failure);
+    expect(claim).toThrow(TaskClaimLockUnavailableError);
+    expect(claim).toThrow(expect.objectContaining({ cause: failure, code: 'TIMEOUT' }));
     expect(save).not.toHaveBeenCalled();
   });
 
@@ -187,13 +196,13 @@ describe('tasks.yaml write-lock timeout failure', () => {
     expect(save).not.toHaveBeenCalled();
   });
 
-  it('does not treat a timeout without a pending claim candidate as recoverable', () => {
+  it('classifies a timeout when the earlier snapshot showed no pending claim candidate', () => {
     const runner = {
       listTaskStateItems: () => [{ name: 'task-a', goalId: undefined, status: 'running' }],
       claimNextTasks: () => { throw lockTimeoutFailure(); },
     } as unknown as TaskRunner;
     expect(() => claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal))
-      .toThrow(/File lock: timed out waiting for lock/);
+      .toThrow(expect.objectContaining({ code: 'TIMEOUT' }));
   });
 
   it('does not treat a non-timeout lock error as a recoverable claim failure', () => {

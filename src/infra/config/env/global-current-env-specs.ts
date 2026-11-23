@@ -2,6 +2,7 @@ import { PROVIDER_OPTIONS_ENV_SPECS } from '../providerOptionsContract.js';
 import type { EnvSpec } from './config-env-shared.js';
 
 export const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
+  { path: 'manager.verify_on_register', type: 'boolean' },
   { path: 'language', type: 'string' },
   { path: 'provider', type: 'string' },
   { path: 'model', type: 'string' },
@@ -50,6 +51,7 @@ export const GLOBAL_ENV_SPECS: readonly EnvSpec[] = [
   { path: 'interactive_preview_steps', type: 'number' },
   { path: 'sync_project_local_takt_on_retry', type: 'boolean' },
   { path: 'auto_requeue_max_attempts', type: 'number' },
+  { path: 'manager.refresh_interval_ms', type: 'number' },
   { path: 'ignore_exceed', type: 'boolean' },
   { path: 'runtime', type: 'json' },
   { path: 'runtime.prepare', type: 'json' },
