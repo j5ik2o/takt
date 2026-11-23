@@ -924,6 +924,7 @@ describe('publishPrFailedTask', () => {
     ['commit', () => mockStageAndCommit.mockRejectedValue(new Error('commit failed'))],
     ['push', () => mockExecFileSync.mockImplementation((_c, args) => {
       if ((args as string[])[0] === 'push') throw new Error('push failed');
+      if ((args as string[])[1] === '--verify') return `${publishedTaskSha}\n`;
       if ((args as string[])[0] === 'remote') return 'origin\n';
       return 'takt/failed-task\n';
     })],
@@ -935,6 +936,22 @@ describe('publishPrFailedTask', () => {
     const result = await publishPrFailedTask('/project', prFailedTask);
 
     expect(result.success).toBe(false);
+  });
+
+  it.each([' \n', 'abc1234'])('leaves pr_failed untouched when Git returns an invalid branch SHA %j', async (output) => {
+    const git = mockExecFileSync.getMockImplementation()!;
+    mockExecFileSync.mockImplementation((command, args, options) => {
+      if ((args as string[])[1] === '--verify') return output;
+      return git(command, args, options);
+    });
+
+    const result = await publishPrFailedTask('/project', prFailedTask);
+
+    expect(result).toEqual({ success: false, error: expect.stringContaining('full commit SHA') });
+    expect(mockExecFileSync).not.toHaveBeenCalledWith('git', expect.arrayContaining(['push']), expect.anything());
+    expect(mockFindExistingPr).not.toHaveBeenCalled();
+    expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+    expect(mockCompletePublishedTask).not.toHaveBeenCalled();
   });
 
   it('rejects a task without a branch', async () => {

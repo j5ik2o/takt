@@ -33,6 +33,12 @@ beforeEach(() => {
   fixture.provider([]);
   inkFrames.frames = [];
   terminal = createEscMenuTerminal();
+  vi.mocked(execFileSync).mockImplementation((file, args) => {
+    if (file === 'git' && args?.join(' ') === 'rev-parse --verify refs/heads/takt/menu-task') {
+      return `${publishedSha}\n`;
+    }
+    return '';
+  });
 });
 
 afterEach(() => {
@@ -41,6 +47,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const publishedSha = 'a1'.repeat(20);
 const workflowPrompt = () => getLabel('retry.usePreviousWorkflowConfirm', 'en', { workflow: 'menu-workflow' });
 const runPrompt = () => getLabel('interactive.runSelector.confirm', 'en');
 
@@ -166,7 +173,7 @@ describe('task list confirmation to menu routes', () => {
         expect(menuMocks.createPullRequestSafely).toHaveBeenCalledWith(expect.any(Object), expect.objectContaining({ branch: task.branch }), fixture.cwd);
         if (kind === 'pr_failed') {
           expect(menuMocks.findExistingPr).toHaveBeenCalledWith(task.branch, fixture.cwd);
-          expect(menuMocks.completePublishedTask).toHaveBeenCalledWith(task.name, 'https://example.com/pr/1');
+          expect(menuMocks.completePublishedTask).toHaveBeenCalledExactlyOnceWith(task.name, 'https://example.com/pr/1', publishedSha);
         }
       }
       await executeNextListOperation(run, confirmationMark);

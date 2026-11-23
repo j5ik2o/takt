@@ -245,9 +245,13 @@ async function publishPrFailedPr(
 }
 
 function readPublicationSha(worktreePath: string, branch: string): string {
-  return execFileSync('git', ['rev-parse', '--verify', toLocalBranchRef(branch)], {
+  const sha = execFileSync('git', ['rev-parse', '--verify', toLocalBranchRef(branch)], {
     cwd: worktreePath, encoding: 'utf8', stdio: 'pipe',
   }).trim();
+  if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(sha)) {
+    throw new Error('Git did not return a full commit SHA for the task branch');
+  }
+  return sha;
 }
 
 function persistPublishedPr(projectDir: string, taskName: string, prUrl: string, publishedSha: string): PublishTaskResult {
