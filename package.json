@@ -82,6 +82,7 @@
     "eval:prompts:fix-verifier-family-boundary": "node eval/scripts/prepare.mjs fix-verifier-family-boundary && node eval/scripts/run-evals.mjs fix-verifier-family-boundary",
     "eval:prompts:fix-verifier-state-closure": "node eval/scripts/prepare.mjs fix-verifier-state-closure && node eval/scripts/run-evals.mjs fix-verifier-state-closure",
     "eval:prompts:fix-verifier-state-routing": "node eval/scripts/prepare.mjs fix-verifier-state-routing && node eval/scripts/run-evals.mjs fix-verifier-state-routing",
+    "eval:prompts:fix-verifier-routing-spark": "node eval/scripts/fix-verifier-routing-spark.mjs",
     "eval:prompts:fix-verifier-model-matrix": "node eval/scripts/prepare.mjs fix-verifier-state-closure fix-verifier-state-routing && node eval/scripts/run-evals.mjs fix-verifier-model-matrix fix-verifier-routing-model-matrix --no-cache",
     "eval:prompts:finding-premise-scope": "node eval/scripts/run-evals.mjs finding-premise-scope --prepare --no-cache",
     "eval:prompts:finding-realistic-premise": "node eval/scripts/run-evals.mjs --prepare finding-realistic-premise --no-cache",

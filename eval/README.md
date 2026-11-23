@@ -815,6 +815,18 @@ for baseline conditions and the limits of comparative claims.
 
 同じ経路判定ケースを Codex Spark で採点するには、接続済みの `codex-spark` を `PATH` に置き、`npm run eval:prompts -- fix-verifier-routing-codex-spark --no-cache` を実行します。モデルと接続先はランチャーの設定を使います。一時ディレクトリの削除に失敗した場合は標準エラーに記録します。故障注入と終了値の対照は `npm test -- src/__tests__/codex-review-provider.integration.test.ts` で確認できます。
 
+ローカルの Spark に接続できる環境では、同じケースを DeepSeek v4.1 Flash の API 応答で採点できます。リポジトリのルートで既存の Phase 3 プロンプトを生成し、専用コマンドを実行します。
+
+```sh
+npm run build
+node eval/scripts/prepare.mjs fix-verifier-state-routing
+npm run eval:prompts:fix-verifier-routing-spark
+```
+
+専用コマンドには Spark の OpenAI 互換 API のベース URL（必要な場合は `/v1` まで）を `TAKT_EVAL_SPARK_BASE_URL` で渡します。Bearer 認証が必要な環境では `TAKT_EVAL_SPARK_API_KEY` も設定します。モデル ID は `deepseek-v4.1-flash` 固定です。実行には Promptfoo と準備済みのプロンプトを使います。Spark ランチャー、OpenCode、TAKT の実行プロセス、外部の採点モデルは不要です。CI や既定の評価スイートからは実行されません。
+
+直接 API 版は fixture のソースと報告書を本文に添え、既存の正規表現で採点します。ツールで作業ディレクトリを読むハーネス版とは評価条件が異なります。終了値は合格が `0`、判定タグの不一致が `1`、設定や API 応答のエラーが `2` です。評価を実行した場合は `.tmp/fix-verifier-routing-spark-direct-*/summary.json` に結果を保存します。生成後は `node --test eval/scripts/fix-verifier-routing-spark.test.mjs` で模擬 API に対する動作を確認できます。
+
 `finding-premise-scope` はレビュー担当4ケースと再計画2ケースを、ケースごとの隔離 fixture と現在のファセットから生成したプロンプトで評価します。Codex gpt-6-sol low、Claude Opus 5、Codex gpt-6-luna max を使い、判定役は gpt-6-sol low です。両 CLI の認証が必要なためデフォルト実行から除外し、`npm run eval:prompts:finding-premise-scope` で明示実行します。rv1 は計画の設計判断（秘密値を写さない）を受入条件として指摘にしないこと、rv2 は前回の裁定が広げた取引先 CSV の形式外の金額表記を理由に persists にしないことを測ります。rn1 は契約が定める円記号付きの金額を persists とし、rn2 は外部の提出者が付けたファイル名による保存先の外への書き込みを blocking の指摘にすることを測ります。pl1 は裁定が広げた形式外の表記を再計画の作業にしないこと、pn1 は契約が定める表記を作業にすることを測ります。
 
 `finding-realistic-premise` は、レビュー6ケース、裁定6ケース、修正完了の検証4ケース、検証後の再計画1ケースの計17ケースで、各役割の判断を評価します。
