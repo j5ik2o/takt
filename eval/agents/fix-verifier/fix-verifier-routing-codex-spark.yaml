@@ -1,0 +1,11 @@
+# yaml-language-server: $schema=https://promptfoo.dev/config-schema.json
+description: 'TAKT workflow eval: fix-verifier mixed-gap routing with Codex Spark'
+
+prompts:
+  - file://../../prompts/fix-verifier-state-routing.phase3.md
+
+providers:
+  - id: 'exec: bash ../../providers/codex-review.sh --spark fixtures/fix-verifier-state-closure'
+    label: codex-spark
+
+tests: file://../../cases/fix-verifier-state-routing.yaml
