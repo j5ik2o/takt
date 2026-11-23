@@ -144,6 +144,80 @@ subworkflow:
       facet_kind: instruction
       default: supervise-review-resolution
 initial_step: plan
+loop_monitors:
+  # plan → write_tests → plan is the "tests cannot be written" re-planning loop that had no monitor.
+  - cycle:
+      - plan
+      - write_tests
+    threshold: 3
+    judge:
+      input_reports:
+        - from_step: plan
+          reports: [plan.md]
+          history: {previous: 2}
+        - from_step: write_tests
+          reports: [test-report.md]
+          history: {previous: 2}
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 'Healthy: test design is progressing and the reports are converging'
+          next: write_tests
+        - condition: Re-planning produced new information, verification results, or knowledge, so test writing can be retried
+          next: write_tests
+        - condition: The same reason repeats without new information, verification results, or knowledge, so test writing does not progress
+          next: ABORT
+        - condition: No feasible remedy exists that satisfies the requirements
+          next: ABORT
+  # implement / peer-review are child workflow_calls. Count only the outer replan round trip and
+  # never share history with the child engine fix monitor.
+  - cycle:
+      - replan
+      - implement
+    threshold: 3
+    judge:
+      input_reports:
+        - from_step: replan
+          reports: [plan.md]
+          history: {previous: 2}
+        - from_step: implement
+          reports: [implementation-report.md]
+          history: {previous: 2}
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 'Healthy: implementation is progressing and the reports are converging'
+          next: implement
+        - condition: The new re-plan has concrete diffs or verification results that let implementation proceed
+          next: implement
+        - condition: The same gap repeats with no new diffs, verification results, or knowledge
+          next: ABORT
+        - condition: No feasible remedy exists that satisfies the requirements
+          next: ABORT
+  - cycle:
+      - replan
+      - peer-review
+    threshold: 3
+    judge:
+      input_reports:
+        - from_step: replan
+          reports: [plan.md]
+          history: {previous: 2}
+        - from_step: peer-review
+          reports: [review-resolution.md]
+          history: {previous: 2}
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 'Healthy: review findings are being resolved and the reports are converging'
+          next: peer-review
+        - condition: The new re-plan has concrete diffs or verification results that can resolve the review findings
+          next: peer-review
+        - condition: The same finding repeats with no new related diffs, verification results, or knowledge
+          next: ABORT
+        - condition: No feasible remedy exists that satisfies the requirements
+          next: ABORT
+
 
 facet_pools:
   coding-facets:

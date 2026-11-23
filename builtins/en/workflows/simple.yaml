@@ -14,6 +14,58 @@ facet_pools:
 capabilities:
   - readonly
 initial_step: plan
+loop_monitors:
+  # supervise → remediation is the outer round trip where supervise returns after a child fix.
+  # Child-engine steps never enter the parent history, so only this outer cycle is counted here.
+  - cycle:
+      - supervise
+      - remediation
+    threshold: 3
+    judge:
+      input_reports:
+        - from_step: remediation
+          reports: [review-resolution.md]
+          history: {previous: 2}
+        - from_step: supervise
+          reports: [supervisor-validation.md]
+          history: {previous: 2}
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 'Healthy: fixes are progressing and the reports are converging'
+          next: remediation
+        - condition: The finding is progressing toward resolution with new diffs, verification results, or knowledge, so another confirmation is needed
+          next: remediation
+        - condition: >-
+            The same finding and cause repeat without new related diffs, verification results, or knowledge,
+            so this loop sees no progress.
+          next: ABORT
+        - condition: No feasible remedy exists that satisfies the requirements
+          next: ABORT
+  # follow-up-review → remediation → follow-up-review; a different period from the child fix monitor.
+  - cycle:
+      - follow-up-review
+      - remediation
+    threshold: 4
+    judge:
+      input_reports:
+        - from_step: remediation
+          reports: [fix-plan.md, fix-report.md, fix-verification.md]
+          history: {previous: 2}
+        - from_step: follow-up-review
+          reports: [coding-review.md]
+          history: {previous: 2}
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 'Healthy: fixes are progressing and the reports are converging'
+          next: remediation
+        - condition: The finding is progressing toward resolution with new diffs, verification results, or knowledge, so another confirmation is needed
+          next: remediation
+        - condition: The same finding repeats with no new related diffs, verification results, or knowledge
+          next: ABORT
+        - condition: No feasible remedy exists that satisfies the requirements
+          next: ABORT
 steps:
   - name: plan
     capabilities:

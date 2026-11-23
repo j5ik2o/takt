@@ -155,6 +155,80 @@ facet_pools:
   takt-security-review-facets:
     uses: takt-security-review-facets
 
+loop_monitors:
+  # plan → write_tests → plan は「テストを書けない」再計画の往復で、これまで監視が無かった。
+  - cycle:
+      - plan
+      - write_tests
+    threshold: 3
+    judge:
+      input_reports:
+        - from_step: plan
+          reports: [plan.md]
+          history: {previous: 2}
+        - from_step: write_tests
+          reports: [test-report.md]
+          history: {previous: 2}
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 健全（テスト設計の進捗があり、報告内容も収束している）
+          next: write_tests
+        - condition: 再計画で新しい情報・検証結果・知見が得られ、テスト作成を再試行できる
+          next: write_tests
+        - condition: 同じ理由が新しい情報・検証結果・知見なしに繰り返され、テスト作成が進展しない
+          next: ABORT
+        - condition: 要件を満たす実現可能な打開手段がない
+          next: ABORT
+  # implement / peer-review は子 workflow_call。子を離れて replan から戻る外側の往復だけを数え、
+  # 子 engine 内の修正 monitor とは履歴を共有しない。
+  - cycle:
+      - replan
+      - implement
+    threshold: 3
+    judge:
+      input_reports:
+        - from_step: replan
+          reports: [plan.md]
+          history: {previous: 2}
+        - from_step: implement
+          reports: [implementation-report.md]
+          history: {previous: 2}
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 健全（実装進捗があり、報告内容も収束している）
+          next: implement
+        - condition: 新しい再計画で実装を進められる具体的な差分・検証結果がある
+          next: implement
+        - condition: 同じ不足が新しい差分・検証結果・知見なしに繰り返されている
+          next: ABORT
+        - condition: 要件を満たす実現可能な打開手段がない
+          next: ABORT
+  - cycle:
+      - replan
+      - peer-review
+    threshold: 3
+    judge:
+      input_reports:
+        - from_step: replan
+          reports: [plan.md]
+          history: {previous: 2}
+        - from_step: peer-review
+          reports: [review-resolution.md]
+          history: {previous: 2}
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 健全（レビュー指摘の解決が進み、報告内容も収束している）
+          next: peer-review
+        - condition: 新しい再計画でレビュー指摘を解消できる具体的な差分・検証結果がある
+          next: peer-review
+        - condition: 同じ指摘が新しい関連差分・検証結果・知見なしに繰り返されている
+          next: ABORT
+        - condition: 要件を満たす実現可能な打開手段がない
+          next: ABORT
+
 steps:
   - name: plan
     capabilities:

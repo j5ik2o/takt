@@ -31,7 +31,8 @@ vi.mock('../core/workflow/evaluation/index.js', async (importOriginal) => {
   };
 });
 
-vi.mock('../core/workflow/phase-runner.js', () => ({
+vi.mock('../core/workflow/phase-runner.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../core/workflow/phase-runner.js')>()),
   runReportPhase: vi.fn().mockResolvedValue(undefined),
   runStatusJudgmentPhase: vi.fn().mockResolvedValue({ label: '', method: 'auto_select' }),
 }));
@@ -46,6 +47,7 @@ vi.mock('../shared/utils/index.js', async (importOriginal) => ({
 import { WorkflowEngine } from '../core/workflow/index.js';
 import { runAgent } from '../agents/runner.js';
 import { runReportPhase } from '../core/workflow/phase-runner.js';
+import { reportInputEntries } from '../core/models/workflow-report-input.js';
 import { normalizeRule } from '../infra/config/loaders/workflowRuleNormalizer.js';
 import { CycleDetector } from '../core/workflow/engine/cycle-detector.js';
 import { loadWorkflowFromFile } from '../infra/config/loaders/workflowLoader.js';
@@ -55,6 +57,7 @@ import { writeReportFile } from '../core/workflow/report-writer.js';
 import type { WorkflowEngineOptions } from '../core/workflow/types.js';
 import { buildWorkflowResumePointEntry, getWorkflowReference } from '../core/workflow/workflow-reference.js';
 import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflow-step-participation-index.js';
+import { getReportFiles } from '../core/workflow/output-contract-files.js';
 import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
 import {
@@ -2639,6 +2642,19 @@ describe('Outer loop over nested workflow_call steps (simple)', () => {
   }
 
   // 実定義の遷移をたどり、同じ step へ戻る最短の閉路だけを外側の候補にする。
+  // engine と同じく、workflow_call の子 workflow の output contract まで辿って生成元を集める。
+  function emittedReports(language: string, config: WorkflowConfig, step: WorkflowStep, seen: Set<string>): Set<string> {
+    if (seen.has(step.name)) return new Set();
+    seen.add(step.name);
+    const reports = new Set(getReportFiles(step.outputContracts));
+    if (step.kind !== 'workflow_call') return reports;
+    const child = loadShipped(language, step.call);
+    for (const childStep of child.steps) {
+      for (const report of emittedReports(language, child, childStep, seen)) reports.add(report);
+    }
+    return reports;
+  }
+
   function simpleCycles(config: WorkflowConfig): string[][] {
     const found = new Map<string, string[]>();
     const walk = (path: string[]): void => {
@@ -2656,40 +2672,78 @@ describe('Outer loop over nested workflow_call steps (simple)', () => {
     return [...found.values()];
   }
 
-  it.each(['ja', 'en'] as const)('%s: simple leaves its outer round trips unmonitored', (language) => {
+  it.each(['ja', 'en'] as const)('%s: simple counts only its shipped outer cycles', (language) => {
     const simple = loadShipped(language, 'simple');
-    expect(simple.loopMonitors ?? []).toHaveLength(0);
     const cycles = simpleCycles(simple).map(cycle => cycle.join('>'));
-    // 実際に往復する外側の閉路で、monitor の対象になっていないもの。
+    // 実際に往復する外側の閉路。
     expect(cycles).toEqual(expect.arrayContaining([
       'supervise>remediation',
       'follow-up-review>remediation',
       'remediation>follow-up-review',
     ]));
+    const monitored = (simple.loopMonitors ?? []).map(monitor => monitor.cycle.join('>'));
+    // 子の fix 4 周 monitor とは別の外側往復だけが親で数えられる。
+    expect(monitored).toEqual(expect.arrayContaining(['supervise>remediation', 'follow-up-review>remediation']));
   });
 
-  it.each(['ja', 'en'] as const)('%s: the outer round trip triggers only once a monitor is added', (language) => {
+  it.each(['ja', 'en'] as const)('%s: simple counts its supervise outer round trip at threshold', (language) => {
     const simple = loadShipped(language, 'simple');
     expect(simpleCycles(simple).map(cycle => cycle.join('>'))).toContain('supervise>remediation');
-    const threshold = 3;
-    const monitor: LoopMonitorConfig = {
-      cycle: ['supervise', 'remediation'],
-      threshold,
-      judge: {
-        persona: 'supervisor',
-        rules: [
-          normalizeRule({ condition: 'Healthy outer progress', next: 'remediation' }) as LoopMonitorRule,
-          normalizeRule({ condition: 'Same findings repeat with no new evidence', next: 'ABORT' }) as LoopMonitorRule,
-        ],
-      },
-    };
-    const detector = new CycleDetector([monitor]);
+    const monitor = simple.loopMonitors?.find(item => item.cycle.join('>') === 'supervise>remediation');
+    if (!monitor) throw new Error('Missing supervise>remediation monitor');
+    // 進展対照は、監視そのものが進展を続行に導く規則を先に選ぶ。実モデルの判断は DGX 検証で別途取得する。
+    const progressRule = monitor.judge.rules.findIndex(rule => rule.next === 'remediation');
+    if (progressRule < 0) throw new Error('Missing continue rule');
+    const detector = new CycleDetector(simple.loopMonitors);
     const reentry = (): boolean => {
       expect(detector.recordAndCheck('supervise', 'remediation').triggered).toBe(false);
       return detector.recordAndCheck('remediation', 'supervise').triggered;
     };
-    for (let round = 1; round <= threshold; round += 1) {
-      expect(reentry()).toBe(round === threshold);
+    for (let round = 1; round <= monitor.threshold; round += 1) {
+      expect(reentry()).toBe(round === monitor.threshold);
+    }
+    // 子の修正 monitor を親の履歴に混ぜても、外側 monitor の発火は変わらない（二重計数しない）。
+    const childOnly = new CycleDetector(simple.loopMonitors);
+    for (let round = 1; round <= monitor.threshold; round += 1) {
+      expect(childOnly.recordAndCheck('remediation', 'supervise').triggered).toBe(false);
+      expect(childOnly.recordAndCheck('supervise', 'remediation').triggered).toBe(false);
+    }
+  });
+
+  it.each(['ja', 'en'] as const)('%s: development-core monitors its re-planning round trips', (language) => {
+    for (const name of ['simple', 'development-core'] as const) {
+      const config = loadShipped(language, name);
+      const cycles = simpleCycles(config).map(cycle => cycle.join('>'));
+      for (const monitor of config.loopMonitors ?? []) {
+        // 追加した監視は、配布定義に実在する往復だけを対象にする。
+        expect(cycles).toContain(monitor.cycle.join('>'));
+      }
+    }
+    const core = loadShipped(language, 'development-core');
+    const monitored = (core.loopMonitors ?? []).map(monitor => monitor.cycle.join('>'));
+    expect(monitored).toEqual(expect.arrayContaining(['plan>write_tests', 'replan>implement', 'replan>peer-review']));
+    const implement = core.steps.find(step => step.name === 'implement');
+    // 子 workflow_call の内側は子 monitor が所有し、親の外側 monitor とは履歴を共有しない。
+    expect(implement?.kind).toBe('workflow_call');
+  });
+
+  it.each(['ja', 'en'] as const)('%s: every monitor report input names a report its producer emits', (language) => {
+    // 宣言しただけの report 名は judge ステップの入力解決で例外になり、監視が働かない。
+    // 実定義の output contract から、宣言した report に実在する生成元があることを確認する。
+    for (const name of ['simple', 'development-core'] as const) {
+      const config = loadShipped(language, name);
+      for (const monitor of config.loopMonitors ?? []) {
+        for (const input of reportInputEntries(monitor.judge.inputReports)) {
+          const source = config.steps.find(step => step.name === input.fromStep);
+          if (!source) throw new Error(`Monitor ${monitor.cycle.join('>')} reads unknown step ${input.fromStep}`);
+          const emitted = emittedReports(language, config, source, new Set());
+          expect(emitted.size).toBeGreaterThan(0);
+          if (input.reports === 'all') continue;
+          for (const report of input.reports) {
+            expect(emitted.has(report), `${name}:${monitor.cycle.join('>')} reads ${report} from ${input.fromStep}`).toBe(true);
+          }
+        }
+      }
     }
   });
 

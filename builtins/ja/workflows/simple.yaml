@@ -14,6 +14,58 @@ facet_pools:
 capabilities:
   - readonly
 initial_step: plan
+loop_monitors:
+  # supervise → remediation は、子の修正後に「修正不要で復帰」する外側の往復。子engine の step は
+  # 親の履歴に入らず、子の fix 4 周 monitor とは別の周回なので、ここだけで数える。
+  - cycle:
+      - supervise
+      - remediation
+    threshold: 3
+    judge:
+      input_reports:
+        - from_step: remediation
+          reports: [review-resolution.md]
+          history: {previous: 2}
+        - from_step: supervise
+          reports: [supervisor-validation.md]
+          history: {previous: 2}
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 健全（修正進捗があり、報告内容も収束している）
+          next: remediation
+        - condition: 修正指摘が新しい差分・検証結果・知見で解消へ進んでおり、もう一度確認する必要がある
+          next: remediation
+        - condition: >-
+            同じ指摘と原因が、新しい関連差分・検証結果・知見を伴わずに繰り返され、
+            このループから見て進展がない。
+          next: ABORT
+        - condition: 要件を満たす実現可能な打開手段がない
+          next: ABORT
+  # follow-up-review → remediation → follow-up-review の往復。子の修正 monitor とは周期が異なる。
+  - cycle:
+      - follow-up-review
+      - remediation
+    threshold: 4
+    judge:
+      input_reports:
+        - from_step: remediation
+          reports: [fix-plan.md, fix-report.md, fix-verification.md]
+          history: {previous: 2}
+        - from_step: follow-up-review
+          reports: [coding-review.md]
+          history: {previous: 2}
+      persona: supervisor
+      instruction: loop-monitor-reviewers-fix
+      rules:
+        - condition: 健全（修正進捗があり、報告内容も収束している）
+          next: remediation
+        - condition: 修正指摘が新しい差分・検証結果・知見で解消へ進んでおり、もう一度確認する必要がある
+          next: remediation
+        - condition: 同じ指摘が新しい関連差分・検証結果・知見なしに繰り返されている
+          next: ABORT
+        - condition: 要件を満たす実現可能な打開手段がない
+          next: ABORT
 steps:
   - name: plan
     capabilities:
