@@ -6,6 +6,7 @@ provider:
   profiles:
     cloud-codex:
       provider: codex
+      model: gpt-6.2-sol
     dgx-flash:
       provider: opencode
       model: dgx/deepseek-v4.1-flash
