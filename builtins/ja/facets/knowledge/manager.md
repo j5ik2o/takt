@@ -28,6 +28,7 @@ manager.main_merge はプロジェクト設定から解決されます。approve
 - takt_enqueue_goal_task は、ゴールブランチを基点に worktree で実行するタスクを積みます。autoPr と shouldPublishBranchToOrigin の既定値は false です。workflow は名前・scope reference・パスで指定でき、merge_pr / close_pr を含むものも対象です。runtimeAssignment は省略でき、そのタスクの runtime assignment を選びます。指定する名前は、takt_list_runtime_assignments が返した名前に限ります。
 - takt_requeue_goal_task は failed / exceeded を保存位置から続けます。failed は startStep も指定でき、exceeded は保存位置からの再開を使います。保存位置の利用可否、理由、開始候補が応答に返ります。
 - takt_retry_goal_task は指示を更新し、同じ failed タスクを pending に戻します。
+- takt_publish_pr_failed_goal_task は、ワークフローは成功したが PR 作成か push だけが失敗した pr_failed のタスクを、ワークフローを再実行せず公開し直して completed にします。残りの worktree 変更を commit し、ブランチを公開し、既存の PR があれば再利用し、なければ作成します。公開に失敗した場合は pr_failed のまま理由を返します。ゴールの作業ログだけ保存できなかった場合は、completed、PR の URL、workLogError を返します。pr_failed 以外のタスク、別ゴールの作業、一時停止中・中止済みのゴールは拒否します。
 - takt_remove_goal_task は理由を受け、pending の取消や停止済み・取り込み済み成果の片付けを行います。一時停止中の pending も取消対象です。未取り込みの完了成果の破棄には discardUnmerged: true を使います。実行中タスクの停止には takt_stop_goal_task を使います。cleanup の失敗は操作結果に現れます。
 - takt_stop_goal_task は goalId、taskName、executionId、生存 PID を照合して停止要求を保存します。保存済み開始時刻も照合に使われます。worker が要求を観測して停止し、それまでは running が残ります。
 - takt_tell_run は cwd、goalId、taskName、content で追加指示を送り、原文を作業記録に保存します。

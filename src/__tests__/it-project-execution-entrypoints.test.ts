@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   failInterrupted: vi.fn(),
   claim: vi.fn(),
   states: vi.fn(),
+  listFailed: vi.fn(),
   requeue: vi.fn(),
   pool: vi.fn(),
   executeTask: vi.fn(),
@@ -30,14 +31,15 @@ vi.mock('../infra/task/index.js', () => ({
     claimNextTasks = mocks.claim;
     getTasksFilePath(): string { return '/project/.takt/tasks.yaml'; }
     listTasksForProviderPreflight(): never[] { return []; }
-    listFailedTasks(): never[] { return []; }
+    listFailedTasks = mocks.listFailed;
+    isAutoRequeueEligible(): boolean { return false; }
     listAllTaskItems(): never[] { return []; }
     listTaskStateItems = mocks.states;
   },
 }));
 vi.mock('../features/tasks/execute/parallelExecution.js', () => ({
   runWithWorkerPool: mocks.pool,
-  requeueExistingFailedTasks: mocks.requeue,
+  attemptAutoRequeueTask: mocks.requeue,
 }));
 vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({
   executeRunTaskAndComplete: mocks.executeTask,
@@ -101,7 +103,8 @@ describe('プロジェクト実行ロックの入口', () => {
     mocks.config.mockReturnValue({ concurrency: 2, taskPollIntervalMs: 500,
       autoRequeueMaxAttempts: 1, notificationSound: false });
     mocks.failInterrupted.mockReturnValue(0);
-    mocks.requeue.mockReturnValue(0);
+    mocks.listFailed.mockReturnValue([]);
+    mocks.requeue.mockReturnValue(false);
     mocks.claim.mockReturnValue([task]);
     mocks.states.mockReturnValue([]);
     mocks.pool.mockResolvedValue({ success: 1, fail: 0, executedTaskNames: ['first'] });
@@ -120,7 +123,10 @@ describe('プロジェクト実行ロックの入口', () => {
   });
 
   it.each(entrypoints)('$kind は中断処理・再投入・最初の取得より前にロックを取得する', async ({ kind, execute }) => {
+    if (kind === 'run') mocks.listFailed.mockReturnValue([{ name: 'existing-failure' }]);
     await execute('/project');
+
+    if (kind === 'run') expect(mocks.requeue).toHaveBeenCalledOnce();
 
     expect(mocks.acquire).toHaveBeenCalledWith('/project', kind);
     const acquired = mocks.acquire.mock.invocationCallOrder[0]!;
@@ -327,7 +333,7 @@ describe('プロジェクト実行ロックの入口', () => {
     expect(mocks.release).toHaveBeenCalledOnce();
   });
 
-  it('run の初期処理中の SIGINT は再投入へ停止信号を渡し、最初の取得を止める', async () => {
+  it('run の初期処理中の SIGINT は再投入と最初の取得を止める', async () => {
     mocks.pool.mockResolvedValue({ success: 0, fail: 0, executedTaskNames: [] });
     mocks.failInterrupted.mockImplementation(() => {
       const handler = process.rawListeners('SIGINT').find((listener) => !listeners.includes(listener));
@@ -335,7 +341,8 @@ describe('プロジェクト実行ロックの入口', () => {
       return 0;
     });
     await runAllTasks('/project');
-    expect(mocks.requeue.mock.calls[0]?.[2]).toMatchObject({ aborted: true });
+    expect(mocks.listFailed).not.toHaveBeenCalled();
+    expect(mocks.requeue).not.toHaveBeenCalled();
     expect(mocks.claim).not.toHaveBeenCalled();
     expect(mocks.pool).toHaveBeenCalledOnce();
     expect(mocks.pool.mock.calls[0]![1]).toEqual([]);

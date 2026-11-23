@@ -104,8 +104,12 @@ export class TaskRunner {
     return this.query.listTasksForProviderPreflight(goalTasksOnly);
   }
 
-  claimNextTasks(count: number, goalSetupFailure?: (task: TaskInfo) => string | undefined): TaskInfo[] {
-    return this.lifecycle.claimNextTasks(count, goalSetupFailure);
+  claimNextTasks(
+    count: number,
+    goalSetupFailure?: (task: TaskInfo) => string | undefined,
+    onSetupFailed?: (task: TaskState) => void,
+  ): TaskInfo[] {
+    return this.lifecycle.claimNextTasks(count, goalSetupFailure, onSetupFailed);
   }
 
   failInterruptedRunningTasks(goalId?: string, onRecovered?: (task: TaskState) => void): number {
@@ -147,8 +151,8 @@ export class TaskRunner {
     return this.lifecycle.prFailTask(result, prError);
   }
 
-  completePublishedTask(taskName: string, prUrl: string | undefined): void {
-    this.lifecycle.completePublishedTask(taskName, prUrl);
+  completePublishedTask(taskName: string, prUrl: string | undefined, publishedSha?: string): void {
+    this.lifecycle.completePublishedTask(taskName, prUrl, publishedSha);
   }
 
   listPendingTaskItems(): TaskListItem[] {

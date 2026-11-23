@@ -904,7 +904,7 @@ describe('MCP package entrypoint', () => {
         'takt_list_goals',
         'takt_get_goal',
       ]));
-      for (const name of ['takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_remove_goal_task', 'takt_enqueue_task', 'takt_tell_run']) {
+      for (const name of ['takt_requeue_goal_task', 'takt_retry_goal_task', 'takt_publish_pr_failed_goal_task', 'takt_remove_goal_task', 'takt_enqueue_task', 'takt_tell_run']) {
         const description = tools.tools.find((tool) => tool.name === name)!.description;
         expect(description, name).toContain('64 KiB');
         expect(description, name).toContain('truncation');

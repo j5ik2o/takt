@@ -3,6 +3,7 @@ import type { TaskInfo, TaskResult, TaskState } from './types.js';
 import { resolveTaskContent, toTaskInfo, toTaskState } from './mapper.js';
 import { cleanupTaskSpecDirectory, prepareTaskSpecDirectory, type PreparedTaskSpecDirectory } from './enqueueService.js';
 import { TaskStore } from './store.js';
+import { isFileLockTimeoutError } from '../fs/file-lock.js';
 import { firstLine, nowIso } from './naming.js';
 import { slugify } from '../../shared/utils/slug.js';
 import { isProcessAlive, isStaleRunningTask } from './process.js';
@@ -38,7 +39,13 @@ export interface PrMergeTaskInput {
   concurrency?: number;
 }
 
-export class TaskClaimLockAcquisitionError extends Error {}
+export type TaskClaimLockFailureCode = 'ENOSPC' | 'TIMEOUT';
+
+export class TaskClaimLockAcquisitionError extends Error {
+  constructor(message: string, readonly code: TaskClaimLockFailureCode, options?: ErrorOptions) {
+    super(message, options);
+  }
+}
 
 function formatGoalList(items: readonly string[]): string {
   return items.map((item) => `- ${item.replace(/\r?\n/g, '\n  ')}`).join('\n');
@@ -238,12 +245,22 @@ export class TaskLifecycleService {
     return toTaskInfo(this.projectDir, this.tasksFile, created);
   }
 
-  claimNextTasks(count: number, goalSetupFailure?: (task: TaskInfo) => string | undefined): TaskInfo[] {
+  claimNextTasks(
+    count: number,
+    goalSetupFailure?: (task: TaskInfo) => string | undefined,
+    onSetupFailed?: (task: TaskState) => void,
+  ): TaskInfo[] {
     if (count <= 0) {
       return [];
     }
 
     const claimed: TaskInfo[] = [];
+    const setupFailures: TaskRecord[] = [];
+    const recordSetupFailure = (task: TaskRecord, next: TaskRecord, reason: string): TaskRecord => {
+      const failed = this.buildSetupFailedTaskRecord(task, next, reason);
+      setupFailures.push(failed);
+      return failed;
+    };
 
     withGoalExecutionLock(this.projectDir, () => this.store.update((current) => {
       let remaining = count;
@@ -273,13 +290,13 @@ export class TaskLifecycleService {
           } catch (error) {
             if (task.goal_id === undefined) throw error;
             const reason = sanitizeSensitiveText(getErrorMessage(error));
-            return this.buildSetupFailedTaskRecord(task, next, reason);
+            return recordSetupFailure(task, next, reason);
           }
           if (task.goal_id !== undefined && goalSetupFailure !== undefined) {
             const reason = goalSetupFailure(info);
             if (reason !== undefined) {
               this.onWarning?.(`Task ${task.name} cannot run: ${sanitizeSensitiveText(reason)}`);
-              return this.buildSetupFailedTaskRecord(task, next, reason);
+              return recordSetupFailure(task, next, reason);
             }
           }
           claimed.push(info);
@@ -292,12 +309,18 @@ export class TaskLifecycleService {
     }, {
       onAcquisitionError: (error) => {
         if (error instanceof Error && 'code' in error && error.code === 'ENOSPC') {
-          throw new TaskClaimLockAcquisitionError(error.message, { cause: error });
+          throw new TaskClaimLockAcquisitionError(error.message, 'ENOSPC', { cause: error });
+        }
+        if (isFileLockTimeoutError(error)) {
+          throw new TaskClaimLockAcquisitionError(error.message, 'TIMEOUT', { cause: error });
         }
         throw error;
       },
     }));
 
+    if (onSetupFailed !== undefined) {
+      for (const task of setupFailures) onSetupFailed(toTaskState(this.tasksFile, task));
+    }
     return claimed;
   }
 
@@ -609,7 +632,7 @@ export class TaskLifecycleService {
     return this.tasksFile;
   }
 
-  completePublishedTask(taskName: string, prUrl: string | undefined): void {
+  completePublishedTask(taskName: string, prUrl: string | undefined, publishedSha?: string): void {
     this.store.update((current) => {
       const index = current.tasks.findIndex((task) => task.name === taskName && task.status === 'pr_failed');
       if (index === -1) {
@@ -622,6 +645,18 @@ export class TaskLifecycleService {
         status: 'completed',
         failure: undefined,
         pr_url: prUrl ?? target.pr_url,
+        ...(publishedSha === undefined ? {} : {
+          completion: {
+            ...target.completion,
+            success: true,
+            interrupted: false,
+            workflowResult: 'completed',
+            branch: target.branch ?? target.completion?.branch,
+            sha: publishedSha,
+            shaUnavailableReason: undefined,
+            failureReason: undefined,
+          },
+        }),
       });
       return { tasks };
     });

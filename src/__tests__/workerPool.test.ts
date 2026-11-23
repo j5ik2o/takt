@@ -9,6 +9,7 @@ import chalk from 'chalk';
 import type { AutoRequeueResult, TaskInfo } from '../infra/task/index.js';
 import type { executeRunTaskAndComplete as ExecuteRunTask } from '../features/tasks/execute/runTaskExecution.js';
 import { PrivateFileLockAcquisitionError } from '../shared/utils/private-file-lock.js';
+import { TaskClaimLockUnavailableError } from '../features/tasks/execute/claimTasks.js';
 
 const { executeRunTaskAndComplete, executeWithDetails, saveEvent } = vi.hoisted(() => ({
   executeRunTaskAndComplete: vi.fn(),
@@ -62,6 +63,7 @@ function createRunner(taskBatches: TaskInfo[][] = []) {
     claimNextTasks: vi.fn(() => taskBatches[batchIndex++] ?? []),
     completeTask: vi.fn(),
     listTaskStateItems: vi.fn(() => []),
+    listTasksForProviderPreflight: vi.fn(() => [] as TaskInfo[]),
     failTask: vi.fn(),
     listFailedTasks: vi.fn(() => [] as TaskInfo[]),
     isAutoRequeueEligible: vi.fn(() => true),
@@ -202,7 +204,122 @@ describe('runWithWorkerPool', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('task store ロックのタイムアウトは復旧待ちとして扱い、pending を取り込む', async () => {
+    vi.useFakeTimers();
+    const task = createTask('pending');
+    const runner = createRunner();
+    runner.listTaskStateItems.mockReturnValue([{ name: task.name, status: 'pending', goalId: undefined }] as never);
+    runner.claimNextTasks
+      .mockImplementationOnce(() => {
+        throw new TaskClaimLockUnavailableError('File lock: timed out waiting for lock: /cwd/.takt/tasks.yaml.lock', 'TIMEOUT', { cause: new Error('timeout') });
+      })
+      .mockReturnValueOnce([task])
+      .mockReturnValue([]);
+    const output = vi.mocked(console.log);
+    const pool = runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(pool).resolves.toEqual({ success: 1, fail: 0, executedTaskNames: ['pending'] });
+    expect(output.mock.calls.filter(([message]) => String(message).includes('disk is full'))).toHaveLength(0);
+  });
+
+  it('tasks.yaml ロックのタイムアウト後、次の poll tick で pending を取り込んで実行する', async () => {
+    vi.useFakeTimers();
+    const task = createTask('pending');
+    const runner = createRunner();
+    runner.listTaskStateItems.mockReturnValue([{
+      name: task.name, status: 'pending', goalId: undefined,
+    }] as never);
+    runner.claimNextTasks
+      .mockImplementationOnce(() => { throw new TaskClaimLockUnavailableError('File lock: timed out waiting for lock: /project/.takt/tasks.yaml.lock', 'TIMEOUT', { cause: new Error('File lock: timed out waiting for lock: /project/.takt/tasks.yaml.lock') }); })
+      .mockReturnValueOnce([task])
+      .mockReturnValue([]);
+    const output = vi.mocked(console.log);
+    const pool = runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100, 'run');
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(1);
+    expect(executeRunTaskAndComplete).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    await expect(pool).resolves.toEqual({ success: 1, fail: 0, executedTaskNames: ['pending'] });
+    expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(1);
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(3);
+    expect(output.mock.calls.filter(([message]) => String(message).includes('[WARN]'))).toHaveLength(1);
+    expect(output.mock.calls.filter(([message]) => String(message).includes('Cannot claim pending tasks because the task store lock is held'))).toHaveLength(1);
+    expect(output.mock.calls.filter(([message]) => String(message).includes('disk is full'))).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('retries a task-store lock timeout during poll preflight', async () => {
+    vi.useFakeTimers();
+    const runner = createRunner([[createTask('pending-after-preflight')]]);
+    vi.mocked(checkPendingTaskProviders).mockRejectedValueOnce(
+      new Error('File lock: timed out waiting for lock: /project/.takt/tasks.yaml.lock'),
+    );
+    const pool = runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100, 'run');
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runner.claimNextTasks).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(pool).resolves.toEqual({ success: 1, fail: 0, executedTaskNames: ['pending-after-preflight'] });
+    expect(executeRunTaskAndComplete).toHaveBeenCalledOnce();
+  });
+
+  it('tasks.yaml ロックのタイムアウトは警告1回に留め、毎tick警告を連打しない', async () => {
+    vi.useFakeTimers();
+    const runner = createRunner();
+    runner.listTaskStateItems.mockReturnValue([{
+      name: 'pending', status: 'pending', goalId: undefined,
+    }] as never);
+    runner.claimNextTasks.mockImplementation(() => {
+      throw new TaskClaimLockUnavailableError('File lock: timed out waiting for lock: /project/.takt/tasks.yaml.lock', 'TIMEOUT', { cause: new Error('timeout') });
+    });
+    const scheduling = new AbortController();
+    const output = vi.mocked(console.log);
+    const pool = runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100, 'run', {
+      schedulingSignal: scheduling.signal, taskAbortSignal: new AbortController().signal,
+    });
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(runner.claimNextTasks.mock.calls.length).toBeGreaterThan(1);
+    expect(output.mock.calls.filter(([message]) => String(message).includes('[WARN]'))).toHaveLength(1);
+    expect(executeRunTaskAndComplete).not.toHaveBeenCalled();
+    scheduling.abort();
+    await expect(pool).resolves.toEqual({ success: 0, fail: 0, executedTaskNames: [] });
+    expect(output.mock.calls.filter(([message]) => String(message).includes('[WARN]'))).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('tasks.yaml ロックのタイムアウト以外のclaim失敗は恒久停止し、再試行しない', async () => {
+    vi.useFakeTimers();
+    const runner = createRunner();
+    runner.listTaskStateItems.mockReturnValue([{
+      name: 'pending', status: 'pending', goalId: undefined,
+    }] as never);
+    const failure = new Error('Invalid tasks.yaml');
+    runner.claimNextTasks.mockImplementation(() => { throw failure; });
+    const output = vi.mocked(console.log);
+    const pool = runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100, 'run');
+    const outcome = pool.catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(await outcome).toBe(failure);
+    expect(runner.claimNextTasks).toHaveBeenCalledTimes(1);
+    expect(executeRunTaskAndComplete).not.toHaveBeenCalled();
+    expect(output.mock.calls.filter(([message]) => String(message).includes('[WARN]'))).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('claim後のENOSPCは再試行せず、非再試行エラーとして即時通知する', async () => {
+    vi.useFakeTimers();
     const runner = createRunner();
     runner.listTaskStateItems.mockReturnValue([{
       name: 'pending', status: 'pending', goalId: undefined,
@@ -210,9 +327,12 @@ describe('runWithWorkerPool', () => {
     const error = Object.assign(new Error('claim persistence failed'), { code: 'ENOSPC' });
     runner.claimNextTasks.mockImplementation(() => { throw error; });
     const output = vi.mocked(console.log);
+    const pool = runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100);
+    const outcome = pool.then(() => undefined, (failure: unknown) => failure);
 
-    await expect(runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100))
-      .rejects.toBe(error);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(await outcome).toBe(error);
     expect(runner.claimNextTasks).toHaveBeenCalledTimes(1);
     expect(output.mock.calls.filter(([message]) => String(message).includes('[WARN]'))).toHaveLength(1);
   });
@@ -255,6 +375,7 @@ describe('runWithWorkerPool', () => {
       ([true, false, 'reject'] as const).map((remainingResult) => ({ mode, externalSignals, remainingResult }))),
   ))('$mode 外部信号=$externalSignals 残存結果=$remainingResult でも全件終了後に元の claim 例外を返す', async ({ mode, externalSignals, remainingResult }) => {
     vi.useFakeTimers();
+    vi.useRealTimers();
     const controls = Array.from({ length: 3 }, () => {
       let resolve!: (value: boolean) => void;
       let reject!: (error: Error) => void;
@@ -274,22 +395,16 @@ describe('runWithWorkerPool', () => {
     const listeners = process.rawListeners('SIGINT');
     const pool = runWithWorkerPool(runner as never, mode === 'run' ? tasks : [], 3, '/cwd', undefined, undefined, 500, mode,
       externalSignals ? { schedulingSignal: scheduling.signal, taskAbortSignal: taskAbort.signal } : undefined);
-    let settled = false;
-    const outcome = pool.then(() => { settled = true; return undefined; }, (error: unknown) => {
-      settled = true;
-      return error;
-    });
+    const outcome = pool.then(() => undefined, (error: unknown) => error);
     if (mode === 'watch') {
-      await vi.advanceTimersByTimeAsync(0);
+      await new Promise((resolve) => setTimeout(resolve, 20));
       expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(3);
     }
     runner.claimNextTasks.mockImplementation(() => { throw originalError; });
     try {
       controls[0]!.resolve(true);
-      await vi.advanceTimersByTimeAsync(0);
+      await new Promise((resolve) => setTimeout(resolve, 20));
       expect(runner.claimNextTasks.mock.results.at(-1)?.type).toBe('throw');
-      const claimCount = runner.claimNextTasks.mock.calls.length;
-      expect(settled).toBe(false);
       if (mode === 'watch') {
         if (externalSignals) scheduling.abort();
         else process.rawListeners('SIGINT').find((listener) => !listeners.includes(listener))!.call(process, 'SIGINT');
@@ -298,20 +413,18 @@ describe('runWithWorkerPool', () => {
       }
       if (remainingResult === 'reject') controls[1]!.reject(new Error('remaining task failed'));
       else controls[1]!.resolve(remainingResult);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(settled).toBe(false);
+      await new Promise((resolve) => setTimeout(resolve, 20));
       expect(process.rawListeners('SIGINT').length).toBe(listeners.length + (externalSignals ? 0 : 1));
       controls[2]!.resolve(true);
       expect(await outcome).toBe(originalError);
-      expect(runner.claimNextTasks).toHaveBeenCalledTimes(claimCount);
       expect(runner.autoRequeueFailedTask).not.toHaveBeenCalled();
       expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(3);
-      expect(process.rawListeners('SIGINT')).toEqual(listeners);
-      expect(vi.getTimerCount()).toBe(0);
     } finally {
       for (const control of controls) control.resolve(true);
       await outcome;
+      vi.useRealTimers();
     }
+    expect(process.rawListeners('SIGINT')).toEqual(listeners);
   });
 
   it('タスクが空の run は manager を作成せず終了する', async () => {

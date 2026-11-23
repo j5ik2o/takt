@@ -661,6 +661,7 @@ describe('release verification wiring', () => {
       'src/__tests__/it-issue-dispatch-notification.test.ts',
       'src/__tests__/it-manager-question-display.test.ts',
       'src/__tests__/it-manager-tui.test.ts',
+      'src/__tests__/it-goal-task-pr-retry.test.ts',
       'src/__tests__/it-workflow-maker-retry-availability.test.ts',
       'src/__tests__/tui-conversation-view.test.tsx',
     ];

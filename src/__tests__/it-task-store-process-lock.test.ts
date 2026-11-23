@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -81,6 +81,75 @@ function runDeletionRaceWorker(projectDir: string, role: 'delete' | 'claim', tas
     child.on('close', (code) => { resolve({ code, stderr }); });
   });
   return { child, completed };
+}
+
+interface ClaimFixtureOutcome {
+  claimed?: string[];
+  error?: string;
+  errorName?: string;
+  code?: unknown;
+  causeMessage?: string;
+}
+
+function spawnFixture(name: string, args: string[], timeoutMs: number) {
+  const child = spawn(process.execPath, [
+    '--import',
+    TSX_ESM_LOADER,
+    join(dirname(fixturePath), name),
+    ...args,
+  ], {
+    cwd: process.cwd(), stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, killSignal: 'SIGKILL',
+  });
+  let stderr = '';
+  child.stdout.resume();
+  child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+  const completed = new Promise<{ code: number | null; stderr: string }>((resolve) => {
+    child.on('error', (error) => { stderr += String(error); });
+    child.on('close', (code) => { resolve({ code, stderr }); });
+  });
+  return { child, completed };
+}
+
+type SpawnedFixture = ReturnType<typeof spawnFixture>;
+
+async function waitForFile(file: string, timeoutMs: number, onTimeout?: () => string): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(file)) {
+    if (Date.now() >= deadline) {
+      throw new Error(`Timed out waiting for ${file}${onTimeout === undefined ? '' : `: ${onTimeout()}`}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+async function startLockHolder(
+  projectDir: string, signalsDir: string, lockName: string,
+): Promise<SpawnedFixture> {
+  const holder = spawnFixture('task-store-lock-holder.ts', [projectDir, signalsDir, lockName], 40_000);
+  const describeHolder = () => existsSync(join(signalsDir, 'lock-holder-error'))
+    ? `holder error: ${readFileSync(join(signalsDir, 'lock-holder-error'), 'utf-8')}`
+    : `holder ${holder.child.exitCode === null ? 'still running' : `exited ${String(holder.child.exitCode)}`}`;
+  await waitForFile(join(signalsDir, 'holder-ready'), 10_000, describeHolder);
+  await waitForFile(join(signalsDir, 'lock-held'), 10_000, describeHolder);
+  return holder;
+}
+
+async function stopLockHolder(holder: SpawnedFixture, signalsDir: string): Promise<void> {
+  if (holder.child.exitCode === null && holder.child.signalCode === null) {
+    writeFileSync(join(signalsDir, 'release-lock'), 'release');
+    const completed = await Promise.race([
+      holder.completed,
+      new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 10_000)),
+    ]);
+    if (completed === 'timeout' && holder.child.exitCode === null && holder.child.signalCode === null) {
+      holder.child.kill('SIGKILL');
+    }
+  }
+  await holder.completed.catch(() => undefined);
+}
+
+function readClaimOutcome(file: string): ClaimFixtureOutcome {
+  return JSON.parse(readFileSync(file, 'utf-8')) as ClaimFixtureOutcome;
 }
 
 describe('TaskStore process lock', () => {
@@ -223,4 +292,67 @@ describe('TaskStore process lock', () => {
     expect(() => store.read()).toThrow(/timed out waiting for lock/);
     expect(existsSync(lockFile)).toBe(true);
   }, 10_000);
+
+  it('recovers a claim blocked by another process holding the tasks.yaml lock', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-claim-lock-recovery-'));
+    testDirs.push(projectDir);
+    const signalsDir = join(projectDir, 'signals');
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    mkdirSync(signalsDir, { recursive: true });
+    const runner = new TaskRunner(projectDir);
+    const pending = runner.addTask('recover after tasks.yaml lock timeout', { slug: 'recover-after-tasks-lock' });
+
+    let holder: SpawnedFixture | undefined;
+    try {
+      holder = await startLockHolder(projectDir, signalsDir, 'tasks.yaml.lock');
+
+      const claim = spawnFixture('task-store-claim-lock-timeout.ts', [projectDir, join(projectDir, 'claim-1.json')], 30_000);
+      expect(await claim.completed).toMatchObject({ code: 0 });
+      const blocked = readClaimOutcome(join(projectDir, 'claim-1.json'));
+      expect(blocked.claimed).toBeUndefined();
+      expect(blocked.errorName).toBe('TaskClaimLockAcquisitionError');
+      expect(blocked.code).toBe('TIMEOUT');
+      expect(blocked.causeMessage).toMatch(/timed out waiting for lock/);
+      expect(parseYaml(readFileSync(runner.getTasksFilePath(), 'utf-8'))).toMatchObject({
+        tasks: [{ name: pending.name, status: 'pending' }],
+      });
+
+      await stopLockHolder(holder, signalsDir);
+      expect(existsSync(join(signalsDir, 'lock-released'))).toBe(true);
+
+      const recovered = spawnFixture('task-store-claim-lock-timeout.ts', [projectDir, join(projectDir, 'claim-2.json')], 30_000);
+      expect(await recovered.completed).toMatchObject({ code: 0 });
+      expect(readClaimOutcome(join(projectDir, 'claim-2.json'))).toEqual({ claimed: [pending.name] });
+      expect(runner.listTaskStateItems()[0]).toMatchObject({ name: pending.name, status: 'running' });
+    } finally {
+      if (holder !== undefined) await stopLockHolder(holder, signalsDir);
+    }
+  }, 60_000);
+
+  it('does not convert another process holding the goal-execution lock into a recoverable claim timeout', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'takt-claim-goal-lock-'));
+    testDirs.push(projectDir);
+    const signalsDir = join(projectDir, 'signals');
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+    mkdirSync(signalsDir, { recursive: true });
+    const runner = new TaskRunner(projectDir);
+    const pending = runner.addTask('claim blocked by the goal execution lock', { slug: 'goal-lock-blocked' });
+
+    let holder: SpawnedFixture | undefined;
+    try {
+      holder = await startLockHolder(projectDir, signalsDir, 'goal-execution.lock');
+
+      const claim = spawnFixture('task-store-claim-lock-timeout.ts', [projectDir, join(projectDir, 'claim-goal.json')], 30_000);
+      expect(await claim.completed).toMatchObject({ code: 0 });
+      const outcome = readClaimOutcome(join(projectDir, 'claim-goal.json'));
+      expect(outcome.error).toMatch(/Timed out waiting for private file lock/);
+      expect(outcome.error).not.toMatch(/File lock: timed out waiting for lock/);
+      expect(outcome.errorName).not.toBe('TaskClaimLockAcquisitionError');
+      expect(outcome.claimed).toBeUndefined();
+      expect(runner.listTaskStateItems()[0]).toMatchObject({ name: pending.name, status: 'pending' });
+      expect(existsSync(join(projectDir, '.takt', 'tasks.yaml.lock'))).toBe(false);
+    } finally {
+      if (holder !== undefined) await stopLockHolder(holder, signalsDir);
+    }
+  }, 60_000);
 });

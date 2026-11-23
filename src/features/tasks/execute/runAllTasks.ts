@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { withProjectExecution } from './projectExecution.js';
 import { TaskRunner } from '../../../infra/task/index.js';
 import { resolveWorkflowConfigValues } from '../../../infra/config/index.js';
@@ -14,9 +15,9 @@ import {
 } from '../../../shared/utils/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import type { RunAllTasksOptions, TaskExecutionOptions } from './types.js';
-import { requeueExistingFailedTasks, runWithWorkerPool } from './parallelExecution.js';
+import { attemptAutoRequeueTask, runWithWorkerPool } from './parallelExecution.js';
 import { toSlackTaskDetail } from './slackSummaryAdapter.js';
-import { failInterruptedTasksWithGoalEvents } from './claimTasks.js';
+import { failInterruptedTasksWithGoalEvents, isClaimLockTimeoutFailure } from './claimTasks.js';
 import { checkQueuedTaskProviders, checkPendingTaskProviders, runtimeAssignmentUnavailableReason, terminalProviderConfirmation } from './providerPreflight.js';
 
 export async function runAllTasks(
@@ -57,15 +58,20 @@ export async function runAllTasks(
       && globalConfig.notificationSoundEvents?.runAbort !== false;
     const concurrency = globalConfig.concurrency;
     const slackWebhookUrl = getSlackWebhookUrl();
-    const failedInterrupted = failInterruptedTasksWithGoalEvents(taskRunner, cwd);
+    const schedulingSignal = shutdownSignals.schedulingSignal;
+    const retryLockTimeout = <T>(operation: () => T | Promise<T>) =>
+      retryStartupLockTimeout(operation, globalConfig.taskPollIntervalMs, schedulingSignal);
+    const failedInterrupted = await retryLockTimeout(() => failInterruptedTasksWithGoalEvents(taskRunner, cwd)) ?? 0;
     if (failedInterrupted > 0) {
       info(`Marked ${failedInterrupted} interrupted running task(s) as failed.`);
     }
     const confirmation = terminalProviderConfirmation();
-    const pendingTasks = shutdownSignals.schedulingSignal.aborted
-      ? [] : taskRunner.listTasksForProviderPreflight(options?.goalTasksOnly === true);
-    const failedTasks = runOptions.autoRequeueMaxAttempts > 0 && !shutdownSignals.schedulingSignal.aborted
-      ? taskRunner.listFailedTasks() : [];
+    const pendingTasks = await retryLockTimeout(
+      () => taskRunner.listTasksForProviderPreflight(options?.goalTasksOnly === true),
+    ) ?? [];
+    const maxAttempts = runOptions.autoRequeueMaxAttempts;
+    const failedTasks = maxAttempts > 0
+      ? (await retryLockTimeout(() => taskRunner.listFailedTasks())) ?? [] : [];
     for (const task of pendingTasks) {
       if (shutdownSignals.schedulingSignal.aborted) break;
       if (task.data?.goal_id !== undefined
@@ -74,19 +80,24 @@ export async function runAllTasks(
     }
     for (const task of failedTasks) {
       if (shutdownSignals.schedulingSignal.aborted) break;
-      if (!taskRunner.isAutoRequeueEligible(task.name, runOptions.autoRequeueMaxAttempts)) continue;
+      if (!await retryLockTimeout(() => taskRunner.isAutoRequeueEligible(task.name, maxAttempts))) continue;
       await checkQueuedTaskProviders(cwd, task, agentOverrides ?? {}, confirmation, shutdownSignals.schedulingSignal);
     }
-    const requeuedExistingFailed = runOptions.autoRequeueMaxAttempts > 0 ? requeueExistingFailedTasks(
-      taskRunner, runOptions.autoRequeueMaxAttempts, shutdownSignals.schedulingSignal, failedTasks,
-    ) : 0;
+    let requeuedExistingFailed = 0;
+    for (const task of failedTasks) {
+      if (schedulingSignal.aborted) break;
+      // Keep successful writes and provider checks completed when a later write needs a retry.
+      if (await retryLockTimeout(() => attemptAutoRequeueTask(taskRunner, task.name, maxAttempts))) {
+        requeuedExistingFailed++;
+      }
+    }
     if (requeuedExistingFailed > 0) {
       info(`Auto-requeued ${requeuedExistingFailed} existing failed task(s).`);
     }
-    if (!shutdownSignals.schedulingSignal.aborted) {
-      await checkPendingTaskProviders(taskRunner, cwd, agentOverrides ?? {}, confirmation,
-        pendingTasks, shutdownSignals.schedulingSignal, options?.goalTasksOnly === true);
-    }
+    await retryLockTimeout(
+      () => checkPendingTaskProviders(taskRunner, cwd, agentOverrides ?? {}, confirmation,
+        pendingTasks, schedulingSignal, options?.goalTasksOnly === true),
+    );
 
     const runId = generateRunId();
     const startTime = Date.now();
@@ -170,4 +181,29 @@ export async function runAllTasks(
       statusLine.stop();
     }
   }, options?.goalTasksOnly);
+}
+
+async function retryStartupLockTimeout<T>(
+  operation: () => T | Promise<T>,
+  pollIntervalMs: number,
+  signal: AbortSignal,
+): Promise<T | undefined> {
+  let warned = false;
+  while (!signal.aborted) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isClaimLockTimeoutFailure(error)) throw error;
+      if (!warned) {
+        warn('Cannot prepare startup tasks because the task store lock is held. Waiting to retry.');
+        warned = true;
+      }
+    }
+    try {
+      await delay(pollIntervalMs, undefined, { signal });
+    } catch (error) {
+      if (!signal.aborted) throw error;
+    }
+  }
+  return undefined;
 }
