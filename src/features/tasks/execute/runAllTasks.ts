@@ -59,15 +59,16 @@ export async function runAllTasks(
     const concurrency = globalConfig.concurrency;
     const slackWebhookUrl = getSlackWebhookUrl();
     const schedulingSignal = shutdownSignals.schedulingSignal;
-    const retryLockTimeout = <T>(operation: () => T) =>
+    const retryLockTimeout = <T>(operation: () => T | Promise<T>) =>
       retryStartupLockTimeout(operation, globalConfig.taskPollIntervalMs, schedulingSignal);
     const failedInterrupted = await retryLockTimeout(() => failInterruptedTasksWithGoalEvents(taskRunner, cwd)) ?? 0;
     if (failedInterrupted > 0) {
       info(`Marked ${failedInterrupted} interrupted running task(s) as failed.`);
     }
     const confirmation = terminalProviderConfirmation();
-    const pendingTasks = shutdownSignals.schedulingSignal.aborted
-      ? [] : readOnLockTimeout(() => taskRunner.listTasksForProviderPreflight(options?.goalTasksOnly === true), []);
+    const pendingTasks = await retryLockTimeout(
+      () => taskRunner.listTasksForProviderPreflight(options?.goalTasksOnly === true),
+    ) ?? [];
     const maxAttempts = runOptions.autoRequeueMaxAttempts;
     const failedTasks = maxAttempts > 0
       ? (await retryLockTimeout(() => taskRunner.listFailedTasks())) ?? [] : [];
@@ -93,13 +94,10 @@ export async function runAllTasks(
     if (requeuedExistingFailed > 0) {
       info(`Auto-requeued ${requeuedExistingFailed} existing failed task(s).`);
     }
-    if (!shutdownSignals.schedulingSignal.aborted) {
-      await readOnLockTimeoutAsync(
-        () => checkPendingTaskProviders(taskRunner, cwd, agentOverrides ?? {}, confirmation,
-          pendingTasks, shutdownSignals.schedulingSignal, options?.goalTasksOnly === true),
-        undefined,
-      );
-    }
+    await retryLockTimeout(
+      () => checkPendingTaskProviders(taskRunner, cwd, agentOverrides ?? {}, confirmation,
+        pendingTasks, schedulingSignal, options?.goalTasksOnly === true),
+    );
 
     const runId = generateRunId();
     const startTime = Date.now();
@@ -186,14 +184,14 @@ export async function runAllTasks(
 }
 
 async function retryStartupLockTimeout<T>(
-  operation: () => T,
+  operation: () => T | Promise<T>,
   pollIntervalMs: number,
   signal: AbortSignal,
 ): Promise<T | undefined> {
   let warned = false;
   while (!signal.aborted) {
     try {
-      return operation();
+      return await operation();
     } catch (error) {
       if (!isClaimLockTimeoutFailure(error)) throw error;
       if (!warned) {
@@ -208,27 +206,4 @@ async function retryStartupLockTimeout<T>(
     }
   }
   return undefined;
-}
-
-/**
- * Startup preflight runs before the worker pool starts. A lock timeout here only means the
- * pending snapshot could not be read yet; the pool claims tasks on its own poll ticks, so the
- * startup read is skipped instead of aborting the whole run.
- */
-function readOnLockTimeout<T>(read: () => T, fallback: T): T {
-  try {
-    return read();
-  } catch (error) {
-    if (isClaimLockTimeoutFailure(error)) return fallback;
-    throw error;
-  }
-}
-
-async function readOnLockTimeoutAsync<T>(read: () => Promise<T>, fallback: T): Promise<T> {
-  try {
-    return await read();
-  } catch (error) {
-    if (isClaimLockTimeoutFailure(error)) return fallback;
-    throw error;
-  }
 }

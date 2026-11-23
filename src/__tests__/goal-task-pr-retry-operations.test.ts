@@ -72,7 +72,7 @@ beforeEach(() => {
     filePath: state.filePath,
     branch: state.branch,
     worktreePath: state.worktreePath,
-    data: { merge_task: true, pr_number: 7 },
+    data: { workflow: 'default' },
   }]);
   doubles.publish.mockResolvedValue({ success: true, prUrl });
 });
@@ -84,7 +84,7 @@ it('publishes an existing pr_failed task without rerunning its workflow and reco
   expect(doubles.publish).toHaveBeenCalledExactlyOnceWith(input.cwd, expect.objectContaining({
     name: input.taskName, branch: state.branch, worktreePath: state.worktreePath,
     content: 'Publish the reviewed work',
-    data: { merge_task: true, pr_number: 7 },
+    data: { workflow: 'default' },
   }));
   expect(goal.workLog).toEqual([expect.objectContaining({ summary: expect.stringContaining(input.taskName) })]);
   expect(goal.workLog[0]!.summary).toContain(prUrl);
@@ -94,6 +94,19 @@ it('publishes an existing pr_failed task without rerunning its workflow and reco
     status: 'completed',
     prUrl,
   });
+});
+
+it('returns the completed publication and the work-log error when saving the goal fails', async () => {
+  doubles.update.mockRejectedValueOnce(new Error('goal write failed'));
+
+  const result = await publishFailedGoalTask(input, {}, signal);
+
+  expect(result.isError).toBeUndefined();
+  expect(JSON.parse(String((result as { content: Array<{ text: string }> }).content[0]!.text))).toMatchObject({
+    status: 'completed', prUrl, workLogError: 'goal write failed',
+  });
+  expect(doubles.publish).toHaveBeenCalledOnce();
+  expect(doubles.get).toHaveBeenCalledTimes(2);
 });
 
 it.each(['completed', 'pending', 'running', 'failed', 'exceeded'] as const)('rejects a %s task without publishing', async (status) => {

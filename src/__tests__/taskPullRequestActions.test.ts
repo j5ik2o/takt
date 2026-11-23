@@ -1,12 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskListItem } from '../infra/task/index.js';
 
+const publishedTaskSha = 'a'.repeat(40);
+
 const {
   mockExistsSync,
   mockConfirmWithCancel,
   mockStageAndCommit,
   mockCreatePullRequestSafely,
   mockGetGitProvider,
+  mockInitGitProvider,
   mockResolveAutoCommitOptions,
   mockCollectTaskWorktreeSummary,
   mockFindRunForTask,
@@ -31,6 +34,7 @@ const {
   mockStageAndCommit: vi.fn(),
   mockCreatePullRequestSafely: vi.fn(),
   mockGetGitProvider: vi.fn(),
+  mockInitGitProvider: vi.fn(),
   mockResolveAutoCommitOptions: vi.fn(),
   mockCollectTaskWorktreeSummary: vi.fn(),
   mockFindRunForTask: vi.fn(),
@@ -79,6 +83,7 @@ vi.mock('../infra/task/git.js', async (importOriginal) => ({
 vi.mock('../infra/git/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getGitProvider: () => mockGetGitProvider(),
+  initGitProvider: mockInitGitProvider,
   createPullRequestSafely: (...args: unknown[]) => mockCreatePullRequestSafely(...args),
 }));
 
@@ -203,6 +208,7 @@ describe('createPullRequestForTask', () => {
     mockLoadRunSessionContext.mockReturnValue(runSessionContext);
     mockExecFileSync.mockImplementation((_command, args, options) => {
       const gitArgs = args as string[];
+      if (gitArgs[0] === 'rev-parse' && gitArgs[1] === '--verify') return `${publishedTaskSha}\n`;
       const cwd = (options as { cwd?: string } | undefined)?.cwd ?? '';
       if (gitArgs[0] === 'rev-parse' && gitArgs.includes('--abbrev-ref')) {
         return cwd.includes('completed') ? 'takt/completed-task\n'
@@ -600,7 +606,7 @@ describe('createPullRequestForTask', () => {
     expect(mockExecFileSync).toHaveBeenCalledWith('git', ['push', 'origin', task.branch], expect.objectContaining({
       env: expect.objectContaining({ GIT_TERMINAL_PROMPT: '0' }),
     }));
-    expect(mockCompletePublishedTask).toHaveBeenCalledWith(task.name, 'https://example.test/pr/1');
+    expect(mockCompletePublishedTask).toHaveBeenCalledWith(task.name, 'https://example.test/pr/1', publishedTaskSha);
     expect(mockCompletePublishedTask.mock.invocationCallOrder[0])
       .toBeGreaterThan(mockCreatePullRequestSafely.mock.invocationCallOrder[0]!);
   });
@@ -633,8 +639,8 @@ describe('createPullRequestForTask', () => {
     expect(mockFindExistingPr).toHaveBeenNthCalledWith(1, task.branch, '/project');
     expect(mockFindExistingPr).toHaveBeenNthCalledWith(2, task.branch, '/project');
     expect(mockCreatePullRequestSafely).toHaveBeenCalledTimes(1);
-    expect(mockCompletePublishedTask).toHaveBeenNthCalledWith(1, task.name, prUrl);
-    expect(mockCompletePublishedTask).toHaveBeenNthCalledWith(2, task.name, prUrl);
+    expect(mockCompletePublishedTask).toHaveBeenNthCalledWith(1, task.name, prUrl, publishedTaskSha);
+    expect(mockCompletePublishedTask).toHaveBeenNthCalledWith(2, task.name, prUrl, publishedTaskSha);
     expect(mockSuccess).toHaveBeenLastCalledWith(expect.stringContaining(prUrl));
     expect(mockError).toHaveBeenCalledTimes(1);
   });
@@ -878,6 +884,7 @@ describe('publishPrFailedTask', () => {
     mockGetGitProvider.mockReturnValue({ findExistingPr: mockFindExistingPr, commentOnPr: mockCommentOnPr });
     mockExecFileSync.mockImplementation((_command, args, options) => {
       const gitArgs = args as string[];
+      if (gitArgs[0] === 'rev-parse' && gitArgs[1] === '--verify') return `${publishedTaskSha}\n`;
       if (gitArgs[0] === 'remote') return 'origin\n';
       if (gitArgs[0] === 'rev-parse' && gitArgs.includes('--abbrev-ref')) return 'takt/failed-task\n';
       if (gitArgs[0] === 'branch' && gitArgs[1] === '--show-current') return 'takt/failed-task\n';
@@ -900,15 +907,17 @@ describe('publishPrFailedTask', () => {
     expect(mockExecFileSync).toHaveBeenCalledWith('git', ['push', 'origin', 'takt/failed-task'],
       expect.objectContaining({ cwd: '/worktree/failed-task' }));
     expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
-    expect(mockCompletePublishedTask).toHaveBeenCalledWith('failed-task', 'https://example.test/pull/9');
+    expect(mockCompletePublishedTask).toHaveBeenCalledWith('failed-task', 'https://example.test/pull/9', publishedTaskSha);
   });
 
   it('creates a PR when none exists and reports the created URL', async () => {
     const result = await publishPrFailedTask('/project', prFailedTask);
 
     expect(result).toEqual({ success: true, prUrl: 'https://example.test/pr/1' });
+    expect(mockInitGitProvider).toHaveBeenCalledWith('/project');
+    expect(mockInitGitProvider).toHaveBeenCalledBefore(mockFindExistingPr);
     expect(mockFindExistingPr).toHaveBeenCalledWith('takt/failed-task', '/project');
-    expect(mockCompletePublishedTask).toHaveBeenCalledWith('failed-task', 'https://example.test/pr/1');
+    expect(mockCompletePublishedTask).toHaveBeenCalledWith('failed-task', 'https://example.test/pr/1', publishedTaskSha);
   });
 
   it.each([

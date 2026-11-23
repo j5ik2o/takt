@@ -1,6 +1,8 @@
 import { join } from 'node:path';
 import { appendGoalWorkLog } from '../../infra/goals/workLog.js';
 import { GoalStore } from '../../infra/goals/store.js';
+import { getErrorMessage } from '../../shared/utils/index.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import { publishPrFailedTask } from '../tasks/list/taskPullRequestActions.js';
 import { goalWrite } from './goalWrite.js';
@@ -27,14 +29,19 @@ export function publishTaktPrFailedGoalTask(
     const published = await publishPrFailedTask(input.cwd, task);
     if (!published.success) throw new Error(published.error);
 
-    await store.update(goal.id, (current) => appendGoalWorkLog(current, {
-      summary: `Published ${input.taskName}: ${published.prUrl}`,
-    }));
-    return {
+    const result = {
       taskName: input.taskName,
       tasksFile: join(input.cwd, '.takt', 'tasks.yaml'),
       status: 'completed',
       prUrl: published.prUrl,
     };
+    try {
+      await store.update(goal.id, (current) => appendGoalWorkLog(current, {
+        summary: `Published ${input.taskName}: ${published.prUrl}`,
+      }));
+    } catch (error) {
+      return { ...result, workLogError: sanitizeSensitiveText(getErrorMessage(error)) };
+    }
+    return result;
   }, 'Goal task publication failed', 'publish_pr');
 }

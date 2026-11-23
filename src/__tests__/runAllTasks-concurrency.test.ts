@@ -242,7 +242,7 @@ vi.mock('../shared/i18n/index.js', () => ({
   getLabel: vi.fn((key: string) => key),
 }));
 
-import { checkPendingTaskProviders, checkQueuedTaskProviders } from '../features/tasks/execute/providerPreflight.js';
+import { checkPendingTaskProviders, checkQueuedTaskProviders, terminalProviderConfirmation } from '../features/tasks/execute/providerPreflight.js';
 import { TaskClaimLockAcquisitionError } from '../infra/task/taskLifecycleService.js';
 import { executeWorkflow,executeWorkflowForRun } from '../features/tasks/execute/workflowExecution.js';
 import { runAllTasks } from '../features/tasks/index.js';
@@ -328,12 +328,14 @@ describe('runAllTasks concurrency', () => {
       expect(mockStatus).toHaveBeenCalledWith('Success', '1', 'green');
     });
 
-    it('continues to claim pending tasks when the startup preflight check rejects with a lock timeout', async () => {
+    it('retries startup provider preparation with the same confirmation and signal after a lock timeout', async () => {
       // Given: the startup checkPendingTaskProviders call hits a lock timeout
       mockLoadWorkflowByIdentifier.mockReturnValue({
         name: 'default', steps: [{ name: 'implement', personaDisplayName: 'coder' }],
         initialStep: 'implement', maxSteps: 10,
       } as never);
+      const confirm = vi.fn(async () => true);
+      vi.mocked(terminalProviderConfirmation).mockReturnValueOnce(confirm);
       vi.mocked(checkPendingTaskProviders).mockRejectedValueOnce(new TaskClaimLockAcquisitionError(
         'File lock: timed out waiting for lock: /project/.takt/tasks.yaml.lock', 'TIMEOUT',
       ));
@@ -344,7 +346,9 @@ describe('runAllTasks concurrency', () => {
       await runAllTasks('/project');
 
       // Then: startup did not abort and the pending task was claimed and executed
-      expect(checkPendingTaskProviders).toHaveBeenCalled();
+      const [first, retried] = vi.mocked(checkPendingTaskProviders).mock.calls;
+      expect(first?.[3]).toBe(confirm);
+      expect(retried?.slice(3)).toEqual(first?.slice(3));
       expect(mockClaimNextTasks).toHaveBeenCalled();
       expect(mockStatus).toHaveBeenCalledWith('Total', '1');
       expect(mockStatus).toHaveBeenCalledWith('Success', '1', 'green');

@@ -632,7 +632,7 @@ export class TaskLifecycleService {
     return this.tasksFile;
   }
 
-  completePublishedTask(taskName: string, prUrl: string | undefined): void {
+  completePublishedTask(taskName: string, prUrl: string | undefined, publishedSha?: string): void {
     this.store.update((current) => {
       const index = current.tasks.findIndex((task) => task.name === taskName && task.status === 'pr_failed');
       if (index === -1) {
@@ -645,6 +645,17 @@ export class TaskLifecycleService {
         status: 'completed',
         failure: undefined,
         pr_url: prUrl ?? target.pr_url,
+        ...(publishedSha === undefined ? {} : {
+          completion: {
+            success: true,
+            interrupted: false,
+            workflowResult: 'completed',
+            branch: target.branch,
+            ...target.completion,
+            sha: publishedSha,
+            shaUnavailableReason: undefined,
+          },
+        }),
       });
       return { tasks };
     });

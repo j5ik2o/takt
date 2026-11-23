@@ -53,7 +53,6 @@ describe('pr_failed goal task recovery through manager MCP', () => {
   beforeEach(async () => {
     root = realpathSync(mkdtempSync(join(tmpdir(), 'takt-pr-failed-')));
     cwd = join(root, 'project');
-    vi.stubEnv('TAKT_CONFIG_DIR', join(root, 'global'));
     clone = join(cwd, '.takt', 'worktrees', taskName);
     mkdirSync(cwd);
     writeFileSync(join(cwd, 'README.md'), 'fixture\n');
@@ -92,7 +91,7 @@ describe('pr_failed goal task recovery through manager MCP', () => {
   }, 30_000);
 
   afterEach(() => {
-    vi.restoreAllMocks(); vi.unstubAllEnvs(); invalidateGlobalConfigCache();
+    vi.restoreAllMocks(); invalidateGlobalConfigCache();
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -124,7 +123,11 @@ describe('pr_failed goal task recovery through manager MCP', () => {
   });
 
   it('recovers a pr_failed task through publication without rerunning the workflow', async () => {
-    expect(runner.listTaskStateItems()[0]).toMatchObject({ name: taskName, goalId, status: 'pr_failed' });
+    const originalSha = git(clone, ['rev-parse', 'HEAD']);
+    expect(runner.listTaskStateItems()[0]).toMatchObject({
+      name: taskName, goalId, status: 'pr_failed', completion: { sha: originalSha },
+    });
+    writeFileSync(join(clone, 'recovered.txt'), 'unpublished result');
 
     const result = await withClient(publish);
 
@@ -132,8 +135,14 @@ describe('pr_failed goal task recovery through manager MCP', () => {
     expect(JSON.parse(firstTextContent(result.content))).toMatchObject({
       taskName, tasksFile: join(cwd, '.takt', 'tasks.yaml'), status: 'completed', prUrl: advertisedPr,
     });
-    expect(runner.listTaskStateItems()[0]).toMatchObject({ name: taskName, status: 'completed', prUrl: advertisedPr });
-    expect(git(cwd, ['rev-parse', branch])).toBe(git(clone, ['rev-parse', 'HEAD']));
+    const publishedSha = git(clone, ['rev-parse', 'HEAD']);
+    expect(publishedSha).not.toBe(originalSha);
+    expect(git(cwd, ['rev-parse', branch])).toBe(publishedSha);
+    expect(git(cwd, ['show', `${publishedSha}:recovered.txt`])).toBe('unpublished result');
+    expect(runner.listTaskStateItems()[0]).toMatchObject({
+      name: taskName, status: 'completed', prUrl: advertisedPr,
+      completion: { sha: publishedSha, success: true, workflowResult: 'completed' },
+    });
     expect((await store.get(goalId)).workLog.at(-1)!.summary).toContain(taskName);
     expect((await store.get(goalId)).workLog.at(-1)!.summary).toContain(advertisedPr);
     expect(runner.listPendingTaskItems()).toEqual([]);
