@@ -77,11 +77,42 @@ jobs:
       - name: Claude Code & TAKT インストール
         run: |
           npm install -g @anthropic-ai/claude-code
-          npm install -g takt
+          # /review はこの版の設定スナップショットを使う。
+          npm install -g takt@0.76.1
+
+      - name: /review 用の Claude 設定を準備
+        run: |
+          # このジョブではプロジェクトの Codex / Spark の runtime を読み込まない。
+          printf 'version: 1\n' > "$RUNNER_TEMP/takt-review-runtime.yaml"
 
       - name: TAKT Review 実行
-        run: takt --pipeline --skip-git --pr ${{ github.event.issue.number }} -w review-takt-default
+        run: |
+          node --input-type=module - "$(npm root -g)" --runtime-file "$RUNNER_TEMP/takt-review-runtime.yaml" --pipeline --skip-git --pr ${{ github.event.issue.number }} -w review-takt-default <<'NODE'
+          import { join } from 'node:path';
+          import { pathToFileURL } from 'node:url';
+
+          const [modules, ...args] = process.argv.slice(2);
+          const dist = join(modules, 'takt', 'dist');
+          const moduleURL = (path) => pathToFileURL(join(dist, path)).href;
+          const { withConfigSnapshot } = await import(moduleURL('infra/config/configSnapshot.js'));
+          const { loadGlobalConfig, loadGlobalConfigTraceState } = await import(moduleURL('infra/config/global/globalConfigCore.js'));
+          const { loadProjectConfig, loadProjectConfigTraceState } = await import(moduleURL('infra/config/project/projectConfig.js'));
+          const projectDir = process.cwd();
+          const project = loadProjectConfig(projectDir);
+          // レビュー対象のファイルを保ったまま、このプロセスにだけ切り替え先を設定する。
+          project.rateLimitFallback = { switchChain: [{ provider: 'claude' }] };
+          const snapshot = {
+            projectDir,
+            project,
+            projectTrace: loadProjectConfigTraceState(projectDir),
+            global: loadGlobalConfig(),
+            globalTrace: loadGlobalConfigTraceState(),
+          };
+          process.argv = [process.execPath, join(dist, 'app/cli/index.js'), ...args];
+          await withConfigSnapshot(snapshot, () => import(moduleURL('app/cli/index.js')));
+          NODE
         env:
+          TAKT_CONFIG_DIR: ${{ runner.temp }}/takt-review-config
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
