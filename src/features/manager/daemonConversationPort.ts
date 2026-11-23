@@ -109,9 +109,18 @@ export function createDaemonConversationInput(options: {
           } finally { snapshot.cancel(); }
         }
         if (attachment.input.assignment.kind === 'daemon' && command.kind !== 'message') throw new ConversationError('invalid_input');
-        if ((command.kind === 'approve_summary' || command.kind === 'dismiss_summary')
+        if ((command.kind === 'approve_summary' || command.kind === 'dismiss_summary' || command.kind === 'reverify_summary')
           && command.conversationId !== id) {
           return { kind: 'error', code: 'invalid_assignment', message: 'Conversation assignment changed' };
+        }
+        if (command.kind === 'reverify_summary') {
+          const snapshot = await options.ingress.snapshot(id);
+          try {
+            const state = snapshot.turnState;
+            if (state.approval?.revision !== command.revision) {
+              return { kind: 'error', code: 'stale_summary', message: 'The displayed proposal has changed' };
+            }
+          } finally { snapshot.cancel(); }
         }
         if (command.kind === 'approve_summary' || command.kind === 'dismiss_summary') {
           const snapshot = await options.ingress.snapshot(id);

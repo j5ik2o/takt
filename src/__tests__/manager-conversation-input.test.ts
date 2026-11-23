@@ -16,7 +16,7 @@ function fixture() {
     abortConfirmation: { abortTarget: null, setAbortTarget: vi.fn(), handleInput: vi.fn() },
     questionAnswer: { answerTarget: null, bodyText: '', clearAnswer: vi.fn(() => true), beginAnswer: vi.fn(), switchToFreeText: vi.fn(),
       handleNavigation: vi.fn(() => false), handleInput: vi.fn(() => true) },
-    summaryApproval: { pending: null, setPending: vi.fn(), dismiss: vi.fn(), handleInput: vi.fn(() => true) },
+    summaryApproval: { pending: null, setPending: vi.fn(), dismiss: vi.fn(), handleInput: vi.fn(() => true), reverifySelected: false },
     selection: { selection: null, open: vi.fn(() => true), close: vi.fn(), refresh: vi.fn(), handleInput: vi.fn() },
     selectTarget: vi.fn(), confirmGoalOperation: vi.fn(async () => {}), saveAnswer: vi.fn(async () => {}), register: vi.fn(async () => {}),
     onInputUnavailable: vi.fn(), openMenu: vi.fn(), slashCompletion: { completions: [], completionIndex: 0, reset: vi.fn(), handleInput: vi.fn(() => false) },

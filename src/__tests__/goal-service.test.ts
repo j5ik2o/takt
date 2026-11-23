@@ -1,7 +1,7 @@
 vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: vi.fn(), readManagerEvents: vi.fn() }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createGoal, GoalRegistrationRecoveryError, hasGoalRegistrationArtifacts, registerReservedGoal } from '../infra/goals/service.js';
-import { GoalRegistrationVerificationError } from '../infra/goals/registrationVerification.js';
+import { GoalRegistrationVerificationError, reverifyPendingGoalRegistration } from '../infra/goals/registrationVerification.js';
 import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
 import type { prepareGoalBranch } from '../infra/goals/git.js';
@@ -440,4 +440,74 @@ it('saves the approved specifications and rejects recovery against different spe
   expect(await createGoal(input)).toMatchObject({ specifications });
   doubles.find.mockReturnValue({ ...goalRecord(), specifications });
   await expect(registerReservedGoal({ ...input, specifications: { gherkin: 'Feature: Different' } })).rejects.toThrow('conflicts');
+});
+
+describe('reverifyPendingGoalRegistration', () => {
+  const COMPLETED_LOG_ID = '11111111-1111-4111-8111-111111111111';
+  const passingVerification = () => doubles.verify.mockResolvedValue({ verdict: 'passed', verificationStarted: true,
+    quint: { status: 'passed', message: '' }, alloy: { status: 'skipped', message: '' } });
+  const pendingGoal = (goalId: string) => GoalSchema.parse({ ...goalRecord(), id: goalId,
+    specifications: { quint: 'module csv {}' }, registrationVerification: { status: 'pending' } });
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    doubles.formal.mockReturnValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 17 });
+    doubles.manager.mockReturnValue({ verifyOnRegister: true });
+  });
+
+  it('completes the pending registration only after the specification verification passes', async () => {
+    passingVerification();
+    const original = pendingGoal(goalRecord().id);
+    doubles.find.mockReturnValue(original);
+    let persisted: Goal | undefined;
+    doubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => (persisted = transform(original)));
+
+    const updated = await reverifyPendingGoalRegistration('/project', original, undefined);
+
+    expect(doubles.verify).toHaveBeenCalledOnce();
+    expect(doubles.create).not.toHaveBeenCalled();
+    expect(updated.registrationVerification).toEqual({ status: 'completed', verdict: 'passed', workLogId: updated.workLog.at(-1)!.id });
+    expect(persisted!.workLog).toHaveLength(1);
+    expect(persisted!.workLog.at(-1)!.summary).toContain('passed');
+  });
+
+  it('leaves the saved goal unchanged and reports the rejection when verification fails', async () => {
+    doubles.verify.mockResolvedValue({ verdict: 'failed', verificationStarted: true,
+      quint: { status: 'failed', message: 'Counterexample found' }, alloy: { status: 'skipped', message: '' } });
+    const original = pendingGoal(goalRecord().id);
+    doubles.find.mockReturnValue(original);
+    doubles.update.mockImplementation(async (_id: string, transform: (goal: Goal) => Goal) => transform(original));
+
+    const error = await reverifyPendingGoalRegistration('/project', original, undefined).then(() => undefined, (caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(GoalRegistrationVerificationError);
+    expect((error as Error).message).toContain('failed');
+    expect(doubles.update).not.toHaveBeenCalled();
+    expect(original).toEqual(pendingGoal(goalRecord().id));
+  });
+
+  it('does not verify or update when the reloaded goal is no longer pending', async () => {
+    passingVerification();
+    const original = pendingGoal(goalRecord().id);
+    doubles.find.mockReturnValue({ ...original,
+      workLog: [{ id: COMPLETED_LOG_ID, recordedAt: '2026-11-03T00:00:00.000Z', summary: 'passed' }],
+      registrationVerification: { status: 'completed', verdict: 'passed', workLogId: COMPLETED_LOG_ID } });
+
+    const returned = await reverifyPendingGoalRegistration('/project', original, undefined);
+
+    expect(returned.registrationVerification).toEqual({ status: 'completed', verdict: 'passed', workLogId: COMPLETED_LOG_ID });
+    expect(doubles.verify).not.toHaveBeenCalled();
+    expect(doubles.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a goal whose verification is not pending without running verification', async () => {
+    const original = GoalSchema.parse({ ...goalRecord(), specifications: { quint: 'module csv {}' },
+      registrationVerification: { status: 'not_required' } });
+
+    const error = await reverifyPendingGoalRegistration('/project', original, undefined).then(() => undefined, (caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(doubles.verify).not.toHaveBeenCalled();
+    expect(doubles.update).not.toHaveBeenCalled();
+  });
 });

@@ -14,6 +14,7 @@ export type ConversationCommand =
   | { kind: 'message'; text: string; display?: boolean; requestProposal?: boolean }
   | { kind: 'approve_summary'; revision: number; conversationId: string; requirePending?: boolean }
   | { kind: 'dismiss_summary'; revision: number; conversationId: string }
+  | { kind: 'reverify_summary'; revision: number; conversationId: string }
   | { kind: 'answer_question'; target: QuestionTarget; questionId: string; answer: GoalAnswerInput;
       source?: 'tui' | 'slack' }
   | { kind: 'pause_goal' | 'resume_goal' | 'abort_goal' | 'delete_goal'; goalId: string }

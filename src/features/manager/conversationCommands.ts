@@ -10,6 +10,7 @@ export const ConversationCommandSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('message'), text: z.string().min(1), display: z.boolean().optional(), requestProposal: z.boolean().optional() }).strict(),
   z.object({ kind: z.literal('approve_summary'), revision, conversationId: ConversationIdSchema, requirePending: z.boolean().optional() }).strict(),
   z.object({ kind: z.literal('dismiss_summary'), revision, conversationId: ConversationIdSchema }).strict(),
+  z.object({ kind: z.literal('reverify_summary'), revision, conversationId: ConversationIdSchema }).strict(),
   z.object({ kind: z.literal('answer_question'), questionId: id,
     target: z.union([
       z.object({ goalId: id, repositoryDirectory: z.string().refine(isAbsolute) }).strict(),

@@ -248,7 +248,7 @@ it('admits approval with its revision and routes inquiry answers to the human qu
   expect(f.ingress.accept).toHaveBeenLastCalledWith(expect.objectContaining({ event: expect.objectContaining({ kind: 'inquiry_answer' }) }));
 });
 
-it.each(['approve_summary', 'dismiss_summary'] as const)(
+it.each(['approve_summary', 'dismiss_summary', 'reverify_summary'] as const)(
   'rejects a %s command whose conversationId differs from the attached conversation before durable admission',
   async (kind) => {
     const f = await fixture();
@@ -323,4 +323,45 @@ it('awaits each progress delivery and delivers the final result to both slow and
   expect(slow.deliver).toHaveBeenCalledTimes(41);
   expect(f.delivery.deliver).toHaveBeenLastCalledWith(f.selected.conversationId, expect.objectContaining({ kind: 'result' }), version);
   stalled.resolve(); await Promise.all([...progress, final]); f.port.close();
+});
+
+it('rejects a reverify whose revision does not match the reservation before durable admission', async () => {
+  const f = await fixture();
+  const snapshot = await f.ingress.snapshot(f.selected.conversationId);
+  snapshot.turnState.approval = { revision: 3, goalId: '11111111-1111-4111-8111-111111111111', repositoryDirectory: '/repo', state: 'reserved' };
+  vi.mocked(f.ingress.snapshot).mockResolvedValue(snapshot);
+
+  expect(await f.port.submit({ attachmentId: f.opened.attachmentId, requestId: 'reverify',
+    speaker: f.selected.speaker, command: { kind: 'reverify_summary', revision: 2, conversationId: f.selected.conversationId } }))
+    .toMatchObject({ kind: 'error', code: 'stale_summary' });
+  expect(f.ingress.accept).not.toHaveBeenCalled();
+});
+
+it('admits a reverify that matches the reserved approval revision', async () => {
+  const f = await fixture();
+  const snapshot = await f.ingress.snapshot(f.selected.conversationId);
+  snapshot.turnState.approval = { revision: 3, goalId: '11111111-1111-4111-8111-111111111111', repositoryDirectory: '/repo', state: 'reserved' };
+  vi.mocked(f.ingress.snapshot).mockResolvedValue(snapshot);
+
+  expect(await f.port.submit({ attachmentId: f.opened.attachmentId, requestId: 'reverify',
+    speaker: f.selected.speaker, command: { kind: 'reverify_summary', revision: 3, conversationId: f.selected.conversationId } }))
+    .toMatchObject({ kind: 'accepted' });
+  expect(f.ingress.accept).toHaveBeenCalledWith(expect.objectContaining({ event: expect.objectContaining({ kind: 'human_command',
+    command: { kind: 'reverify_summary', revision: 3, conversationId: f.selected.conversationId } }) }));
+});
+
+it('rejects a reverify from a director conversation', async () => {
+  const f = await fixture();
+  const director = { kind: 'daemon' as const, repositoryDirectories: [] as string[] };
+  const directorId = conversationId(director);
+  const base = await f.ingress.snapshot(f.selected.conversationId);
+  f.loadSnapshot.mockResolvedValue({ ...base, conversationId: directorId,
+    turnState: { ...base.turnState, assignment: director } });
+  const directorOpened = await f.port.open({ conversationId: directorId, assignment: director,
+    speaker: f.selected.speaker, binding: f.selected.binding }, f.delivery);
+
+  await expect(f.port.submit({ attachmentId: directorOpened.attachmentId, requestId: 'reverify-director',
+    speaker: f.selected.speaker, command: { kind: 'reverify_summary', revision: 1, conversationId: directorId } }))
+    .rejects.toMatchObject({ code: 'invalid_input' });
+  expect(f.ingress.accept).not.toHaveBeenCalled();
 });

@@ -91,6 +91,20 @@ export async function verifyGoalSpecificationsForRegistration(
   }
 }
 
+export async function reverifyPendingGoalRegistration(cwd: string, goal: Goal, signal: AbortSignal | undefined): Promise<Goal> {
+  if (goal.registrationVerification?.status !== 'pending') throw new Error('Goal registration verification is not pending');
+  const store = new GoalStore(cwd);
+  const current = store.find(goal.id);
+  if (current === undefined) throw new Error('Goal no longer exists');
+  if (current.registrationVerification?.status !== 'pending') return current;
+  const summary = await verifyGoalSpecificationsForRegistration(cwd, current.specifications, signal);
+  return store.update(goal.id, (latest) => {
+    if (latest.registrationVerification?.status !== 'pending') return latest;
+    const updated = appendGoalWorkLog(latest, { summary });
+    return { ...updated, registrationVerification: { status: 'completed', verdict: 'passed', workLogId: updated.workLog.at(-1)!.id } };
+  });
+}
+
 export async function verifyRegisteredGoal(cwd: string, goal: Goal, signal: AbortSignal | undefined): Promise<Goal> {
   const specifications = goal.specifications;
   if (specifications?.quint === undefined && specifications?.alloy === undefined) return goal;

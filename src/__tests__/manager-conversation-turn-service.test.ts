@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createConversationTurnService } from '../features/manager/conversationService.js';
 import { buildManagerEventPrompt } from '../features/daemon/inboxEvent.js';
 
@@ -15,6 +15,7 @@ import type { AssistantCliOverrides } from '../core/config/provider-resolution.j
 import { mergeTaktGoalPr } from '../features/mcp/goalIntegrationOperations.js';
 import type { TurnEvent } from '../core/daemon/events.js';
 import type { ConversationChange } from '../core/daemon/messages.js';
+import type { TurnStart } from '../core/daemon/messages.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
 import { runFormalSpecVerification, cleanupFormalSpecVerificationArtifacts } from '../features/interactive/formalSpecVerification.js';
@@ -29,7 +30,7 @@ vi.mock('../features/interactive/formalSpecVerification.js', () => ({
 vi.mock('../features/interactive/taskInstructionFormat.js', () => ({ resolveFormalSpecConfigurationWithoutPrompt: doubles.formalSpec }));
 
 const doubles = vi.hoisted(() => ({ epics: vi.fn(), readTasks: vi.fn(), assignment: vi.fn(), formalSpec: vi.fn(), register: vi.fn(), artifacts: vi.fn(),
-  validateBranches: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), findGoal: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn(), setStatus: vi.fn(), invalidate: vi.fn() }));
+  validateBranches: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), findGoal: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn(), setStatus: vi.fn(), invalidate: vi.fn(), reverify: vi.fn() }));
 vi.mock('../infra/daemon/epicFiles.js', () => ({ DaemonEpicFiles: class { async *list(workspaceId: string) { yield* await doubles.epics(workspaceId); } } }));
 vi.mock('../features/daemon/watchers/state.js', () => ({ readWatchTasks: doubles.readTasks }));
 vi.mock('../infra/goals/execution.js', async (original) => ({ ...await original<typeof import('../infra/goals/execution.js')>(), setGoalExecutionStatus: doubles.setStatus }));
@@ -42,6 +43,8 @@ vi.mock('../features/manager/assignment.js', async (original) => ({ ...await ori
   findAssignedGoalRepository: async () => '/repository' }));
 vi.mock('../infra/goals/service.js', async (original) => ({ ...await original<typeof import('../infra/goals/service.js')>(),
   registerReservedGoal: doubles.register, hasGoalRegistrationArtifacts: doubles.artifacts }));
+vi.mock('../infra/goals/registrationVerification.js', async (original) => ({ ...await original<typeof import('../infra/goals/registrationVerification.js')>(),
+  reverifyPendingGoalRegistration: doubles.reverify }));
 vi.mock('../infra/goals/git.js', async (original) => ({ ...await original<typeof import('../infra/goals/git.js')>(),
   validateGoalBranchReferences: doubles.validateBranches }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.autoRun }));
@@ -95,9 +98,9 @@ it('uses the daemon turn identity for tool events while preserving call and prov
   expect(event.toolActivity).toEqual({ callId: 'provider-call', operationId: 'ignored-upstream-operation', generation: 900 });
 });
 
-function conversationFixture() {
+function conversationFixture(initialState?: Partial<TurnStart['state']>) {
   const f = fixture();
-  let state = structuredClone(f.input.state);
+  let state = { ...structuredClone(f.input.state), ...initialState };
   let generation = 0;
   let service = f.service;
   const save = (change: ConversationChange) => {
@@ -1223,4 +1226,70 @@ it.each(['ja', 'en'] as const)('delivers structured origins and treats missing o
     await f.run({ kind: 'director_message', directorConversationId: 'director', text, origin });
     expect(turnData(f.execute.mock.lastCall![0].prompt)).toEqual({ text, directorConversationId: 'director', origin: origin ?? 'unknown' });
   }
+});
+
+describe('reverify_summary of a reserved registration', () => {
+  const pendingGoal = (goalId: string) => ({ ...goalRecord(), id: goalId,
+    specifications: { quint: 'module csv {}' }, registrationVerification: { status: 'pending' as const },
+    workLog: [] });
+  const completedGoal = (goalId: string) => ({ ...goalRecord(), id: goalId,
+    specifications: { quint: 'module csv {}' },
+    workLog: [{ id: '11111111-1111-4111-8111-111111111111', recordedAt: '2026-11-03T00:00:00.000Z', summary: 'passed' }],
+    registrationVerification: { status: 'completed' as const, verdict: 'passed' as const, workLogId: '11111111-1111-4111-8111-111111111111' } });
+  const reserved = (goalId: string) => conversationFixture({ approval: { state: 'reserved', revision: 1, goalId, repositoryDirectory: '/repository' } });
+  const reverifyCommand = (revision = 1): TurnEvent => ({ kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+    command: { kind: 'reverify_summary', revision, conversationId: turnConversationId } });
+
+  it('reverifies the pending goal, persists the completion, and marks the approval registered', async () => {
+    const goal = pendingGoal(goalRecord().id);
+    const f = reserved(goal.id);
+    doubles.findGoal.mockReturnValue(goal);
+    doubles.reverify.mockResolvedValue(completedGoal(goal.id));
+
+    const outcome = await f.run(reverifyCommand());
+
+    expect(doubles.reverify).toHaveBeenCalledOnce();
+    expect(doubles.reverify.mock.calls[0]![0]).toBe('/repository');
+    expect(doubles.register).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'goal_registered', goal: { id: goal.id } } });
+    expect(f.state().approval).toMatchObject({ state: 'registered', goalId: goal.id });
+    expect(f.state().pending).toBeNull();
+  });
+
+  it('keeps the reservation and preserves the proposal when reverification fails so the operator can retry', async () => {
+    const goal = pendingGoal(goalRecord().id);
+    const f = reserved(goal.id);
+    doubles.findGoal.mockReturnValue(goal);
+    doubles.reverify.mockRejectedValueOnce(new Error('Formal specification verification: failed'));
+
+    const failed = await f.run(reverifyCommand());
+    expect(failed).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'operation_failed',
+      message: expect.stringContaining('failed') } });
+    expect(failed.change).toBeUndefined();
+    expect(f.state().approval).toMatchObject({ state: 'reserved', revision: 1, goalId: goal.id });
+
+    doubles.reverify.mockResolvedValueOnce(completedGoal(goal.id));
+    expect(await f.run(reverifyCommand())).toMatchObject({ kind: 'completed', result: { kind: 'goal_registered' } });
+    expect(doubles.reverify).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a reverify whose revision differs from the reservation without verifying', async () => {
+    const goal = pendingGoal(goalRecord().id);
+    const f = reserved(goal.id);
+    doubles.findGoal.mockReturnValue(goal);
+
+    expect(await f.run(reverifyCommand(2))).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'registration_recovery' } });
+    expect(doubles.reverify).not.toHaveBeenCalled();
+  });
+
+  it('still recovers an ordinary message while the registration is reserved', async () => {
+    const goal = pendingGoal(goalRecord().id);
+    const f = reserved(goal.id);
+    doubles.findGoal.mockReturnValue(goal);
+
+    expect(await f.run(humanMessage('please retry the verification'))).toMatchObject({ kind: 'completed',
+      result: { kind: 'error', code: 'registration_recovery' } });
+    expect(doubles.reverify).not.toHaveBeenCalled();
+    expect(f.execute).not.toHaveBeenCalled();
+  });
 });

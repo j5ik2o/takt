@@ -21,6 +21,7 @@ import { CLEAR_COMMAND } from './conversationCommands.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import type { Goal } from '../../infra/goals/schema.js';
 import { hasGoalRegistrationArtifacts, registerReservedGoal } from '../../infra/goals/service.js';
+import { reverifyPendingGoalRegistration } from '../../infra/goals/registrationVerification.js';
 import { validateGoalBranchReferences } from '../../infra/goals/git.js';
 import { setGoalExecutionStatus } from '../../infra/goals/execution.js';
 import { deleteFinishedGoal } from '../../infra/goals/deletion.js';
@@ -77,7 +78,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
       let promptEvent = event;
       try {
         io.signal.throwIfAborted();
-        if ((command.kind === 'approve_summary' || command.kind === 'dismiss_summary')
+        if ((command.kind === 'approve_summary' || command.kind === 'dismiss_summary' || command.kind === 'reverify_summary')
           && command.conversationId !== input.turn.conversationId) throw new ConversationError('invalid_assignment');
         if (event.kind === 'epic_verification_result' || event.kind === 'epic_completed') {
           if (assignment.kind !== 'workspace' || assignment.workspaceId !== event.workspaceId) throw new ConversationError('invalid_assignment');
@@ -145,7 +146,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
         }
         if (identity.kind === 'daemon' && command.kind !== 'message') throw new ConversationError('invalid_input');
         if (state.current.approval?.state === 'reserved'
-          && (command.kind !== 'approve_summary' || command.revision !== state.current.approval.revision)) throw new ConversationError('registration_recovery');
+          && ((command.kind !== 'approve_summary' && command.kind !== 'reverify_summary') || command.revision !== state.current.approval.revision)) throw new ConversationError('registration_recovery');
         if (clear) {
           return { kind: 'completed', result: { kind: 'notice', message: getLabel('manager.conversation.cleared', language) },
             change: state.change({ session: { ...state.current.session, sessionId: null }, interruptedMessage: null }) };
@@ -164,7 +165,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             kind: 'reply', message: getLabel('interactive.ui.verifyUnavailable', language),
           } };
         }
-        if (human && command.kind !== 'approve_summary' && !verify) {
+        if (human && command.kind !== 'approve_summary' && command.kind !== 'reverify_summary' && !verify) {
           if (command.kind === 'dismiss_summary' && priorPending?.revision !== command.revision) throw new ConversationError('stale_summary');
           await state.save({ proposal: { revision: nextRevision(state.current.revision), pending: null } });
         }
@@ -209,6 +210,18 @@ export function createConversationTurnService(configDirectory: string, runtime: 
               throw error;
             }
           }
+        } else if (assignment.kind !== 'daemon' && command.kind === 'reverify_summary') {
+          const existing = state.current.approval;
+          if (existing?.state !== 'reserved' || existing.revision !== command.revision) throw new ConversationError('registration_recovery');
+          if (!assignment.repositoryDirectories.includes(existing.repositoryDirectory)) throw new ConversationError('invalid_assignment');
+          const store = new GoalStore(existing.repositoryDirectory);
+          const goal = store.find(existing.goalId);
+          if (goal === undefined) throw new ConversationError('invalid_assignment');
+          io.signal.throwIfAborted();
+          const reverified = await reverifyPendingGoalRegistration(existing.repositoryDirectory, goal, io.signal);
+          return { kind: 'completed', result: { kind: 'goal_registered', goal: reverified }, change: state.change({
+            approval: { ...existing, state: 'registered' }, proposal: { revision: nextRevision(state.current.revision), pending: null },
+          }) };
         } else if (command.kind === 'message') {
           const agentOverrides = human ? event.agentOverrides : state.current.session.agentOverrides;
           const resolved = await runtime.resolve(assignment, io.signal, agentOverrides);

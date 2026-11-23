@@ -179,6 +179,15 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     finally { submitting.current--; if (mounted.current) setSending(submitting.current > 0); }
   };
   const summaryApproval = useManagerSummaryApproval({ selected, setApprove, resetChoice,
+    reverifyAvailable: client.getSnapshot().state?.approval?.state === 'reserved',
+    reverify: async (revision) => {
+      const current = client.getSnapshot();
+      const conversationId = current.state?.conversationId;
+      if (conversationId === undefined) return;
+      resetChoice();
+      registering.current = true;
+      if (await send({ kind: 'reverify_summary', revision, conversationId }) === null) registering.current = false;
+    },
     dismissSummary: async (revision) => {
       const conversationId = client.getSnapshot().state?.conversationId;
       if (conversationId === undefined) return;
@@ -560,7 +569,8 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     {selection.selection !== null && <ManagerSelectionDialog selection={selection.selection} lang={lang} />}
     {answerTarget !== null && selection.selection === null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
     {!epicsOpen && abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget} approve={approve} lang={lang} />}
-    {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} />}
+    {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang}
+      reverifyAvailable={client.getSnapshot().state?.approval?.state === 'reserved'} reverifySelected={summaryApproval.reverifySelected} />}
     {!epicsOpen && toolHeight > 0 && <ToolActivityView page={toolPage} state={currentToolView} labels={toolLabels} height={toolHeight} />}
     <StatusLine busy={busy} label={statusLabel} streamed="" />
     {queueRows > 0 && <QueueView heading={queueHeading}

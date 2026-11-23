@@ -556,6 +556,7 @@ manager:
     constraints: "Work constraints"
     none: "None"
     approve: "Register goal"
+    reverify: "Re-run goal verification"
     continue: "Return to conversation without registering"
     dismissHint: "Returning to the conversation or typing changes dismisses this proposal."
   inputUnavailableDuringAbort: "Cannot enter input during abort confirmation. Finish the confirmation before typing."
