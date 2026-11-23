@@ -18,6 +18,7 @@ import { buildSafeGitEnvironment } from '../../../infra/task/git-environment.js'
 import { createPrCloneGitOperations } from '../../../infra/workflow/system/pr-clone-git.js';
 import { checkForkThreats } from '../../merge/threat-check.js';
 import { assertReusableWorktreePath } from '../execute/reusedWorktree.js';
+import { assertTaskStateWorktreeOwnership } from '../taskStateWorktreeOwnership.js';
 import {
   assertPrMergeCloneIdentity,
   assertSavedPrMergeIdentity,
@@ -154,6 +155,11 @@ export async function publishPrFailedTask(
   }
   const branch = task.branch;
   const worktreePath = task.worktreePath;
+  try {
+    assertTaskStateWorktreeOwnership(projectDir, task);
+  } catch (error) {
+    return { success: false, error: getErrorMessage(error) };
+  }
   const currentBranch = getCurrentBranch(worktreePath);
   if (currentBranch === 'HEAD' || currentBranch !== branch) {
     return {

@@ -24,6 +24,7 @@ const {
   mockCreatePrCloneGitOperations,
   mockCheckForkThreats,
   mockAssertReusableWorktreePath,
+  mockAssertTaskStateWorktreeOwnership,
   mockRecordPrMergePushedHead,
   mockFetchPrDetails,
   mockPushPrMergeHead,
@@ -49,6 +50,7 @@ const {
   mockCreatePrCloneGitOperations: vi.fn(),
   mockCheckForkThreats: vi.fn(),
   mockAssertReusableWorktreePath: vi.fn(),
+  mockAssertTaskStateWorktreeOwnership: vi.fn(),
   mockRecordPrMergePushedHead: vi.fn(),
   mockFetchPrDetails: vi.fn(),
   mockPushPrMergeHead: vi.fn(),
@@ -95,6 +97,10 @@ vi.mock('../features/interactive/index.js', async (importOriginal) => ({
 
 vi.mock('../features/tasks/list/taskWorktreeSummary.js', () => ({
   collectTaskWorktreeSummary: (...args: unknown[]) => mockCollectTaskWorktreeSummary(...args),
+}));
+
+vi.mock('../features/tasks/taskStateWorktreeOwnership.js', () => ({
+  assertTaskStateWorktreeOwnership: mockAssertTaskStateWorktreeOwnership,
 }));
 
 vi.mock('../features/tasks/execute/reusedWorktree.js', () => ({
@@ -951,6 +957,20 @@ describe('publishPrFailedTask', () => {
     expect(mockExecFileSync).not.toHaveBeenCalledWith('git', expect.arrayContaining(['push']), expect.anything());
     expect(mockFindExistingPr).not.toHaveBeenCalled();
     expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
+    expect(mockCompletePublishedTask).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unowned worktree before any Git or publication operation', async () => {
+    mockAssertTaskStateWorktreeOwnership.mockImplementationOnce(() => {
+      throw new Error('Task worktree ownership validation failed');
+    });
+
+    expect(await publishPrFailedTask('/project', prFailedTask)).toEqual({
+      success: false, error: expect.stringContaining('Task worktree ownership validation failed'),
+    });
+    expect(mockAssertTaskStateWorktreeOwnership).toHaveBeenCalledExactlyOnceWith('/project', prFailedTask);
+    expect(mockExecFileSync).not.toHaveBeenCalled();
+    expect(mockStageAndCommit).not.toHaveBeenCalled();
     expect(mockCompletePublishedTask).not.toHaveBeenCalled();
   });
 

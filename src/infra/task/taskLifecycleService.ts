@@ -647,13 +647,14 @@ export class TaskLifecycleService {
         pr_url: prUrl ?? target.pr_url,
         ...(publishedSha === undefined ? {} : {
           completion: {
+            ...target.completion,
             success: true,
             interrupted: false,
             workflowResult: 'completed',
-            branch: target.branch,
-            ...target.completion,
+            branch: target.branch ?? target.completion?.branch,
             sha: publishedSha,
             shaUnavailableReason: undefined,
+            failureReason: undefined,
           },
         }),
       });

@@ -77,7 +77,8 @@ describe('pr_failed goal task recovery through manager MCP', () => {
     const running = runner.updateRunningTaskExecution(claimed.name, { runSlug: 'pr-failed-run', worktreePath: clone, branch });
     runner.prFailTask({ task: running, success: true, response: 'Result ready', executionLog: [], branch, worktreePath: clone,
       startedAt: '2026-10-08T00:00:00Z', completedAt: '2026-10-08T00:01:00Z',
-      completion: { success: true, interrupted: false, branch, sha: git(clone, ['rev-parse', 'HEAD']), workflowResult: 'completed' } },
+      completion: { success: false, interrupted: false, branch, sha: git(clone, ['rev-parse', 'HEAD']),
+        workflowResult: 'completed', failureReason: 'push rejected' } },
     'push rejected');
     const runDir = join(clone, '.takt', 'runs', 'pr-failed-run');
     for (const directory of ['logs', 'reports', 'context']) mkdirSync(join(runDir, directory), { recursive: true });
@@ -125,7 +126,8 @@ describe('pr_failed goal task recovery through manager MCP', () => {
   it('recovers a pr_failed task through publication without rerunning the workflow', async () => {
     const originalSha = git(clone, ['rev-parse', 'HEAD']);
     expect(runner.listTaskStateItems()[0]).toMatchObject({
-      name: taskName, goalId, status: 'pr_failed', completion: { sha: originalSha },
+      name: taskName, goalId, status: 'pr_failed',
+      completion: { sha: originalSha, success: false, failureReason: 'push rejected' },
     });
     writeFileSync(join(clone, 'recovered.txt'), 'unpublished result');
 
@@ -143,6 +145,9 @@ describe('pr_failed goal task recovery through manager MCP', () => {
       name: taskName, status: 'completed', prUrl: advertisedPr,
       completion: { sha: publishedSha, success: true, workflowResult: 'completed' },
     });
+    const recovered = runner.listTaskStateItems()[0];
+    expect(recovered?.failure).toBeUndefined();
+    expect(recovered?.completion?.failureReason).toBeUndefined();
     expect((await store.get(goalId)).workLog.at(-1)!.summary).toContain(taskName);
     expect((await store.get(goalId)).workLog.at(-1)!.summary).toContain(advertisedPr);
     expect(runner.listPendingTaskItems()).toEqual([]);
