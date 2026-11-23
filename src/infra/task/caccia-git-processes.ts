@@ -9,10 +9,21 @@ interface ProcessEntry {
 const exitWait = new Int32Array(new SharedArrayBuffer(4));
 const cloneProcesses = new Map<string, Set<OwnedGitProcess>>();
 
-function processTable(): ProcessEntry[] {
-  return execFileSync('ps', ['-axo', 'pid=,pgid=,stat=,lstart='], {
+function inspectProcesses(file: string): string {
+  return execFileSync(file, ['-axo', 'pid=,pgid=,stat=,lstart='], {
     encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' }, timeout: 1_000, killSignal: 'SIGKILL',
-  }).split('\n').flatMap((line) => {
+  });
+}
+
+function processTable(): ProcessEntry[] {
+  let output: string;
+  try {
+    output = inspectProcesses('ps');
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+    output = inspectProcesses('/bin/ps');
+  }
+  return output.split('\n').flatMap((line) => {
     const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/u.exec(line);
     if (!match || match[3]!.startsWith('Z')) return [];
     return [{
@@ -38,9 +49,10 @@ class OwnedGitProcess {
   signal(signal: NodeJS.Signals): void {
     if (process.platform === 'win32') {
       if (!this.closed) this.signalLeader(signal);
-    } else {
-      if (this.remaining(processTable()).length > 0) signalPid(-this.pid, signal);
+      return;
     }
+    // While our child leads its process group, cancellation needs no ps lookup.
+    if (!this.closed || this.remaining(processTable()).length > 0) signalPid(-this.pid, signal);
   }
 
   onLeaderExit(): boolean {
@@ -68,20 +80,14 @@ class OwnedGitProcess {
 
   remaining(table: ProcessEntry[]): ProcessEntry[] {
     const members = table.filter(({ group }) => group === this.pid);
-    if (members.length > 0 && this.groupInspectionError !== undefined) {
+    if (!this.closed || members.length === 0) return members;
+    // A new live leader proves the number was reused. Without that leader or
+    // an identity we observed, the group could still contain our descendants.
+    if (members.some(({ pid }) => pid === this.pid)) return [];
+    if (this.groupInspectionError !== undefined || !members.some(({ pid, started }) => this.members.get(pid) === started)) {
       throw new Error(`Could not identify Caccia Git process group ${this.pid}`, { cause: this.groupInspectionError });
     }
-    return !this.closed || members.some(({ pid, started }) => this.members.get(pid) === started) ? members : [];
-  }
-
-  kill(entries: ProcessEntry[]): void {
-    if (process.platform === 'win32') {
-      if (!this.closed) this.signalLeader('SIGKILL');
-    } else if (entries.length > 0) {
-      // Preserve the identities we observed even if the leader is reaped during cleanup.
-      for (const { pid, started } of entries) this.members.set(pid, started);
-      signalPid(-this.pid, 'SIGKILL');
-    }
+    return members;
   }
 }
 
@@ -91,10 +97,7 @@ export function registerCacciaCloneGit(cwd: string): () => void {
   cloneProcesses.set(cwd, children);
   return () => {
     if (children.size > 0) {
-      const table = process.platform === 'win32' ? [] : processTable();
-      for (const child of children) {
-        child.kill(child.remaining(table));
-      }
+      for (const child of children) child.signal('SIGKILL');
       if (process.platform !== 'win32') {
         const deadline = performance.now() + 2_000;
         let remaining: ProcessEntry[];

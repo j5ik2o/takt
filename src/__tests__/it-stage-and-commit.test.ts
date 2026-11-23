@@ -64,6 +64,39 @@ function isFixtureProcessRunning(pidFile: string): boolean {
 }
 
 describe('stageAndCommit', () => {
+  it.skipIf(process.platform === 'win32')('can commit unsigned changes from a terminal without node-pty', async () => {
+    const root = join(import.meta.dirname, '..', '..');
+    const gitModule = pathToFileURL(join(root, 'src/infra/task/git.ts')).href;
+    execFileSync('git', ['config', 'commit.gpgsign', 'false'], { cwd: testDir });
+    writeFileSync(join(testDir, 'unsigned.txt'), 'unsigned content\n');
+    const child = spawnPty(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', `
+      import { registerHooks } from 'node:module';
+      import { stageAndCommit } from ${JSON.stringify(gitModule)};
+      registerHooks({
+        resolve(specifier, context, next) {
+          if (specifier === 'node-pty') throw Object.assign(new Error('optional add-on absent'), { code: 'ERR_MODULE_NOT_FOUND' });
+          return next(specifier, context);
+        },
+      });
+      await stageAndCommit(${JSON.stringify(testDir)}, 'Unsigned fixture', {}, new AbortController().signal);
+    `], { cwd: root });
+    let output = '';
+    child.onData((chunk) => { output += chunk; });
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        reject(new Error(`Unsigned commit fixture timed out: ${output}`));
+      }, 15_000);
+      child.onExit(({ exitCode, signal }) => {
+        clearTimeout(timer);
+        if (exitCode === 0 && !signal) resolve();
+        else reject(new Error(`Unsigned commit fixture exited (${exitCode}, ${signal}): ${output}`));
+      });
+    });
+    const subject = execFileSync('git', ['log', '-1', '--format=%s'], { cwd: testDir, encoding: 'utf8' });
+    expect(subject.trim()).toBe('Unsigned fixture');
+  });
+
   it.skipIf(process.platform === 'win32').each(['complete', 'interrupt', 'redirected with a reparented hook child'] as const)(
     'keeps the controlling terminal for a signed commit (%s)',
     async (mode) => {
@@ -147,7 +180,8 @@ printf '%s\\n' '-----BEGIN PGP SIGNATURE-----' 'fixture' '-----END PGP SIGNATURE
         }
       `];
       const child = spawnPty(redirected ? '/bin/sh' : process.execPath,
-        redirected ? ['-c', 'exec "$@" </dev/null >"$TAKT_TEST_REDIRECT_LOG" 2>&1', 'fixture', process.execPath, ...args] : args, {
+        // Keep the outer PTY's slave open on Linux while redirecting all three standard fds.
+        redirected ? ['-c', 'exec "$@" 3<>/dev/tty </dev/null >"$TAKT_TEST_REDIRECT_LOG" 2>&1', 'fixture', process.execPath, ...args] : args, {
         cwd: root,
         env: { ...process.env, GPG_TTY: '/not-the-inner-pty', TAKT_TEST_SIGNER_PID: signerPid, TAKT_TEST_NODE: process.execPath,
           TAKT_TEST_HOOK_HELPER: join(testDir, '.git', 'fixture-hook-helper.cjs'), TAKT_TEST_HOOK_CHILD: childPidFile,
@@ -162,18 +196,19 @@ printf '%s\\n' '-----BEGIN PGP SIGNATURE-----' 'fixture' '-----END PGP SIGNATURE
           child.write(mode === 'interrupt' ? '\x03' : 'fixture\r');
         }
       });
-      const exit = await new Promise<number>((resolve, reject) => {
+      const exit = await new Promise<{ exitCode: number; signal?: number }>((resolve, reject) => {
         const timer = setTimeout(() => {
           child.kill('SIGKILL');
           reject(new Error(`Signed commit fixture timed out: ${output}`));
         }, 15_000);
-        child.onExit(({ exitCode }) => {
+        child.onExit((event) => {
           clearTimeout(timer);
-          resolve(exitCode);
+          resolve(event);
         });
       }).finally(() => listener.dispose());
       if (redirected && existsSync(redirectedLog)) output += readFileSync(redirectedLog, 'utf8');
-      expect(exit, output).toBe(0);
+      expect(exit.signal || 0, output).toBe(0);
+      expect(exit.exitCode, output).toBe(0);
       expect(responded, output).toBe(true);
       if (mode !== 'interrupt') {
         expect(git(['cat-file', '-p', 'HEAD'])).toContain('gpgsig -----BEGIN PGP SIGNATURE-----');

@@ -65,7 +65,7 @@ it('rejects on abort even when signalling Git fails', async () => {
 it.skipIf(process.platform === 'win32')('does not signal a reused Git process group after its owned members leave', () => {
   const signal = vi.spyOn(process, 'kill').mockReturnValue(true);
   const snapshot = vi.mocked(execFileSync);
-  snapshot.mockReturnValue('5001 4001 S Mon Nov 23 12:01:00 2026\n')
+  snapshot.mockReturnValue('4001 4001 S Mon Nov 23 12:01:00 2026\n')
     .mockReturnValueOnce('5001 4001 S Mon Nov 23 12:00:00 2026\n');
   const release = registerCacciaCloneGit('/fixture/caccia-group');
   let leaderExited: (() => void) | undefined;
@@ -81,6 +81,43 @@ it.skipIf(process.platform === 'win32')('does not signal a reused Git process gr
     snapshot.mockReset();
   }
   expect(signal.mock.calls).toEqual([[-4001, 0]]);
+});
+
+it.skipIf(process.platform === 'win32')('signals the owned group when ps is missing from PATH', () => {
+  const signal = vi.spyOn(process, 'kill').mockReturnValue(true);
+  const snapshot = vi.mocked(execFileSync);
+  snapshot.mockImplementation((file) => {
+    if (file === 'ps') throw Object.assign(new Error('spawn ps ENOENT'), { code: 'ENOENT' });
+    return signal.mock.calls.some(([, name]) => name === 'SIGKILL') ? '' : '4001 4001 S Mon Nov 23 12:00:00 2026\n';
+  });
+  const release = registerCacciaCloneGit('/fixture/caccia-missing-ps');
+  const terminate = trackCacciaCloneGit('/fixture/caccia-missing-ps', 4001, vi.fn(), () => undefined)!;
+  try {
+    terminate('SIGINT');
+    release();
+    expect(signal.mock.calls).toEqual([[-4001, 'SIGINT'], [-4001, 'SIGKILL']]);
+  } finally {
+    snapshot.mockReset();
+  }
+});
+
+it.skipIf(process.platform === 'win32')('retains the clone registration if only unverified group members survive', () => {
+  const signal = vi.spyOn(process, 'kill').mockReturnValue(true);
+  const snapshot = vi.mocked(execFileSync);
+  snapshot.mockReturnValue('5002 4001 S Mon Nov 23 12:01:00 2026\n')
+    .mockReturnValueOnce('5001 4001 S Mon Nov 23 12:00:00 2026\n');
+  const release = registerCacciaCloneGit('/fixture/caccia-replacement');
+  let leaderExited: (() => void) | undefined;
+  trackCacciaCloneGit('/fixture/caccia-replacement', 4001, vi.fn(), (callback) => { leaderExited = callback; });
+  try {
+    leaderExited!();
+    expect(release).toThrow(/identify Caccia Git process group/u);
+    expect(signal.mock.calls).toEqual([[-4001, 0]]);
+  } finally {
+    snapshot.mockReturnValue('');
+    release();
+    snapshot.mockReset();
+  }
 });
 
 it.each([

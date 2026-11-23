@@ -24,17 +24,19 @@ export async function tryCacciaTerminalCommit(
 ): Promise<boolean> {
   const fd = openControllingTerminal();
   if (fd === undefined) return false;
+  const terminal = await import('node-pty').catch(() => undefined);
+  if (signal.aborted || terminal === undefined) {
+    closeSync(fd);
+    if (signal.aborted) throw new Error(TASK_EXECUTION_ABORTED_MESSAGE);
+    return false;
+  }
   let input: ReadStream | undefined;
   let pty: IPty;
   try {
-    const { spawn } = await import('node-pty').catch((error: unknown) => {
-      throw new Error('Caccia terminal commits require the optional node-pty dependency', { cause: error });
-    });
-    if (signal.aborted) throw new Error(TASK_EXECUTION_ABORTED_MESSAGE);
     input = new ReadStream(fd);
     // forkpty owns the session. exec preserves its leader PID, and GPG can
     // pass the inner terminal's actual device path to its agent.
-    pty = spawn('/bin/sh', ['-c', 'GPG_TTY=$(tty) || exit 1; export GPG_TTY; exec git "$@"',
+    pty = terminal.spawn('/bin/sh', ['-c', 'GPG_TTY=$(tty) || exit 1; export GPG_TTY; exec git "$@"',
       'caccia-git', ...args], { cwd, env, name: process.env.TERM ?? 'xterm' });
   } catch (error) {
     if (input === undefined) closeSync(fd);
