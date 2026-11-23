@@ -93,6 +93,10 @@ for (const [name, reply, exit, summary] of [
   ['HTTP failure', res => res.writeHead(503).end('private diagnostic local-test-token'), 2, /HTTP 503/],
   ['broken transport', res => res.destroy(), 2, /request failed/],
   ['malformed JSON', res => res.end('<html>invalid</html>'), 2, /invalid JSON/],
+  ['malformed choices', res => {
+    const data = JSON.parse(completion('[FIX-VERIFIER:2]'));
+    res.end(JSON.stringify({ ...data, choices: { 0: data.choices[0] } }));
+  }, 2, /usable completion/],
   ['missing answer', res => res.end(completion(' ')), 2, /usable completion/],
   ['truncated answer', res => res.end(completion('[FIX-VERIFIER:2]', undefined, 'length')), 2, /usable completion/],
   ['different model', res => res.end(completion('[FIX-VERIFIER:2]', 'other-model')), 2, /different model/],

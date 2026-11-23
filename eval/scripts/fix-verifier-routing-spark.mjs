@@ -90,7 +90,7 @@ function sparkProvider(endpoint) {
         return { error: error instanceof SyntaxError ? 'Spark returned invalid JSON.' : 'Spark response read failed.' };
       }
       if (data?.model && data.model !== model) return { error: 'Spark reported a different model.' };
-      const choice = data?.choices?.[0];
+      const choice = Array.isArray(data?.choices) && data.choices.length === 1 ? data.choices[0] : undefined;
       const output = choice?.message?.content;
       if (data?.model !== model || data.error || choice?.finish_reason !== 'stop'
           || choice?.message?.role !== 'assistant' || choice.message.refusal
