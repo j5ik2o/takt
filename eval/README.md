@@ -813,6 +813,8 @@ for baseline conditions and the limits of comparative claims.
 
 `fix-verification-applicable-inputs` は完了検証7ケース、再計画3ケース、レビュー裁定4ケースを、隔離したfixtureと現在のファセットで評価します。`npm run eval:prompts:fix-verification-applicable-inputs` で明示実行します。レビュー裁定A1〜A4だけの評価は `npm run eval:prompts:review-adjudication-applicable-inputs` で実行できます。専用verifierの状態・経路を測る `fix-verifier-family-boundary`、`fix-verifier-state-closure`、`fix-verifier-state-routing` と複数モデル比較の設定も登録されています。これらは各stepの評価であり、修正ループ全体の収束は測りません。
 
+同じ経路判定ケースを Codex Spark で採点するには、接続済みの `codex-spark` を `PATH` に置き、`npm run eval:prompts -- fix-verifier-routing-codex-spark --no-cache` を実行します。モデルと接続先はランチャーの設定を使います。一時ディレクトリの削除に失敗した場合は標準エラーに記録します。故障注入と終了値の対照は `npm test -- src/__tests__/codex-review-provider.integration.test.ts` で確認できます。
+
 `finding-premise-scope` はレビュー担当4ケースと再計画2ケースを、ケースごとの隔離 fixture と現在のファセットから生成したプロンプトで評価します。Codex gpt-6-sol low、Claude Opus 5、Codex gpt-6-luna max を使い、判定役は gpt-6-sol low です。両 CLI の認証が必要なためデフォルト実行から除外し、`npm run eval:prompts:finding-premise-scope` で明示実行します。rv1 は計画の設計判断（秘密値を写さない）を受入条件として指摘にしないこと、rv2 は前回の裁定が広げた取引先 CSV の形式外の金額表記を理由に persists にしないことを測ります。rn1 は契約が定める円記号付きの金額を persists とし、rn2 は外部の提出者が付けたファイル名による保存先の外への書き込みを blocking の指摘にすることを測ります。pl1 は裁定が広げた形式外の表記を再計画の作業にしないこと、pn1 は契約が定める表記を作業にすることを測ります。
 
 `finding-realistic-premise` は、レビュー6ケース、裁定6ケース、修正完了の検証4ケース、検証後の再計画1ケースの計17ケースで、各役割の判断を評価します。

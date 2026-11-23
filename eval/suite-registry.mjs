@@ -110,6 +110,7 @@ const CLASSIFICATIONS = [
       'fix-verifier-state-routing',
       'fix-verifier-model-matrix',
       'fix-verifier-routing-model-matrix',
+      'fix-verifier-routing-codex-spark',
       'fix-verification-scope',
       'fix-verification-current-diff-regression',
       'fix-verification-preserved-condition',
@@ -574,6 +575,10 @@ const EXECUTION_OVERRIDES = {
     defaultEligible: false, credentials: ['claude', 'codex', 'opencode'], cost: 'high',
     reason: 'Claude・Codex・opencode の複数モデル比較を要する',
   },
+  'fix-verifier-routing-codex-spark': {
+    defaultEligible: false, credentials: ['codex'], cost: 'standard',
+    reason: 'ローカルの codex-spark ランチャーと接続環境を要する',
+  },
   'review-impact-path-coverage': {
     defaultEligible: false,
     credentials: ['claude', 'codex'],
@@ -775,6 +780,7 @@ const PREPARE_TARGET_OVERRIDES = {
   'remediation-evidence': [],
   'fix-verifier-model-matrix': ['fix-verifier-state-closure'],
   'fix-verifier-routing-model-matrix': ['fix-verifier-state-routing'],
+  'fix-verifier-routing-codex-spark': ['fix-verifier-state-routing'],
   'completion-scope-routing': [],
   'evidence-judgment': [],
   coding: ['coding-review'],

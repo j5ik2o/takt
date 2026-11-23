@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import {
   chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -56,17 +57,19 @@ function collectResult(child: ChildProcessWithoutNullStreams): Promise<ProcessRe
 }
 
 function startProvider(
-  mode: 'success' | 'failure' | 'activity' | 'idle' | 'exit-race',
+  mode: 'success' | 'failure' | 'wrong-answer' | 'activity' | 'idle' | 'exit-race',
   environment: NodeJS.ProcessEnv = {},
+  launcher: 'codex' | 'codex-spark' = 'codex',
 ): StartedProvider {
   const currentPath = process.env.PATH;
   if (currentPath === undefined) {
     throw new Error('PATH is required for the Codex provider integration test');
   }
 
+  const launcherArgs = launcher === 'codex-spark' ? ['--spark'] : ['test-model', 'max'];
   const child = spawn(
     'bash',
-    [providerScript, 'test-model', 'max', relative(evalDir, fixtureDir), 'Review the fixture'],
+    [providerScript, ...launcherArgs, relative(evalDir, fixtureDir), 'Review the fixture'],
     {
       env: {
         ...process.env,
@@ -92,6 +95,12 @@ function readWorkerPids(): number[] {
     .split(/\s+/)
     .filter(Boolean)
     .map(Number);
+}
+
+function injectCleanupFailure(): void {
+  writeFileSync(join(fakeBinDir, 'rm'), '#!/bin/bash\nprintf "injected cleanup error %s\\n" "$*" >&2\nexit 1\n', {
+    mode: 0o755,
+  });
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -169,6 +178,12 @@ beforeEach(() => {
     [
       '#!/usr/bin/env bash',
       'set -euo pipefail',
+      'if [ "${0##*/}" = codex-spark ]; then',
+      '  [[ "$*" = *"mcp_servers.searxng.enabled=false"* && "$*" = *"--ephemeral"* ]]',
+      '  [[ "$CODEX_HOME" = "$TMPDIR/"* && -d "$CODEX_HOME" ]]',
+      '  [[ "$CODEX_SPARK_LOG_DIR" = "$TMPDIR/"* ]]',
+      'fi',
+      '[[ -f input.txt ]]',
       "out=''",
       'while [ "$#" -gt 0 ]; do',
       '  if [ "$1" = "-o" ]; then',
@@ -178,15 +193,19 @@ beforeEach(() => {
       '    shift',
       '  fi',
       'done',
-      'cat >/dev/null',
+      '[[ "$(cat)" = "Review the fixture" ]]',
       'case "$FAKE_CODEX_MODE" in',
       '  success)',
       '    printf \'%s\\n\' \'{"type":"thread.started"}\'',
       '    printf \'review complete\\n\' > "$out"',
       '    ;;',
       '  failure)',
+      '    printf \'partial answer\\n\' > "$out"',
       '    echo \'fake codex failure\' >&2',
       '    exit 7',
+      '    ;;',
+      '  wrong-answer)',
+      '    printf \'[FIX-VERIFIER:3]\\n\' > "$out"',
       '    ;;',
       '  activity)',
       '    for step in 1 2 3; do',
@@ -215,6 +234,7 @@ beforeEach(() => {
     ].join('\n'),
   );
   chmodSync(fakeCodex, 0o755);
+  copyFileSync(fakeCodex, join(fakeBinDir, 'codex-spark'));
 });
 
 afterEach(async () => {
@@ -253,6 +273,37 @@ describe('Codex review eval provider process boundary', () => {
       stderr: '',
     });
     expect(readdirSync(outputRootDir)).toEqual([]);
+  });
+
+  it('preserves the Codex answer and exit status after a cleanup failure', async () => {
+    injectCleanupFailure();
+    await expect(startProvider('success', { TMPDIR: testDir }).result).resolves.toEqual({
+      code: 0,
+      signal: null,
+      stdout: 'review complete\n',
+      stderr: 'codex review temporary directory cleanup failed (exit 1)\n',
+    });
+  });
+
+  it('leaves a wrong Spark answer available for grading after a cleanup failure', async () => {
+    injectCleanupFailure();
+    await expect(startProvider('wrong-answer', { TMPDIR: testDir }, 'codex-spark').result).resolves.toEqual({
+      code: 0,
+      signal: null,
+      stdout: '[FIX-VERIFIER:3]\n',
+      stderr: 'codex review temporary directory cleanup failed (exit 1)\n',
+    });
+  });
+
+  it('preserves the Spark CLI failure and withholds its partial answer after a cleanup failure', async () => {
+    injectCleanupFailure();
+    await expect(startProvider('failure', { TMPDIR: testDir }, 'codex-spark').result).resolves.toEqual({
+      code: 7,
+      signal: null,
+      stdout: '',
+      stderr: 'codex review failed (exit 7)\nfake codex failure\n'
+        + 'codex review temporary directory cleanup failed (exit 1)\n',
+    });
   });
 
   it('allows total runtime beyond the idle threshold while events continue', async () => {
