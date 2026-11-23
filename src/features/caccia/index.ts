@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveConfigValue } from '../../infra/config/index.js';
 import {
+  CacciaGitHubTimeoutError,
   fetchCacciaPullRequestDetails,
   fetchCacciaPullRequestHeadSha,
   fetchCodeRabbitReviewStatus,
@@ -14,6 +15,7 @@ import {
   cloneAndIsolateAbortable,
   runGitCommandAbortable,
 } from '../../infra/task/clone-exec.js';
+import { registerCacciaCloneGit } from '../../infra/task/caccia-git-processes.js';
 import { resolveAutoCommitOptions } from '../../infra/task/autoCommit.js';
 import { buildSafeGitEnvironment } from '../../infra/task/git-environment.js';
 import { stageAndCommit } from '../../infra/task/git.js';
@@ -45,8 +47,8 @@ let temporaryCloneExitListenerInstalled = false;
 function cleanupOwnedTemporaryClonesOnExit(): void {
   const failures: Array<{ cwd: string; error: unknown }> = [];
   for (const [cwd, releaseGitOperations] of [...ownedTemporaryClones]) {
-    releaseGitOperations();
     try {
+      releaseGitOperations();
       rmSync(cwd, { recursive: true, force: true });
       ownedTemporaryClones.delete(cwd);
     } catch (error) {
@@ -285,24 +287,28 @@ async function waitForPushedPullRequestHead(
 ): Promise<void> {
   const deadline = Date.now() + PUSHED_HEAD_WAIT_MS;
   let lastObservedHeadSha: string | undefined;
-  const timeoutError = (cause?: unknown): Error => new Error(
-    `Timed out waiting for pull request #${prNumber} head to reflect ${pushedHeadSha}`
-    + ` before resolving review thread ${threadId}`
-    + ` (${lastObservedHeadSha === undefined
-      ? 'no PR head was fetched'
-      : `last successfully observed ${lastObservedHeadSha}`})`
-    + (cause === undefined ? '' : '; last HEAD lookup failed'),
-    { cause },
-  );
+  const timeoutError = (cause?: unknown): Error => {
+    const TimeoutError = cause instanceof CacciaGitHubTimeoutError ? CacciaGitHubTimeoutError : Error;
+    return new TimeoutError(
+      `Timed out waiting for pull request #${prNumber} head to reflect ${pushedHeadSha}`
+      + ` before resolving review thread ${threadId}`
+      + ` (${lastObservedHeadSha === undefined
+        ? 'no PR head was fetched'
+        : `last successfully observed ${lastObservedHeadSha}`})`
+      + (cause === undefined ? '' : '; last HEAD lookup failed'),
+      { cause },
+    );
+  };
   while (true) {
     assertNotAborted(signal);
+    if (Date.now() >= deadline) throw timeoutError();
     try {
       lastObservedHeadSha = await dependencies.fetchCurrentPullRequestHeadSha(
         prNumber, projectCwd, signal, deadline,
       );
     } catch (error) {
       assertNotAborted(signal);
-      if (Date.now() < deadline) {
+      if (!(error instanceof CacciaGitHubTimeoutError) && Date.now() < deadline) {
         throw error;
       }
       throw timeoutError(error);
@@ -339,7 +345,11 @@ async function createTemporaryClone(
   }
   const cloneCwd = mkdtempSync(join(tmpdir(), `takt-caccia-${prNumber}-`));
   try {
-    registerOwnedTemporaryClone(cloneCwd, () => releaseGitOperations(cloneCwd));
+    const terminateGit = registerCacciaCloneGit(cloneCwd);
+    registerOwnedTemporaryClone(cloneCwd, () => {
+      terminateGit();
+      releaseGitOperations(cloneCwd);
+    });
     await cloneAndIsolateAbortable(input.projectCwd, cloneCwd, undefined, input.abortSignal);
     const autoCommitOptions = resolveAutoCommitOptions(input.projectCwd);
     const cloneGit = await createCacciaCloneGitOperations({
@@ -369,7 +379,11 @@ async function createTemporaryClone(
     }
     return { cwd: cloneCwd, title: pullRequest.title, body: pullRequest.body, operations: cloneGit.operations };
   } catch (error) {
-    removeOwnedTemporaryClone(cloneCwd, true);
+    try {
+      removeOwnedTemporaryClone(cloneCwd, true);
+    } catch (cleanupError) {
+      log.error('Could not remove Caccia clone after setup failed', { error: getErrorMessage(cleanupError) });
+    }
     throw error;
   }
 }
@@ -453,7 +467,7 @@ async function commitAndPush(
   onPushedHead: CacciaPushedHeadListener | undefined,
 ): Promise<{ headSha: string; pushed: boolean }> {
   assertNotAborted(signal);
-  const commitHash = await stageAndCommit(cwd, 'fix: address CodeRabbit review', resolveAutoCommitOptions(projectCwd));
+  const commitHash = await stageAndCommit(cwd, 'fix: address CodeRabbit review', resolveAutoCommitOptions(projectCwd), signal);
   const headSha = (await runGitCommandAbortable(cwd, ['rev-parse', 'HEAD'], signal)).stdout.trim();
   if (commitHash !== undefined) {
     const branch = (await runGitCommandAbortable(cwd, ['rev-parse', '--abbrev-ref', 'HEAD'], signal)).stdout.trim();
@@ -659,6 +673,7 @@ async function runCacciaWithDependencies(
     out.cloning();
     const clone = await dependencies.createTemporaryClone(prNumber, reviewedHeadSha);
     const pushed = await (async () => {
+      let pushResult: Awaited<ReturnType<CacciaDependencies['commitAndPush']>>;
       try {
         const threadIds = threads.map((thread) => thread.id);
         const workflowResult = await dependencies.executeWorkflow({
@@ -671,7 +686,7 @@ async function runCacciaWithDependencies(
         });
         assertNotAborted(input.abortSignal);
         assertCacciaWorkflowComplete(workflowResult, threadIds, workflowResult.workflowFailure);
-        const pushResult = await dependencies.commitAndPush(clone.cwd,
+        pushResult = await dependencies.commitAndPush(clone.cwd,
           input.entry === 'linked' ? input.onPushedHead : undefined);
         if (pushResult.pushed) {
           out.pushed(pushResult.headSha);
@@ -704,10 +719,16 @@ async function runCacciaWithDependencies(
           await dependencies.resolveReviewThread(thread.id, input.projectCwd, input.abortSignal);
           out.resolved(thread.id);
         }
-        return pushResult;
-      } finally {
-        await dependencies.removeTemporaryClone(clone.cwd);
+      } catch (error) {
+        try {
+          await dependencies.removeTemporaryClone(clone.cwd);
+        } catch (cleanupError) {
+          log.error('Could not remove Caccia clone after review failed', { error: getErrorMessage(cleanupError) });
+        }
+        throw error;
       }
+      await dependencies.removeTemporaryClone(clone.cwd);
+      return pushResult;
     })();
 
     out.waitingForReview();

@@ -205,6 +205,8 @@ export interface WorkflowExecutionResult {
   abortKind?: WorkflowAbortKind;
   /** Whether the root or a started child workflow defines an explicit Caccia effect. */
   workflowHasCaccia?: boolean;
+  /** The terminal failure came from a Caccia GitHub timeout. */
+  cacciaGitHubTimedOut?: true;
   reason?: string;
   retryable?: boolean;
   lastStep?: string;

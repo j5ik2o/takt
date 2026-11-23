@@ -37,6 +37,22 @@ function details(overrides: Partial<PrDetails>): PrDetails {
   return { ...options().prExecutionContext!, number: 123, sameRepository: true, ...overrides };
 }
 describe('Caccia effect result', () => {
+  it.each(['initial', 'final'])('releases the effect at 60 seconds when the %s PR lookup never settles', async (lookup) => {
+    const pendingLookup = () => new Promise<never>(() => undefined);
+    if (lookup === 'final') mocks.details.mockResolvedValueOnce({
+      ...options().prExecutionContext, number: 123, sameRepository: true,
+    });
+    mocks.details.mockImplementationOnce(pendingLookup);
+    const settled = vi.fn();
+    const effect = cacciaEffect(options(), 123).then(settled);
+
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toHaveBeenCalledWith(expect.objectContaining({ success: false, failed: true, timedOut: true }));
+    await effect;
+  });
+
   it('preserves a sanitized report diagnostic even when it contains a generic error keyword', async () => {
     const failure = new CacciaWorkflowError('permission denied while inspecting design; T4, T5 require a decision; @reviewer /private/source.ts');
     mocks.run.mockRejectedValueOnce(failure);

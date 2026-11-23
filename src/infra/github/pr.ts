@@ -838,6 +838,10 @@ interface PullRequestLocator {
 
 class ReviewStatusDeadlineExceededError extends Error {}
 
+export const CACCIA_GITHUB_TIMEOUT_MS = 60_000;
+
+export class CacciaGitHubTimeoutError extends Error {}
+
 function isCommandTimeoutError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -859,32 +863,59 @@ function runGhCommand(
   maxBuffer?: number,
   hostname?: string,
 ): Promise<string> {
-  const timeout = deadlineAt === undefined ? undefined : deadlineAt - Date.now();
-  if (timeout !== undefined && timeout <= 0) {
+  signal?.throwIfAborted();
+  const remaining = deadlineAt === undefined ? Infinity : deadlineAt - Date.now();
+  if (remaining <= 0) {
     return Promise.reject(new ReviewStatusDeadlineExceededError());
   }
+  const timeout = Math.min(remaining, CACCIA_GITHUB_TIMEOUT_MS);
 
   const options = {
     cwd,
     encoding: 'utf-8' as const,
     ...(maxBuffer !== undefined ? { maxBuffer } : {}),
-    ...(timeout !== undefined ? { timeout, killSignal: 'SIGKILL' as const } : {}),
+    timeout,
+    killSignal: 'SIGKILL' as const,
     ...(signal !== undefined ? { signal } : {}),
   };
   return new Promise((resolve, reject) => {
     const commandArgs = hostname === undefined ? args : [...args, '--hostname', hostname];
-    execFile('gh', commandArgs, options, (error, stdout) => {
-      if (error) {
-        if (deadlineAt !== undefined && isCommandTimeoutError(error)) {
-          reject(new ReviewStatusDeadlineExceededError());
-        } else {
+    let child: ReturnType<typeof execFile> | undefined;
+    // execFile uses SIGTERM for AbortSignal even when its timeout uses SIGKILL.
+    const killOnAbort = (): void => { child?.kill?.('SIGKILL'); };
+    signal?.addEventListener('abort', killOnAbort, { once: true });
+    const removeAbortListener = (): void => signal?.removeEventListener('abort', killOnAbort);
+    try {
+      child = execFile('gh', commandArgs, options, (error, stdout) => {
+        removeAbortListener();
+        if (error && !signal?.aborted && isCommandTimeoutError(error)) {
+          reject(remaining <= CACCIA_GITHUB_TIMEOUT_MS
+            ? new ReviewStatusDeadlineExceededError()
+            : new CacciaGitHubTimeoutError(`Caccia GitHub command timed out after ${CACCIA_GITHUB_TIMEOUT_MS}ms`));
+        } else if (error) {
           reject(error);
+        } else {
+          resolve(stdout);
         }
-        return;
-      }
-      resolve(stdout);
-    });
+      });
+    } catch (error) {
+      removeAbortListener();
+      reject(error);
+    }
   });
+}
+
+export async function commentOnPrAbortable(
+  prNumber: number, body: string, cwd: string, signal: AbortSignal, target?: GitHubPullRequestTarget,
+): Promise<CommentResult> {
+  try {
+    await runGhCommand(['pr', 'comment', target?.url ?? String(prNumber), '--body', body], cwd, undefined, signal);
+    return { success: true };
+  } catch (error) {
+    signal.throwIfAborted();
+    if (error instanceof CacciaGitHubTimeoutError) throw error;
+    return { success: false, error: getErrorMessage(error) };
+  }
 }
 
 export async function requestCodeRabbitReview(
@@ -1639,8 +1670,15 @@ export async function fetchCacciaPullRequestHeadSha(
   deadlineAt?: number,
   target?: GitHubPullRequestTarget,
 ): Promise<string> {
-  const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal, target);
-  return locator.headSha;
+  try {
+    const locator = await fetchPullRequestLocatorAsync(prNumber, cwd, deadlineAt, signal, target);
+    return locator.headSha;
+  } catch (error) {
+    if (error instanceof ReviewStatusDeadlineExceededError) {
+      throw new CacciaGitHubTimeoutError(`GitHub did not return the head of pull request #${prNumber} by the deadline`, { cause: error });
+    }
+    throw error;
+  }
 }
 
 /** Resolves the supplied GitHub review thread through its GraphQL thread ID. */

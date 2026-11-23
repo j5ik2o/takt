@@ -332,19 +332,7 @@ describe('Builtin PR merge workflow execution', () => {
       if (effect.type === 'sync_with_root' || effect.type === 'resolve_conflicts_with_ai') {
         return recoveryServices.executeEffect(effect, payload, state);
       }
-      if (String(effect.type) === 'caccia') {
-        if (scenario.cacciaError) {
-          cacciaGit.mockRejectedValueOnce(scenario.cacciaError);
-          return cacciaEffect({ cwd: cloneCwd, projectCwd: project, task: 'Review PR',
-            prExecutionContext: { prNumber, headBranch: 'feature/pr', baseBranch: 'main',
-              headSha, headRepositoryUrl: '/remote', headRepositoryPushUrls: ['/remote'] } }, prNumber);
-        }
-        const result = scenario.caccia ?? { success: true, failed: false, outcome: 'skipped',
-          headSha, unresolvedCount: 0, skipReason: 'config_disabled', reason: 'Caccia is disabled' };
-        if (typeof result.headSha === 'string') headSha = result.headSha;
-        return result;
-      }
-      if (effect.type === 'comment_pr') {
+      if (effect.type === 'caccia' || effect.type === 'comment_pr') {
         return recoveryServices.executeEffect(effect, payload, state);
       }
       const failed = (String(effect.type) === 'commit_and_push' && scenario.pushFailed)
@@ -396,6 +384,18 @@ describe('Builtin PR merge workflow execution', () => {
     const rerunPrCi = vi.fn(githubProvider.rerunPrCi.bind(githubProvider));
     const recoveryServices = createDefaultSystemStepServices({ cwd: cloneCwd, projectCwd: project, task: 'Review PR',
       runPaths: buildRunPaths(project, 'merge-workflow-report'),
+      cacciaService: { execute: async () => {
+        if (scenario.cacciaError) {
+          cacciaGit.mockRejectedValueOnce(scenario.cacciaError);
+          return cacciaEffect({ cwd: cloneCwd, projectCwd: project, task: 'Review PR',
+            prExecutionContext: { prNumber, headBranch: 'feature/pr', baseBranch: 'main',
+              headSha, headRepositoryUrl: '/remote', headRepositoryPushUrls: ['/remote'] } }, prNumber);
+        }
+        const result = scenario.caccia ?? { success: true, failed: false, outcome: 'skipped',
+          headSha, unresolvedCount: 0, skipReason: 'config_disabled', reason: 'Caccia is disabled' };
+        if (typeof result.headSha === 'string') headSha = result.headSha;
+        return result;
+      } },
       prExecutionContext: { prNumber, headBranch: 'feature/pr', baseBranch: 'main', headSha: 'a'.repeat(40),
         headRepositoryUrl: '/remote', headRepositoryPushUrls: ['/remote'],
         ...{ mergeConcurrency: scenario.concurrency ?? 2 } },
@@ -801,7 +801,22 @@ describe('Builtin PR merge workflow execution', () => {
         expect(h.executeEffect.mock.calls.filter(([effect]) => effect.type === 'comment_pr'))
           .toEqual([[expect.anything(), expect.objectContaining({ pr: 123, body: h.comments[0] }), expect.anything()]]);
       });
+
     });
+
+    it.each(['merge-prepare', 'merge-review', 'merge-review-fix', 'merge-review-fix-simple'])(
+      '%s aborts after a Caccia GitHub timeout without another GitHub call',
+      async (name) => {
+        const h = harness(name, { caccia: {
+          success: false, failed: true, timedOut: true, error: 'Caccia GitHub command timed out',
+        } }, language);
+        expect((await h.engine.run()).status).toBe('aborted');
+        expect(h.calls.filter((call) => call === 'caccia')).toHaveLength(1);
+        expect(h.calls).not.toContain('comment_pr');
+        expect(h.calls).not.toContain('merge_pr');
+        expect(h.comments).toEqual([]);
+      },
+    );
   });
 
   it.each(['ja', 'en'] as const)('%sのsimpleは単体レビューと共通最終ゲートを経てpush後のCIを待ってmergeする', async (language) => {

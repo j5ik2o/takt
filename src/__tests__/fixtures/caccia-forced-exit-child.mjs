@@ -1,4 +1,5 @@
 import { mock } from 'node:test';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
@@ -14,6 +15,7 @@ const timeoutMarkerPath = process.env.TAKT_CACCIA_TIMEOUT_MARKER;
 const cloneCount = Number(process.env.TAKT_CACCIA_CLONE_COUNT);
 const route = process.env.TAKT_CACCIA_ROUTE;
 const failFirstCleanup = process.env.TAKT_CACCIA_FAIL_FIRST_CLEANUP === 'true';
+const gitLogDir = process.env.TAKT_CACCIA_GIT_LOG_DIR;
 const activeClonePaths = new Set();
 
 function reportGracefulStart() {
@@ -71,6 +73,21 @@ if (failFirstCleanup) {
   });
 }
 
+if (gitLogDir) {
+  const originalRmSync = fs.rmSync.bind(fs);
+  fs.rmSync = (path, options) => {
+    if (activeClonePaths.has(path)) {
+      const pids = ['git-pid', 'grandchild-pid'].map((name) => Number(fs.readFileSync(join(gitLogDir, name), 'utf8')));
+      const live = execFileSync('ps', ['-axo', 'pid=,stat='], { encoding: 'utf8' }).split('\n')
+        .map((line) => line.trim().split(/\s+/u))
+        .filter(([pid, state]) => pids.includes(Number(pid)) && !state.startsWith('Z'));
+      fs.writeFileSync(join(gitLogDir, 'before-clone-removal'), JSON.stringify(live));
+    }
+    return originalRmSync(path, options);
+  };
+  syncBuiltinESMExports();
+}
+
 const githubModule = pathToFileURL(join(sourceRoot, 'src/infra/github/pr.js')).href;
 const actualGithub = await import(pathToFileURL(join(sourceRoot, 'src/infra/github/pr.ts')).href);
 mock.module(githubModule, {
@@ -110,6 +127,16 @@ mock.module(workflowModule, {
       }
       fs.mkdirSync(join(projectCwd, '.takt', 'runs', 'caccia-forced-exit'), { recursive: true });
       fs.writeFileSync(reportPath, 'workflow reached before forced exit\n', 'utf8');
+      if (gitLogDir) {
+        const { runGitCommandAbortable } = await import(
+          pathToFileURL(join(sourceRoot, 'src/infra/task/clone-exec.ts')).href
+        );
+        // Start a registered Git process inside the temporary clone so the forced-exit path must
+        // stop it (and its descendant) before removing the clone. The fake `git` on PATH logs pids.
+        runGitCommandAbortable(options.cwd, ['fetch'], options.abortSignal)
+          .then(() => fs.writeFileSync(join(gitLogDir, 'git-closed'), String(process.pid)))
+          .catch(() => undefined);
+      }
       process.send?.({ type: 'workflow-started', cwd: options.cwd });
       return new Promise(() => undefined);
     },

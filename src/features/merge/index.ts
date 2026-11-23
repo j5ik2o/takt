@@ -191,12 +191,15 @@ export async function executePersistedPrMergeTask(
     if (data.goal_id !== undefined) {
       const goal = await new GoalStore(projectCwd).get(data.goal_id);
       if (goal.branch !== data.branch) throw new Error('Goal branch changed during PR merge execution');
-      branchSynchronization = await synchronizeGoalBranch(projectCwd, goal.branch, undefined,
-        execution.ok && execution.result.merged && execution.result.headSha !== undefined
-          ? { cwd: task.worktreePath, sha: execution.result.headSha } : undefined);
+      if (!(execution.ok && execution.result.cacciaGitHubTimedOut)) {
+        branchSynchronization = await synchronizeGoalBranch(projectCwd, goal.branch, undefined,
+          execution.ok && execution.result.merged && execution.result.headSha !== undefined
+            ? { cwd: task.worktreePath, sha: execution.result.headSha } : undefined);
+      }
     }
     if (!execution.ok) throw execution.error;
-    const result = execution.result;
+    const result = { ...execution.result };
+    delete result.cacciaGitHubTimedOut;
     monitor?.check();
     signal?.throwIfAborted();
     const completion: GoalTaskResult = {
@@ -269,7 +272,7 @@ export async function executePersistedPrMergeTask(
 
 async function runPrMergeWorkflow(
   request: PrWorkflowRequest, task: TaskInfo, runner: TaskRunner, runSlug: string,
-): Promise<PrMergeResult & { headSha?: string; failureReason?: string }> {
+): Promise<PrMergeResult & { headSha?: string; failureReason?: string; cacciaGitHubTimedOut?: true }> {
   const provider = request.pullRequest === undefined ? getGitProvider() : new GitHubProvider(request.pullRequest);
   if (!provider.fetchPrDetails || !provider.fetchPrStatus) throw new Error('The VCS provider does not support PR merge workflow execution');
   const details = await provider.fetchPrDetails(request.prNumber, request.projectCwd, request.abortSignal);
@@ -429,6 +432,10 @@ async function runPrMergeWorkflow(
     skipWorktreeRuntimeProtection: true,
   }, ...(request.pullRequest === undefined ? [] : [{ gitProvider: provider }]));
   if (!result.success) log.error('PR workflow failed', { prNumber: request.prNumber });
+  if (!result.success && result.cacciaGitHubTimedOut) {
+    return { success: false, merged: false, outcome: 'unresolved', cacciaGitHubTimedOut: true,
+      ...(result.reason === undefined ? {} : { failureReason: sanitizeSensitiveText(result.reason) }) };
+  }
   const { merged, headSha: publishedHeadSha } = await provider.fetchPrStatus(request.prNumber, request.projectCwd,
     { signal: request.abortSignal });
   return { success: result.success, merged, headSha: publishedHeadSha,
