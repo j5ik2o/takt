@@ -91,23 +91,35 @@ export async function verifyGoalSpecificationsForRegistration(
   }
 }
 
-export async function verifyRegisteredGoal(cwd: string, goal: Goal, signal: AbortSignal | undefined): Promise<Goal> {
-  const specifications = goal.specifications;
-  if (specifications?.quint === undefined && specifications?.alloy === undefined) return goal;
-  if (goal.registrationVerification?.status === 'not_required') return goal;
+/** A saved registration whose verification was interrupted, or completed without passing. */
+export function needsRegistrationReverification(goal: Goal): boolean {
+  const verification = goal.registrationVerification;
+  return verification?.status === 'pending'
+    || (verification?.status === 'completed' && (verification.verdict === 'failed' || verification.verdict === 'error'));
+}
+
+export class GoalRegistrationRecoveryError extends Error {
+  readonly code = 'registration_recovery';
+}
+
+/**
+ * Runs the registration verification again for a saved goal. Only an explicit request reaches
+ * this function. A verdict other than passed throws and leaves goal.json unchanged.
+ */
+export async function reverifyRegisteredGoal(cwd: string, goal: Goal, signal: AbortSignal | undefined): Promise<Goal> {
   const store = new GoalStore(cwd);
-  const notRequired = () => store.update(goal.id, (current) => ({ ...current, registrationVerification: { status: 'not_required' } }));
-  if (!resolveManagerConfig(cwd).verifyOnRegister) return notRequired();
-  const configuration = resolveFormalSpecConfigurationWithoutPrompt(cwd);
-  if (!configuration.mode) return notRequired();
-  const result = await runRegistrationVerification(cwd, specifications, signal);
-  try {
-    const summary = verificationSummary(specifications, result);
-    return await store.update(goal.id, (current) => {
-      const updated = appendGoalWorkLog(current, { summary });
-      return { ...updated, registrationVerification: { status: 'completed', verdict: result.verdict, workLogId: updated.workLog.at(-1)!.id } };
-    });
-  } finally {
-    cleanupFormalSpecVerificationArtifacts(result);
+  if (initialRegistrationVerification(cwd, goal.specifications)?.status !== 'pending') {
+    return store.update(goal.id, (current) => needsRegistrationReverification(current)
+      ? { ...current, registrationVerification: { status: 'not_required' } } : current);
   }
+  const summary = await verifyGoalSpecificationsForRegistration(cwd, goal.specifications, signal);
+  return store.update(goal.id, (current) => {
+    // The verifier runs outside the goal lock, so another writer may have finished first.
+    if (!needsRegistrationReverification(current)) return current;
+    if (JSON.stringify(current.specifications) !== JSON.stringify(goal.specifications)) {
+      throw new GoalRegistrationRecoveryError('Goal specifications changed while they were verified');
+    }
+    const updated = appendGoalWorkLog(current, { summary });
+    return { ...updated, registrationVerification: { status: 'completed', verdict: 'passed', workLogId: updated.workLog.at(-1)!.id } };
+  });
 }

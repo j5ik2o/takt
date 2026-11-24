@@ -5,7 +5,7 @@ import { ManagerSummaryDialog } from '../features/manager/ManagerSummaryDialog.j
 import type { Submission } from '../features/manager/conversationPort.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { stripAnsi } from '../shared/utils/text.js';
-import { managerConversationId, mount, showProposal, waitFor, typeAndSubmit, ESC, ENTER, UP, DOWN } from './helpers/manager-tui-fixtures.js';
+import { cwd, managerConversationId, mount, showProposal, waitFor, typeAndSubmit, ESC, ENTER, UP, DOWN } from './helpers/manager-tui-fixtures.js';
 
 describe.each(['ja', 'en'] as const)('goal proposal confirmation in %s', (lang) => {
   it.each([false, true])('shows the question, registration choices and dismissal explanation with approve=%s', (approve) => {
@@ -150,4 +150,88 @@ describe.each(['ja', 'en'] as const)('goal proposal confirmation in %s', (lang) 
     context.app.stdin.write(input === DOWN + ENTER ? ENTER : input);
     await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4, conversationId: managerConversationId }]));
   });
+});
+
+describe.each(['ja', 'en'] as const)('re-verification of a reserved registration in %s', (lang) => {
+  const reverifyLabel = getLabel('manager.summary.reverify', lang);
+  const rows = (props: { approve: boolean; reverify?: 'available' | 'selected' }): string[] =>
+    stripAnsi(renderToString(createElement(ManagerSummaryDialog, { ...props, lang }), { columns: 120 }))
+      .split('\n').slice(1, -1).map((row) => row.replace(/^│\s*|\s*│$/gu, ''));
+  async function reservedProposal() {
+    const context = mount(lang);
+    await showProposal(context);
+    expect(context.app.lastFrame()).not.toContain(reverifyLabel);
+    context.client.change({ state: { ...context.client.getSnapshot().state!, approval: { state: 'reserved', revision: 4,
+      goalId: '11111111-1111-4111-8111-111111111111', repositoryDirectory: cwd } } });
+    await waitFor(() => expect(context.app.lastFrame()).toContain(reverifyLabel));
+    return context;
+  }
+
+  it('offers the row between registering and returning only when asked to', () => {
+    expect(rows({ approve: false })).not.toContain(reverifyLabel);
+    expect(rows({ approve: false, reverify: 'available' }).slice(1, 4)).toEqual([
+      getLabel('manager.summary.approve', lang), reverifyLabel, getLabel('manager.summary.continue', lang),
+    ]);
+  });
+
+  it('sends the approval with the re-verification request from the middle row', async () => {
+    const context = await reservedProposal();
+    context.app.stdin.write(UP);
+    context.app.stdin.write(ENTER);
+    await waitFor(() => expect(context.client.commands()).toEqual([
+      { kind: 'approve_summary', revision: 4, conversationId: managerConversationId, reverifyRegistration: true },
+    ]));
+  });
+
+  it.each([
+    [UP + UP, { kind: 'approve_summary' as const }],
+    [UP + UP + DOWN + DOWN, { kind: 'dismiss_summary' as const }],
+    ['', { kind: 'dismiss_summary' as const }],
+  ])('sends the plain command after arrows %j leave the re-verification row', async (arrows, expected) => {
+    const context = await reservedProposal();
+    for (const arrow of arrows.match(/\u001B\[[AB]/gu) ?? []) context.app.stdin.write(arrow);
+    context.app.stdin.write(ENTER);
+    await waitFor(() => expect(context.client.commands()).toEqual([{ ...expected, revision: 4, conversationId: managerConversationId }]));
+  });
+
+  it('does not offer re-verification when the approval is not reserved', async () => {
+    const context = mount(lang);
+    await showProposal(context);
+    context.client.change({ state: { ...context.client.getSnapshot().state!, approval: { state: 'registered', revision: 3,
+      goalId: '11111111-1111-4111-8111-111111111111', repositoryDirectory: cwd } } });
+    context.app.stdin.write(UP);
+    context.app.stdin.write(ENTER);
+    await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4, conversationId: managerConversationId }]));
+    expect(context.app.frames.join('\n')).not.toContain(reverifyLabel);
+  });
+});
+
+it('returns the re-verification row to the default choice after another view was opened', async () => {
+  const context = mount('en');
+  await showProposal(context);
+  context.client.change({ state: { ...context.client.getSnapshot().state!, approval: { state: 'reserved', revision: 4,
+    goalId: '11111111-1111-4111-8111-111111111111', repositoryDirectory: cwd } } });
+  await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.summary.reverify', 'en')));
+  context.app.stdin.write(UP);
+  context.app.stdin.write('\u0014');
+  await waitFor(() => expect(context.app.lastFrame()).not.toContain(getLabel('manager.summary.confirmation', 'en')));
+  context.app.stdin.write(ESC);
+  await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.summary.confirmation', 'en')));
+  context.app.stdin.write(ENTER);
+  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4, conversationId: managerConversationId }]));
+});
+
+it('does not carry a re-verification selection over to a later reserved proposal', async () => {
+  const context = mount('en');
+  await showProposal(context);
+  const reserved = (revision: number) => ({ state: 'reserved' as const, revision, goalId: '11111111-1111-4111-8111-111111111111', repositoryDirectory: cwd });
+  const state = context.client.getSnapshot().state!;
+  context.client.change({ state: { ...state, approval: reserved(4) } });
+  await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.summary.reverify', 'en')));
+  context.app.stdin.write(UP);
+  context.client.change({ state: { ...state, revision: 5, pending: { ...state.pending!, revision: 5 }, approval: reserved(5) } });
+  await waitFor(() => expect(context.client.getSnapshot().state?.pending?.revision).toBe(5));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  context.app.stdin.write(ENTER);
+  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 5, conversationId: managerConversationId }]));
 });

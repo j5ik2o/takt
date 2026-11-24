@@ -7,7 +7,10 @@ import { TaskRunner } from '../task/runner.js';
 import { getGlobalConfigDir } from '../config/paths.js';
 import { registerProject } from '../config/global/projectRegistry.js';
 import { FileEventStore } from '../daemon/eventStore.js';
-import { initialRegistrationVerification, verifyGoalSpecificationsForRegistration } from './registrationVerification.js';
+import {
+  GoalRegistrationRecoveryError, initialRegistrationVerification, needsRegistrationReverification,
+  reverifyRegisteredGoal, verifyGoalSpecificationsForRegistration,
+} from './registrationVerification.js';
 import { appendGoalWorkLog } from './workLog.js';
 
 export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): Promise<Goal> {
@@ -50,9 +53,7 @@ export async function createGoal(input: GoalCreateInput, signal?: AbortSignal): 
   return goal;
 }
 
-export class GoalRegistrationRecoveryError extends Error {
-  readonly code = 'registration_recovery';
-}
+export { GoalRegistrationRecoveryError };
 
 async function hasGoalRegistrationBranch(cwd: string, id: string, signal: AbortSignal | undefined): Promise<boolean> {
   const refs = await runGoalGit(cwd, ['for-each-ref', '--format=%(refname)', `refs/heads/takt/*-goal-${id.slice(0, 8)}`], 1024, signal);
@@ -65,7 +66,17 @@ export async function hasGoalRegistrationArtifacts(cwd: string, id: string): Pro
   return hasGoalRegistrationBranch(cwd, id, undefined);
 }
 
-export async function registerReservedGoal(input: GoalCreateInput, signal?: AbortSignal): Promise<Goal> {
+/** Retries a reserved registration. It never runs the verifier for a goal that is already saved. */
+export function registerReservedGoal(input: GoalCreateInput, signal?: AbortSignal): Promise<Goal> {
+  return recoverReservedGoal(input, signal, false);
+}
+
+/** The explicit recovery: also re-runs an interrupted or unpassed verification of the saved goal. */
+export function reverifyReservedGoal(input: GoalCreateInput, signal?: AbortSignal): Promise<Goal> {
+  return recoverReservedGoal(input, signal, true);
+}
+
+async function recoverReservedGoal(input: GoalCreateInput, signal: AbortSignal | undefined, reverify: boolean): Promise<Goal> {
   signal?.throwIfAborted();
   input = GoalCreateInputSchema.parse(input);
   const store = new GoalStore(input.cwd);
@@ -92,14 +103,16 @@ export async function registerReservedGoal(input: GoalCreateInput, signal?: Abor
     const latest = store.find(input.id);
     if (latest === undefined) throw new GoalRegistrationRecoveryError('Reserved goal no longer exists');
     assertMatchingReservation(latest);
-    if (latest.registrationVerification?.status === 'pending') {
-      throw new GoalRegistrationRecoveryError('Reserved goal verification has not completed');
-    }
-    return latest;
+    if (!needsRegistrationReverification(latest)) return latest;
+    if (!reverify) throw new GoalRegistrationRecoveryError('Reserved goal verification has not passed');
+    signal?.throwIfAborted();
+    return reverifyRegisteredGoal(input.cwd, latest, signal);
   }
   signal?.throwIfAborted();
   if (await hasGoalRegistrationBranch(input.cwd, input.id, signal)) {
     throw new GoalRegistrationRecoveryError('A branch for this reservation requires explicit reconciliation');
   }
+  // Re-verification recovers a saved goal. Creating one stays with the plain approval.
+  if (reverify) throw new GoalRegistrationRecoveryError('Reserved goal does not exist, so there is nothing to verify again');
   return createGoal(input, signal);
 }

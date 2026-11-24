@@ -43,7 +43,9 @@ import { TurnConversationState } from '../features/daemonTurn/conversationState.
 import type { PreparedConversationRuntime } from '../features/manager/conversationRuntime.js';
 import { createConversationTurnService } from '../features/manager/conversationService.js';
 import { WatchChecks } from '../features/daemon/watchers/checks.js';
-import { saveManagerEvent } from '../infra/goals/events.js';
+import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
+import * as managerConfig from '../infra/config/managerConfig.js';
+import * as formalSpecConfig from '../infra/config/formalSpecConfig.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import * as autoRun from '../features/manager/autoRun.js';
 import { parseDaemonProcessMessage, parseTurnProcessMessage } from '../core/daemon/processProtocol.js';
@@ -1457,6 +1459,58 @@ it.each([undefined, { status: 'pending' as const }])('recovers a legacy reserved
   expect(verify).not.toHaveBeenCalled();
   expect(await readdir(join(f.repository, '.takt', 'goals'))).toEqual([goal.id]);
   expect(resolve).not.toHaveBeenCalled();
+});
+
+it.each(['passed', 'failed'] as const)('recovers a reserved goal with pending verification only by an explicit re-verification that returns %s', async (verdict) => {
+  const f = await fixture();
+  vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
+  vi.spyOn(managerConfig, 'resolveManagerConfig').mockReturnValue({ verifyOnRegister: true } as ReturnType<typeof managerConfig.resolveManagerConfig>);
+  vi.spyOn(formalSpecConfig, 'resolveFormalSpecConfigurationWithoutPrompt').mockReturnValue({ mode: true, comments: true, modelCheckTimeoutSeconds: 17 });
+  const verify = vi.spyOn(registrationVerification, 'runFormalSpecVerification').mockResolvedValue({
+    verdict, verificationStarted: true, quint: { status: verdict, message: 'Quint registration result' }, alloy: { status: 'skipped' } });
+  const goal = { ...goalRecord(), specifications: { quint: 'module csv {}' }, registrationVerification: { status: 'pending' as const } };
+  const summary = { objective: goal.objective, outOfScope: goal.outOfScope, acceptanceCriteria: goal.acceptanceCriteria, constraints: goal.constraints, specifications: goal.specifications };
+  const path = join(f.repository, '.takt', 'goals', goal.id, 'goal.json');
+  await mkdir(join(path, '..'), { recursive: true }); await writeFile(path, JSON.stringify(goal));
+  saveManagerEvent(f.repository, { kind: 'registered', goalId: goal.id });
+  expect(await f.conversations.store.save({ conversationId: f.id, operationId: 'reserve', generation: 1 }, {
+    operationId: 'reserved-goal', expectedVersion: 0, proposal: { revision: 1, pending: { revision: 1, repositoryDirectory: f.repository, summary } },
+    approval: { state: 'reserved', revision: 1, goalId: goal.id, repositoryDirectory: f.repository },
+  }, new AbortController().signal)).toMatchObject({ kind: 'state_saved' });
+  const service = createConversationTurnService(f.directory, { resolve: vi.fn(), async close() {} });
+  const approve = async (name: string, generation: number, reverifyRegistration?: true) => {
+    accepted(await f.dispatcher.accept({ ...input(name, f.id), event: { kind: 'human_command', speaker: { namespace: 'local', id: 'operator' },
+      command: { kind: 'approve_summary', revision: 1, conversationId: f.id, ...(reverifyRegistration === undefined ? {} : { reverifyRegistration }) } } }));
+    const turn = await f.runner.started(generation);
+    const outcome = await service.execute(turn.input, { signal: turn.signal, progress() {},
+      request: (request) => f.dispatcher.request(turn.turn, request, turn.signal) });
+    await f.runner.finish(turn, outcome);
+    return outcome;
+  };
+
+  expect(await approve('retry', 1)).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'registration_recovery' } });
+  expect(verify).not.toHaveBeenCalled();
+  expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(goal);
+
+  const outcome = await approve('reverify', 2, true);
+  expect(verify).toHaveBeenCalledOnce();
+  const state = (await f.conversations.store.read(f.id))!.state;
+  const saved = JSON.parse(await readFile(path, 'utf8')) as Goal;
+  if (verdict === 'passed') {
+    expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'goal_registered', goal: { id: goal.id } } });
+    expect(state.approval).toMatchObject({ state: 'registered', goalId: goal.id });
+    expect(state.pending).toBeNull();
+    expect(saved.workLog).toHaveLength(1);
+    expect(saved.registrationVerification).toEqual({ status: 'completed', verdict: 'passed', workLogId: saved.workLog[0]!.id });
+  } else {
+    expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'operation_failed',
+      message: expect.stringContaining('Formal specification verification: failed') } });
+    expect(state.approval).toMatchObject({ state: 'reserved', goalId: goal.id });
+    expect(state.pending).toEqual({ revision: 1, repositoryDirectory: f.repository, summary });
+    expect(saved).toEqual(goal);
+  }
+  expect(await readdir(join(f.repository, '.takt', 'goals'))).toEqual([goal.id]);
+  expect(readManagerEvents(f.repository).filter(({ event }) => event.kind === 'registered' && event.goalId === goal.id)).toHaveLength(1);
 });
 
 it.each<TurnOutcome>([

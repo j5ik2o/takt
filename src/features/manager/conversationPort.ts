@@ -12,7 +12,8 @@ export type ConversationDisplayAssignment = ManagerAssignment | { readonly kind:
 
 export type ConversationCommand =
   | { kind: 'message'; text: string; display?: boolean; requestProposal?: boolean }
-  | { kind: 'approve_summary'; revision: number; conversationId: string; requirePending?: boolean }
+  // reverifyRegistration asks a reserved registration to re-run the verification of its saved goal.
+  | { kind: 'approve_summary'; revision: number; conversationId: string; requirePending?: boolean; reverifyRegistration?: true }
   | { kind: 'dismiss_summary'; revision: number; conversationId: string }
   | { kind: 'answer_question'; target: QuestionTarget; questionId: string; answer: GoalAnswerInput;
       source?: 'tui' | 'slack' }
