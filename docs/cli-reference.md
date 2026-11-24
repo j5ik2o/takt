@@ -91,6 +91,8 @@ Opening manager starts the daemon if needed and waits until it is ready. The TUI
 
 Use `takt daemon stop` to stop the manager background daemon explicitly. It exits automatically only when its projects have no unfinished goals, pending events, or pending/running tasks, no project inspection is in progress, no TUI is connected, and no conversation operation is initializing, running, or finishing cleanup. A saved pending summary alone does not keep the daemon running.
 
+A command that needs the daemon reuses a running daemon when it has the same TAKT version and the same daemon program file. A command started through a symbolic link counts as the same installation as the daemon running from the path the link points to, so the daemon keeps its process ID. When the version differs, or when the running daemon was started from a different installation, the command stops that daemon and starts its own. To switch installations deliberately, stop every `takt manager`, `takt director`, and `takt-mcp` process that was started from the old installation first; otherwise the old and the new commands replace each other's daemon in turn.
+
 `takt manager` opens a goal conversation TUI in an interactive terminal. manager is experimental: behavior, settings, and saved data formats may change without notice. It automatically queues and runs tasks, which incurs provider API costs.
 
 ## Director (experimental)
