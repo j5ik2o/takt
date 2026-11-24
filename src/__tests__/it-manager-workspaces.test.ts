@@ -524,7 +524,9 @@ describe('manager workspace storage and repository boundaries', () => {
       plan: { ctx: { provider: new MockProvider(), providerType: 'mock', model: undefined, lang },
         strategy: { systemPrompt: 'manager fixture' } } });
     await client.ready;
-    const app = render(createElement(ManagerView, { cwd, assignment, lang, client, initialDiagnostics: [], onExit: vi.fn() }));
+    // 定期 refresh を事実上止める。画面の更新は下の明示的な refresh だけで起こし、定期更新の間隔と待ち時間の競合に依存しない。
+    const app = render(createElement(ManagerView, { cwd, assignment, lang, client, initialDiagnostics: [], onExit: vi.fn(),
+      refreshIntervalMs: 3_600_000 }));
     try {
       await vi.waitFor(() => {
         expect(app.lastFrame()).not.toContain(lang === 'ja' ? '処理中' : 'Working');
