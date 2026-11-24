@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -7,6 +7,20 @@ import { initializeGitFixture } from './helpers/git-fixture.js';
 import { goalId } from './helpers/goal-fixtures.js';
 
 const cliEntry = join(process.cwd(), 'dist', 'app', 'cli', 'index.js');
+const runningChildren = new Set<ChildProcess>();
+
+function track(child: ChildProcess): void {
+  runningChildren.add(child);
+  child.once('close', () => { runningChildren.delete(child); });
+}
+
+// タイムアウトしたテストの子プロセスを止め、終了を待ってから fixture を消す。
+async function stopRunningChildren(): Promise<void> {
+  await Promise.all([...runningChildren].map((child) => new Promise<void>((resolve) => {
+    child.once('close', () => resolve());
+    child.kill('SIGKILL');
+  })));
+}
 
 interface CliInvocation {
   exitCode: number;
@@ -21,6 +35,7 @@ function invokeTakt(args: string[], cwd: string, stdin?: string): Promise<CliInv
       env: { ...process.env, TAKT_NO_TTY: '1' },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    track(child);
     let stdout = '';
     let stderr = '';
     child.stdout.setEncoding('utf8');
@@ -74,7 +89,8 @@ describe('goal registration through the public CLI', () => {
     initializeGitFixture(repository, []);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await stopRunningChildren();
     rmSync(root, { recursive: true, force: true });
   });
 
@@ -215,6 +231,7 @@ function invokeTaktHoldingStdinUnderHangup(
       env: { ...process.env, TAKT_NO_TTY: '1' },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    track(child);
     const timers: NodeJS.Timeout[] = [];
     const clearTimers = () => { for (const timer of timers) clearTimeout(timer); };
     let stdout = '';

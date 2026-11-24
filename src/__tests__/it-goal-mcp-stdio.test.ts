@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import * as crypto from 'node:crypto';
 import { mkdirSync,mkdtempSync,readFileSync,readdirSync,realpathSync,rmSync,writeFileSync } from 'node:fs';
 import { createServer,type Server } from 'node:http';
-import { basename,join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { createElement } from 'react';
 import { stringify as stringifyYaml } from 'yaml';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
@@ -71,7 +71,7 @@ vi.mock('node:fs/promises', async (original) => {
     },
     async unlink(...args: Parameters<typeof fs.unlink>) {
       const path = String(args[0]);
-      if (acceptanceIo.failRelease && path.endsWith('/daemon-events/.lock')) {
+      if (acceptanceIo.failRelease && basename(path) === '.lock' && basename(dirname(path)) === 'daemon-events') {
         acceptanceIo.failRelease = false;
         throw Object.assign(new Error('lock release failed'), { code: 'EIO' });
       }
@@ -215,7 +215,7 @@ describe('conversation messages through the stdio MCP entrypoint', () => {
       }
     };
     acceptanceIo.renamed = async (path) => {
-      if (!path.includes('/daemon-events/') || !path.endsWith('.json')) return;
+      if (basename(dirname(path)) !== 'daemon-events' || !path.endsWith('.json')) return;
       const record = EventRecordSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
       if (record.event.event.kind !== 'human_command' || record.event.event.command.kind !== 'message'
         || record.event.event.command.text !== '次') return;

@@ -13,7 +13,7 @@ import { RecentMessageLimitSchema, type ConversationHistory } from '../../core/d
 export function createDaemonConversationInput(options: {
   ingress: DaemonIngress;
   history?: ConversationHistory;
-  resolveAssignment(selected: ConversationAssignment): Promise<ConversationAssignment>;
+  resolveAssignment(selected: ConversationAssignment, signal?: AbortSignal): Promise<ConversationAssignment>;
 }) {
   const attachments = new Map<string, { input: ConversationOpen; delivery: ConversationDelivery; changes: SnapshotChanges; startedAt: number; validation: Promise<void>; activitySequence?: number }>();
   const activities = new Map<string, { output: Extract<PortOutput, { kind: 'activity' }>; version: OutputVersion }>();
@@ -151,7 +151,7 @@ export function createDaemonConversationInput(options: {
       signal?.throwIfAborted();
       const attachment = attached(attachmentId);
       const id = attachment.input.conversationId;
-      if (conversationId(await options.resolveAssignment(attachment.input.assignment)) !== id) throw new ConversationError('invalid_assignment');
+      if (conversationId(await options.resolveAssignment(attachment.input.assignment, signal)) !== id) throw new ConversationError('invalid_assignment');
       if (options.history === undefined) throw new ConversationError('operation_failed');
       return options.history.recentMessages(id, RecentMessageLimitSchema.parse(limit), signal);
     },

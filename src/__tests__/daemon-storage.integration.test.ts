@@ -4,7 +4,7 @@ import { AsyncCommand } from '../infra/daemon/command.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFile, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FileEventStore } from '../infra/daemon/eventStore.js';
 import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
@@ -43,7 +43,7 @@ vi.mock('node:fs/promises', async (original) => {
   const fs = await original<typeof import('node:fs/promises')>();
   return { ...fs,
     unlink: async (...args: Parameters<typeof fs.unlink>) => {
-      if (injection.lockReleaseFailure && String(args[0]).endsWith('/.lock')) {
+      if (injection.lockReleaseFailure && basename(String(args[0])) === '.lock') {
         injection.lockReleaseFailure = false;
         throw Object.assign(new Error('lock release failed'), { code: 'EIO' });
       }
@@ -51,7 +51,7 @@ vi.mock('node:fs/promises', async (original) => {
     },
     open: async (...args: Parameters<typeof fs.open>) => {
       const file = await fs.open(...args);
-      if (String(args[0]).endsWith('/cancel-read')) return new Proxy(file, { get(target, property) {
+      if (basename(String(args[0])) === 'cancel-read') return new Proxy(file, { get(target, property) {
         if (property === 'read') return async (buffer: Buffer) => { const result = await target.read(buffer); await injection.afterRead?.(); return result; };
         if (property === 'readFile') return async (...readArgs: Parameters<typeof target.readFile>) => { await injection.beforeEntireRead?.(); return target.readFile(...readArgs); };
         if (property === 'close') return async () => { await target.close(); injection.afterClose?.(); };

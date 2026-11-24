@@ -114,8 +114,9 @@ export async function startDaemon(options: {
     }, 1000);
     storageRetry.unref();
   } });
-  const input = createDaemonConversationInput({ ingress: dispatcher, history: eventStore, async resolveAssignment(selected) {
-    const assignment = await routing.resolve(selected);
+  const input = createDaemonConversationInput({ ingress: dispatcher, history: eventStore, async resolveAssignment(selected, signal) {
+    const assignment = await routing.resolve(selected, signal);
+    signal?.throwIfAborted();
     await conversations.ensure(assignment);
     return assignment;
   } });
