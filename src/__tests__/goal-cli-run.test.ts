@@ -55,6 +55,16 @@ describe('runGoalRegister', () => {
     expect(doubles.createGoal.mock.calls[0]?.[0]).toMatchObject({ id: goalId, cwd: repository });
   });
 
+  it('keeps multibyte characters intact when standard input splits them across chunks', async () => {
+    const objective = '日本語の目的を確認する';
+    const bytes = Buffer.from(JSON.stringify({ id: goalId, ...goalInput(), objective }), 'utf8');
+    const split = bytes.indexOf(Buffer.from('本', 'utf8')) + 1;
+
+    await run('-', Readable.from([bytes.subarray(0, split), bytes.subarray(split)]));
+
+    expect(doubles.createGoal.mock.calls[0]?.[0]).toMatchObject({ objective });
+  });
+
   it('keeps goal registration on the verification-owning createGoal path without a pre-aborted signal', async () => {
     await run('/tmp/goal.json', stdin(''));
 

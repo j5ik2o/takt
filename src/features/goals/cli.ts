@@ -12,11 +12,12 @@ export interface GoalRegisterDependencies {
 }
 
 async function readAll(stream: Readable): Promise<string> {
-  let text = '';
+  // チャンク境界は UTF-8 の文字境界と一致しないため、全体を連結してから一度だけ復号する。
+  const chunks: Buffer[] = [];
   for await (const chunk of stream) {
-    text += typeof chunk === 'string' ? chunk : String(chunk);
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : Buffer.from(chunk as Uint8Array));
   }
-  return text;
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 export async function runGoalRegister(

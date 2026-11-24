@@ -25,6 +25,7 @@ export class FileEventStore implements EventStore, ConversationTurns {
   private readonly requests = new Map<string, string>();
   private readonly sequences = new Map<number, string>();
   private readonly byConversation = new Map<string, Map<string, string>>();
+  private readonly relaysByDirector = new Map<string, Map<string, string>>();
   private readonly knownFiles = new Set<string>();
   private readonly lock = new FileAsyncLock();
   private readonly conversations: ConversationStateStore;
@@ -119,6 +120,14 @@ export class FileEventStore implements EventStore, ConversationTurns {
       this.byConversation.set(event.conversationId, conversation);
     }
     conversation.set(event.eventId, path);
+    if (event.event.kind === 'director_message') {
+      let relays = this.relaysByDirector.get(event.event.directorConversationId);
+      if (relays === undefined) {
+        relays = new Map<string, string>();
+        this.relaysByDirector.set(event.event.directorConversationId, relays);
+      }
+      relays.set(event.eventId, path);
+    }
     this.lastSequence = Math.max(this.lastSequence, event.acceptedSequence);
     this.knownFiles.add(path);
   }
@@ -185,9 +194,11 @@ export class FileEventStore implements EventStore, ConversationTurns {
     for (const [sequence, eventId] of this.sequences) {
       if (removedIds.has(eventId)) this.sequences.delete(sequence);
     }
-    for (const [conversationId, conversation] of this.byConversation) {
-      for (const eventId of removedIds) conversation.delete(eventId);
-      if (conversation.size === 0) this.byConversation.delete(conversationId);
+    for (const index of [this.byConversation, this.relaysByDirector]) {
+      for (const [key, events] of index) {
+        for (const eventId of removedIds) events.delete(eventId);
+        if (events.size === 0) index.delete(key);
+      }
     }
   }
 
@@ -226,6 +237,7 @@ export class FileEventStore implements EventStore, ConversationTurns {
           this.requests.delete(requestKey(event));
           this.sequences.delete(event.acceptedSequence);
           this.byConversation.get(event.conversationId)?.delete(event.eventId);
+          if (event.event.kind === 'director_message') this.relaysByDirector.get(event.event.directorConversationId)?.delete(event.eventId);
           this.knownFiles.delete(this.path(event.eventId));
         }
         throw error;
@@ -301,9 +313,14 @@ export class FileEventStore implements EventStore, ConversationTurns {
 
   async recentMessages(target: string, limit: number, signal?: AbortSignal): Promise<RecentMessages> {
     RecentMessageLimitSchema.parse(limit);
-    return this.serializeHistory(async () => {
-      await ensurePrivateDirectory(this.directory);
+    return this.serializeHistory(() => this.exclusive(async () => {
+      await this.refresh();
       signal?.throwIfAborted();
+      // 対象会話の索引と、daemon 会話なら director への中継の索引だけを読む。共有ディレクトリ全体は走査しない。
+      const candidates = new Set(this.byConversation.get(target)?.values());
+      if (target === conversationId({ kind: 'daemon' })) {
+        for (const path of this.relaysByDirector.get(target)?.values() ?? []) candidates.add(path);
+      }
       const recent: Array<{ message: RecentMessage; part: number }> = [];
       let truncated = false;
       const append = (message: Omit<RecentMessage, 'truncated'>, part: number): void => {
@@ -312,10 +329,9 @@ export class FileEventStore implements EventStore, ConversationTurns {
         recent.sort((a, b) => a.message.acceptedSequence - b.message.acceptedSequence || a.part - b.part);
         if (recent.length > limit) { recent.shift(); truncated = true; }
       };
-      for await (const entry of await opendir(this.directory)) {
+      for (const path of candidates) {
         signal?.throwIfAborted();
-        if (!entry.name.endsWith('.json')) continue;
-        const record = await this.read(join(this.directory, entry.name), signal);
+        const record = await this.read(path, signal);
         const saved = record.event;
         const event = saved.event;
         const direct = saved.conversationId === target;
@@ -358,7 +374,7 @@ export class FileEventStore implements EventStore, ConversationTurns {
         messages.shift(); truncated = true;
       }
       return { messages, truncated: truncated || messages.some((message) => message.truncated) };
-    }, signal);
+    }), signal);
   }
 
   private async *pending(): AsyncGenerator<StoredEvent> {

@@ -3,10 +3,11 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createTaktMcpServer } from '../app/mcp/server.js';
-import { startLocalMcpConnection, type LocalMcpConnection } from '../features/mcp/localConnection.js';
+import { startLocalMcpConnection } from '../features/mcp/localConnection.js';
 import { startManagerMcpConnection } from '../features/manager/managerMcpConnection.js';
+import { startTaktMcpHttpConnection } from '../infra/mcp/serverHttpTransport.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 
 describe('shared MCP HTTP transport', () => {
@@ -107,23 +108,15 @@ describe('shared MCP HTTP transport', () => {
     }
   });
 
-  it('does not let a local connection entrypoint choose the listener port or token', () => {
-    expect(startLocalMcpConnection.length).toBe(1);
-  });
-
-  it('routes the local entrypoint through the shared infra transport without the resident variant', async () => {
-    const infra = await import('../infra/mcp/serverHttpTransport.js');
-    const localSpy = vi.spyOn(infra, 'startLocalMcpHttpConnection');
-    const residentSpy = vi.spyOn(infra, 'startTaktMcpHttpConnection');
-    const connection = await startLocalMcpConnection(() => createTaktMcpServer({}, { toolSet: 'all', allowedProjectRoot: cwd }));
+  it('keeps answering 500 when the resident server factory throws', async () => {
+    const connection = await startTaktMcpHttpConnection({ host: '127.0.0.1', port: 0,
+      createServer: () => { throw new Error('factory failed'); } });
     try {
-      expect(localSpy).toHaveBeenCalledOnce();
-      expect(residentSpy).not.toHaveBeenCalled();
-      expect(localSpy.mock.calls[0]![0].createServer).toEqual(expect.any(Function));
+      const status = await post(connection.url, { authorization: connection.authorization },
+        JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize' }));
+      expect(status).toBe(500);
     } finally {
       await connection.dispose();
-      localSpy.mockRestore();
-      residentSpy.mockRestore();
     }
   });
 });

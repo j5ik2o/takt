@@ -78,7 +78,6 @@ async function createServerOptions(options: TaktMcpServerSettingsOptions) {
       : managerAssignmentSchema.parse(JSON.parse(rawAssignment));
   return {
     toolSet: options.toolSet, managerAssignment,
-    conversationTools: options.toolSet === 'all',
     includeReferenceMarkers: options.includeReferenceMarkers,
   };
 }
@@ -89,7 +88,8 @@ export async function connectTaktMcpServerToStdio(): Promise<void> {
     toolSet: resolveToolSet(argv),
     includeReferenceMarkers: shouldIncludeReferenceMarkers(argv),
   });
-  const server = createTaktMcpServer({}, options);
+  // 会話の送受信は stdio だけに公開する。HTTP の接続はプロジェクトの範囲外にある director 会話へ届くため出さない。
+  const server = createTaktMcpServer({}, { ...options, conversationTools: options.toolSet === 'all' });
   await server.connect(new StdioServerTransport());
 }
 

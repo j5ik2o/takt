@@ -324,6 +324,10 @@ takt-mcp --http
 | `takt_get_run` | 1つの run の現在 step、phase、ログ、レポート、追加指示の配信状況を取得する。 |
 | `takt_tell_run` | 対象を再確認して、実行中の worktree clone タスクへ追加指示を送る。 |
 | `takt_cleanup_tasks` | 絞り込んだ対象を一覧表示し、`confirm: true` の場合だけ削除します（`all` 限定）。 |
+| `takt_send_message` | manager（絶対パスの `cwd` を指定）または director（`cwd` なし）へメッセージを送ります。stdio の `all` 限定。 |
+| `takt_list_recent_messages` | その会話の直近 1〜50 件（既定 20 件）のメッセージと返答を読みます。stdio の `all` 限定。 |
+
+`takt_send_message` と `takt_list_recent_messages` は、`takt-mcp` を stdio で `all` のツールセットで起動したときだけ使えます。`--http` では公開しません。`takt_send_message` が返すのは受付と `operationId` で、返答ではありません。返答は同じ宛先の `takt_list_recent_messages` で読みます。履歴は保存された会話の記録から読むため、TUI で `/clear` する前のメッセージも含みます。
 
 `takt_cleanup_tasks` は絞り込んだタスクの一覧を確認してから削除するツールです。絶対パスの `cwd` と `reason` が必須です。任意入力は `statuses`（`pending`、`completed`、`failed`、`exceeded`、`pr_failed` を複数指定でき、`running` は指定できません）、`goalId`、`branch`、`confirm`（既定値は `false`）です。`statuses`、`goalId`、`branch` のいずれか1つ以上が必要です。
 
@@ -546,6 +550,35 @@ takt list --non-interactive --action delete --status failed pr_failed --format j
 `takt list` でタスクを選ぶと、状態に応じたアクションメニューが開きます。Instruct、Requeue などの既存アクションは、それぞれ対応する状態で引き続き使用できます。ワークツリークローンを持つ実行中タスクでは、**Interactive** を選ぶと、そのタスクを `/tell` の初期対象にした通常の assistant 会話が開きます。会話中に別のタスクを確認したり、新しいタスクを相談したりでき、`/go` で実行・保存できます。`/tell` は確定画面でタスク名、workflow、現在 step、指示内容を表示し、確定時に選ばれたタスクにだけ書き込みます。対話端末で確認できない場合は送信せず、理由を通知します。`/cancel` で会話または保留中の操作を取り消します。**Mark as failed** もアクションメニューから引き続き使用できます。
 
 `/tell` の候補は、TAKT が管理する有効な worktree clone で実行中のタスクだけです。選択画面の表示後にも対象を再確認するため、その間に終了したタスクには指示を書き込みません。
+
+### takt goal register
+
+JSON ファイルから、または `--input -` で標準入力からゴールを登録します。ゴールは現在のディレクトリを含む Git リポジトリに保存します。JSON に `cwd` があっても、そのリポジトリで置き換えます。
+
+```bash
+takt goal register --input goal.json
+cat goal.json | takt goal register --input -
+```
+
+| フィールド | 必須 | 説明 |
+|------------|------|------|
+| `id` | はい | ゴールの ID（UUID）。 |
+| `objective` | はい | ゴールで達成すること。 |
+| `outOfScope` | はい | 範囲外の項目の配列。空でもかまいません。 |
+| `acceptanceCriteria` | はい | 受入条件の配列。1 件以上。 |
+| `constraints` | はい | 作業上の制約の配列。空でもかまいません。 |
+| `specifications` | いいえ | 形式仕様。manager での登録と同じく、登録前に検証します。 |
+| `startBranch`、`integrationBranch` | いいえ | 作業を始めるブランチと、統合先のブランチ。 |
+
+```json
+{
+  "id": "00000000-0000-4000-8000-000000000000",
+  "objective": "CLI からゴールを登録する",
+  "outOfScope": [],
+  "acceptanceCriteria": ["takt goal register でゴールが保存される"],
+  "constraints": []
+}
+```
 
 ### タスクディレクトリワークフロー（作成 / 実行 / 確認）
 

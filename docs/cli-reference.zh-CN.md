@@ -301,6 +301,10 @@ server 暴露以下工具：
 | `takt_get_run` | 返回一个 run 的当前 step、phase、日志、report 和追加指令投递状态。 |
 | `takt_tell_run` | 重新确认目标后，向一个正在运行的 worktree clone 任务发送追加指令。 |
 | `takt_cleanup_tasks` | 预览筛选后的任务，仅在 `confirm: true` 时删除（仅限 `all`）。 |
+| `takt_send_message` | 向 manager（指定绝对路径 `cwd`）或 director（不指定 `cwd`）发送消息。仅限 stdio 的 `all` 工具集。 |
+| `takt_list_recent_messages` | 读取该会话最近 1-50 条（默认 20 条）消息和回复。仅限 stdio 的 `all` 工具集。 |
+
+`takt_send_message` 和 `takt_list_recent_messages` 仅在 `takt-mcp` 以 stdio 方式、使用 `all` 工具集运行时可用；`--http` 不提供它们。`takt_send_message` 返回受理结果和 `operationId`，而不是回复；请用同一收件方的 `takt_list_recent_messages` 读取回复。历史记录读取自已保存的会话记录，因此也包含在 TUI 中执行 `/clear` 之前的消息。
 
 `takt_cleanup_tasks` 用于先查看筛选后的任务，再执行删除。必需输入为绝对路径的 `cwd` 和 `reason`。可选输入为 `statuses`（可指定一个或多个 `pending`、`completed`、`failed`、`exceeded`、`pr_failed`，不能指定 `running`）、`goalId`、`branch` 和 `confirm`（默认 `false`）。必须至少指定 `statuses`、`goalId` 或 `branch` 中的一个。
 
@@ -489,6 +493,35 @@ takt list --non-interactive --action delete --status failed pr_failed --format j
 在 `takt list` 中选择带有 worktree clone 的运行中任务后，会打开普通 assistant 对话，并将该任务作为 `/tell` 的初始目标。对话中可以查看其他任务、讨论新任务，并使用 `/go` 执行或保存。`/tell` 会显示任务名称、workflow、当前 step 和指令，确认后只向确认时选中的任务写入。没有交互式终端或无法取得确认时不会发送指令，并会显示原因；`/cancel` 会关闭对话或取消待处理操作。
 
 `/tell` 只列出 TAKT 管理的有效 worktree clone 中运行的任务。打开选择界面后还会再次确认目标，因此在此期间结束的任务不会收到指令。
+
+### `takt goal register`
+
+从 JSON 文件，或通过 `--input -` 从标准输入注册目标。目标保存在包含当前目录的 Git 仓库中；JSON 中的 `cwd` 会被替换为该仓库。
+
+```bash
+takt goal register --input goal.json
+cat goal.json | takt goal register --input -
+```
+
+| 字段 | 必需 | 说明 |
+|------|------|------|
+| `id` | 是 | 目标 ID（UUID）。 |
+| `objective` | 是 | 目标要达成的内容。 |
+| `outOfScope` | 是 | 范围外事项的数组，可以为空。 |
+| `acceptanceCriteria` | 是 | 验收条件的数组，至少 1 项。 |
+| `constraints` | 是 | 工作约束的数组，可以为空。 |
+| `specifications` | 否 | 形式化规格，与 manager 注册相同，在注册前验证。 |
+| `startBranch`、`integrationBranch` | 否 | 开始工作的分支和集成目标分支。 |
+
+```json
+{
+  "id": "00000000-0000-4000-8000-000000000000",
+  "objective": "从 CLI 注册目标",
+  "outOfScope": [],
+  "acceptanceCriteria": ["takt goal register 保存目标"],
+  "constraints": []
+}
+```
 
 ### 任务目录工作流（创建 / 运行 / 验证）
 

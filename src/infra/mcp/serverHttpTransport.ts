@@ -43,6 +43,8 @@ interface HttpListenerOptions {
   readonly token: string | undefined;
   createServer(request: IncomingMessage, assertConnected: () => Promise<void>): McpServer;
   readonly invalidateOnDispose: boolean;
+  /** ローカル接続はリクエストから server を作るため、作成失敗をリクエストの誤りとして返す。 */
+  readonly rejectServerCreationFailure: boolean;
 }
 
 async function startHttpListener(options: HttpListenerOptions): Promise<LocalMcpHttpConnection> {
@@ -81,7 +83,10 @@ async function startHttpListener(options: HttpListenerOptions): Promise<LocalMcp
     });
     let server: McpServer;
     try { server = options.createServer(req, assertConnected); }
-    catch { req.resume(); res.writeHead(400); res.end(); return; }
+    catch (error) {
+      if (!options.rejectServerCreationFailure) throw error;
+      req.resume(); res.writeHead(400); res.end(); return;
+    }
     const session = { server, transport };
     sessions.set(id, session);
     let connected = false;
@@ -141,6 +146,7 @@ export async function startTaktMcpHttpConnection(
     token: options.token,
     createServer: () => options.createServer(),
     invalidateOnDispose: false,
+    rejectServerCreationFailure: false,
   });
   return { url: connection.url, authorization: connection.authorization, dispose: connection.dispose };
 }
@@ -154,5 +160,6 @@ export async function startLocalMcpHttpConnection(
     token: undefined,
     createServer: (request, assertConnected) => options.createServer(request, { assertConnected }),
     invalidateOnDispose: true,
+    rejectServerCreationFailure: true,
   });
 }

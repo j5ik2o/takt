@@ -246,7 +246,7 @@ export function createTaktMcpServer(
     }, (input) => sendTaktMessage(input, messageDeps));
     server.registerTool('takt_list_recent_messages', {
       title: 'Read recent conversation messages',
-      description: 'Read the selected recipient conversation: manager requires absolute cwd; director must omit cwd. Returns human, manager, director and unknown speakers; unknown means author information is absent from legacy records. Includes operationId, status and relay origin. kind distinguishes message, reply and unsuccessful relay result. limit selects the latest 1-50 entries (default 20), in acceptance order. Text and total output are bounded with explicit truncation. Acceptance, failed and interrupted operations are not successful replies.',
+      description: 'Read the selected recipient conversation: manager requires absolute cwd; director must omit cwd. Returns human, manager, director and unknown speakers; unknown means author information is absent from legacy records. Includes operationId, status and relay origin. kind distinguishes message, reply and unsuccessful relay result. limit selects the latest 1-50 entries (default 20), in acceptance order. Text and total output are bounded with explicit truncation. Acceptance, failed and interrupted operations are not successful replies. Reads saved records, so messages from before a TUI /clear are included.',
       inputSchema: listRecentMessagesInputSchema,
     }, (input) => listTaktRecentMessages(input, messageDeps));
   }
