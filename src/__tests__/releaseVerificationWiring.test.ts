@@ -675,6 +675,15 @@ describe('release verification wiring', () => {
     ]);
   });
 
+  it('routes the vanished runtime assignment suite, which runs real git processes, to heavy IT', () => {
+    const testFile = 'src/__tests__/runtime-assignment-missing-goal-task.integration.test.ts';
+
+    expect(lightIntegrationTestFiles).not.toContain(testFile);
+    expect(selectNpmTestRuns([testFile])).toEqual([
+      { npmArgs: ['run', 'test:it:heavy:parallel', '--ignore-scripts', '--', testFile] },
+    ]);
+  });
+
   it('routes tell task specification persistence through the light integration gate', () => {
     const testFile = 'src/__tests__/it-live-intervention-task-spec.test.ts';
 
