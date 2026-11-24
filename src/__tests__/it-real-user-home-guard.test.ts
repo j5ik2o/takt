@@ -123,6 +123,46 @@ describe('real user home guard', () => {
     expectFakeRealTaktIntact();
   });
 
+  it('rejects writes through a symlink outside the real directory whose target inside it does not exist yet', async () => {
+    const missing = join(fakeRealTakt, 'not-created-yet.yaml');
+    const absoluteLink = join(workspace, 'dangling-absolute');
+    const relativeLink = join(workspace, 'dangling-relative');
+    const chainedLink = join(workspace, 'dangling-chained');
+    const missingDirLink = join(workspace, 'dangling-dir');
+    symlinkSync(missing, absoluteLink);
+    symlinkSync(join('real-home', '.takt', 'not-created-yet.yaml'), relativeLink);
+    symlinkSync(absoluteLink, chainedLink);
+    symlinkSync(join(fakeRealTakt, 'not-created-dir'), missingDirLink);
+
+    for (const link of [absoluteLink, relativeLink, chainedLink]) {
+      expect(touchesProtectedDirectory(link)).toBe(true);
+      expect(() => writeFileSync(link, 'x')).toThrow(RealUserHomeAccessError);
+      expect(() => fs.openSync(link, 'w')).toThrow(RealUserHomeAccessError);
+      expect(() => fs.createWriteStream(link)).toThrow(RealUserHomeAccessError);
+      await expect(writeFilePromise(link, 'x')).rejects.toThrow(RealUserHomeAccessError);
+    }
+    expect(() => mkdirSync(missingDirLink)).toThrow(RealUserHomeAccessError);
+    expect(() => writeFileSync(join(missingDirLink, 'child'), 'x')).toThrow(RealUserHomeAccessError);
+
+    expect(existsSync(missing)).toBe(false);
+    expect(existsSync(join(fakeRealTakt, 'not-created-dir'))).toBe(false);
+    expectFakeRealTaktIntact();
+  });
+
+  it('keeps dangling and looping symlinks that stay outside the real directory writable', () => {
+    const target = join(workspace, 'plain-target');
+    const link = join(workspace, 'dangling-plain');
+    symlinkSync(target, link);
+    symlinkSync(join(workspace, 'loop-b'), join(workspace, 'loop-a'));
+    symlinkSync(join(workspace, 'loop-a'), join(workspace, 'loop-b'));
+
+    writeFileSync(link, 'x');
+
+    expect(readFileSync(target, 'utf-8')).toBe('x');
+    expect(touchesProtectedDirectory(join(workspace, 'loop-a'))).toBe(false);
+    expectFakeRealTaktIntact();
+  });
+
   it('still allows the incident sentinel pattern against the isolated home and other temporary directories', () => {
     const sentinel = join(homedir(), '.takt');
     mkdirSync(join(sentinel, 'projects'), { recursive: true });

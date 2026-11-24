@@ -17,12 +17,26 @@ const protectedDirectories = new Set<string>();
 let installed = false;
 
 const realpathNative = fs.realpathSync.native;
+const readlinkOriginal = fs.readlinkSync;
+
+/** The OS gives up on a symlink chain at about this depth (ELOOP). */
+const MAX_SYMLINK_HOPS = 40;
+
+/** The target of `path` when it is a symlink, even a dangling one. */
+function readSymlinkTarget(path: string): string | undefined {
+  try {
+    return readlinkOriginal(path, 'utf-8');
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Resolve a path the way the OS does: follow each existing component's symlink
- * before applying the next `..`. A missing tail is kept as written.
+ * before applying the next `..`. A dangling symlink is followed to its target,
+ * because a write through it creates that target. A missing tail is kept as written.
  */
-export function resolveThroughExistingPrefix(path: string): string {
+export function resolveThroughExistingPrefix(path: string, hops = 0): string {
   const absolute = isAbsolute(path) ? path : `${process.cwd()}${sep}${path}`;
   try {
     // The OS resolves an existing path component by component already.
@@ -42,7 +56,10 @@ export function resolveThroughExistingPrefix(path: string): string {
     try {
       current = realpathNative(next);
     } catch {
-      current = next;
+      const target = hops < MAX_SYMLINK_HOPS ? readSymlinkTarget(next) : undefined;
+      current = target === undefined
+        ? next
+        : resolveThroughExistingPrefix(isAbsolute(target) ? target : `${current}${sep}${target}`, hops + 1);
     }
   }
   return current;
