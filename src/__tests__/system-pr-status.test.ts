@@ -353,6 +353,15 @@ describe('CI failure system input and rerun effect', () => {
         checks: [{ jobs: [{ id: 20 }] }, { jobs: [{ id: 21, notStarted: true }] }] });
     });
 
+    it.each([
+      ['診断できるjobのログが1件ある', mixed(), 1],
+      ['未開始jobだけでログが1件もない', { ...failure(), checks: [{ name: 'macos', run, jobs: [notStartedJob] }] }, 0],
+    ] satisfies Array<[string, PrCiFailure, number]>)('%s証拠は、修正へ進めるかの判断に使う保存ログ件数を返す', async (_label, evidence, logCount) => {
+      const h = fixture();
+      h.fetchPrCiFailure.mockResolvedValue(evidence);
+      expect(await h.service.resolveSystemInput(input, h.state)).toMatchObject({ complete: true, logCount });
+    });
+
     it('未開始jobと外部チェックがない証拠のpromptには区別の注記を足さない', async () => {
       const h = fixture();
       const result = await h.service.resolveSystemInput(input, h.state) as { promptEvidence: string };

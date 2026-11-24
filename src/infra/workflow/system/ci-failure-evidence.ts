@@ -95,7 +95,7 @@ export async function saveCiFailureEvidence(
   rerunCount: number,
   recoveryError: unknown,
   signal?: AbortSignal,
-): Promise<{ failure: PrCiFailure; promptEvidence: string }> {
+): Promise<{ failure: PrCiFailure; promptEvidence: string; logCount: number }> {
   const canonicalDirectory = join(runPaths.runRootAbs, 'ci-evidence');
   const viewRelativeDirectory = join('.takt', 'runs', runPaths.slug, 'ci-evidence');
   const viewDirectory = join(workspaceCwd, viewRelativeDirectory);
@@ -123,7 +123,7 @@ export async function saveCiFailureEvidence(
     ...(notStarted === 0 ? [] : [`${notStarted} failed job(s) are marked notStarted: cancelled before any step ran, so no log exists. They never ran the code; judge why they did not start, and do not treat them as passed.`]),
     ...(external === 0 ? [] : [`${external} failed check(s) are listed under external: they have no Actions log and cannot be diagnosed or rerun here. They remain failed; judge the other checks on their own evidence.`]),
   ];
-  return { failure: view.failure,
+  return { failure: view.failure, logCount: view.logCount,
     promptEvidence: [
       `PR #${failure.number}; HEAD ${failure.headSha}; complete=${view.failure.complete}; checks=${view.failure.checks.length}; unique job logs=${view.logCount}; not started jobs=${notStarted}; external checks=${external}; unavailable=${view.failure.unavailable.length}; fixRounds=${fixRounds}; rerunCount=${rerunCount}.`,
       ...notes,

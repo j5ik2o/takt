@@ -111,6 +111,8 @@ interface Scenario {
   largeCiLogs?: boolean;
   /** Adds a job cancelled before start and an external status beside the diagnosable check. */
   mixedCiEvidence?: boolean;
+  /** Every failed job was cancelled before start: complete evidence with no log at all. */
+  notStartedOnlyCiEvidence?: boolean;
 }
 
 describe('Builtin PR merge workflow execution', () => {
@@ -379,6 +381,10 @@ describe('Builtin PR merge workflow execution', () => {
       const check = { name: scenario.ciName?.field === 'check' ? scenario.ciName.value : `unit-round-${pushes}`,
         run: { id: 10 + pushes, attempt: reruns + 1, headSha, url: `https://github.com/org/repo/actions/runs/${10 + pushes}` },
         jobs };
+      if (scenario.notStartedOnlyCiEvidence) {
+        return { number, headSha, complete: true, unavailable: [], checks: [{ ...check, jobs: [{ id: 90, name: 'macos',
+          url: `${check.run.url}/job/90`, notStarted: true }] }] };
+      }
       if (scenario.mixedCiEvidence) {
         return { number, headSha, complete, unavailable: [],
           checks: [check, { name: 'macos', run: check.run, jobs: [{ id: 90, name: 'macos',
@@ -1247,6 +1253,22 @@ describe('Builtin PR merge workflow execution', () => {
       expect(h.rerunPrCi).toHaveBeenCalledOnce();
       expect(h.calls).not.toContain('agent:fix_ci');
       expect(h.calls.indexOf('agent:investigate_ci')).toBeLessThan(h.calls.indexOf('rerun_ci'));
+    });
+
+    it('開始前取消だけでログが1件もなければ、欠陥と判断されても修正へ進まず停止する', async () => {
+      const h = await runRecovery({ ciFailures: [defect()], notStartedOnlyCiEvidence: true });
+      expect(h.state.status).toBe('aborted');
+      expect(h.calls).not.toContain('agent:fix_ci');
+      expect(h.calls).not.toContain('merge_pr');
+      expect(h.rerunPrCi).not.toHaveBeenCalled();
+      expect(h.comments).toHaveLength(1);
+    });
+
+    it('開始前取消だけの失敗は、外部要因と判断されれば1回の再実行へ進む', async () => {
+      const h = await runRecovery({ ciFailures: [external], notStartedOnlyCiEvidence: true });
+      expect(h.state.status).toBe('completed');
+      expect(h.rerunPrCi).toHaveBeenCalledOnce();
+      expect(h.calls).not.toContain('agent:fix_ci');
     });
 
     it('同じrunの複数checkと6件の長いjobログを一度だけ保存し3段階のpromptから参照できる', async () => {

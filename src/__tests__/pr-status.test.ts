@@ -411,6 +411,25 @@ describe('PR status acquisition', () => {
         checks: [{ name: 'deploy', jobs: [{ id: 20, log: 'expected 2 to equal 3' }] }] });
     });
 
+    it('/jobs/形式の番号が別の失敗jobのdatabaseIdと偶然一致しても、そのjobだけの証拠にしない', async () => {
+      install([{ ...check('COMPLETED', 'FAILURE'), name: 'deploy', detailsUrl: `${run}/jobs/22` }],
+        [job(20, 'unit', 'failure', ranStep), job(22, 'e2e', 'failure', ranStep)], { 20: 'unit log', 22: 'e2e log' });
+
+      const evidence = await failureEvidence() as PrCiFailure;
+      expect(evidence.checks.map(({ jobs }) => jobs.map(({ id }) => id))).toEqual([[20, 22]]);
+    });
+
+    it('ActionsのrunのURLなのに読めない形のCheckRunは、外部チェックにせず証拠欠落として止める', async () => {
+      const detailsUrl = 'https://github.com/org/repo/actions/runs/10/unknown/1';
+      install([actionsCheck('unit', 20), { ...check('COMPLETED', 'FAILURE'), name: 'odd', detailsUrl }],
+        [job(20, 'unit', 'failure', ranStep)], { 20: 'expected 2 to equal 3' });
+
+      const evidence = await failureEvidence();
+      expect(evidence).toMatchObject({ complete: false,
+        unavailable: [{ name: 'odd', url: detailsUrl, reason: expect.any(String) }] });
+      expect(evidence).not.toHaveProperty('external');
+    });
+
     it('失敗チェックが成功したjobを指し、runに失敗jobが1つもなければ成功扱いにせず不完全にする', async () => {
       install([actionsCheck('lint', 22)], [job(22, 'lint', 'success', ranStep)]);
 

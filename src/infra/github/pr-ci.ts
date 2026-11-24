@@ -49,10 +49,11 @@ async function readRun(id: number, cwd: string, options?: PrStatusFetchOptions, 
   return run;
 }
 
+/** `undefined`: the check has no Actions log. `'unreadable'`: it points at Actions, but not in a form we can read. */
 function actionsCheckReference(check: { kind: string; url: string | null }) {
   if (check.kind !== 'CheckRun' || check.url === null) return undefined;
   try { return { ...actionsReference(check.url), url: check.url }; }
-  catch { return undefined; }
+  catch { return /\/actions\/runs\//.test(check.url) ? 'unreadable' as const : undefined; }
 }
 
 function errorText(error: unknown): string {
@@ -76,6 +77,10 @@ export async function collectPrCiFailure(
     const reference = actionsCheckReference(check);
     if (reference === undefined) {
       external.push({ name: check.name, url: check.url });
+      continue;
+    }
+    if (reference === 'unreadable') {
+      result.unavailable.push({ name: check.name, url: check.url, reason: 'Unsupported Actions check URL' });
       continue;
     }
     try {
