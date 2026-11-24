@@ -32,9 +32,9 @@ export interface ResolvedTaskRetryPath {
   segments: TaskRetryPathSegment[];
   headings: readonly { readonly path: string; readonly description?: string }[];
   /**
-   * Set when every frame of the position can only end in ABORT, so running
-   * from it cannot change the outcome. Lists the steps that route into the
-   * terminal frame.
+   * Set when every frame of the position can only end in ABORT and another
+   * step routes into the terminal frame, so running from it only repeats the
+   * report of a failure that happened elsewhere. Lists those steps.
    */
   onlyAborts?: { readonly reachedFrom: readonly string[] };
 }
@@ -270,7 +270,9 @@ function resolveTaskRetryStackPathWithOptions(
       return { reason: `Saved restart position ${formatTaskRetryPath([entry.workflow, entry.step])} has a missing step or step kind mismatch` };
     }
     everyFrameOnlyAborts &&= stepOnlyAborts(steps, step.name);
-    const onlyAborts = everyFrameOnlyAborts ? { onlyAborts: { reachedFrom: stepsRoutingTo(steps, step.name) } } : {};
+    // A step nothing routes into is the workflow's own work, not a report of a failure elsewhere.
+    const reachedFrom = stepsRoutingTo(steps, step.name);
+    const onlyAborts = everyFrameOnlyAborts && reachedFrom.length > 0 ? { onlyAborts: { reachedFrom } } : {};
     const isTerminalEntry = index === stack.length - 1;
     if (isTerminalEntry && options.requireRestartTarget && !isWorkflowRestartTarget(step)) {
       return { reason: `Step ${formatTaskRetryPath([step.name])} is not a restart target` };

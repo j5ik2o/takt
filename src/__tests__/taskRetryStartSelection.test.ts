@@ -1573,6 +1573,22 @@ describe('saved resume position on a step that can only abort', () => {
       .toEqual(['"report_failure"', '"work"']);
   });
 
+  it('keeps resuming an aborting step that no other step routes into', () => {
+    const workflow = makeWorkflow({
+      name: 'default',
+      ref: 'project:root',
+      steps: [withRules(agentStep('work'), ['ABORT'])],
+    });
+
+    const model = buildTaskRetryStartOptions(workflow, {
+      ...pathContext,
+      resumePoint: rootResumePoint('work', 'agent'),
+    });
+
+    expect(model.resumeFailureReason).toBeUndefined();
+    expect(model.defaultId).toBe('resume-checkpoint');
+  });
+
   it('keeps resuming a step that can wait for user input instead of aborting', () => {
     const asking: WorkflowStep = {
       ...agentStep('ask'),
