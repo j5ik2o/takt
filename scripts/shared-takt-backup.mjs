@@ -7,13 +7,13 @@
  *   backup   copy the configuration and the current managed provider generations
  *            into a new generation under a private directory outside the source
  *   verify   compare a generation with its manifest (contents, sizes, modes)
- *   restore  copy a verified generation into a new directory
- *   check    compare a restored directory with the generation it came from, then
- *            load its configuration and inspect its managed providers with a built TAKT
+ *
+ * Restoring is a manual procedure in the document above; this tool never
+ * writes anywhere but the backup directory.
  *
  * Rules the code below keeps:
  *   - The config directory is only read. Every write goes under the backup
- *     directory or a restore target, and neither may overlap the config directory.
+ *     directory, which may not overlap any TAKT config directory.
  *   - A generation is staged and renamed into place only after every copied file
  *     matches its source. Older generations are removed last, after the new one is
  *     published and logged, so a run that could not publish has removed nothing.
@@ -29,9 +29,9 @@ import { constants, createReadStream, realpathSync, rmSync } from 'node:fs';
 import {
   chmod, copyFile, link, lstat, mkdir, open, readdir, readFile, readlink, realpath, rename, rm, symlink, writeFile,
 } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 /** Files and directories of the config directory that hold configuration. Runtime state is not listed. */
 export const CONFIG_TARGETS = Object.freeze([
@@ -118,6 +118,18 @@ function liveConfigDirectory(env) {
   return resolve(env.TAKT_CONFIG_DIR || join(homedir(), '.takt'));
 }
 
+/** Every place a TAKT config directory can be, whichever one this run copies. */
+function knownConfigDirectories(env) {
+  const directories = [join(homedir(), '.takt')];
+  if (env.TAKT_CONFIG_DIR) directories.push(resolve(env.TAKT_CONFIG_DIR));
+  try {
+    directories.push(join(userInfo().homedir, '.takt'));
+  } catch {
+    // No account database entry (some containers): HOME is all there is.
+  }
+  return directories;
+}
+
 function unsafeEntry(name) {
   return new BackupError('DEST_UNSAFE', 'An entry of the backup directory is not what this tool creates there.', name);
 }
@@ -130,12 +142,16 @@ function unsafeEntry(name) {
  * `--source` names another one.
  */
 async function prepareBackupRoot(source, dest, env) {
-  if (await overlaps(source, dest) || await overlaps(liveConfigDirectory(env), dest)) {
-    throw new BackupError('DEST_OVERLAPS_SOURCE', 'The backup directory must not contain, or lie inside, the TAKT config directory being copied or the one in use.');
+  for (const configDirectory of [source, ...knownConfigDirectories(env)]) {
+    if (await overlaps(configDirectory, dest)) {
+      throw new BackupError('DEST_OVERLAPS_SOURCE', 'The backup directory must not contain, or lie inside, a TAKT config directory: the one being copied, TAKT_CONFIG_DIR, or ~/.takt.');
+    }
+  }
+  if (await realpathOfMaybeMissing(dest) !== resolve(dest)) {
+    throw new BackupError('DEST_IS_LINK', 'The backup directory path passes through a symbolic link. Name the real path.');
   }
   if (await lstatOrUndefined(dest) === undefined) await mkdir(dest, { recursive: true, mode: 0o700 });
   const root = await lstat(dest);
-  if (root.isSymbolicLink()) throw new BackupError('DEST_IS_LINK', 'The backup directory is a symbolic link. Name the directory itself.');
   if (!root.isDirectory()) throw new BackupError('DEST_NOT_DIRECTORY', 'The backup path is not a directory.');
   if (typeof process.getuid === 'function' && root.uid !== process.getuid()) {
     throw new BackupError('DEST_NOT_OWNED', 'The backup directory belongs to another user.');
@@ -367,14 +383,8 @@ async function copyManagedProvider(context, name) {
   return { generation: current };
 }
 
-async function pointLatestAt(dest, name) {
-  const pending = join(dest, `${STAGING_PREFIX}latest-${randomBytes(4).toString('hex')}`);
-  await symlink(join(GENERATIONS, name), pending);
-  await rename(pending, join(dest, LATEST));
-}
-
 /** Stage, check, and publish one generation. Runs under the lock. */
-async function createGeneration({ source, dest, keep, acceptRemoved, name, startedAt, log }) {
+async function createGeneration({ source, dest, keep, acceptRemoved, name, startedAt, log, readBack }) {
   await removeStagingLeftovers(dest);
   if (!await isRealDirectory(await realpathOfMaybeMissing(source))) throw new BackupError('SOURCE_MISSING', 'The TAKT config directory does not exist.');
   const published = await listGenerations(dest);
@@ -413,20 +423,25 @@ async function createGeneration({ source, dest, keep, acceptRemoved, name, start
     const manifest = { version: 1, generation: name, createdAt: startedAt, source: context.realSource, targets, totals: context.totals, entries: context.entries };
     await writeFile(join(staging, MANIFEST), JSON.stringify(manifest), { flag: 'wx', mode: 0o600 });
     // What is about to be published must pass the same check a later verify runs, or it replaces nothing.
-    await verifyTree(context.data, parseManifest(await readFile(join(staging, MANIFEST), 'utf8')).entries, storedDirectoryMode);
+    await verifyTree(context.data, parseManifest(await readBack(join(staging, MANIFEST), 'utf8')).entries);
     const pruned = published.slice(0, Math.max(0, published.length + 1 - keep));
     const summary = { generation: name, targets, totals: context.totals, pruned };
 
+    // The link is made before the generation is published, so that pointing latest at it is one rename.
+    // If that rename fails, latest still names what it named before, and the generation is taken back.
+    const pendingLatest = join(dest, `${STAGING_PREFIX}latest-${randomBytes(4).toString('hex')}`);
+    await symlink(join(GENERATIONS, name), pendingLatest);
     await rename(staging, final);
     try {
-      await pointLatestAt(dest, name);
+      await rename(pendingLatest, join(dest, LATEST));
+    } catch (error) {
+      await rename(final, staging);
+      throw error;
+    }
+    try {
       await log.write({ time: startedAt, action: 'backup', source, result: 'ok', ...summary });
     } catch (error) {
-      // Not published after all: take the generation back so that the earlier one stays the newest.
-      if (latestBefore === undefined) await rm(join(dest, LATEST), { force: true }).catch(() => {});
-      else await pointLatestAt(dest, latestBefore).catch(() => {});
-      await rename(final, staging).catch(() => {});
-      throw error;
+      throw new BackupError('LOG_FAILED', `Generation ${name} is published, but the log could not be written (${describeFailure(error).code}). No older generation was removed.`);
     }
     try {
       for (const old of pruned) {
@@ -448,14 +463,14 @@ async function createGeneration({ source, dest, keep, acceptRemoved, name, start
  *
  * @returns the published generation's summary. Throws without publishing when anything fails.
  */
-export async function backupSharedTakt({ source, dest, keep = DEFAULT_KEEP, acceptRemoved = false, now = new Date(), env = process.env, openLogFile = openLog }) {
+export async function backupSharedTakt({ source, dest, keep = DEFAULT_KEEP, acceptRemoved = false, now = new Date(), env = process.env, openLogFile = openLog, readBack = readFile }) {
   if (!Number.isInteger(keep) || keep < 1) throw new BackupError('INVALID_KEEP', '--keep must be a whole number of at least 1.');
   await prepareBackupRoot(source, dest, env);
   const log = await openLogFile(dest);
   const name = generationName(now);
   const startedAt = now.toISOString();
   try {
-    return await withLock(dest, () => createGeneration({ source, dest, keep, acceptRemoved, name, startedAt, log }));
+    return await withLock(dest, () => createGeneration({ source, dest, keep, acceptRemoved, name, startedAt, log, readBack }));
   } catch (error) {
     await log.write({ time: startedAt, action: 'backup', source, result: 'failed', generation: name, error: describeFailure(error) }).catch(() => {});
     throw error;
@@ -464,21 +479,21 @@ export async function backupSharedTakt({ source, dest, keep = DEFAULT_KEEP, acce
   }
 }
 
-async function verifyTree(root, entries, directoryMode) {
+async function verifyTree(root, entries) {
   for (const entry of entries) {
-    const difference = await entryDifference(root, entry, directoryMode);
+    const difference = await entryDifference(root, entry);
     if (difference !== undefined) throw damaged(difference, entry.path);
   }
 }
 
 /** Compare one manifest entry with what is on disk under `root`. Returns the difference, if any. */
-async function entryDifference(root, entry, directoryMode) {
+async function entryDifference(root, entry) {
   const stats = await lstatOrUndefined(join(root, entry.path));
   if (stats === undefined) return 'missing';
   const mode = stats.mode & 0o7777;
   if (entry.type === 'directory') {
     if (!stats.isDirectory()) return 'not a directory';
-    return mode === directoryMode(entry.mode) ? undefined : 'mode changed';
+    return mode === storedDirectoryMode(entry.mode) ? undefined : 'mode changed';
   }
   if (entry.type === 'link') return stats.isSymbolicLink() && await readlink(join(root, entry.path)) === entry.target ? undefined : 'link changed';
   if (!stats.isFile() || stats.size !== entry.size) return 'size changed';
@@ -489,7 +504,7 @@ async function entryDifference(root, entry, directoryMode) {
 async function openVerifiedGeneration(dest, generation) {
   const opened = await openGeneration(dest, generation);
   if (!await isRealDirectory(join(opened.directory, DATA))) throw damaged('data is missing', DATA);
-  await verifyTree(join(opened.directory, DATA), opened.manifest.entries, storedDirectoryMode);
+  await verifyTree(join(opened.directory, DATA), opened.manifest.entries);
   return opened;
 }
 
@@ -502,108 +517,9 @@ export async function verifyGeneration({ dest, generation }) {
   return summaryOf(await openVerifiedGeneration(dest, generation));
 }
 
-/** Refuse a directory this tool would write to, or let TAKT write to, when it touches a config directory in use. */
-async function assertIsolated(directory, protectedDirectories) {
-  for (const protectedDirectory of protectedDirectories) {
-    if (await overlaps(directory, protectedDirectory)) {
-      throw new BackupError('NOT_ISOLATED', 'The directory overlaps the TAKT config directory or the backup directory. Use a separate, new directory.');
-    }
-  }
-}
-
-/**
- * Copy a verified generation into a directory that does not exist yet.
- * The target may not overlap the config directory the generation came from,
- * the config directory in use, or the backup directory: putting a restored
- * directory in place is the operator's step, done by renaming it.
- */
-export async function restoreGeneration({ dest, generation, to, env = process.env }) {
-  const opened = await openGeneration(dest, generation);
-  await assertIsolated(to, [opened.manifest.source, liveConfigDirectory(env), dest]);
-  if (await lstatOrUndefined(to) !== undefined) throw new BackupError('RESTORE_TARGET_EXISTS', 'The restore target already exists. Name a directory that does not exist yet.');
-  const { directory, manifest } = await openVerifiedGeneration(dest, opened.name);
-  await mkdir(to, { mode: 0o700 });
-  for (const entry of manifest.entries) {
-    const target = join(to, entry.path);
-    if (entry.type === 'directory') await mkdir(target, { mode: 0o700 });
-    else if (entry.type === 'link') await symlink(entry.target, target);
-    else {
-      await copyFile(join(directory, DATA, entry.path), target, constants.COPYFILE_EXCL);
-      await chmod(target, entry.mode);
-      if (await hashFile(target) !== entry.sha256) throw new BackupError('COPY_MISMATCH', 'A restored file does not match the generation.', entry.path);
-    }
-  }
-  for (const entry of manifest.entries.filter((candidate) => candidate.type === 'directory').reverse()) {
-    await chmod(join(to, entry.path), entry.mode);
-  }
-  return summaryOf(opened);
-}
-
-async function importBuiltTakt(taktRoot) {
-  const load = (path) => import(pathToFileURL(join(taktRoot, 'dist', path)).href);
-  try {
-    const [config, loader] = await Promise.all([load('infra/config/global/globalConfigCore.js'), load('infra/managed-providers/loader.js')]);
-    return {
-      loadConfig: () => { config.loadGlobalConfig(); },
-      inspectProvider: (provider) => loader.inspectProviderInstallation(provider),
-    };
-  } catch (error) {
-    throw new BackupError('TAKT_NOT_BUILT', `Could not load a built TAKT (dist/) from the --takt directory (${describeFailure(error).code}).`);
-  }
-}
-
-/**
- * Check a restored directory against the generation it came from: every entry
- * of the manifest is there unchanged, the configuration loads, and each managed
- * provider the generation holds passes TAKT's own inspection, with
- * TAKT_CONFIG_DIR pointing at the restored directory.
- */
-export async function checkRestoredConfigDirectory({ dest, generation, configDirectory, taktRoot, env = process.env, importTakt = importBuiltTakt }) {
-  if (!await isRealDirectory(configDirectory)) throw new BackupError('CONFIG_DIR_MISSING', 'The directory to check does not exist.');
-  const { name, manifest } = await openGeneration(dest, generation);
-  // TAKT's inspection may repair what it inspects, so it must not be pointed at a config directory in use.
-  await assertIsolated(configDirectory, [manifest.source, liveConfigDirectory(env), dest]);
-  const result = { generation: name, restored: 'complete', config: 'absent', providers: {} };
-  for (const entry of manifest.entries) {
-    const difference = await entryDifference(configDirectory, entry, (mode) => mode);
-    if (difference !== undefined) {
-      result.restored = `differs from the generation (${entry.path}: ${difference})`;
-      break;
-    }
-  }
-  // TAKT is only pointed at a directory that is exactly what the generation holds: its inspection can repair,
-  // and a link in a changed directory could carry that repair elsewhere.
-  if (result.restored !== 'complete') return { ...result, config: 'not checked', ok: false };
-  const held = (targetName) => manifest.targets.some((target) => target.name === targetName && target.status === 'copied');
-  const previous = process.env.TAKT_CONFIG_DIR;
-  process.env.TAKT_CONFIG_DIR = await realpath(configDirectory);
-  try {
-    const takt = await importTakt(taktRoot);
-    if (held('config.yaml')) {
-      try {
-        takt.loadConfig();
-        result.config = 'readable';
-      } catch (error) {
-        // TAKT's own message can quote configuration values, so only the kind of failure is reported.
-        result.config = `unreadable (${describeFailure(error).code})`;
-      }
-    }
-    for (const provider of manifest.targets.filter((target) => target.kind === 'managed-provider')) {
-      result.providers[provider.name] = held(provider.name) ? (await takt.inspectProvider(provider.name)).state : 'absent';
-    }
-  } finally {
-    if (previous === undefined) delete process.env.TAKT_CONFIG_DIR;
-    else process.env.TAKT_CONFIG_DIR = previous;
-  }
-  result.ok = result.restored === 'complete' && !result.config.startsWith('unreadable') && !Object.values(result.providers).includes('missing');
-  return result;
-}
-
 const USAGE = `Usage:
   shared-takt-backup.mjs backup  --dest <dir> [--source <dir>] [--keep <n>] [--accept-removed]
   shared-takt-backup.mjs verify  --dest <dir> [--generation <name>]
-  shared-takt-backup.mjs restore --dest <dir> --to <new dir> [--generation <name>]
-  shared-takt-backup.mjs check   --dest <dir> --config-dir <restored dir> [--generation <name>] [--takt <built TAKT checkout>]
 
 --source defaults to TAKT_CONFIG_DIR, then ~/.takt. --generation defaults to the one "latest" points at.
 `;
@@ -614,7 +530,7 @@ function parseArguments(argv) {
   for (let index = 0; index < rest.length; index += 1) {
     const flag = rest[index];
     if (flag === '--accept-removed') options.acceptRemoved = true;
-    else if (['--source', '--dest', '--keep', '--generation', '--to', '--config-dir', '--takt'].includes(flag) && rest[index + 1] !== undefined) {
+    else if (['--source', '--dest', '--keep', '--generation'].includes(flag) && rest[index + 1] !== undefined) {
       options[flag.slice(2)] = rest[index += 1];
     } else throw new BackupError('USAGE', `Unknown or incomplete argument: ${flag}`);
   }
@@ -656,24 +572,6 @@ export async function main(argv, { stdout = process.stdout, stderr = process.std
     if (command === 'verify') {
       stdout.write(summaryLine('verify', await verifyGeneration({ dest: resolve(required(options, 'dest')), generation: options.generation })));
       return 0;
-    }
-    if (command === 'restore') {
-      const summary = await restoreGeneration({ dest: resolve(required(options, 'dest')), generation: options.generation, to: resolve(required(options, 'to')), env });
-      stdout.write(summaryLine('restore', summary));
-      return 0;
-    }
-    if (command === 'check') {
-      const result = await checkRestoredConfigDirectory({
-        dest: resolve(required(options, 'dest')),
-        generation: options.generation,
-        configDirectory: resolve(required(options, 'config-dir')),
-        taktRoot: resolve(options.takt ?? fileURLToPath(new URL('..', import.meta.url))),
-        env,
-      });
-      stdout.write(`generation: ${result.generation}\nrestored: ${result.restored}\nconfig: ${result.config}\n`);
-      for (const [provider, state] of Object.entries(result.providers)) stdout.write(`${provider}: ${state}\n`);
-      stdout.write(`check ${result.ok ? 'ok' : 'failed'}\n`);
-      return result.ok ? 0 : 1;
     }
     stderr.write(USAGE);
     return 2;

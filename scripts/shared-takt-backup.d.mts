@@ -44,30 +44,11 @@ export function backupSharedTakt(input: {
   readonly now?: Date;
   readonly env?: NodeJS.ProcessEnv;
   readonly openLogFile?: (dest: string) => Promise<BackupLog>;
+  /** Reads the staged manifest back before publishing. Replaceable so that a test can damage what is read. */
+  readonly readBack?: (path: string, encoding: 'utf8') => Promise<string>;
 }): Promise<GenerationSummary & { readonly pruned: readonly string[] }>;
 
 export function verifyGeneration(input: { readonly dest: string; readonly generation?: string }): Promise<GenerationSummary>;
-
-export function restoreGeneration(input: {
-  readonly dest: string;
-  readonly generation?: string;
-  readonly to: string;
-  readonly env?: NodeJS.ProcessEnv;
-}): Promise<GenerationSummary>;
-
-export interface BuiltTakt {
-  readonly loadConfig: () => void;
-  readonly inspectProvider: (provider: string) => Promise<{ readonly state: 'missing' | 'stale' | 'ready' }>;
-}
-
-export function checkRestoredConfigDirectory(input: {
-  readonly dest: string;
-  readonly generation?: string;
-  readonly configDirectory: string;
-  readonly taktRoot: string;
-  readonly env?: NodeJS.ProcessEnv;
-  readonly importTakt?: (taktRoot: string) => Promise<BuiltTakt>;
-}): Promise<{ generation: string; restored: string; config: string; providers: Record<string, string>; ok: boolean }>;
 
 export function main(
   argv: readonly string[],
