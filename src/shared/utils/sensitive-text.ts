@@ -21,7 +21,9 @@ const SENSITIVE_TEXT_KEY_PATTERN = String.raw`(?:${SENSITIVE_KEY_PATTERN}|${SENS
 // (e.g. `authorization-token=v`): header-key prefixes are consumed character
 // by character until the header exclusion no longer blocks the key.
 const SENSITIVE_BARE_ASSIGNMENT_KEY_PATTERN = String.raw`(?<!${SENSITIVE_KEY_CHAR_PATTERN})(?:(?=(?:${SENSITIVE_HEADER_KEY_PATTERN})\b)${SENSITIVE_KEY_CHAR_PATTERN})*(?!(?:${SENSITIVE_HEADER_KEY_PATTERN})\b)${SENSITIVE_KEY_PATTERN}`;
-const SENSITIVE_ASSIGNMENT_KEY_PATTERN = String.raw`(?:["'](?:${SENSITIVE_TEXT_KEY_PATTERN})["']|${SENSITIVE_BARE_ASSIGNMENT_KEY_PATTERN})`;
+// `\"key\"` is a key of JSON that was serialized into a string once more (an SDK error
+// that embeds response headers or a body).
+const SENSITIVE_ASSIGNMENT_KEY_PATTERN = String.raw`(?:["'](?:${SENSITIVE_TEXT_KEY_PATTERN})["']|\\"(?:${SENSITIVE_TEXT_KEY_PATTERN})\\"|${SENSITIVE_BARE_ASSIGNMENT_KEY_PATTERN})`;
 const SENSITIVE_KEY_NAME_REGEX = new RegExp(
   String.raw`^${SENSITIVE_TEXT_KEY_PATTERN}$`,
   'i',
@@ -74,8 +76,26 @@ const CURL_SHORT_USER_COMPACT_REGEX = new RegExp(
   String.raw`(^|\s)(-u)(?:\\")?(${CURL_USER_VALUE_PATTERN})(?:\\")?`,
   'gi',
 );
-const SENSITIVE_QUERY_VALUE_REGEX = /([?&](?:api[_-]?key|token|password|secret)=)([^&\s]+)/gi;
-const KNOWN_TOKEN_REGEX = /\b(?:sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{8,}|xox[baprs]-[A-Za-z0-9-]{8,})\b/g;
+const SENSITIVE_QUERY_VALUE_REGEX = /([?&](?:api[_-]?key|key|token|password|secret|sig|signature)=)([^&\s]+)/gi;
+// A bearer credential with no header name in front of it. The value needs a digit or 20
+// characters, so that prose such as "Bearer authentication" stays readable.
+const BEARER_VALUE_PATTERN = String.raw`[A-Za-z0-9._~+/=-]`;
+const BARE_BEARER_VALUE_REGEX = new RegExp(
+  String.raw`(\b[Bb]earer\s+)((?=${BEARER_VALUE_PATTERN}*\d|${BEARER_VALUE_PATTERN}{20})${BEARER_VALUE_PATTERN}{8,})`,
+  'g',
+);
+const KNOWN_TOKEN_REGEX = new RegExp(
+  String.raw`\b(?:${[
+    String.raw`sk-[A-Za-z0-9_-]{8,}`,
+    String.raw`gh[pousr]_[A-Za-z0-9_]{8,}`,
+    String.raw`github_pat_[A-Za-z0-9_]{20,}`,
+    String.raw`xox[baprs]-[A-Za-z0-9-]{8,}`,
+    String.raw`AIza[A-Za-z0-9_-]{30,}`,
+    String.raw`A[KS]IA[A-Z0-9]{16}`,
+    String.raw`eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`,
+  ].join('|')})\b`,
+  'g',
+);
 const PEM_PRIVATE_KEY_REGEX = /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?(?:-----END \1-----|$)/g;
 
 interface HttpHeaderValue {
@@ -177,7 +197,7 @@ export function sanitizeSensitiveText(text: string): string {
       return `${prefix}${quote}${REDACTED_VALUE}${quote}`;
     })
     .replace(URL_USERINFO_CREDENTIALS_REGEX, `$1${REDACTED_VALUE}@`);
-  return redactHttpHeaders(sanitized)
+  return redactHttpHeaders(sanitized.replace(BARE_BEARER_VALUE_REGEX, `$1${REDACTED_VALUE}`))
     .replace(CURL_USER_EQUALS_REGEX, `$1${REDACTED_VALUE}`)
     .replace(CURL_USER_SPACE_REGEX, `$1${REDACTED_VALUE}`)
     .replace(CURL_SHORT_USER_COMPACT_REGEX, `$1$2${REDACTED_VALUE}`)
@@ -207,6 +227,7 @@ export function collectEmbeddedSensitiveValues(text: string, values: Set<string>
   addMatches(text, SENSITIVE_OPTION_VALUE_REGEX, 2, values);
   addMatches(text, SENSITIVE_QUERY_VALUE_REGEX, 2, values);
   addMatches(text, KNOWN_TOKEN_REGEX, 0, values);
+  addMatches(text, BARE_BEARER_VALUE_REGEX, 2, values);
   collectHttpHeaderSensitiveValues(text, values);
   addMatches(text, URL_USERINFO_CREDENTIALS_REGEX, 2, values, true);
   addMatches(text, CURL_USER_EQUALS_REGEX, 2, values, true);
@@ -320,6 +341,7 @@ export function sensitiveTextRanges(text: string, values: ReadonlySet<string>): 
     text.matchAll(SENSITIVE_HEADER_ASSIGNMENT_COLON_VALUE_REGEX),
     text.matchAll(SENSITIVE_OPTION_VALUE_REGEX),
     text.matchAll(SENSITIVE_QUERY_VALUE_REGEX),
+    text.matchAll(BARE_BEARER_VALUE_REGEX),
   ];
   for (const matches of valueMatches) {
     for (const match of matches) {

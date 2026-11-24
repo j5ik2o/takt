@@ -329,6 +329,55 @@ describe('sensitiveText', () => {
     },
   );
 
+  it.each([
+    ['an escaped JSON authorization header', String.raw`Request failed {\"Authorization\": \"Bearer ESC2SECRET\"}`, 'ESC2SECRET',
+      String.raw`Request failed {\"Authorization\": \"[REDACTED]\"}`],
+    ['an escaped JSON token', String.raw`{\"token\": \"ESC3SECRET\"}`, 'ESC3SECRET', String.raw`{\"token\": \"[REDACTED]\"}`],
+    ['an escaped JSON api_key inside a string', String.raw`"{\"api_key\":\"ESCSECRET\"}"`, 'ESCSECRET',
+      String.raw`"{\"api_key\":\"[REDACTED]\"}"`],
+    ['a bearer credential without a header name', 'Bearer PLAINBEARERSECRET123 rejected', 'PLAINBEARERSECRET123',
+      'Bearer [REDACTED] rejected'],
+    ['a bearer credential after a sensitive key', 'invalid credentials: Bearer eyJhbGciOi.eyJzdWIiOi.SECRETSIG', 'eyJhbGciOi.eyJzdWIiOi.SECRETSIG',
+      'invalid credentials: [REDACTED] [REDACTED]'],
+    ['a bearer credential on the line after the scheme', 'Authorization: Bearer\nNEWLINE2SECRET', 'NEWLINE2SECRET',
+      'Authorization: [REDACTED]\n[REDACTED]'],
+    ['a key query parameter', 'POST https://example.test/v1/models:generateContent?key=QUERYKEYSECRET failed', 'QUERYKEYSECRET',
+      'POST https://example.test/v1/models:generateContent?key=[REDACTED] failed'],
+    ['a signature query parameter', 'GET https://example.test/blob?sv=2024&sig=SASSIGSECRET%3D failed', 'SASSIGSECRET%3D',
+      'GET https://example.test/blob?sv=2024&sig=[REDACTED] failed'],
+    ['a Google API key', 'key AIzaSyFAKE0123456789abcdefghijklmnopqrs rejected', 'AIzaSyFAKE0123456789abcdefghijklmnopqrs',
+      'key [REDACTED] rejected'],
+    ['an AWS access key ID', 'denied for AKIAIOSFODNN7EXAMPLE in us-east-1', 'AKIAIOSFODNN7EXAMPLE',
+      'denied for [REDACTED] in us-east-1'],
+    ['a fine-grained GitHub token', 'bad github_pat_11ABCDEFG0abcdefghijkl_mnopqrstuvwxyz0123 here', 'github_pat_11ABCDEFG0abcdefghijkl_mnopqrstuvwxyz0123',
+      'bad [REDACTED] here'],
+    ['a GitHub OAuth token', 'bad gho_abcdefghij0123456789 here', 'gho_abcdefghij0123456789', 'bad [REDACTED] here'],
+    ['a JSON web token', 'got eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.c2lnbmF0dXJlLXNlY3JldA back', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTYifQ.c2lnbmF0dXJlLXNlY3JldA',
+      'got [REDACTED] back'],
+  ])('redacts %s', (_name, text, secret, expected) => {
+    const sanitized = sanitizeSensitiveText(text);
+
+    expect(sanitized).not.toContain(secret);
+    expect(sanitized).toBe(expected);
+    // The value collector finds the same credential.
+    expect(sanitizeSensitiveTextWithKnownValues(`echo ${secret}`, text)).not.toContain(secret);
+    // The stream redactor commits line by line, so it cannot join a scheme to a value on the next line.
+    if (!text.includes('\n')) {
+      const stream = createSensitiveTextStreamRedactor();
+      expect(stream.write(text, undefined) + stream.flush(undefined)).not.toContain(secret);
+    }
+  });
+
+  it.each([
+    'Bearer authentication is required',
+    'Use a Bearer token for this endpoint',
+    'sorted by ?sort=name&order=asc',
+    'commit 7868714bb04d20e71c498fb5653a45e523880935 on main',
+    'monkey=banana',
+  ])('keeps ordinary text unchanged: %s', (text) => {
+    expect(sanitizeSensitiveText(text)).toBe(text);
+  });
+
   it('redacts both the API token assignment and API key option', () => {
     const sanitized = sanitizeSensitiveText('api_token=abc123xyz --api-key=def456uvw');
 
