@@ -6,6 +6,7 @@ import {
   type WorkflowResumePointEntry,
   type WorkflowStep,
 } from '../../core/models/index.js';
+import { stepOnlyAborts, stepsRoutingTo } from '../../core/workflow/abort-only-step.js';
 import { WorkflowRestartNavigator } from '../../core/workflow/engine/WorkflowRestartNavigator.js';
 import { getWorkflowResumeFrameError, resumeWorkflowMatches } from '../../core/workflow/run/resume-point.js';
 import { getWorkflowStepKind, isWorkflowCallStep } from '../../core/workflow/step-kind.js';
@@ -30,6 +31,12 @@ type TaskRetryPathSegment = string | { callStep: string; workflow: string };
 export interface ResolvedTaskRetryPath {
   segments: TaskRetryPathSegment[];
   headings: readonly { readonly path: string; readonly description?: string }[];
+  /**
+   * Set when every frame of the position can only end in ABORT, so running
+   * from it cannot change the outcome. Lists the steps that route into the
+   * terminal frame.
+   */
+  onlyAborts?: { readonly reachedFrom: readonly string[] };
 }
 
 export type TaskRetryPathResolution = ResolvedTaskRetryPath | { reason: string };
@@ -244,6 +251,7 @@ function resolveTaskRetryStackPathWithOptions(
   const ancestors = [getWorkflowReference(rootWorkflow)];
   const segments: TaskRetryPathSegment[] = [rootWorkflow.name];
   const headings: { path: string; description?: string }[] = [];
+  let everyFrameOnlyAborts = true;
   for (let index = 0; index < stack.length; index += 1) {
     const entry = stack[index]!;
     const reason = options.requireRestartIdentity
@@ -258,6 +266,8 @@ function resolveTaskRetryStackPathWithOptions(
     if (step === undefined || (options.requireRestartIdentity && getWorkflowStepKind(step) !== entry.kind)) {
       return { reason: `Saved restart position ${formatTaskRetryPath([entry.workflow, entry.step])} has a missing step or step kind mismatch` };
     }
+    everyFrameOnlyAborts &&= stepOnlyAborts(steps, step.name);
+    const onlyAborts = everyFrameOnlyAborts ? { onlyAborts: { reachedFrom: stepsRoutingTo(steps, step.name) } } : {};
     const isTerminalEntry = index === stack.length - 1;
     if (isTerminalEntry && options.requireRestartTarget && !isWorkflowRestartTarget(step)) {
       return { reason: `Step ${formatTaskRetryPath([step.name])} is not a restart target` };
@@ -276,7 +286,7 @@ function resolveTaskRetryStackPathWithOptions(
       });
       if (isTerminalEntry) {
         segments.push(step.name);
-        return { segments, headings };
+        return { segments, headings, ...onlyAborts };
       }
       segments.push({ callStep: step.name, workflow: child.name });
       workflow = child;
@@ -286,7 +296,7 @@ function resolveTaskRetryStackPathWithOptions(
     }
     segments.push(step.name);
     if (isTerminalEntry) {
-      return { segments, headings };
+      return { segments, headings, ...onlyAborts };
     }
     if (
       !options.allowParallelEntries
