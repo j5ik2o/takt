@@ -5,7 +5,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import {
-  chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync,
+  chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync,
   rmSync, statSync, symlinkSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -147,6 +147,70 @@ describe('backup', () => {
     await expect(verifyGeneration({ dest })).resolves.toMatchObject({ generation: first.generation });
   });
 
+  it('leaves latest where it was when a run fails after the clock has gone back', async () => {
+    await backupSharedTakt({ source, dest, now: at(25) });
+    await backupSharedTakt({ source, dest, now: at(24) });
+    expect(readlinkSync(join(dest, 'latest'))).toBe(join('generations', nameAt(24)));
+    const failingLog = async () => ({
+      write: async (record: { result: string }) => { if (record.result === 'ok') throw new Error('log device failed'); },
+      close: async () => {},
+    });
+
+    await expect(backupSharedTakt({ source, dest, now: at(26), openLogFile: failingLog })).rejects.toThrow('log device failed');
+
+    expect(readlinkSync(join(dest, 'latest'))).toBe(join('generations', nameAt(24)));
+    expect(await listGenerations(dest)).toEqual([nameAt(24), nameAt(25)]);
+  });
+
+  it('compares a run with the generation latest points at, not with the newest name', async () => {
+    await backupSharedTakt({ source, dest, now: at(25) });
+    rmSync(join(source, 'pi'), { recursive: true });
+    await backupSharedTakt({ source, dest, now: at(24), acceptRemoved: true });
+
+    const third = await backupSharedTakt({ source, dest, now: at(26) });
+
+    expect(third.targets.find((target) => target.name === 'pi')?.status).toBe('absent');
+    expect(readlinkSync(join(dest, 'latest'))).toBe(join('generations', nameAt(26)));
+  });
+
+  it('refuses a run in which a file that held content is empty, unless that is accepted', async () => {
+    const first = await backupSharedTakt({ source, dest, keep: 1, now: at(20) });
+
+    write('config.yaml', '');
+    expect(await failureCode(backupSharedTakt({ source, dest, keep: 1, now: at(21) }))).toBe('FILE_EMPTIED');
+    write('config.yaml', CONFIG);
+    write('workflows/custom.yaml', '', 0o644);
+    write('workflows/other.yaml', 'name: other\n', 0o644);
+    expect(await failureCode(backupSharedTakt({ source, dest, keep: 1, now: at(22) }))).toBe('FILE_EMPTIED');
+
+    expect(await listGenerations(dest)).toEqual([first.generation]);
+    expect(readFileSync(generationPath(first.generation, 'data', 'config.yaml'), 'utf8')).toBe(CONFIG);
+
+    await expect(backupSharedTakt({ source, dest, keep: 1, now: at(23), acceptRemoved: true })).resolves.toBeDefined();
+  });
+
+  it('refuses a first run that finds config.yaml empty', async () => {
+    write('config.yaml', '');
+
+    expect(await failureCode(backupSharedTakt({ source, dest, now: at(24) }))).toBe('FILE_EMPTIED');
+    expect(await listGenerations(dest)).toEqual([]);
+  });
+
+  it('publishes a generation that verifies whatever the umask of the run', async () => {
+    chmodSync(join(source, 'pi'), 0o755);
+    const umask = process.umask(0o022);
+    try {
+      await backupSharedTakt({ source, dest, keep: 1, now: at(24) });
+      process.umask(0o077);
+      const second = await backupSharedTakt({ source, dest, keep: 1, now: at(25) });
+
+      expect(statSync(generationPath(second.generation, 'data', 'pi')).mode & 0o777).toBe(0o755);
+      await expect(verifyGeneration({ dest })).resolves.toMatchObject({ generation: second.generation });
+    } finally {
+      process.umask(umask);
+    }
+  });
+
   it('records a run that finds the config directory gone, and publishes nothing', async () => {
     const first = await backupSharedTakt({ source, dest, keep: 1, now: at(24) });
     rmSync(source, { recursive: true });
@@ -250,6 +314,17 @@ describe('backup', () => {
     expect(readdirSync(dest)).toEqual([]);
   });
 
+  it('refuses a backup directory inside the config directory in use, even when another one is being copied', async () => {
+    const live = join(root, 'live');
+    mkdirSync(join(live, '.staging-in-use'), { recursive: true, mode: 0o700 });
+    chmodSync(live, 0o700);
+
+    for (const target of [live, join(live, 'backup')]) {
+      expect(await failureCode(backupSharedTakt({ source, dest: target, env: { TAKT_CONFIG_DIR: live } }))).toBe('DEST_OVERLAPS_SOURCE');
+    }
+    expect(readdirSync(live)).toEqual(['.staging-in-use']);
+  });
+
   it('refuses a backup directory whose own entries are links, and writes nothing through them', async () => {
     const before = snapshot(source);
     const elsewhere = join(root, 'elsewhere');
@@ -261,6 +336,10 @@ describe('backup', () => {
 
     mkdirSync(dest, { mode: 0o700 });
     symlinkSync(join(source, 'config.yaml'), join(dest, 'backup.log'));
+    expect(await failureCode(backupSharedTakt({ source, dest, now: at(24) }))).toBe('DEST_UNSAFE');
+    rmSync(join(dest, 'backup.log'));
+
+    linkSync(join(source, 'config.yaml'), join(dest, 'backup.log'));
     expect(await failureCode(backupSharedTakt({ source, dest, now: at(24) }))).toBe('DEST_UNSAFE');
     rmSync(join(dest, 'backup.log'));
 
@@ -426,8 +505,12 @@ describe('check', () => {
     expect(process.env.TAKT_CONFIG_DIR).toBe(before);
   });
 
-  it('fails when the restored directory lacks or changes anything the generation holds', async () => {
-    const check = () => checkRestoredConfigDirectory({ dest, configDirectory: restored, taktRoot: root, importTakt: builtTakt({ pi: 'ready' }, []) });
+  it('fails without inspecting when the restored directory lacks or changes anything the generation holds', async () => {
+    const seen: string[] = [];
+    let loads = 0;
+    const check = () => checkRestoredConfigDirectory({
+      dest, configDirectory: restored, taktRoot: root, importTakt: builtTakt({ pi: 'ready' }, seen, () => { loads += 1; }),
+    });
 
     chmodSync(join(restored, 'config.yaml'), 0o644);
     expect(await check()).toMatchObject({ restored: 'differs from the generation (config.yaml: mode changed)', ok: false });
@@ -438,6 +521,13 @@ describe('check', () => {
 
     rmSync(join(restored, 'config.yaml'));
     expect(await check()).toMatchObject({ restored: 'differs from the generation (config.yaml: missing)', ok: false });
+
+    rmSync(join(restored, 'pi'), { recursive: true });
+    symlinkSync(join(source, 'pi'), join(restored, 'pi'));
+    writeFileSync(join(restored, 'config.yaml'), CONFIG, { mode: 0o600 });
+    expect(await check()).toMatchObject({ restored: 'differs from the generation (pi: not a directory)', config: 'not checked', providers: {}, ok: false });
+    expect(seen).toEqual([]);
+    expect(loads).toBe(0);
   });
 
   it('fails when a restored provider does not pass inspection or the configuration cannot be loaded', async () => {

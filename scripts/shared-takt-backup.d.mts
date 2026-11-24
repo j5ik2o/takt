@@ -42,6 +42,7 @@ export function backupSharedTakt(input: {
   readonly keep?: number;
   readonly acceptRemoved?: boolean;
   readonly now?: Date;
+  readonly env?: NodeJS.ProcessEnv;
   readonly openLogFile?: (dest: string) => Promise<BackupLog>;
 }): Promise<GenerationSummary & { readonly pruned: readonly string[] }>;
 

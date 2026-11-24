@@ -125,12 +125,13 @@ function unsafeEntry(name) {
 /**
  * Make sure every path a run writes under the backup directory is what it
  * seems: the root and `generations` are real private directories, and the log
- * is a regular file. A link in any of these places could lead back into the
- * config directory.
+ * is a regular file of its own. A link in any of these places could lead back
+ * into the config directory, and so could the config directory in use when
+ * `--source` names another one.
  */
-async function prepareBackupRoot(source, dest) {
-  if (await overlaps(source, dest)) {
-    throw new BackupError('DEST_OVERLAPS_SOURCE', 'The backup directory and the TAKT config directory must not contain each other.');
+async function prepareBackupRoot(source, dest, env) {
+  if (await overlaps(source, dest) || await overlaps(liveConfigDirectory(env), dest)) {
+    throw new BackupError('DEST_OVERLAPS_SOURCE', 'The backup directory must not contain, or lie inside, the TAKT config directory being copied or the one in use.');
   }
   if (await lstatOrUndefined(dest) === undefined) await mkdir(dest, { recursive: true, mode: 0o700 });
   const root = await lstat(dest);
@@ -149,8 +150,14 @@ async function prepareBackupRoot(source, dest) {
   if (log !== undefined && !log.isFile()) throw unsafeEntry(LOG);
 }
 
+/** The log is checked on the open handle: a hard link to a file elsewhere passes every check made by path. */
 async function openLog(dest) {
   const handle = await open(join(dest, LOG), constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+  const stats = await handle.stat();
+  if (!stats.isFile() || stats.nlink !== 1) {
+    await handle.close();
+    throw unsafeEntry(LOG);
+  }
   return { write: (record) => handle.write(`${JSON.stringify(record)}\n`), close: () => handle.close() };
 }
 
@@ -349,13 +356,14 @@ async function copyManagedProvider(context, name) {
     throw new BackupError('MANAGED_PROVIDER_BROKEN', 'The managed provider has no usable current generation.', join(name, 'sdk'));
   }
   const rootMode = (await lstat(join(context.source, name))).mode & 0o7777;
-  await mkdir(join(context.data, name), { mode: storedDirectoryMode(rootMode) });
+  await mkdir(join(context.data, name), { mode: 0o700 });
   context.entries.push({ path: name, type: 'directory', mode: rootMode });
   await copyEntry(context, join(name, current));
   await copyEntry(context, join(name, 'sdk'));
   if (await readlink(linkPath).catch(() => undefined) !== current) {
     throw new BackupError('SOURCE_CHANGED', 'The managed provider was reinstalled while it was being copied.', join(name, 'sdk'));
   }
+  await chmod(join(context.data, name), storedDirectoryMode(rootMode));
   return { generation: current };
 }
 
@@ -371,7 +379,9 @@ async function createGeneration({ source, dest, keep, acceptRemoved, name, start
   if (!await isRealDirectory(await realpathOfMaybeMissing(source))) throw new BackupError('SOURCE_MISSING', 'The TAKT config directory does not exist.');
   const published = await listGenerations(dest);
   if (published.includes(name)) throw new BackupError('GENERATION_EXISTS', 'A generation with this timestamp already exists.');
-  const previousName = published.at(-1);
+  // The generation this run must not make worse: the one `latest` pointed at when the run began.
+  const latestBefore = await latestGeneration(dest);
+  const previousName = latestBefore !== undefined && published.includes(latestBefore) ? latestBefore : published.at(-1);
   const previous = previousName === undefined ? undefined : (await openGeneration(dest, previousName)).manifest;
   const staging = join(dest, `${STAGING_PREFIX}${name}-${randomBytes(4).toString('hex')}`);
   const final = join(dest, GENERATIONS, name);
@@ -394,9 +404,17 @@ async function createGeneration({ source, dest, keep, acceptRemoved, name, start
     if (lost.length > 0 && !acceptRemoved) {
       throw new BackupError('TARGET_DISAPPEARED', `Held files in the previous generation but holds none now: ${lost.join(', ')}. Pass --accept-removed if this is intended.`);
     }
+    const previousSizes = new Map((previous?.entries ?? []).filter((entry) => entry.type === 'file').map((entry) => [entry.path, entry.size]));
+    const emptied = context.entries.find((entry) => entry.type === 'file' && entry.size === 0
+      && (entry.path === 'config.yaml' || previousSizes.get(entry.path) > 0));
+    if (emptied !== undefined && !acceptRemoved) {
+      throw new BackupError('FILE_EMPTIED', 'A file that held content is empty now. Pass --accept-removed if this is intended.', emptied.path);
+    }
     const manifest = { version: 1, generation: name, createdAt: startedAt, source: context.realSource, targets, totals: context.totals, entries: context.entries };
     await writeFile(join(staging, MANIFEST), JSON.stringify(manifest), { flag: 'wx', mode: 0o600 });
-    const pruned = [...published, name].slice(0, -keep);
+    // What is about to be published must pass the same check a later verify runs, or it replaces nothing.
+    await verifyTree(context.data, parseManifest(await readFile(join(staging, MANIFEST), 'utf8')).entries, storedDirectoryMode);
+    const pruned = published.slice(0, Math.max(0, published.length + 1 - keep));
     const summary = { generation: name, targets, totals: context.totals, pruned };
 
     await rename(staging, final);
@@ -405,8 +423,8 @@ async function createGeneration({ source, dest, keep, acceptRemoved, name, start
       await log.write({ time: startedAt, action: 'backup', source, result: 'ok', ...summary });
     } catch (error) {
       // Not published after all: take the generation back so that the earlier one stays the newest.
-      if (previousName === undefined) await rm(join(dest, LATEST), { force: true }).catch(() => {});
-      else await pointLatestAt(dest, previousName).catch(() => {});
+      if (latestBefore === undefined) await rm(join(dest, LATEST), { force: true }).catch(() => {});
+      else await pointLatestAt(dest, latestBefore).catch(() => {});
       await rename(final, staging).catch(() => {});
       throw error;
     }
@@ -430,9 +448,9 @@ async function createGeneration({ source, dest, keep, acceptRemoved, name, start
  *
  * @returns the published generation's summary. Throws without publishing when anything fails.
  */
-export async function backupSharedTakt({ source, dest, keep = DEFAULT_KEEP, acceptRemoved = false, now = new Date(), openLogFile = openLog }) {
+export async function backupSharedTakt({ source, dest, keep = DEFAULT_KEEP, acceptRemoved = false, now = new Date(), env = process.env, openLogFile = openLog }) {
   if (!Number.isInteger(keep) || keep < 1) throw new BackupError('INVALID_KEEP', '--keep must be a whole number of at least 1.');
-  await prepareBackupRoot(source, dest);
+  await prepareBackupRoot(source, dest, env);
   const log = await openLogFile(dest);
   const name = generationName(now);
   const startedAt = now.toISOString();
@@ -443,6 +461,13 @@ export async function backupSharedTakt({ source, dest, keep = DEFAULT_KEEP, acce
     throw error;
   } finally {
     await log.close();
+  }
+}
+
+async function verifyTree(root, entries, directoryMode) {
+  for (const entry of entries) {
+    const difference = await entryDifference(root, entry, directoryMode);
+    if (difference !== undefined) throw damaged(difference, entry.path);
   }
 }
 
@@ -464,10 +489,7 @@ async function entryDifference(root, entry, directoryMode) {
 async function openVerifiedGeneration(dest, generation) {
   const opened = await openGeneration(dest, generation);
   if (!await isRealDirectory(join(opened.directory, DATA))) throw damaged('data is missing', DATA);
-  for (const entry of opened.manifest.entries) {
-    const difference = await entryDifference(join(opened.directory, DATA), entry, storedDirectoryMode);
-    if (difference !== undefined) throw damaged(difference, entry.path);
-  }
+  await verifyTree(join(opened.directory, DATA), opened.manifest.entries, storedDirectoryMode);
   return opened;
 }
 
@@ -549,6 +571,9 @@ export async function checkRestoredConfigDirectory({ dest, generation, configDir
       break;
     }
   }
+  // TAKT is only pointed at a directory that is exactly what the generation holds: its inspection can repair,
+  // and a link in a changed directory could carry that repair elsewhere.
+  if (result.restored !== 'complete') return { ...result, config: 'not checked', ok: false };
   const held = (targetName) => manifest.targets.some((target) => target.name === targetName && target.status === 'copied');
   const previous = process.env.TAKT_CONFIG_DIR;
   process.env.TAKT_CONFIG_DIR = await realpath(configDirectory);
@@ -620,6 +645,7 @@ export async function main(argv, { stdout = process.stdout, stderr = process.std
         keep: options.keep === undefined ? DEFAULT_KEEP : Number(options.keep),
         acceptRemoved: options.acceptRemoved === true,
         now: now(),
+        env,
       });
       stdout.write(summaryLine('backup', summary));
       const unsaved = summary.targets.filter((target) => target.status === 'link' || target.status === 'empty').map((target) => `${target.name} (${target.status})`);
