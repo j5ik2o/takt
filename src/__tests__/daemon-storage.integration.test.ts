@@ -373,6 +373,44 @@ describe('durable daemon event storage', () => {
     ]);
   });
 
+  it('readTurns reads a settled event again when its file was replaced without an intervening read', async () => {
+    const directory = await root();
+    const reader = new FileEventStore(directory);
+    const kept = event('kept message', 1);
+    const replaced = event('replaced message', 2);
+    await reader.accept(kept); await reader.accept(replaced);
+    await settle(reader, kept); await settle(reader, replaced);
+    await reader.readTurns(kept.conversationId);
+    expect((await reader.readTurns(kept.conversationId)).map((turn) => turn.message)).toEqual(['kept message', 'replaced message']);
+    // The file is removed by hand and another instance accepts the same
+    // event id before this instance lists the directory again, so the
+    // listing alone never shows the file as gone.
+    await rm(eventFile(directory, replaced));
+    await new FileEventStore(directory).accept(event('replaced message', 2, 'new message'));
+    expect(await reader.readTurns(kept.conversationId)).toEqual([
+      { operationId: kept.operationId, message: 'kept message', acceptedSequence: 1, pending: false, outcome: { kind: 'interrupted' } },
+      { operationId: replaced.operationId, message: 'new message', acceptedSequence: 2, pending: true },
+    ]);
+  });
+
+  it('readTurns stays correct when more settled events exist than it keeps', async () => {
+    const directory = await root();
+    const store = new FileEventStore(directory, undefined, { settledTurnLimit: 1 });
+    const first = event('first message', 1);
+    const second = event('second message', 2);
+    await store.accept(first); await store.accept(second);
+    await settle(store, first); await settle(store, second);
+    const expected = [
+      { operationId: first.operationId, message: 'first message', acceptedSequence: 1, pending: false, outcome: { kind: 'interrupted' } },
+      { operationId: second.operationId, message: 'second message', acceptedSequence: 2, pending: false, outcome: { kind: 'interrupted' } },
+    ];
+    expect(await store.readTurns(first.conversationId)).toEqual(expected);
+    injection.opened = [];
+    expect(await store.readTurns(first.conversationId)).toEqual(expected);
+    // Only one turn is kept, so at least one settled file is read again.
+    expect(injection.opened.filter((path) => path.endsWith('.json')).length).toBeGreaterThanOrEqual(1);
+  });
+
   it('readTurns keeps a caller change to a returned turn out of later reads', async () => {
     const directory = await root();
     const store = new FileEventStore(directory);

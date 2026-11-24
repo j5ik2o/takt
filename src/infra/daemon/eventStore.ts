@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { opendir, readdir, unlink } from 'node:fs/promises';
+import { opendir, readdir, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { AcceptedEvent } from '../../core/daemon/events.js';
@@ -16,6 +16,30 @@ const fileKey = (id: string): string => createHash('sha256').update(id).digest('
 const requestKey = (event: AcceptedEvent): string => JSON.stringify([event.conversationId, event.requestId]);
 
 type StoredTurn = Awaited<ReturnType<ConversationTurns['readTurns']>>[number];
+type FileStamp = { ino: bigint; mtimeNs: bigint; size: bigint };
+// 20,000 turns hold a few tens of megabytes at the sizes seen in practice.
+// A limit below the event count of one conversation would evict and read
+// that conversation's files again on every call.
+const SETTLED_TURN_LIMIT = 20_000;
+
+// readTurns checks every kept turn on every call. Awaiting the stats one by
+// one costs about twice the CPU of issuing them in batches.
+const STAMP_BATCH = 64;
+
+async function fileStamp(path: string): Promise<FileStamp | undefined> {
+  try {
+    const { ino, mtimeNs, size } = await stat(path, { bigint: true });
+    return { ino, mtimeNs, size };
+  } catch (error) { if (hasCode(error, 'ENOENT')) return undefined; throw error; }
+}
+
+async function fileStamps(paths: readonly string[]): Promise<(FileStamp | undefined)[]> {
+  const stamps: (FileStamp | undefined)[] = [];
+  for (let start = 0; start < paths.length; start += STAMP_BATCH) {
+    stamps.push(...await Promise.all(paths.slice(start, start + STAMP_BATCH).map(fileStamp)));
+  }
+  return stamps;
+}
 
 function deepFreeze<T>(value: T): T {
   if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -33,8 +57,10 @@ export class FileEventStore implements EventStore, ConversationTurns {
   private readonly byConversation = new Map<string, Map<string, string>>();
   private readonly knownFiles = new Set<string>();
   // A settled record is never written again, so its turn is read from the
-  // file once. Only forget() drops an entry, when the file itself is gone.
-  private readonly settledTurns = new Map<string, StoredTurn>();
+  // file once. The stamp detects a file that was removed by hand and created
+  // again under the same event id. Entries are ordered least recently used first.
+  private readonly settledTurns = new Map<string, { turn: StoredTurn; stamp: FileStamp }>();
+  private readonly settledTurnLimit: number;
   private readonly lock = new FileAsyncLock();
   private readonly conversations: ConversationStateStore;
   private readonly files: DaemonPersistedFiles;
@@ -42,7 +68,8 @@ export class FileEventStore implements EventStore, ConversationTurns {
 
   constructor(configDirectory: string, private readonly routing?: {
     permits(assignment: ConversationAssignment, id: string): Promise<boolean>;
-  }) {
+  }, options?: { settledTurnLimit?: number }) {
+    this.settledTurnLimit = options?.settledTurnLimit ?? SETTLED_TURN_LIMIT;
     this.directory = join(configDirectory, 'daemon-events');
     this.conversations = new ConversationStateStore(configDirectory);
     this.files = new DaemonPersistedFiles(configDirectory);
@@ -125,18 +152,35 @@ export class FileEventStore implements EventStore, ConversationTurns {
       // delivery. Read the durable events of this conversation through the
       // index that refresh() and accept() maintain, instead of reading every
       // event file in the shared directory on every call.
-      const paths = this.byConversation.get(conversationId);
-      if (paths === undefined) return turns;
-      for (const path of [...paths.values()]) {
+      const paths = [...this.byConversation.get(conversationId)?.values() ?? []];
+      // Each stamp is taken before its file is read, so a file replaced in
+      // between is kept under the older stamp and read again next time.
+      const stamps = await fileStamps(paths);
+      for (const [position, path] of paths.entries()) {
+        const stamp = stamps[position];
+        if (stamp === undefined) {
+          this.forget(path);
+          continue;
+        }
         const settled = this.settledTurns.get(path);
         if (settled !== undefined) {
-          turns.push(settled);
-          continue;
+          if (stamp.ino === settled.stamp.ino && stamp.mtimeNs === settled.stamp.mtimeNs && stamp.size === settled.stamp.size) {
+            this.settledTurns.delete(path);
+            this.settledTurns.set(path, settled);
+            turns.push(settled.turn);
+            continue;
+          }
+          // The replacement can be a different event, so index it afresh.
+          this.forget(path);
         }
         const record = await this.readStored(path);
         if (record === undefined) {
           this.forget(path);
           continue;
+        }
+        if (settled !== undefined) {
+          this.index(record, path);
+          if (record.event.conversationId !== conversationId) continue;
         }
         const { event } = record;
         const message = event.event.kind === 'human_command' && event.event.command.kind === 'message'
@@ -145,7 +189,13 @@ export class FileEventStore implements EventStore, ConversationTurns {
           acceptedSequence: event.acceptedSequence, pending: record.state === 'queued',
           ...(record.state === 'settled' ? { outcome: record.result.outcome } : {}) };
         // Later reads return the same object, so a caller must not be able to change it.
-        if (record.state === 'settled') this.settledTurns.set(path, deepFreeze(turn));
+        if (record.state === 'settled') {
+          this.settledTurns.set(path, { turn: deepFreeze(turn), stamp });
+          for (const oldest of this.settledTurns.keys()) {
+            if (this.settledTurns.size <= this.settledTurnLimit) break;
+            this.settledTurns.delete(oldest);
+          }
+        }
         turns.push(turn);
       }
       return turns.sort((left, right) => left.acceptedSequence - right.acceptedSequence);
