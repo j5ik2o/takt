@@ -18,6 +18,7 @@ const RunSchema = z.object({
   jobs: z.array(z.object({
     databaseId: z.number().int().positive(), name: z.string(), url: z.string().url(),
     status: z.string(), conclusion: z.string().nullable(),
+    steps: z.array(z.unknown()).optional(),
   })),
 });
 type CiRun = z.infer<typeof RunSchema>;
@@ -29,9 +30,11 @@ const PrHeadSchema = z.object({
 
 export function actionsReference(value: string) {
   const url = new URL(value);
-  const match = /^\/([^/]+)\/([^/]+)\/actions\/runs\/(\d+)(?:\/attempts\/\d+)?(?:\/jobs?\/\d+)?\/?$/.exec(url.pathname);
+  const match = /^\/([^/]+)\/([^/]+)\/actions\/runs\/(\d+)(?:\/attempts\/\d+)?(?:\/(jobs?)\/(\d+))?\/?$/.exec(url.pathname);
   if (url.protocol !== 'https:' || !match) throw new Error('Unsupported Actions check URL');
-  return { id: Number(match[3]), repository: `${url.hostname}/${match[1]}/${match[2]}` };
+  return { id: Number(match[3]), repository: `${url.hostname}/${match[1]}/${match[2]}`,
+    // Only `/job/<id>` carries the job's database ID; the number in `/jobs/<number>` is a different identifier.
+    jobId: match[4] === 'job' ? Number(match[5]) : undefined };
 }
 
 async function readRun(id: number, cwd: string, options?: PrStatusFetchOptions, url?: string, target?: GitHubPullRequestTarget): Promise<CiRun> {
@@ -44,6 +47,12 @@ async function readRun(id: number, cwd: string, options?: PrStatusFetchOptions, 
     throw new Error('Actions run repository does not match the failed check');
   }
   return run;
+}
+
+function actionsCheckReference(check: { kind: string; url: string | null }) {
+  if (check.kind !== 'CheckRun' || check.url === null) return undefined;
+  try { return { ...actionsReference(check.url), url: check.url }; }
+  catch { return undefined; }
 }
 
 function errorText(error: unknown): string {
@@ -61,22 +70,31 @@ export async function collectPrCiFailure(
   }
   const runs = new Map<string, Promise<CiRun>>();
   const logs = new Map<string, Promise<string>>();
+  const external: NonNullable<PrCiFailure['external']> = [];
   for (const check of status.ci.checks ?? []) {
     if (!check.finished || check.passed) continue;
+    const reference = actionsCheckReference(check);
+    if (reference === undefined) {
+      external.push({ name: check.name, url: check.url });
+      continue;
+    }
     try {
-      if (check.kind !== 'CheckRun' || check.url === null) throw new Error('Failed check has no supported Actions log reference');
-      const reference = actionsReference(check.url);
       const key = `${reference.repository}/${reference.id}`;
       let pending = runs.get(key);
       if (!pending) {
-        pending = readRun(reference.id, cwd, options, check.url, target);
+        pending = readRun(reference.id, cwd, options, reference.url, target);
         runs.set(key, pending);
       }
       const run = await pending;
       if (run.headSha !== headSha) throw new Error('Actions run HEAD does not match the failed PR HEAD');
       if (run.status !== 'completed') throw new Error('Actions run has not completed');
-      const failedJobs = run.jobs.filter((job) => job.status === 'completed'
+      const runFailedJobs = run.jobs.filter((job) => job.status === 'completed'
         && !['success', 'neutral', 'skipped'].includes(job.conclusion ?? ''));
+      // A check that names its failed job owns only that job's evidence; a sibling job's state is not its concern.
+      // When the named job is not a failed job of this attempt (the run was rerun, or the check was marked failed
+      // from the run's result), the run's failed jobs stand in, as they do for a check that names no job.
+      const ownFailedJobs = runFailedJobs.filter((job) => job.databaseId === reference.jobId);
+      const failedJobs = ownFailedJobs.length > 0 ? ownFailedJobs : runFailedJobs;
       if (failedJobs.length === 0) throw new Error('No failed job evidence is available');
       const jobs: PrCiFailure['checks'][number]['jobs'] = [];
       for (const job of failedJobs) {
@@ -85,6 +103,10 @@ export async function collectPrCiFailure(
           throw new Error('Failed job reference does not match the Actions run');
         }
         const details = { id: job.databaseId, name: job.name, url: job.url };
+        if (job.conclusion === 'cancelled' && job.steps?.length === 0) {
+          jobs.push({ ...details, notStarted: true });
+          continue;
+        }
         try {
           const logKey = `${key}/${run.attempt}/${job.databaseId}`;
           let pendingLog = logs.get(logKey);
@@ -117,8 +139,11 @@ export async function collectPrCiFailure(
       result.unavailable.push({ name: check.name, url: check.url, reason: errorText(error) });
     }
   }
+  if (external.length > 0) result.external = external;
   if (result.checks.length === 0 && result.unavailable.length === 0) {
-    result.unavailable.push({ name: 'CI', reason: 'Failed check details are unavailable' });
+    result.unavailable.push({ name: 'CI', reason: external.length > 0
+      ? 'Only checks without Actions logs failed; there is no Actions evidence to diagnose'
+      : 'Failed check details are unavailable' });
   }
   result.complete = result.checks.length > 0 && result.unavailable.length === 0;
   return result;

@@ -105,8 +105,10 @@ export async function resolvePrCiFailure(
   return { ...failure, fixRounds, rerunCount, recoveryError, promptEvidence,
     details: JSON.stringify({
       checks: failure.checks.map(({ name, run, jobs }) => ({
-        name, run, jobs: jobs.map(({ id, name: jobName, url }) => ({ id, name: jobName, url })),
+        name, run, jobs: jobs.map(({ id, name: jobName, url, notStarted }) => ({
+          id, name: jobName, url, ...(notStarted === true ? { notStarted } : {}) })),
       })),
+      ...(failure.external === undefined ? {} : { external: failure.external }),
       unavailable: failure.unavailable,
       recoveryError,
     }) };
@@ -134,7 +136,7 @@ export async function rerunCiEffect(
     }
     if (!failure.complete || failure.unavailable.length > 0 || failure.checks.length === 0
       || failure.checks.some(({ run, jobs }) => run.headSha !== failure.headSha
-        || jobs.length === 0 || jobs.some((job) => job.log === undefined || job.log.trim().length === 0))) {
+        || jobs.length === 0 || jobs.some((job) => job.notStarted !== true && (job.log === undefined || job.log.trim().length === 0)))) {
       throw new Error('CI rerun requires complete failure evidence');
     }
     const provider = options.gitProvider ?? getGitProvider();
