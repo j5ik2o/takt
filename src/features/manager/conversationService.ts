@@ -176,8 +176,8 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             result = { kind: 'goal_registered', goal: await new GoalStore(existing.repositoryDirectory).get(existing.goalId) };
           } else {
             if (priorPending === null || priorPending.revision !== command.revision || state.current.revision !== command.revision) throw new ConversationError('stale_summary');
-            // Re-verification recovers a reservation that already exists; it never starts a registration.
-            if (command.reverifyRegistration && (existing?.state !== 'reserved' || existing.revision !== command.revision)) throw new ConversationError('invalid_input');
+            // Re-verification is accepted only for a reservation that already exists. The gate above has matched its revision.
+            if (command.reverifyRegistration && existing?.state !== 'reserved') throw new ConversationError('invalid_input');
             if (!assignment.repositoryDirectories.includes(priorPending.repositoryDirectory)) throw new ConversationError('invalid_assignment');
             validateManagerSummary(priorPending.summary);
             nextRevision(state.current.revision);

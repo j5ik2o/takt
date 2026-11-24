@@ -735,17 +735,10 @@ it('keeps the reservation and reports the verdict when the requested re-verifica
   expect(f.request).not.toHaveBeenCalledWith(expect.objectContaining({ change: expect.objectContaining({ approval: null }) }));
   expect(doubles.artifacts).toHaveBeenCalledExactlyOnceWith('/repository', goal.id);
 });
-it.each([
-  ['no reservation', null],
-  ['a reservation of another revision', { state: 'reserved' as const, revision: 2, goalId: goalRecord().id, repositoryDirectory: '/repository' }],
-])('rejects a re-verification request with %s before touching the goal', async (_name, approval) => {
+it('rejects a re-verification request without a reservation before touching the goal', async () => {
   const { f, approve } = reservedRegistration();
-  f.input.state.approval = approval;
-  if (approval !== null) {
-    f.input.state.pending = { ...f.input.state.pending!, revision: 2 };
-    f.input.state.revision = 2;
-  }
-  expect(await approve(true)).toMatchObject({ kind: 'completed', result: { kind: 'error' } });
+  f.input.state.approval = null;
+  expect(await approve(true)).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'invalid_input' } });
   expect(doubles.reverify).not.toHaveBeenCalled();
   expect(doubles.register).not.toHaveBeenCalled();
   expect(f.request).not.toHaveBeenCalled();

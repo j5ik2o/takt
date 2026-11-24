@@ -194,7 +194,7 @@ describe.each(['ja', 'en'] as const)('re-verification of a reserved registration
     await waitFor(() => expect(context.client.commands()).toEqual([{ ...expected, revision: 4, conversationId: managerConversationId }]));
   });
 
-  it('does not offer re-verification for a reservation of another proposal revision', async () => {
+  it('does not offer re-verification when the approval is not reserved', async () => {
     const context = mount(lang);
     await showProposal(context);
     context.client.change({ state: { ...context.client.getSnapshot().state!, approval: { state: 'registered', revision: 3,
@@ -204,4 +204,19 @@ describe.each(['ja', 'en'] as const)('re-verification of a reserved registration
     await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'approve_summary', revision: 4, conversationId: managerConversationId }]));
     expect(context.app.frames.join('\n')).not.toContain(reverifyLabel);
   });
+});
+
+it('does not carry a re-verification selection over to a later reserved proposal', async () => {
+  const context = mount('en');
+  await showProposal(context);
+  const reserved = (revision: number) => ({ state: 'reserved' as const, revision, goalId: '11111111-1111-4111-8111-111111111111', repositoryDirectory: cwd });
+  const state = context.client.getSnapshot().state!;
+  context.client.change({ state: { ...state, approval: reserved(4) } });
+  await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.summary.reverify', 'en')));
+  context.app.stdin.write(UP);
+  context.client.change({ state: { ...state, revision: 5, pending: { ...state.pending!, revision: 5 }, approval: reserved(5) } });
+  await waitFor(() => expect(context.client.getSnapshot().state?.pending?.revision).toBe(5));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  context.app.stdin.write(ENTER);
+  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 5, conversationId: managerConversationId }]));
 });
