@@ -328,6 +328,22 @@ function storedDirectoryMode(mode) {
 }
 
 /**
+ * Whether a link under `root` ends up, when the OS follows it, inside the backup target (the first path segment)
+ * it belongs to. The answer comes from resolving the link, not from its text: `..` after a linked directory
+ * leads somewhere else than the text suggests. A link kept by this rule resolves the same way in any copy of the
+ * tree; any other link would make a copy read or write a file that is not in the backup.
+ */
+async function linkStaysInTarget(root, relativePath, target) {
+  const targetRoot = relativePath.split(sep)[0];
+  if (isAbsolute(target)) return false;
+  try {
+    return isInsideOrEqual(join(await realpath(root), targetRoot), await realpath(join(root, relativePath)));
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Copy one tree entry into the staged generation and record it.
  * Symbolic links are copied as links and never followed; one that leaves its backup target fails the run.
  */
@@ -339,11 +355,8 @@ async function copyEntry(context, relativePath) {
   if (before.isSymbolicLink()) {
     const target = await readlink(sourcePath);
     await symlink(target, stagedPath);
-    // A link is only kept when it stays inside the backup target it belongs to. Anything else would make a
-    // copy of the generation read, or write, a file that is not in the backup.
-    const targetRoot = relativePath.split(sep)[0];
-    if (isAbsolute(target) || !isInsideOrEqual(targetRoot, join(dirname(relativePath), target))) {
-      throw new BackupError('EXTERNAL_LINK', 'A symbolic link points outside the backup target it is in. Replace it with the files themselves.', relativePath);
+    if (!await linkStaysInTarget(context.source, relativePath, target)) {
+      throw new BackupError('EXTERNAL_LINK', 'A symbolic link does not resolve inside the backup target it is in. Replace it with the files themselves.', relativePath);
     }
     context.entries.push({ path: relativePath, type: 'link', target });
     return;
@@ -433,14 +446,14 @@ async function createGeneration({ source, dest, keep, acceptRemoved, name, start
     for (const target of MANAGED_PROVIDER_TARGETS) targets.push(await copyTarget(context, target, 'managed-provider', () => copyManagedProvider(context, target)));
     const copied = new Set(targets.filter((target) => target.status === 'copied').map((target) => target.name));
     if (copied.size === 0) throw new BackupError('NOTHING_TO_COPY', 'The TAKT config directory holds no file of any backup target.');
-    if (!copied.has('config.yaml')) throw new BackupError('CONFIG_MISSING', 'The TAKT config directory has no config.yaml.');
+    const config = context.entries.find((entry) => entry.path === 'config.yaml');
+    if (config?.type !== 'file' || config.size === 0) throw new BackupError('CONFIG_MISSING', 'The TAKT config directory has no config.yaml that is a file with content.');
     const lost = (previous?.targets ?? []).filter((target) => target.status === 'copied' && !copied.has(target.name)).map((target) => target.name);
     if (lost.length > 0 && !acceptRemoved) {
       throw new BackupError('TARGET_DISAPPEARED', `Held files in the previous generation but holds none now: ${lost.join(', ')}. Pass --accept-removed if this is intended.`);
     }
     const previousSizes = new Map((previous?.entries ?? []).filter((entry) => entry.type === 'file').map((entry) => [entry.path, entry.size]));
-    const emptied = context.entries.find((entry) => entry.type === 'file' && entry.size === 0
-      && (entry.path === 'config.yaml' || previousSizes.get(entry.path) > 0));
+    const emptied = context.entries.find((entry) => entry.type === 'file' && entry.size === 0 && previousSizes.get(entry.path) > 0);
     if (emptied !== undefined && !acceptRemoved) {
       throw new BackupError('FILE_EMPTIED', 'A file that held content is empty now. Pass --accept-removed if this is intended.', emptied.path);
     }
@@ -532,7 +545,10 @@ async function entryDifference(root, entry) {
     if (!stats.isDirectory()) return 'not a directory';
     return mode === storedDirectoryMode(entry.mode) ? undefined : 'mode changed';
   }
-  if (entry.type === 'link') return stats.isSymbolicLink() && await readlink(join(root, entry.path)) === entry.target ? undefined : 'link changed';
+  if (entry.type === 'link') {
+    if (!stats.isSymbolicLink() || await readlink(join(root, entry.path)) !== entry.target) return 'link changed';
+    return await linkStaysInTarget(root, entry.path, entry.target) ? undefined : 'link leaves its target';
+  }
   if (!stats.isFile() || stats.size !== entry.size) return 'size changed';
   if (mode !== entry.mode) return 'mode changed';
   return await hashFile(join(root, entry.path)) === entry.sha256 ? undefined : 'content changed';

@@ -167,25 +167,42 @@ describe('backup', () => {
       ['workflows/sibling.yaml', '../config.yaml'],
       ['facets/personas/outside.md', '../../../elsewhere.yaml'],
       ['schemas', elsewhere],
+      ['schemas', 'workflows'],
+      ['workflows/dangling.yaml', 'no-such-file.yaml'],
+      // The text stays inside workflows/, but `here` is workflows/ itself, so the OS resolves this to ../config.yaml.
+      ['workflows/through-a-link.yaml', 'here/../config.yaml'],
     ];
+    symlinkSync('.', join(source, 'workflows', 'here'));
     for (const [path, target] of cases) {
       symlinkSync(target, join(source, path));
       expect(await failureCode(backupSharedTakt({ source, dest, now: at(21) }))).toBe('EXTERNAL_LINK');
       rmSync(join(source, path));
     }
+    // A link to the directory it is in stays inside its target, so it is kept.
+    const second = await backupSharedTakt({ source, dest, now: at(22) });
+    expect(readlinkSync(generationPath(second.generation, 'data', 'workflows', 'here'))).toBe('.');
+    await expect(verifyGeneration({ dest })).resolves.toBeDefined();
+
     rmSync(join(source, 'config.yaml'));
     symlinkSync(elsewhere, join(source, 'config.yaml'));
-    expect(await failureCode(backupSharedTakt({ source, dest, now: at(22) }))).toBe('EXTERNAL_LINK');
+    expect(await failureCode(backupSharedTakt({ source, dest, now: at(23) }))).toBe('EXTERNAL_LINK');
 
-    expect(await listGenerations(dest)).toEqual([first.generation]);
+    expect(await listGenerations(dest)).toEqual([first.generation, second.generation]);
   });
 
-  it('requires config.yaml', async () => {
+  it('requires config.yaml to be a file with content', async () => {
     const first = await backupSharedTakt({ source, dest, keep: 1, now: at(24) });
-    rmSync(join(source, 'config.yaml'));
+    const run = (day: number) => failureCode(backupSharedTakt({ source, dest, keep: 1, now: at(day), acceptRemoved: true }));
 
-    expect(await failureCode(backupSharedTakt({ source, dest, keep: 1, now: at(25), acceptRemoved: true }))).toBe('CONFIG_MISSING');
+    write('config.yaml', '');
+    expect(await run(25)).toBe('CONFIG_MISSING');
+    rmSync(join(source, 'config.yaml'));
+    expect(await run(26)).toBe('CONFIG_MISSING');
+    write('config.yaml/nested.yaml', CONFIG);
+    expect(await run(27)).toBe('CONFIG_MISSING');
+
     expect(await listGenerations(dest)).toEqual([first.generation]);
+    await expect(verifyGeneration({ dest })).resolves.toMatchObject({ generation: first.generation });
   });
 
   it('removes a generation that was never published before counting the ones to keep', async () => {
@@ -236,9 +253,6 @@ describe('backup', () => {
   it('refuses a run in which a file that held content is empty, unless that is accepted', async () => {
     const first = await backupSharedTakt({ source, dest, keep: 1, now: at(20) });
 
-    write('config.yaml', '');
-    expect(await failureCode(backupSharedTakt({ source, dest, keep: 1, now: at(21) }))).toBe('FILE_EMPTIED');
-    write('config.yaml', CONFIG);
     write('workflows/custom.yaml', '', 0o644);
     write('workflows/other.yaml', 'name: other\n', 0o644);
     expect(await failureCode(backupSharedTakt({ source, dest, keep: 1, now: at(22) }))).toBe('FILE_EMPTIED');
@@ -247,13 +261,6 @@ describe('backup', () => {
     expect(readFileSync(generationPath(first.generation, 'data', 'config.yaml'), 'utf8')).toBe(CONFIG);
 
     await expect(backupSharedTakt({ source, dest, keep: 1, now: at(23), acceptRemoved: true })).resolves.toBeDefined();
-  });
-
-  it('refuses a first run that finds config.yaml empty', async () => {
-    write('config.yaml', '');
-
-    expect(await failureCode(backupSharedTakt({ source, dest, now: at(24) }))).toBe('FILE_EMPTIED');
-    expect(await listGenerations(dest)).toEqual([]);
   });
 
   it('publishes a generation that verifies whatever the umask of the run', async () => {
@@ -492,6 +499,22 @@ describe('verify', () => {
     expect(await failureCode(verifyGeneration({ dest }))).toBe('GENERATION_DAMAGED');
     rmSync(generationPath(generation, 'added.yaml'));
 
+    await expect(verifyGeneration({ dest })).resolves.toBeDefined();
+  });
+
+  it('reports a link that does not resolve inside its backup target', async () => {
+    const { generation } = await backupSharedTakt({ source, dest, now: at(24) });
+    const manifestPath = generationPath(generation, 'manifest.json');
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { entries: unknown[] };
+
+    for (const target of ['../config.yaml', join(source, 'config.yaml'), 'no-such-file.yaml']) {
+      symlinkSync(target, generationPath(generation, 'data', 'workflows', 'added.yaml'));
+      writeFileSync(manifestPath, JSON.stringify({ ...manifest, entries: [...manifest.entries, { path: 'workflows/added.yaml', type: 'link', target }] }));
+      expect(await failureCode(verifyGeneration({ dest }))).toBe('GENERATION_DAMAGED');
+      rmSync(generationPath(generation, 'data', 'workflows', 'added.yaml'));
+    }
+    symlinkSync('custom.yaml', generationPath(generation, 'data', 'workflows', 'added.yaml'));
+    writeFileSync(manifestPath, JSON.stringify({ ...manifest, entries: [...manifest.entries, { path: 'workflows/added.yaml', type: 'link', target: 'custom.yaml' }] }));
     await expect(verifyGeneration({ dest })).resolves.toBeDefined();
   });
 
