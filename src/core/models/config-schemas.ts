@@ -9,6 +9,7 @@ import { VCS_PROVIDER_TYPES } from './vcs-types.js';
 import { MAX_FORMAL_SPEC_MODEL_CHECK_TIMEOUT_SECONDS } from './config-types.js';
 import type { CacciaConfig, MergeConfig } from './config-types.js';
 import { PrListWhereRawSchema } from './workflow-system-schemas.js';
+import { TaskFinishHookConfigSchema } from './task-finish-hook.js';
 import {
   AnalyticsConfigSchema,
   AutoRoutingSchema,
@@ -253,6 +254,7 @@ const ProjectConfigObjectSchema = ProjectConfigObjectBaseSchema.extend({
     main_merge: z.enum(['auto', 'approve']).optional(),
     slack: SlackConfigSchema.optional(),
   }).optional(),
+  task_finish_hook: TaskFinishHookConfigSchema.optional(),
 });
 
 export const ProjectConfigSchema = ProjectConfigObjectSchema;

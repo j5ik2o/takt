@@ -4,9 +4,9 @@ import { setGoalExecutionStatus } from '../infra/goals/execution.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
 
-const doubles = vi.hoisted(() => ({ boundary: vi.fn(), invalidate: vi.fn(), daemon: vi.fn(), run: vi.fn() }));
+const doubles = vi.hoisted(() => ({ boundary: vi.fn(), invalidate: vi.fn(), list: vi.fn(() => []), daemon: vi.fn(), run: vi.fn() }));
 vi.mock('../infra/goals/execution.js', () => ({ setGoalExecutionStatus: vi.fn() }));
-vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = doubles.invalidate; } }));
+vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = doubles.invalidate; listTaskStateItems = doubles.list; } }));
 vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: doubles.daemon }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.run }));
 vi.mock('../features/mcp/operations.js', async (original) => ({
@@ -58,6 +58,8 @@ describe('goal execution MCP operations', () => {
     expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ goalId, executionStatus: 'aborted' });
     expect(setGoalExecutionStatus).toHaveBeenCalledExactlyOnceWith(input.cwd, goalId, 'aborted', signal, 'manager');
     expect(doubles.invalidate).toHaveBeenCalledExactlyOnceWith(goalId);
+    // The pending tasks are read first, so the finish hook can be called for the ones this fails.
+    expect(doubles.list.mock.invocationCallOrder[0]).toBeLessThan(doubles.invalidate.mock.invocationCallOrder[0]!);
     expect(vi.mocked(setGoalExecutionStatus).mock.invocationCallOrder[0]).toBeLessThan(doubles.invalidate.mock.invocationCallOrder[0]!);
     expect(doubles.daemon).not.toHaveBeenCalled();
     expect(doubles.run).not.toHaveBeenCalled();

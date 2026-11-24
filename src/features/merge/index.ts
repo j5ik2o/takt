@@ -25,6 +25,7 @@ import type { WorkflowExecutionOptions } from '../tasks/execute/types.js';
 import { TaskRunner, resolveCloneBaseDir } from '../../infra/task/index.js';
 import { createTaskClonePath } from '../../infra/task/clone-path.js';
 import type { TaskInfo } from '../../infra/task/index.js';
+import { withTaskFinishHook } from '../tasks/execute/taskFinishHook.js';
 import { assertReusableWorktreePath } from '../tasks/execute/reusedWorktree.js';
 import { generateExecutionReportDir } from '../../core/workflow/run/run-slug.js';
 import { buildRunPaths } from '../../core/workflow/run/run-paths.js';
@@ -93,7 +94,10 @@ interface MergeDependencies {
 export async function executePrWorkflow(request: PrWorkflowRequest): Promise<PrMergeResult> {
   const runner = new TaskRunner(request.projectCwd);
   const task = await createPrMergeTask(request, runner);
-  return executePersistedPrMergeTask(task, runner, request.projectCwd, request.abortSignal, request.display);
+  // `takt merge` runs the saved merge task without the queue's completion path, so it attaches the hook itself.
+  return withTaskFinishHook(request.projectCwd, runner, task.name,
+    () => executePersistedPrMergeTask(task, runner, request.projectCwd, request.abortSignal, request.display),
+    { emitStatusLog: request.display?.outputMode !== 'silent' });
 }
 
 export async function enqueuePrMergeTask(request: PrWorkflowRequest, goal: {

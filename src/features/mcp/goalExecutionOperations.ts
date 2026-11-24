@@ -1,3 +1,4 @@
+import { invalidatePendingGoalTasksWithFinishHook } from '../tasks/execute/taskFinishHook.js';
 import { setGoalExecutionStatus } from '../../infra/goals/execution.js';
 import type { Goal } from '../../infra/goals/schema.js';
 import { TaskRunner } from '../../infra/task/runner.js';
@@ -17,7 +18,7 @@ async function changeGoalExecution(
     assertCwdAllowedByMcpRoot(parsed.cwd, deps.allowedProjectRoot);
     signal.throwIfAborted();
     const goal = await setGoalExecutionStatus(parsed.cwd, parsed.goalId, executionStatus, signal, 'manager');
-    if (executionStatus === 'aborted') new TaskRunner(parsed.cwd).invalidatePendingGoalTasks(goal.id);
+    if (executionStatus === 'aborted') await invalidatePendingGoalTasksWithFinishHook(parsed.cwd, new TaskRunner(parsed.cwd), goal.id);
     if (executionStatus === 'active') {
       signal.throwIfAborted();
       await ensureDaemon();

@@ -29,6 +29,8 @@ export interface BoundedCommandResult {
 
 export function runBoundedCommand(options: {
   command: string;
+  /** When set, `command` is an executable started with these literal arguments and no shell. */
+  args?: readonly string[];
   cwd: string;
   timeoutMs: number;
   env: NodeJS.ProcessEnv;
@@ -43,13 +45,15 @@ export function runBoundedCommand(options: {
       resolve(result);
       return;
     }
-    const child = spawn(options.command, {
+    const spawnOptions = {
       cwd: options.cwd,
-      shell: true,
       detached: process.platform !== 'win32',
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
       env: options.env,
-    });
+    };
+    const child = options.args === undefined
+      ? spawn(options.command, { ...spawnOptions, shell: true })
+      : spawn(options.command, [...options.args], { ...spawnOptions, shell: false });
     let outputBytes = 0;
     let settled = false;
     let terminating = false;

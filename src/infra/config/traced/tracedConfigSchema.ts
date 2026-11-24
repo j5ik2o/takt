@@ -133,6 +133,7 @@ const PROJECT_TRACKED_KEYS = [
   'workflow_mcp_servers.stdio',
   'workflow_mcp_servers.sse',
   'workflow_mcp_servers.http',
+  'task_finish_hook',
   'prevent_sleep',
   'notification_sound',
   'notification_sound_events',

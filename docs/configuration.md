@@ -395,6 +395,15 @@ Pi authentication uses the Pi SDK credential store or provider-native environmen
 
 `guards.call_timeout_ms` limits how long a provider may go without a response or tool event. Set it from 60,000 to 86,400,000 ms; the default is 3,600,000 ms (60 minutes). Each event restarts the timer, so it does not impose a 60-minute limit on the whole run. It applies to `codex`, `opencode`, Claude providers, `cursor`, `copilot`, `kiro`, `devin`, and `pi`. The legacy `claude_terminal.timeout_ms` is used only when this setting is absent.
 
+To stop a silent OpenCode call sooner than the 60-minute default, lower the value in the project or global config. One minute is the shortest accepted value; a lower one is rejected when the config is loaded.
+
+```yaml
+provider_options:
+  opencode:
+    guards:
+      call_timeout_ms: 600000   # 10 minutes without any response or tool event
+```
+
 OpenCode's `provider_options.opencode.guards.profile` defaults to `standard`. `minimal` disables heuristic loop detection but retains time and output bounds. `model_profiles` is checked in order and uses `*` as a wildcard. Individual guard settings merge between global and project configuration, but a higher-priority `model_profiles` map replaces the entire lower-priority map.
 
 OpenCode defaults to an `event_limit` of 500,000, a `text_byte_limit` of 1 MiB, and a `reasoning_byte_limit` of 4 MiB. Override `event_limit` with `TAKT_OPENCODE_STREAM_EVENT_LIMIT` if needed. During a tool call, the ordinary inactivity check pauses; if its completion event never arrives, it ends with `PART_TIMEOUT` after six times `call_timeout_ms`.
@@ -432,6 +441,7 @@ The project's `.takt/config.yaml` can override many global settings, including `
 | `workflow_command_gates` | object | - | Workflow YAML command quality gate policy (overrides global) |
 | `workflow_system_commands` | object | - | Workflow system command input policy |
 | `sync_conflict_resolver` | object | - | Sync conflict resolver policy (overrides global) |
+| `task_finish_hook` | object | - | Command run once after a queued task's final state is saved. Project-only. See [Task finish hook](#task-finish-hook) |
 | `observability` | object | - | Project-level OpenTelemetry opt-in override. `enabled` initializes the SDK, `monitor` writes workflow metrics to `.takt/runs/<run>/monitor.json`, `session_log_exporter` writes a shadow session log from spans, and `usage_events_phase` writes phase-level usage events to `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl`. With `enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT`, TAKT also sends spans and metrics through OTLP using standard `OTEL_EXPORTER_OTLP_*` environment variables; TAKT does not add an OTLP config key. |
 
 Project config values override global config when both are set.
@@ -504,6 +514,57 @@ A task with `worktree: true` runs in a clone without an `origin` remote, so `gh`
 A variable you already set is never overridden. No remote and no credential is added, and the URL's user name or token is never used. Nothing is added for a workflow without `repository_identity`, for a task that runs in the project root, when `origin` is missing or not a recognised URL, or when the provider is unknown. System `command` inputs run without `HOME`, so `gh` / `glab` there still need their own authentication.
 
 The provider is `vcs_provider` when set (project overrides global), otherwise detected from the `origin` hostname: `github.com` is GitHub and `gitlab.com` is GitLab. Any other host, such as GitHub Enterprise Cloud under `*.ghe.com`, GitHub Enterprise Server, or a self-hosted GitLab, is not detected; set `vcs_provider` for it. If the `origin` host does not serve the web or the API, such as an ssh-only host (`ssh.github.com`, `altssh.gitlab.com`) or an alias from `~/.ssh/config` (`github.com-work`), setting `vcs_provider` does not give a correct value either: set `GH_REPO` / `GITLAB_REPO` yourself, which is passed on as is (see above).
+
+## Task finish hook
+
+`task_finish_hook` in the project's `.takt/config.yaml` names one command that TAKT runs each time a queued task's final state is saved. Use it to notify another tool that a task ended. It is a project-only key: the global config rejects it.
+
+TAKT runs this command on its own, at the end of every task, for anyone who runs TAKT in the project. Run TAKT only in a repository whose `.takt/config.yaml` you trust, as with the other project settings that name commands.
+
+```yaml
+task_finish_hook:
+  command: [/usr/local/bin/notify-task, --source, takt]   # argv; the first entry is the executable
+  timeout_ms: 10000                                        # optional, default 10000, at most 60000
+```
+
+`command` is a list of arguments, not a shell line. TAKT starts the executable directly, so `$VAR`, `|`, `;`, and quotes inside an argument are passed as written. To use shell syntax, name the shell yourself, for example `[sh, -c, 'echo "$TAKT_FINISH_STATUS" >> finished.log']`.
+
+The command runs:
+
+- once for each saved final state: `completed`, `failed`, `exceeded`, or `pr_failed`. A stop, an interruption, a goal pause, and an execution error are all saved as `failed`. A retry or requeue saves a new final state later and calls the command again for it.
+- after the state is written to `.takt/tasks.yaml`, in the project root as the working directory.
+- with a small environment: `PATH`, `SHELL`, `TMPDIR`, `TMP`, `TEMP` (on Windows also `SystemRoot`, `WINDIR`, `COMSPEC`, `PATHEXT`) and the variables below. `HOME`, API keys, tokens, and every other variable of TAKT's environment are not passed. A command that needs one of them sets it itself.
+- for every task taken from the queue (`takt run`, `takt watch`, the manager's daemon, the `takt list` actions that execute a task) and for PR merge tasks, including `takt merge`.
+- for a final state saved without an execution: a `pr_failed` task that becomes `completed` when its PR is published later, a goal task that fails while it is taken from the queue, and each pending task that an aborted goal saves as `failed` (these run side by side).
+
+It does not run for a direct run without the queue (`takt "task"`, `--pipeline`), when the final state could not be saved, or when no TAKT process is executing the task at the time its state is saved (a task whose process died and that is later recovered or force-failed).
+
+| Variable | Value |
+|---|---|
+| `TAKT_FINISH_TASK_NAME` | Task name |
+| `TAKT_FINISH_STATUS` | `completed`, `failed`, `exceeded`, or `pr_failed` |
+| `TAKT_FINISH_PROJECT_DIR` | Project root |
+| `TAKT_FINISH_INTERRUPTED` | `true` when the saved result records an interruption (goal tasks and stopped tasks), otherwise `false` |
+| `TAKT_FINISH_COMPLETED_AT` | Completion time saved with the state (ISO 8601) |
+| `TAKT_FINISH_RUN_SLUG` | Run name, when one was saved |
+| `TAKT_FINISH_RUN_DIR` | `.takt/runs/<run>` of that run, only if the directory exists when the command starts |
+| `TAKT_FINISH_BRANCH` | Task branch, when saved |
+| `TAKT_FINISH_WORKTREE_PATH` | Clone path, when saved |
+| `TAKT_FINISH_PR_URL` | Pull request URL, when saved |
+| `TAKT_FINISH_GOAL_ID` | Goal ID of a goal task |
+| `TAKT_FINISH_FAILURE_REASON` | Saved failure message, cut at 4,096 characters |
+
+A variable without a value is unset, not empty.
+
+The command only observes the result. Its exit code, a timeout, or a failure to start never changes the saved state, the resume point, or the task's result; TAKT prints a warning and continues. When the timeout expires, TAKT ends the command's process group with `SIGTERM` and then `SIGKILL`. Standard output and standard error are captured up to 64 KiB and are not shown, except that standard error goes to the debug log when the command fails.
+
+Limits to plan for:
+
+- **The execution slot stays occupied while the command runs.** TAKT waits for the command before it starts the next task in that slot, so a command that hangs delays the queue by `timeout_ms` (plus about one second to end the process group) per task. Keep the command short.
+- **Long work started from the command must not keep the command's output open.** TAKT waits until the command's standard output and standard error are closed. A background process that inherits them keeps the command "running" after it exits: with `[sh, -c, 'sleep 5 & exit 0']` and a 1.5-second timeout, TAKT reported a timeout after 2.6 seconds and ended the background `sleep` with the process group. Redirect the output of the background process, for example `[sh, -c, 'long-job >/dev/null 2>&1 &']`; the same test then returned in 31 ms and the process kept running.
+- **An interruption does not stop the command.** The command runs in its own process group, so Ctrl+C does not reach it, and TAKT waits for it (up to the timeout) even while it shuts down. If TAKT itself is killed, a running command is left behind.
+- **On Windows, `.cmd` and `.bat` files cannot be started directly.** Name the interpreter: `[cmd, /c, notify.cmd]`.
+- **`TAKT_FINISH_RUN_DIR` is not kept for the command.** For a task that ran in a clone, the directory is inside the clone and disappears with it when the task is deleted or the goal's clones are cleaned up. A successful PR merge task removes its clone before the command starts, so the variable can then be unset. Copy what you need while the command runs.
 
 ## Environment Variable Overrides
 
