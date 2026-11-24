@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { opendir, unlink } from 'node:fs/promises';
+import { opendir, readdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import type { AcceptedEvent } from '../../core/daemon/events.js';
@@ -155,9 +155,8 @@ export class FileEventStore implements EventStore, ConversationTurns {
   private async refresh(): Promise<void> {
     await ensurePrivateDirectory(this.directory);
     const present = new Set<string>();
-    for await (const entry of await opendir(this.directory)) {
-      if (!entry.name.endsWith('.json')) continue;
-      present.add(join(this.directory, entry.name));
+    for (const name of await readdir(this.directory)) {
+      if (name.endsWith('.json')) present.add(join(this.directory, name));
     }
     // A file another instance indexed can disappear afterwards (the
     // rollback in accept() unlinks after releasing the lock). Drop index
