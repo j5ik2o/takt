@@ -90,7 +90,7 @@ Use these tools for inquiries that do not belong to a goal.
 
 | Tool | Purpose |
 |------|---------|
-| `takt_list_standalone_inquiries` | Read unanswered inquiries without a goal saved under the current assignment, including their id, kind, body and creation time. |
+| `takt_list_standalone_inquiries` | Read unanswered inquiries without a goal saved under the current assignment, including their id, kind, body and creation time. A saved file that cannot be read is skipped and returned in `skippedInquiryFiles` with its path and reason, alongside the readable inquiries. |
 | `takt_withdraw_standalone_inquiry` | Withdraw an unanswered inquiry without a goal by passing its id and a reason. An inquiry that is no longer unanswered keeps both its state and saved answer unchanged. |
 
 Every turn, manager receives a summary of the goals in its assigned repositories. The summary lists only goals that are not finished; for finished goals (completed or aborted) it receives only a per-repository count (`finishedGoalCount`). This keeps finished goals out of status reports, including after `/clear`. When manager needs a finished goal's contents, it reads them with `takt_list_goals` and `state: finished`. The `state` argument of `takt_list_goals` is `open` (not finished), `finished` (completed or aborted) or `all`; it defaults to `all`. `offset`, `limit` and `totalCount` apply to the filtered goals, and unreadable records are always returned as individual errors regardless of `state`.
