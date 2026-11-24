@@ -284,7 +284,7 @@ function selectRuntimeAssignment(
   if (assignment !== undefined && input.runtimeAssignment !== undefined && !hasActiveProviderSection(file)) {
     throw new RuntimeAssignmentSelectionError(
       assignmentName,
-      `Cannot select runtime assignment "${assignmentName}". The assignment is defined, but the runtime.yaml provider section is not active: it has no usable defaults, profiles, targets, or assignments.`,
+      `Cannot select runtime assignment "${assignmentName}". The assignment is defined, but the runtime.yaml provider section is not active: it has no usable defaults, profiles, targets, or assignments. Settings used only by companions do not count while companion.enabled is false.`,
     );
   }
   if (file === undefined || provider === undefined || assignment === undefined) {

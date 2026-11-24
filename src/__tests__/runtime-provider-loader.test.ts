@@ -1130,6 +1130,7 @@ describe('runtime-provider loader', () => {
 
       expect(() => select('companion-only')).toThrow('Cannot select runtime assignment "companion-only"');
       expect(() => select('companion-only')).toThrow(/is defined, but .*provider section is not active/);
+      expect(() => select('companion-only')).toThrow(/companion\.enabled is false/);
       expect(() => select('companion-only')).not.toThrow(/Available assignments/);
     });
   });

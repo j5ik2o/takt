@@ -7,7 +7,8 @@ import {
 import { RuntimeAssignmentSelectionError } from '../../../infra/config/runtime-provider/loader.js';
 
 /**
- * タスク自身の runtime_assignment が runtime.yaml から消えているときだけ、選択エラーの文面を返す。
+ * タスク自身の runtime_assignment を選択できないときだけ、選択エラーの文面を返す。
+ * 名前が runtime.yaml から消えている場合と、名前は定義済みで provider section が無効な場合がある。
  *
  * goal の判定は呼び出し側が行う。provider.defaults.assignment や provider.directories の
  * 参照不正は別文面・別経路のため判定しない。`--runtime-assignment` 起動時はタスク名が解決に
