@@ -34,7 +34,7 @@ import { deferred } from './helpers/controlledDaemon.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import { scenarioText, secretFragmentsIn, splitSecretScenarios } from './helpers/split-secret-scenarios.js';
 
-const injection = vi.hoisted(() => ({ beforeSync: undefined as (() => Promise<void>) | undefined, afterRename: undefined as (() => void) | undefined, renameFailure: false, afterRenameFailure: false, lockReleaseFailure: false, unlinkBeforeOpen: undefined as string | undefined }));
+const injection = vi.hoisted(() => ({ beforeSync: undefined as (() => Promise<void>) | undefined, afterRename: undefined as (() => void) | undefined, renameFailure: false, afterRenameFailure: false, lockReleaseFailure: false, unlinkBeforeOpen: undefined as string | undefined, opened: undefined as string[] | undefined }));
 vi.mock('node:fs/promises', async (original) => {
   const fs = await original<typeof import('node:fs/promises')>();
   return { ...fs,
@@ -46,8 +46,9 @@ vi.mock('node:fs/promises', async (original) => {
       await fs.unlink(...args);
     },
     open: async (...args: Parameters<typeof fs.open>) => {
+      injection.opened?.push(String(args[0]));
       if (injection.unlinkBeforeOpen !== undefined && String(args[0]).endsWith(injection.unlinkBeforeOpen)) {
-        injection.unlinkBeforeOpen = undefined;
+        injection.unlinkBeforeOpen = undefined; injection.opened = undefined;
         await fs.unlink(String(args[0])).catch(() => undefined);
       }
       const file = await fs.open(...args);
@@ -82,6 +83,12 @@ function event(id: string, sequence: number, text = id): AcceptedEvent {
 }
 function result(input: AcceptedEvent): TurnResult {
   return { conversationId: input.conversationId, operationId: input.operationId, generation: 1, event: input, outcome: { kind: 'interrupted' } };
+}
+const eventFile = (directory: string, input: AcceptedEvent): string => join(directory, 'daemon-events', `${createHash('sha256').update(input.eventId).digest('hex')}.json`);
+async function settle(store: FileEventStore, input: AcceptedEvent): Promise<void> {
+  await store.markStarted(input.eventId, { conversationId: input.conversationId, operationId: input.operationId, generation: 1 });
+  await store.saveResult(input.eventId, result(input));
+  await store.markSettled(input.eventId, result(input));
 }
 const assignment = { kind: 'repository' as const, repositoryDirectory: '/repo' };
 const id = conversationId(assignment);
@@ -297,6 +304,86 @@ describe('durable daemon event storage', () => {
     injection.unlinkBeforeOpen = `${createHash('sha256').update(vanished.eventId).digest('hex')}.json`;
     const turns = await reader.readTurns(kept.conversationId);
     expect(turns.filter((turn) => turn.message !== undefined).map((turn) => turn.message)).toEqual(['kept message']);
+  });
+
+  it('readTurns reads a settled event file once and keeps reading unsettled ones', async () => {
+    const directory = await root();
+    const store = new FileEventStore(directory);
+    const settled = event('settled message', 1);
+    const queued = event('queued message', 2);
+    await store.accept(settled); await store.accept(queued);
+    await settle(store, settled);
+    const first = await store.readTurns(settled.conversationId);
+    injection.opened = [];
+    const second = await store.readTurns(settled.conversationId);
+    const opened = injection.opened.filter((path) => path.endsWith('.json'));
+    expect(opened).toEqual([eventFile(directory, queued)]);
+    expect(second).toEqual(first);
+    expect(second).toEqual([
+      { operationId: settled.operationId, message: 'settled message', acceptedSequence: 1, pending: false, outcome: { kind: 'interrupted' } },
+      { operationId: queued.operationId, message: 'queued message', acceptedSequence: 2, pending: true },
+    ]);
+  });
+
+  it('readTurns reports each state change another instance makes after an earlier read', async () => {
+    const directory = await root();
+    const writer = new FileEventStore(directory);
+    const reader = new FileEventStore(directory);
+    const input = event('message', 1);
+    const turnOf = { conversationId: input.conversationId, operationId: input.operationId, generation: 1 };
+    const summary = { operationId: input.operationId, message: 'message', acceptedSequence: 1 };
+    await writer.accept(input);
+    expect(await reader.readTurns(input.conversationId)).toEqual([{ ...summary, pending: true }]);
+    await writer.markStarted(input.eventId, turnOf);
+    expect(await reader.readTurns(input.conversationId)).toEqual([{ ...summary, pending: false }]);
+    // A deferred result returns the event to the queue, so a result that has
+    // been saved is not final until the record is settled.
+    const postponed: TurnResult = { ...result(input), outcome: { kind: 'deferred' } };
+    await writer.saveResult(input.eventId, postponed);
+    expect(await reader.readTurns(input.conversationId)).toEqual([{ ...summary, pending: false }]);
+    await writer.markSettled(input.eventId, postponed);
+    expect(await reader.readTurns(input.conversationId)).toEqual([{ ...summary, pending: true }]);
+    await writer.markStarted(input.eventId, { ...turnOf, generation: 2 });
+    const final: TurnResult = { ...result(input), generation: 2 };
+    await writer.saveResult(input.eventId, final);
+    expect(await reader.readTurns(input.conversationId)).toEqual([{ ...summary, pending: false }]);
+    await writer.markSettled(input.eventId, final);
+    const settledTurns = [{ ...summary, pending: false, outcome: { kind: 'interrupted' } }];
+    expect(await reader.readTurns(input.conversationId)).toEqual(settledTurns);
+    expect(await reader.readTurns(input.conversationId)).toEqual(settledTurns);
+  });
+
+  it('readTurns drops a settled event whose file disappears after an earlier read', async () => {
+    const directory = await root();
+    const store = new FileEventStore(directory);
+    const kept = event('kept message', 1);
+    const vanished = event('vanished message', 2);
+    await store.accept(kept); await store.accept(vanished);
+    await settle(store, kept); await settle(store, vanished);
+    expect((await store.readTurns(kept.conversationId)).map((turn) => turn.message)).toEqual(['kept message', 'vanished message']);
+    expect((await store.readTurns(kept.conversationId)).map((turn) => turn.message)).toEqual(['kept message', 'vanished message']);
+    await rm(eventFile(directory, vanished));
+    expect((await store.readTurns(kept.conversationId)).map((turn) => turn.message)).toEqual(['kept message']);
+    // A later event that reuses the vanished event's id is read from its own file.
+    const reaccepted = { ...event('vanished message', 2, 'reaccepted message') };
+    await new FileEventStore(directory).accept(reaccepted);
+    expect(await store.readTurns(kept.conversationId)).toEqual([
+      { operationId: kept.operationId, message: 'kept message', acceptedSequence: 1, pending: false, outcome: { kind: 'interrupted' } },
+      { operationId: reaccepted.operationId, message: 'reaccepted message', acceptedSequence: 2, pending: true },
+    ]);
+  });
+
+  it('readTurns keeps a caller change to a returned turn out of later reads', async () => {
+    const directory = await root();
+    const store = new FileEventStore(directory);
+    const input = event('message', 1);
+    await store.accept(input);
+    await settle(store, input);
+    const expected = [{ operationId: input.operationId, message: 'message', acceptedSequence: 1, pending: false, outcome: { kind: 'interrupted' } }];
+    await store.readTurns(input.conversationId);
+    const [turnRead] = await store.readTurns(input.conversationId);
+    try { (turnRead as { message?: string }).message = 'changed by caller'; } catch { /* a frozen turn rejects the change */ }
+    expect(await store.readTurns(input.conversationId)).toEqual(expected);
   });
 
   it('indexes retired PR retry observations and restores only unfinished settlement', async () => {

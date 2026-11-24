@@ -15,6 +15,16 @@ import { DaemonPersistedFiles } from './persistedFiles.js';
 const fileKey = (id: string): string => createHash('sha256').update(id).digest('hex');
 const requestKey = (event: AcceptedEvent): string => JSON.stringify([event.conversationId, event.requestId]);
 
+type StoredTurn = Awaited<ReturnType<ConversationTurns['readTurns']>>[number];
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+}
+
 export class FileEventStore implements EventStore, ConversationTurns {
   private readonly directory: string;
   private readonly ids = new Map<string, string>();
@@ -22,6 +32,9 @@ export class FileEventStore implements EventStore, ConversationTurns {
   private readonly sequences = new Map<number, string>();
   private readonly byConversation = new Map<string, Map<string, string>>();
   private readonly knownFiles = new Set<string>();
+  // A settled record is never written again, so its turn is read from the
+  // file once. Only forget() drops an entry, when the file itself is gone.
+  private readonly settledTurns = new Map<string, StoredTurn>();
   private readonly lock = new FileAsyncLock();
   private readonly conversations: ConversationStateStore;
   private readonly files: DaemonPersistedFiles;
@@ -107,7 +120,7 @@ export class FileEventStore implements EventStore, ConversationTurns {
   readTurns(conversationId: string): ReturnType<ConversationTurns['readTurns']> {
     return this.exclusive(async () => {
       await this.refresh();
-      const turns: Awaited<ReturnType<ConversationTurns['readTurns']>>[number][] = [];
+      const turns: StoredTurn[] = [];
       // Completed turns and background-turn order must survive missed live
       // delivery. Read the durable events of this conversation through the
       // index that refresh() and accept() maintain, instead of reading every
@@ -115,6 +128,11 @@ export class FileEventStore implements EventStore, ConversationTurns {
       const paths = this.byConversation.get(conversationId);
       if (paths === undefined) return turns;
       for (const path of [...paths.values()]) {
+        const settled = this.settledTurns.get(path);
+        if (settled !== undefined) {
+          turns.push(settled);
+          continue;
+        }
         const record = await this.readStored(path);
         if (record === undefined) {
           this.forget(path);
@@ -123,9 +141,12 @@ export class FileEventStore implements EventStore, ConversationTurns {
         const { event } = record;
         const message = event.event.kind === 'human_command' && event.event.command.kind === 'message'
           && event.event.command.display !== false ? event.event.command.text : undefined;
-        turns.push({ operationId: event.operationId, ...(message === undefined ? {} : { message }),
+        const turn: StoredTurn = { operationId: event.operationId, ...(message === undefined ? {} : { message }),
           acceptedSequence: event.acceptedSequence, pending: record.state === 'queued',
-          ...(record.state === 'settled' ? { outcome: record.result.outcome } : {}) });
+          ...(record.state === 'settled' ? { outcome: record.result.outcome } : {}) };
+        // Later reads return the same object, so a caller must not be able to change it.
+        if (record.state === 'settled') this.settledTurns.set(path, deepFreeze(turn));
+        turns.push(turn);
       }
       return turns.sort((left, right) => left.acceptedSequence - right.acceptedSequence);
     });
@@ -157,6 +178,7 @@ export class FileEventStore implements EventStore, ConversationTurns {
 
   private forget(path: string): void {
     this.knownFiles.delete(path);
+    this.settledTurns.delete(path);
     const removedIds = new Set<string>();
     for (const [eventId, candidate] of this.ids) {
       if (candidate === path) {
