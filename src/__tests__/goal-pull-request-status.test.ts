@@ -148,7 +148,7 @@ describe('gh pr view call budget', () => {
     for (const elapsed of [60_001, 90_000, 119_999]) {
       expect(await at(elapsed)).toMatchObject({ status: 'available', pullRequest: { state: 'OPEN' } });
     }
-    expect(await refresh()).toMatchObject({ status: 'available', pullRequest: { state: 'OPEN' } });
+    expect(await refresh()).toEqual({ status: 'unavailable' });
     expect(fetch).toHaveBeenCalledTimes(2);
     await at(120_000);
     expect(fetch).toHaveBeenCalledTimes(3);
@@ -161,6 +161,44 @@ describe('gh pr view call budget', () => {
     expect(await at(900_001)).toEqual({ status: 'unavailable' });
     expect(await at(1_000_000)).toEqual({ status: 'unavailable' });
     expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not give a refresh an old closed state while gh is failing', async () => {
+    fetch.mockResolvedValueOnce({ ...response(), state: 'CLOSED' }).mockRejectedValue(rateLimited());
+    await at(0);
+    now = 300_000;
+    expect(await refresh()).toEqual({ status: 'unavailable' });
+    now = 330_000;
+    expect(await refresh()).toEqual({ status: 'unavailable' });
+    expect(await read()).toMatchObject({ status: 'available', pullRequest: { state: 'CLOSED' } });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('starts a new read for a refresh instead of joining an earlier one, and keeps the newer result', async () => {
+    let resolveOlder!: (value: PrMergeStatus) => void;
+    fetch.mockReturnValueOnce(new Promise((r) => { resolveOlder = r; })).mockResolvedValueOnce(response());
+    const older = read();
+    expect(await refresh()).toMatchObject({ pullRequest: { state: 'MERGED' } });
+    resolveOlder({ ...response(), state: 'OPEN' });
+    expect(await older).toMatchObject({ pullRequest: { state: 'OPEN' } });
+    now = 3_600_000;
+    expect(await read()).toMatchObject({ pullRequest: { state: 'MERGED' } });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads the current Date.now when no clock is injected', async () => {
+    // Built before the spy, like the process-wide cache that tests cannot rebuild.
+    cache = new PrMergeStatusCache(fetch);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      fetch.mockResolvedValue({ ...response(), state: 'OPEN' });
+      await read();
+      clock.mockReturnValue(1_060_000);
+      await read();
+      expect(fetch).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it('does not retry a failed first read until the backoff passes', async () => {
