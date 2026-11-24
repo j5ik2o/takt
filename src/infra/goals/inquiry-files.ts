@@ -1,8 +1,8 @@
 import { stat } from 'node:fs/promises';
 import { z } from 'zod/v4';
 import { getErrorMessage } from '../../shared/utils/error.js';
-import { hasCode } from './privateFile.js';
-import { GoalQuestionSchema, type GoalQuestion } from '../goals/schema.js';
+import { hasCode } from '../daemon/privateFile.js';
+import { GoalQuestionSchema, type GoalQuestion } from './schema.js';
 
 export function parseInquiryFile(fileName: string, value: unknown): GoalQuestion {
   const question = GoalQuestionSchema.parse(value);

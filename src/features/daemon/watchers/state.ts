@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { parseDocument } from 'yaml';
 import { z } from 'zod/v4';
 import type { GoalQuestion } from '../../../infra/goals/schema.js';
-import { parseInquiryFile, type InvalidInquiryFileReports } from '../../../infra/daemon/inquiryFiles.js';
+import { parseInquiryFile, type InvalidInquiryFileReports } from '../../../infra/goals/inquiry-files.js';
 import type { WatchGoalReader, WatchGoal } from './goalReader.js';
 import { isMissing, listWatchEntries } from './files.js';
 import { watchGoalDirectory } from './goalPaths.js';

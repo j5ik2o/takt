@@ -4,7 +4,7 @@ import { epicVerificationRecovery } from '../../infra/epics/state.js';
 import type { EpicSnapshot } from '../../infra/epics/projection.js';
 import type { SnapshotItem } from '../manager/conversationPort.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
-import { inquiryFileFailureReason, parseInquiryFile } from '../../infra/daemon/inquiryFiles.js';
+import { inquiryFileFailureReason, parseInquiryFile } from '../../infra/goals/inquiry-files.js';
 import { DaemonDisplayFiles, readDisplayFile } from '../../infra/daemon/displayFiles.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitive-text.js';

@@ -12,7 +12,7 @@ import type { PullRequestWatchTarget } from './watchers/pullRequests.js';
 import type { DirectoryWatchTarget } from './watchers/directories.js';
 import type { WatchObservations } from './watchers/observations.js';
 import { listWatchEntries } from './watchers/files.js';
-import { InvalidInquiryFileReports } from '../../infra/daemon/inquiryFiles.js';
+import { InvalidInquiryFileReports } from '../../infra/goals/inquiry-files.js';
 import { readWatchGoal, readWatchGoals, readWatchInquiries, readWatchTasks, type WatchTask } from './watchers/state.js';
 import { DaemonConversations } from './conversationState.js';
 import { projectKey, routeAssignment } from './routing.js';

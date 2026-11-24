@@ -1,5 +1,5 @@
 import { DaemonPersistedFiles, type DaemonInquiryOwner } from '../../infra/daemon/persistedFiles.js';
-import { InvalidInquiryFileReports } from '../../infra/daemon/inquiryFiles.js';
+import { InvalidInquiryFileReports } from '../../infra/goals/inquiry-files.js';
 import type { GoalQuestion } from '../../infra/goals/schema.js';
 
 export interface PendingGoalAnswer {

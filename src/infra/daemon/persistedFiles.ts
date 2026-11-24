@@ -13,7 +13,7 @@ import { FileAsyncLock } from './lock.js';
 import { readDisplayFile } from './displayFiles.js';
 import { hasCode, readPrivateFile, writePrivateFile } from './privateFile.js';
 import { readInboxJson } from './inboxFiles.js';
-import { parseInquiryFile, type InvalidInquiryFileReports } from './inquiryFiles.js';
+import { parseInquiryFile, type InvalidInquiryFileReports } from '../goals/inquiry-files.js';
 
 const MAX_PROJECTION_BYTES = 256 * 1024;
 // 業務 schema の値 import は run の同期読取まで到達するため、ここでは保存形式だけを検証する。
