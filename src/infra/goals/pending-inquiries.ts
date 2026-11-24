@@ -1,4 +1,5 @@
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
+import { collectSkippedInquiryFiles, type SkippedInquiryFile } from './inquiry-files.js';
 import { StandaloneInquiryStore, type InquiryOwner } from './standalone-inquiries.js';
 import { GoalStore } from './store.js';
 import type { Goal, GoalQuestion } from './schema.js';
@@ -17,6 +18,8 @@ export type PendingInquiry = {
 interface PendingInquiryResult {
   inquiries: PendingInquiry[];
   errors: { repositoryDirectory: string; goalId: string; error: Error }[];
+  /** 読めずに飛ばした単独の問い合わせファイル。保存された本文は含めない。 */
+  skippedInquiryFiles: SkippedInquiryFile[];
 }
 
 const SUMMARY_MAX_BYTES = 512;
@@ -42,11 +45,13 @@ export async function listPendingInquiries(configDirectory: string, assignment: 
     inquiries.push(...result.goals.flat());
     errors.push(...result.errors.map((entry) => ({ ...entry, repositoryDirectory })));
   }
-  const standalone = await new StandaloneInquiryStore(configDirectory, assignment).listPending();
+  const { reports, skipped } = collectSkippedInquiryFiles();
+  const standalone = await new StandaloneInquiryStore(configDirectory, assignment, reports).listPending();
   inquiries.push(...pendingQuestions(standalone).map((entry) => ({ ...entry, goalId: null })));
   return {
     inquiries: inquiries.sort(compareInquiries),
     errors: errors.sort((left, right) => compareText(left.repositoryDirectory, right.repositoryDirectory) || compareText(left.goalId, right.goalId)),
+    skippedInquiryFiles: skipped.sort((left, right) => compareText(left.path, right.path)),
   };
 }
 

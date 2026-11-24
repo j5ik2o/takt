@@ -333,7 +333,7 @@ export function createTaktMcpServer(
     }, false));
     server.registerTool('takt_list_standalone_inquiries', {
       title: 'List standalone inquiries',
-      description: 'Read only pending standalone inquiries owned by the manager assignment of the repository that contains cwd. Includes id, kind, body and creation time without changing saved state. Use offset/limit (1-50) and nextOffset for continuation. Responses fit 64 KiB, with explicit truncation.',
+      description: 'Read only pending standalone inquiries owned by the manager assignment of the repository that contains cwd. Includes id, kind, body and creation time without changing saved state. Unreadable saved files are skipped and returned in skippedInquiryFiles with path and reason alongside the readable inquiries; totalCount counts readable pending inquiries only. Use offset/limit (1-50) and nextOffset for continuation. Responses fit 64 KiB, with explicit truncation.',
       inputSchema: listStandaloneInquiriesInputSchema,
     }, (input) => operation(input.cwd, 'Standalone inquiry list failed', async (_deps, assignment) =>
       listTaktStandaloneInquiries(input, globalConfigDirectory, await assignmentForStandaloneInquiry(input.cwd, assignment)), false));

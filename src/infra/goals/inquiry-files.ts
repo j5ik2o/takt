@@ -20,8 +20,11 @@ export function inquiryFileFailureReason(error: unknown): string {
 }
 
 export class InvalidInquiryFileError extends Error {
+  readonly reason: string;
   constructor(readonly path: string, error: unknown) {
-    super(`Skipped invalid inquiry file ${path}: ${inquiryFileFailureReason(error)}`);
+    const reason = inquiryFileFailureReason(error);
+    super(`Skipped invalid inquiry file ${path}: ${reason}`);
+    this.reason = reason;
     this.name = 'InvalidInquiryFileError';
   }
 }
@@ -34,7 +37,7 @@ const MAX_REPORTED_FILES = 256;
  */
 export class InvalidInquiryFileReports {
   private readonly reported = new Map<string, string>();
-  constructor(private readonly onError: (error: unknown) => void) {}
+  constructor(private readonly onError: (error: InvalidInquiryFileError) => void) {}
 
   async invalid(path: string, error: unknown): Promise<void> {
     // 列挙のあとに削除された問い合わせは、無いものとして扱う。
@@ -56,4 +59,12 @@ export class InvalidInquiryFileReports {
 
   /** 読めるようになったファイルは、次に壊れたときにまた知らせる。 */
   valid(path: string): void { this.reported.delete(path); }
+}
+
+export interface SkippedInquiryFile { readonly path: string; readonly reason: string }
+
+/** 1 回の一覧で飛ばしたファイルを集める。飛ばした件を応答へ載せる呼び出し元が、一覧ごとに作る。 */
+export function collectSkippedInquiryFiles(): { reports: InvalidInquiryFileReports; skipped: SkippedInquiryFile[] } {
+  const skipped: SkippedInquiryFile[] = [];
+  return { reports: new InvalidInquiryFileReports(({ path, reason }) => { skipped.push({ path, reason }); }), skipped };
 }

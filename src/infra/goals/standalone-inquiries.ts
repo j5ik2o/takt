@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { z } from 'zod/v4';
 import { writeFileAtomic } from '../../shared/utils/atomic-file.js';
 import { projectIdForCanonicalDirectory } from '../config/global/projectRegistry.js';
+import { createLogger } from '../../shared/utils/debug.js';
+import { InvalidInquiryFileReports } from './inquiry-files.js';
 import { withInquiryLock } from './inquiry-lock.js';
 import { createInquiry, answerInquiry, withdrawInquiry } from './inquiry.js';
 import { GoalQuestionSchema, type GoalAnswerInput, type GoalQuestion, type GoalQuestionInput } from './schema.js';
@@ -18,8 +20,14 @@ function isMissing(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ENOENT';
 }
 
+const log = createLogger('standalone-inquiries');
+/** 応答へ載せない一覧では、読めないファイルをプロセスの中で 1 回だけログに残す。 */
+const loggedInvalidFiles = new InvalidInquiryFileReports((error) => log.warn(error.message));
+
 export class StandaloneInquiryStore {
-  constructor(private readonly configDirectory: string, private readonly owner: InquiryOwner) {}
+  /** 一覧は、読めない 1 件を invalidFiles へ知らせて飛ばす。ID を指定した読み書きは、その 1 件のエラーを返す。 */
+  constructor(private readonly configDirectory: string, private readonly owner: InquiryOwner,
+    private readonly invalidFiles: InvalidInquiryFileReports = loggedInvalidFiles) {}
 
   async create(input: GoalQuestionInput): Promise<GoalQuestion> {
     return withInquiryLock(this.configDirectory, async () => {
@@ -44,8 +52,8 @@ export class StandaloneInquiryStore {
     const questions: GoalQuestion[] = [];
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-      const id = IdSchema.parse(entry.name.slice(0, -'.json'.length));
-      questions.push(await this.read(join(directory, entry.name), id));
+      const question = await this.readListed(directory, entry.name);
+      if (question !== undefined) questions.push(question);
     }
     return questions;
   }
@@ -61,9 +69,8 @@ export class StandaloneInquiryStore {
     const questions: GoalQuestion[] = [];
     for await (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-      const id = IdSchema.parse(entry.name.slice(0, -'.json'.length));
-      const question = await this.read(join(directory, entry.name), id);
-      if (question.status === 'pending') questions.push(question);
+      const question = await this.readListed(directory, entry.name);
+      if (question?.status === 'pending') questions.push(question);
     }
     return questions;
   }
@@ -78,9 +85,8 @@ export class StandaloneInquiryStore {
     }
     for await (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-      const id = IdSchema.parse(entry.name.slice(0, -'.json'.length));
-      const question = await this.read(join(directory, entry.name), id);
-      if (question.status === 'pending' && question.recipient === 'human') yield question;
+      const question = await this.readListed(directory, entry.name);
+      if (question?.status === 'pending' && question.recipient === 'human') yield question;
     }
   }
 
@@ -101,15 +107,14 @@ export class StandaloneInquiryStore {
     let totalCount = 0;
     for await (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-      const id = IdSchema.parse(entry.name.slice(0, -'.json'.length));
-      const question = await this.read(join(directory, entry.name), id);
-      if (question.status !== 'pending') continue;
+      const question = await this.readListed(directory, entry.name);
+      if (question?.status !== 'pending') continue;
       totalCount++;
       let position = 0;
       let end = candidates.length;
       while (position < end) {
         const middle = Math.floor((position + end) / 2);
-        if (candidates[middle]!.id.localeCompare(id) < 0) position = middle + 1;
+        if (candidates[middle]!.id.localeCompare(question.id) < 0) position = middle + 1;
         else end = middle;
       }
       if (position >= capacity) continue;
@@ -163,6 +168,18 @@ export class StandaloneInquiryStore {
   private async read(path: string, id: string): Promise<GoalQuestion> {
     const question = GoalQuestionSchema.parse(JSON.parse(await readFile(path, 'utf8')));
     if (question.id !== id) throw new Error('Saved question ID differs from its filename');
+    return question;
+  }
+
+  private async readListed(directory: string, fileName: string): Promise<GoalQuestion | undefined> {
+    const path = join(directory, fileName);
+    let question;
+    try { question = await this.read(path, IdSchema.parse(fileName.slice(0, -'.json'.length))); }
+    catch (error) {
+      await this.invalidFiles.invalid(path, error);
+      return undefined;
+    }
+    this.invalidFiles.valid(path);
     return question;
   }
 

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -176,6 +176,14 @@ it('lists all repository and workspace managers and reuses the existing paged go
   await standaloneStore.withdraw(approval.id, 'No longer needed');
   expect(decoded(await client.callTool({ name: 'takt_list_manager_inquiries', arguments: { managerId: workspaceId, limit: 1 } })))
     .toMatchObject({ totalCount: 2, inquiries: [expect.objectContaining({ repositoryDirectory: c })] });
+  const unreadable = join(directory, 'workspaces', workspace.id, 'inquiries', '00000000-0000-1000-8000-000000000001.json');
+  writeFileSync(unreadable, '{"body":"unreadable-inquiry-body"');
+  const skipping = await client.callTool({ name: 'takt_list_manager_inquiries', arguments: { managerId: workspaceId, limit: 1 } });
+  expect(skipping.isError).toBe(true);
+  expect(decoded(skipping)).toMatchObject({ totalCount: 2, inquiries: [expect.objectContaining({ repositoryDirectory: c })],
+    skippedInquiryFiles: [{ path: unreadable, reason: 'invalid JSON' }] });
+  expect(JSON.stringify(skipping)).not.toContain('unreadable-inquiry-body');
+  rmSync(unreadable);
   writeFileSync(join(b, '.takt', 'goals', goalC.id, 'goal.json'), '{invalid');
   const partial = await client.callTool({ name: 'takt_list_manager_inquiries', arguments: { managerId: workspaceId, limit: 1 } });
   expect(partial.isError).toBe(true);

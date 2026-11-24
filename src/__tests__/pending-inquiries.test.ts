@@ -99,7 +99,7 @@ describe('pending inquiry collection', () => {
     const result = await listPendingInquiries(config, repository);
     expect(result.inquiries).toEqual([expect.objectContaining({ goalId: secondGoalId, kind: 'question', summary: legacy.body })]);
     savedGoals.set('/repos/a', [goalRecord()]);
-    expect(await listPendingInquiries(config, repository)).toEqual({ inquiries: [], errors: [] });
+    expect(await listPendingInquiries(config, repository)).toEqual({ inquiries: [], errors: [], skippedInquiryFiles: [] });
   });
 
   it('orders dated inquiries chronologically and resolves missing dates and ties independently of enumeration', async () => {

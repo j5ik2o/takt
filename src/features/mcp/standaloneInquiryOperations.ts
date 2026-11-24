@@ -1,4 +1,5 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { collectSkippedInquiryFiles } from '../../infra/goals/inquiry-files.js';
 import { StandaloneInquiryStore, type InquiryOwner } from '../../infra/goals/standalone-inquiries.js';
 import { jsonResult, pagedResult } from './response.js';
 import type { AskStandaloneQuestionInput, ListStandaloneInquiriesInput, WithdrawStandaloneInquiryInput } from './schemas.js';
@@ -20,11 +21,11 @@ export async function listTaktStandaloneInquiries(
   input: ListStandaloneInquiriesInput, configDirectory: string, owner: InquiryOwner,
 ): Promise<CallToolResult> {
   const offset = input.offset ?? 0;
-  const store = new StandaloneInquiryStore(configDirectory, owner);
-  const page = await store.listPendingPage(offset, input.limit ?? 50);
+  const { reports, skipped } = collectSkippedInquiryFiles();
+  const page = await new StandaloneInquiryStore(configDirectory, owner, reports).listPendingPage(offset, input.limit ?? 50);
   return pagedResult('inquiries', page.inquiries.map((inquiry) => ({
     ...inquiry, kind: inquiry.kind ?? 'question', createdAt: inquiry.createdAt ?? null,
-  })), page.totalCount, offset);
+  })), page.totalCount, offset, skipped.length > 0, skipped.length > 0 ? { skippedInquiryFiles: skipped } : {});
 }
 
 export async function withdrawTaktStandaloneInquiry(

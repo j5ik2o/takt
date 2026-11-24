@@ -1,6 +1,7 @@
 import * as crypto from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { collectSkippedInquiryFiles } from '../infra/goals/inquiry-files.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import { GoalQuestionSchema } from '../infra/goals/schema.js';
 import { askTaktStandaloneQuestion } from '../features/mcp/standaloneInquiryOperations.js';
@@ -12,14 +13,14 @@ vi.mock('../features/manager/notifications.js', () => ({ sendSavedStandaloneQues
 vi.mock('../shared/i18n/index.js', () => ({ getLabel: (key: string) => key }));
 
 const io = vi.hoisted(() => ({
-  read: vi.fn(), syncRead: vi.fn(), readdir: vi.fn(), opendir: vi.fn(), close: vi.fn(), mkdir: vi.fn(), realpath: vi.fn(), access: vi.fn(), write: vi.fn(),
+  read: vi.fn(), syncRead: vi.fn(), readdir: vi.fn(), opendir: vi.fn(), close: vi.fn(), mkdir: vi.fn(), realpath: vi.fn(), access: vi.fn(), write: vi.fn(), stat: vi.fn(),
 }));
 vi.mock('node:fs', async (original) => ({
   ...await original<typeof import('node:fs')>(), readFileSync: io.syncRead,
 }));
 vi.mock('node:fs/promises', async (original) => ({
   ...await original<typeof import('node:fs/promises')>(),
-  readFile: io.read, readdir: io.readdir, opendir: io.opendir, mkdir: io.mkdir, realpath: io.realpath, access: io.access,
+  readFile: io.read, readdir: io.readdir, opendir: io.opendir, mkdir: io.mkdir, realpath: io.realpath, access: io.access, stat: io.stat,
 }));
 vi.mock('../shared/utils/atomic-file.js', () => ({ writeFileAtomic: io.write }));
 vi.mock('../infra/goals/inquiry-lock.js', () => ({ withInquiryLock: (_directory: string, action: () => Promise<unknown>) => action() }));
@@ -39,6 +40,12 @@ let files: Map<string, string>;
 
 function missing() {
   return Object.assign(new Error('missing file'), { code: 'ENOENT' });
+}
+
+/** 飛ばしたファイルを集める一覧用のストア。 */
+function reporting() {
+  const { reports, skipped } = collectSkippedInquiryFiles();
+  return { store: new StandaloneInquiryStore(config, workspace, reports), skipped };
 }
 
 function workspaceFile(id: string) {
@@ -63,6 +70,11 @@ beforeEach(() => {
     return content;
   });
   io.access.mockImplementation(async (path: string) => { if (!files.has(path)) throw missing(); });
+  io.stat.mockImplementation(async (path: string) => {
+    const content = files.get(path);
+    if (content === undefined) throw missing();
+    return { ino: 1, size: Buffer.byteLength(content), mtimeMs: 0 };
+  });
   io.readdir.mockImplementation(async (path: string, options?: { withFileTypes?: boolean }) => {
     const names = [...files.keys()].filter((file) => dirname(file) === path).map((file) => basename(file));
     if (names.length === 0) throw missing();
@@ -192,9 +204,16 @@ describe('standalone inquiry ownership and persistence', () => {
     JSON.stringify({ id: firstId, body: '不正な保存形式', status: 'answered' }),
     JSON.stringify({ id: firstId, recipient: 'human', body: '認証を更新してください', kind: 'operation_request', status: 'answered',
       answer: { text: '実施しました', source: 'tui', answeredAt: now } }),
-  ])('rejects malformed saved data instead of hiding it as an empty list: %s', async (serialized) => {
+  ])('skips malformed saved data and reports its file instead of failing the list: %s', async (serialized) => {
+    const { store, skipped } = reporting();
+    vi.mocked(crypto.randomUUID).mockReset().mockReturnValue(secondId);
+    const readable = await store.create({ body: '読める相談' });
     files.set(workspaceFile(firstId), serialized);
-    await expect(new StandaloneInquiryStore(config, workspace).list()).rejects.toThrow();
+    io.write.mockClear();
+    expect(await store.list()).toEqual([readable]);
+    expect(skipped).toEqual([{ path: workspaceFile(firstId), reason: expect.any(String) }]);
+    expect(skipped[0]!.reason).not.toMatch(/不正な保存形式|認証を更新してください|実施しました/);
+    expect(files.get(workspaceFile(firstId))).toBe(serialized);
     expect(io.write).not.toHaveBeenCalled();
   });
 
@@ -248,28 +267,34 @@ describe('standalone pending inquiry reads', () => {
     ]);
   });
 
-  it('validates completed records before excluding them', async () => {
-    const store = new StandaloneInquiryStore(config, workspace);
+  it('validates completed records before excluding them and reports the invalid one', async () => {
+    const { store, skipped } = reporting();
     const created = await store.create({ body: '形式を選んでください' });
     const answered = await store.answer(created.id, 'JSON');
     expect(await store.listPending()).toEqual([]);
     const { answer: _answer, ...invalid } = answered;
     files.set(workspaceFile(created.id), JSON.stringify(invalid));
-    await expect(store.listPending()).rejects.toThrow();
+    expect(await store.listPending()).toEqual([]);
+    expect(skipped).toEqual([{ path: workspaceFile(created.id), reason: 'answer: Only answered questions require an answer' }]);
     expect(io.close).toHaveBeenCalledTimes(2);
   });
 
-  it.each(['{', JSON.stringify({ id: secondId, recipient: 'human', body: '別のID', status: 'pending' })])(
-    'rejects invalid JSON or a saved ID differing from its filename: %s', async (serialized) => {
-      files.set(workspaceFile(firstId), serialized);
-      await expect(new StandaloneInquiryStore(config, workspace).listPending()).rejects.toThrow();
-      expect(io.close).toHaveBeenCalledTimes(1);
-    },
-  );
+  it.each([
+    { serialized: '{', reason: 'invalid JSON' },
+    { serialized: JSON.stringify({ id: secondId, recipient: 'human', body: '別のID', status: 'pending' }), reason: 'Saved question ID differs from its filename' },
+  ])('skips and reports invalid JSON or a saved ID differing from its filename: $reason', async ({ serialized, reason }) => {
+    const { store, skipped } = reporting();
+    files.set(workspaceFile(firstId), serialized);
+    expect(await store.listPending()).toEqual([]);
+    expect(skipped).toEqual([{ path: workspaceFile(firstId), reason }]);
+    expect(io.close).toHaveBeenCalledTimes(1);
+  });
 
-  it('rejects invalid inquiry filenames', async () => {
+  it('skips and reports invalid inquiry filenames without reading them', async () => {
+    const { store, skipped } = reporting();
     files.set(workspaceFile('invalid'), '{}');
-    await expect(new StandaloneInquiryStore(config, workspace).listPending()).rejects.toThrow();
+    expect(await store.listPending()).toEqual([]);
+    expect(skipped).toEqual([{ path: workspaceFile('invalid'), reason: '(root): invalid_format' }]);
     expect(io.read).not.toHaveBeenCalled();
     expect(io.close).toHaveBeenCalledTimes(1);
   });
@@ -292,12 +317,15 @@ describe('standalone pending inquiry reads', () => {
     await expect(store.listPending()).rejects.toBe(failure);
   });
 
-  it.each(['ENOENT', 'EACCES'])('propagates a %s file read failure and closes the directory', async (code) => {
-    const store = new StandaloneInquiryStore(config, workspace);
+  it.each([
+    { code: 'ENOENT', reported: [] },
+    { code: 'EACCES', reported: [{ path: workspaceFile(firstId), reason: 'read failed' }] },
+  ])('skips a file whose read fails with $code, reporting only a file that still exists', async ({ code, reported }) => {
+    const { store, skipped } = reporting();
     await store.create({ body: '読み込む相談' });
-    const failure = Object.assign(new Error('read failed'), { code });
-    io.read.mockRejectedValueOnce(failure);
-    await expect(store.listPending()).rejects.toBe(failure);
+    io.read.mockRejectedValueOnce(Object.assign(new Error('read failed'), { code }));
+    expect(await store.listPending()).toEqual([]);
+    expect(skipped).toEqual(reported);
     expect(io.close).toHaveBeenCalledTimes(1);
   });
 
@@ -416,39 +444,48 @@ describe('standalone pending inquiry pages', () => {
   it.each([
     { id: secondId, body: '別のID', status: 'pending' },
     { id: firstId, body: '回答欠落', status: 'answered' },
-  ])('rejects invalid saved records even outside the selected page: $status', async (record) => {
+  ])('reports invalid saved records even outside the selected page and does not count them: $status', async (record) => {
+    const { store, skipped } = reporting();
     files.set(workspaceFile(firstId), JSON.stringify(record));
-    await expect(new StandaloneInquiryStore(config, workspace).listPendingPage(10, 1)).rejects.toThrow();
+    expect(await store.listPendingPage(10, 1)).toEqual({ inquiries: [], totalCount: 0 });
+    expect(skipped.map(({ path }) => path)).toEqual([workspaceFile(firstId)]);
+    expect(JSON.stringify(skipped)).not.toContain(record.body);
     expect(io.close).toHaveBeenCalledOnce();
     expect(io.write).not.toHaveBeenCalled();
   });
 
-  it('validates records after the page is full instead of returning partial success', async () => {
-    const store = new StandaloneInquiryStore(config, workspace);
-    await store.create({ body: '有効な相談' });
+  it('validates records after the page is full and reports the invalid one alongside the page', async () => {
+    const { store, skipped } = reporting();
+    const readable = await store.create({ body: '有効な相談' });
     files.set(workspaceFile(secondId), '{');
-    await expect(store.listPendingPage(0, 1)).rejects.toThrow();
+    expect(await store.listPendingPage(0, 1)).toEqual({ inquiries: [readable], totalCount: 1 });
+    expect(skipped).toEqual([{ path: workspaceFile(secondId), reason: 'invalid JSON' }]);
     expect(io.close).toHaveBeenCalledOnce();
   });
 
-  it('ignores non-record entries but rejects invalid JSON filenames', async () => {
+  it('ignores non-record entries and reports invalid JSON filenames without reading them', async () => {
     io.opendir.mockResolvedValueOnce((async function* () {
       yield { name: `${firstId}.json`, isFile: () => false };
       yield { name: 'temporary.tmp', isFile: () => true };
     })());
-    const store = new StandaloneInquiryStore(config, workspace);
+    const { store, skipped } = reporting();
     expect(await store.listPendingPage(0, 1)).toEqual({ inquiries: [], totalCount: 0 });
+    expect(skipped).toEqual([]);
     files.set(workspaceFile('invalid'), '{}');
-    await expect(store.listPendingPage(0, 1)).rejects.toThrow();
+    expect(await store.listPendingPage(0, 1)).toEqual({ inquiries: [], totalCount: 0 });
+    expect(skipped).toEqual([{ path: workspaceFile('invalid'), reason: '(root): invalid_format' }]);
     expect(io.read).not.toHaveBeenCalled();
   });
 
-  it.each(['ENOENT', 'EACCES'])('propagates %s while reading a saved page and closes the directory', async (code) => {
-    const store = new StandaloneInquiryStore(config, workspace);
+  it.each([
+    { code: 'ENOENT', reported: [] },
+    { code: 'EACCES', reported: [{ path: workspaceFile(firstId), reason: 'read failed' }] },
+  ])('skips a page record whose read fails with $code, reporting only a file that still exists', async ({ code, reported }) => {
+    const { store, skipped } = reporting();
     await store.create({ body: '相談' });
-    const failure = Object.assign(new Error('read failed'), { code });
-    io.read.mockRejectedValueOnce(failure);
-    await expect(store.listPendingPage(0, 1)).rejects.toBe(failure);
+    io.read.mockRejectedValueOnce(Object.assign(new Error('read failed'), { code }));
+    expect(await store.listPendingPage(0, 1)).toEqual({ inquiries: [], totalCount: 0 });
+    expect(skipped).toEqual(reported);
     expect(io.close).toHaveBeenCalledOnce();
   });
 

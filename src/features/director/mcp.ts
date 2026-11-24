@@ -55,13 +55,16 @@ export function createDirectorMcpServer(configDirectory: string, actions: Direct
     if (!assignment.repositoryDirectories.includes(value.cwd)) throw new Error('Repository is outside manager assignment');
     return getTaktGoal(value, { readOnly: true, allowedProjectRoot: value.cwd }, signal);
   }));
-  server.registerTool('takt_list_manager_inquiries', { description: 'Read pending human inquiries of an assigned manager.',
+  server.registerTool('takt_list_manager_inquiries', { description: 'Read pending human inquiries of an assigned manager. Unreadable standalone inquiry files are skipped and listed in skippedInquiryFiles with path and reason alongside the readable inquiries.',
     inputSchema: z.object({ managerId, ...page }).strict() }, guarded(async (value: { managerId: string; offset?: number; limit?: number }) => {
     const assignment = await resolveDirectorManager(configDirectory, value.managerId);
     const offset = value.offset ?? 0;
     const result = await listPendingInquiries(configDirectory, assignment);
     return pagedResult('inquiries', result.inquiries.slice(offset, offset + (value.limit ?? 50)), result.inquiries.length, offset,
-      result.errors.length > 0, { errors: result.errors.map(({ repositoryDirectory, goalId }) => ({ repositoryDirectory, goalId })) });
+      result.errors.length > 0 || result.skippedInquiryFiles.length > 0, {
+        errors: result.errors.map(({ repositoryDirectory, goalId }) => ({ repositoryDirectory, goalId })),
+        ...(result.skippedInquiryFiles.length > 0 ? { skippedInquiryFiles: result.skippedInquiryFiles } : {}),
+      });
   }));
   server.registerTool('takt_tell_manager', { description: 'Save a message for a manager through daemon IPC and return accepted with operationId and managerId immediately. Saved messages are processed in order. Replies, failures, and interruptions appear later as director notifications with the same operationId. Acceptance does not mean a requested merge succeeded. Never automatically resend an accepted message.',
     inputSchema: z.object({ managerId, text: z.string().min(1), origin: DirectorMessageOriginSchema.describe('Use director for your own request. Use human only to relay an instruction received from a person; put that instruction in text and keep your own requests separate.') }).strict() }, guarded(async (value: { managerId: string; text: string; origin: DirectorMessageOrigin }) => {
