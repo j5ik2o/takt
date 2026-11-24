@@ -1,6 +1,6 @@
 import { Console } from 'node:console';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach } from 'vitest';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
@@ -8,10 +8,9 @@ import {
   assertIsolatedUserDirectories,
   detectRealUserTaktDirectories,
   installRealUserHomeFsGuard,
-  isWithinOrEqual,
   protectDirectory,
 } from './helpers/realUserHomeGuard.js';
-import { ISOLATION_ROOT_ENV, ORIGINAL_HOME_ENV, ORIGINAL_TAKT_CONFIG_DIR_ENV } from '../../scripts/test-user-isolation.mjs';
+import { ORIGINAL_HOME_ENV, ORIGINAL_TAKT_CONFIG_DIR_ENV } from '../../scripts/test-user-isolation.mjs';
 
 globalThis.console.Console = Console;
 
@@ -24,12 +23,10 @@ process.env.TMPDIR = TEST_TMPDIR;
 // temporary root before any worker started. Refuse to run if that did not
 // happen, and reject fs writes and deletions that still reach the real ~/.takt.
 for (const directory of detectRealUserTaktDirectories(process.env[ORIGINAL_HOME_ENV])) protectDirectory(directory);
-// A config dir the developer exported is real too, unless it encloses the
-// isolated root (protecting it would refuse every test write).
+// A config dir the developer exported is real too. The runner refused to start
+// if the temporary directory was inside it, so protecting it never blocks test writes.
 const originalConfigDir = process.env[ORIGINAL_TAKT_CONFIG_DIR_ENV];
-if (originalConfigDir && !isWithinOrEqual(resolve(originalConfigDir), process.env[ISOLATION_ROOT_ENV] ?? '')) {
-  protectDirectory(originalConfigDir);
-}
+if (originalConfigDir) protectDirectory(originalConfigDir);
 installRealUserHomeFsGuard();
 assertIsolatedUserDirectories();
 

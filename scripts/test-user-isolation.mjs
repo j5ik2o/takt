@@ -15,8 +15,8 @@
  * below because they are read-only for tests and their shims fail without them.
  */
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { tmpdir, userInfo } from 'node:os';
+import { isAbsolute, join, relative, sep } from 'node:path';
 
 /** Set on the isolated root so a nested config load reuses it. Not TAKT_-prefixed: tests clear those. */
 export const ISOLATION_ROOT_ENV = 'TEST_USER_ISOLATION_ROOT';
@@ -43,11 +43,37 @@ function preserveToolLocations(home, env) {
   }
 }
 
+/** The real TAKT directories that exist: `<home>/.takt` and a TAKT_CONFIG_DIR the run started with. */
+function existingRealTaktDirectories(env) {
+  const candidates = [env.TAKT_CONFIG_DIR, env.HOME && join(env.HOME, '.takt')];
+  try {
+    candidates.push(join(userInfo().homedir, '.takt'));
+  } catch {
+    // No account database entry (some containers): the inherited HOME is all there is.
+  }
+  return candidates.filter((directory) => directory && existsSync(directory)).map((directory) => realpathSync(directory));
+}
+
+/** Refuse before the first write when the inherited temporary directory lies inside a real TAKT directory. */
+function assertTemporaryDirectoryOutsideRealTakt(temporaryDirectory, env) {
+  for (const directory of existingRealTaktDirectories(env)) {
+    const rel = relative(directory, temporaryDirectory);
+    if (rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))) {
+      throw new Error(
+        `Refusing to isolate test user directories: the temporary directory "${temporaryDirectory}" lies inside `
+        + `the TAKT directory "${directory}". Point TMPDIR outside it.`,
+      );
+    }
+  }
+}
+
 export function isolateUserDirectoriesForTestRun(env = process.env) {
   const existing = env[ISOLATION_ROOT_ENV];
   if (existing && existsSync(existing)) return existing;
+  const temporaryDirectory = realpathSync(tmpdir());
+  assertTemporaryDirectoryOutsideRealTakt(temporaryDirectory, env);
   // Keep the prefix short: macOS limits Unix socket paths under TMPDIR to 104 bytes.
-  const root = realpathSync(mkdtempSync(join(realpathSync(tmpdir()), 'tt-')));
+  const root = realpathSync(mkdtempSync(join(temporaryDirectory, 'tt-')));
   const home = join(root, 'h');
   const directories = {
     HOME: home,

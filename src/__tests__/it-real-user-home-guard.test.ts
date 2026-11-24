@@ -5,10 +5,10 @@
  * never opened. The incident shape: a sentinel test wrote join(homedir(), '.takt')
  * and removed it recursively while HOME was the real home.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import {
-  chownSync, existsSync, linkSync, lutimesSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync,
+  chownSync, existsSync, linkSync, lutimesSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync,
   symlinkSync, writeFileSync,
 } from 'node:fs';
 import { rm as rmPromise, writeFile as writeFilePromise } from 'node:fs/promises';
@@ -163,8 +163,9 @@ describe('real user home guard', () => {
     expectFakeRealTaktIntact();
   });
 
-  it('still allows the incident sentinel pattern against the isolated home and other temporary directories', () => {
-    const sentinel = join(homedir(), '.takt');
+  it('still allows the incident sentinel pattern against a home this test created and other temporary directories', () => {
+    // Never homedir(): under a config that skips the shared setup it is the real home.
+    const sentinel = join(workspace, 'isolated-home', '.takt');
     mkdirSync(join(sentinel, 'projects'), { recursive: true });
     writeFileSync(join(sentinel, 'config.yaml'), 'language: ja\n');
     rmSync(sentinel, { recursive: true, force: true });
@@ -175,6 +176,37 @@ describe('real user home guard', () => {
 
     expect(existsSync(sentinel)).toBe(false);
     expect(existsSync(scratch)).toBe(false);
+    expectFakeRealTaktIntact();
+  });
+
+  it('refuses to create the isolated root when the temporary directory lies inside a real TAKT directory', () => {
+    const script = pathToFileURL(join(process.cwd(), 'scripts', 'test-user-isolation.mjs')).href;
+    const tmpInsideRealTakt = join(fakeRealTakt, 'tmp');
+    const linkToRealTakt = join(workspace, 'tmp-link');
+    unprotectDirectory(fakeRealTakt);
+    mkdirSync(tmpInsideRealTakt);
+    symlinkSync(tmpInsideRealTakt, linkToRealTakt, 'dir');
+    protectDirectory(fakeRealTakt);
+    const run = (tmp: string, extra: NodeJS.ProcessEnv): ReturnType<typeof spawnSync> => {
+      const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: join(workspace, 'other-home'), TMPDIR: tmp, TMP: tmp, TEMP: tmp, ...extra };
+      return spawnSync(process.execPath, [
+        '--input-type=module',
+        '-e',
+        `import { isolateUserDirectoriesForTestRun } from ${JSON.stringify(script)}; isolateUserDirectoriesForTestRun();`,
+      ], { encoding: 'utf-8', env });
+    };
+
+    for (const [tmp, extra] of [
+      [tmpInsideRealTakt, { HOME: fakeRealHome }],
+      [linkToRealTakt, { HOME: fakeRealHome }],
+      [tmpInsideRealTakt, { TAKT_CONFIG_DIR: fakeRealTakt }],
+    ] as const) {
+      const result = run(tmp, extra);
+      expect(result.status).not.toBe(0);
+      expect(String(result.stderr)).toContain('Refusing to isolate test user directories');
+    }
+
+    expect(readdirSync(tmpInsideRealTakt)).toEqual([]);
     expectFakeRealTaktIntact();
   });
 
