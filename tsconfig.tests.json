@@ -729,6 +729,7 @@
     "src/__tests__/sessionLogger.test.ts",
     "src/__tests__/sessionSelector.test.ts",
     "src/__tests__/sessionStore.test.ts",
+    "src/__tests__/shared-takt-backup.test.ts",
     "src/__tests__/sigint-interrupt.test.ts",
     "src/__tests__/sigint-worker-pool.test.ts",
     "src/__tests__/skill-permission-handler.test.ts",
