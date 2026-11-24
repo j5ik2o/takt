@@ -41,12 +41,13 @@ module ciFailureEvidence {
     else
       checks == Set(Diagnosable)
 
-  // What an investigator that follows merge-ci-recovery can conclude from the evidence.
-  // A defect needs a log. An external cause needs a log or a job that never started.
+  // The investigator is an LLM: the routing must be safe for any verdict it returns.
   pure def allowedVerdicts(checks: Set[Evidence]): Set[Verdict] =
-    Set(Insufficient)
-      .union(if (checks.contains(Diagnosable)) Set(Defect, ExternalCause) else Set())
-      .union(if (checks.contains(NotStarted)) Set(ExternalCause) else Set())
+    Set(Insufficient, Defect, ExternalCause)
+
+  // refresh_ci starts a fix only when at least one job log was saved (`logCount > 0`).
+  // Before the fix the rule had no such guard; `complete` then implied a log.
+  pure def hasLog(checks: Set[Evidence]): bool = checks.contains(Diagnosable)
 
   action initWith(first: Set[Evidence]): bool = all {
     failed' = first,
@@ -73,7 +74,6 @@ module ciFailureEvidence {
 
   action investigateAs(v: Verdict): bool = all {
     phase == Investigate,
-    allowedVerdicts(failed).contains(v),
     verdict' = v,
     phase' = Refresh,
     failed' = failed, complete' = complete, fixRounds' = fixRounds, rerunCount' = rerunCount,
@@ -90,7 +90,7 @@ module ciFailureEvidence {
     phase == Refresh,
     if (not(complete)) all { phase' = Stopped, stopReason' = IncompleteEvidence }
     else if (rerunCount > 0) all { phase' = Stopped, stopReason' = RerunSpent }
-    else if (verdict == Defect and fixRounds < MAX_FIX_ROUNDS) all { phase' = FixCi, stopReason' = stopReason }
+    else if (verdict == Defect and (not(FIXED) or hasLog(failed)) and fixRounds < MAX_FIX_ROUNDS) all { phase' = FixCi, stopReason' = stopReason }
     else if (verdict == ExternalCause) all { phase' = RerunCi, stopReason' = stopReason }
     else all { phase' = Stopped, stopReason' = NoRecovery },
     failed' = failed, complete' = complete, verdict' = verdict, fixRounds' = fixRounds, rerunCount' = rerunCount,

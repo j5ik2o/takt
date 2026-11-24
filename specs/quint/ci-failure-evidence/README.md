@@ -16,8 +16,9 @@ A Quint model of how the CI recovery steps of the merge workflows read failure e
 Each failed check is reduced to the kind of evidence it can give: `Diagnosable`, `NotStarted`,
 `External` or `Missing`. The model keeps the set of kinds, not the individual checks.
 
-The investigator is modelled as following the `merge-ci-recovery` policy: a `Defect` verdict needs a
-log, an `ExternalCause` verdict needs a log or a job that never started.
+The investigator is an LLM, so the model lets it return any verdict for any evidence. The
+invariants must hold without trusting it. For that reason `refresh_ci` starts a fix only when at
+least one job log was saved (`logCount > 0`); `hasLog` models that guard.
 
 Not modelled: how `ci.passed` is computed from the checks, HEAD changes during investigation,
 evidence storage failures, timeouts, and the mapping from a check to its job. The code tests cover
@@ -77,10 +78,14 @@ the same as before the fix.
 
 | Witness | Traces out of 20000 |
 |---|---|
-| `fixReachedWithExternalBeside` | 911 |
-| `rerunReachedForNotStartedOnly` | 715 |
-| `stoppedForMissing` | 13310 |
-| `merged` | 221 |
+| `fixReachedWithExternalBeside` | 896 |
+| `rerunReachedForNotStartedOnly` | 463 |
+| `stoppedForMissing` | 13011 |
+| `merged` | 190 |
+
+Without the `logCount > 0` guard (replace `not(FIXED) or hasLog(failed)` by `true`), the same run (reproduce with seed 0x12e)
+violates `fixNeedsDiagnosis`: jobs that never started give complete evidence with no log, and a
+`Defect` verdict would start a fix. The independent review of the first version found this path.
 
 Trace lengths were 4 to 16. `Stopped` and `Merged` are terminal states with no enabled action, so
 short traces are expected there and do not indicate a modelling deadlock elsewhere.
@@ -88,7 +93,7 @@ short traces are expected there and do not indicate a modelling deadlock elsewhe
 ### Scenario tests
 
 ```sh
-quint test ciFailureEvidence_test.qnt --main fixedCodeTest     # 5 passing
+quint test ciFailureEvidence_test.qnt --main fixedCodeTest     # 6 passing
 quint test ciFailureEvidence_test.qnt --main currentCodeTest   # 2 passing
 ```
 

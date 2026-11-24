@@ -20,6 +20,11 @@ module fixedCodeTest {
     initWith(Set(NotStarted)).then(collect).then(investigateAs(ExternalCause)).then(refresh)
       .expect(phase == RerunCi)
 
+  // Only jobs that never started, and the investigator still says defect: no log, so no fix.
+  run notStartedOnlyDefectStopsTest =
+    initWith(Set(NotStarted)).then(collect).then(investigateAs(Defect)).then(refresh)
+      .expect(phase == Stopped and stopReason == NoRecovery)
+
   // Only external statuses failed: nothing to diagnose, recovery stops and nothing is merged.
   run externalOnlyStopsTest =
     initWith(Set(External)).then(collect).then(investigateAs(Insufficient)).then(refresh)
