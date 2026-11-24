@@ -89,6 +89,25 @@ describe('PR status system input target ownership', () => {
   });
 });
 
+describe('CI failure evidence in builtin merge workflows', () => {
+  const root = join(import.meta.dirname, '..', '..');
+  const workflows = ['builtins/en/workflows', 'builtins/ja/workflows']
+    .flatMap((directory) => readdirSync(join(root, directory)).filter((name) => name.endsWith('.yaml'))
+      .map((name) => join(directory, name)))
+    .filter((path) => readFileSync(join(root, path), 'utf8').includes('type: pr_ci_failure'));
+
+  it('pr_ci_failureを使うworkflowを見つけている', () => {
+    expect(workflows.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it.each(workflows)('%s は保存したjobログがあるときだけ欠陥の修正へ進む', (path) => {
+    const defectRules = readFileSync(join(root, path), 'utf8').split('\n')
+      .filter((line) => line.includes('investigate_ci.verdict == "defect"'));
+    expect(defectRules.length).toBeGreaterThan(0);
+    for (const rule of defectRules) expect(rule).toContain('collect_ci_failure.failure.logCount > 0');
+  });
+});
+
 describe('CI failure system input and rerun effect', () => {
   let runDirectory: string;
   beforeEach(() => { runDirectory = mkdtempSync(join(tmpdir(), 'takt-ci-status-')); });
@@ -359,6 +378,80 @@ describe('CI failure system input and rerun effect', () => {
       expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: collected }, h.state))
         .toMatchObject({ success: true });
       expect(h.rerunPrCi).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe('開始前に取り消されたjobを含む証拠', () => {
+    const run = failure().checks[0]!.run;
+    const notStartedJob = { id: 21, name: 'macos', url: `${run.url}/job/21`, notStarted: true };
+    const mixed = (): PrCiFailure => ({ ...failure(), checks: [...failure().checks, { name: 'macos', run, jobs: [notStartedJob] }] });
+    const onlyNotStarted = (): PrCiFailure => ({ ...failure(), checks: [{ name: 'macos', run, jobs: [notStartedJob] }] });
+
+    it('診断できるjobのログだけを保存し、未開始jobを不足証拠にせず索引・調査prompt・停止コメント用の情報へ区別して渡す', async () => {
+      const h = fixture();
+      h.fetchPrCiFailure.mockResolvedValue(mixed());
+
+      const result = await h.service.resolveSystemInput(input, h.state) as PrCiFailure & {
+        promptEvidence: string; details: string; logCount: number;
+      };
+      expect(result).toMatchObject({ complete: true, unavailable: [], logCount: 1 });
+      const [summary, ...notes] = result.promptEvidence.split('\n').slice(0, -1);
+      for (const count of ['complete=true', 'unique job logs=1', 'not started jobs=1', 'unavailable=0']) {
+        expect(summary).toContain(count);
+      }
+      // The index marks these with `notStarted`; the prompt must say what the field means.
+      expect(notes.some((note) => note.includes('notStarted'))).toBe(true);
+      const index = JSON.parse(readFileSync(/^Evidence index: (.+)$/m.exec(result.promptEvidence)![1]!, 'utf8')) as {
+        complete: boolean; unavailable: unknown[];
+        checks: Array<{ jobs: Array<{ id: number; logPath: string | null; notStarted?: boolean }> }>;
+      };
+      expect(index).toMatchObject({ complete: true, unavailable: [] });
+      expect(index.checks.map(({ jobs }) => jobs)).toEqual([
+        [{ id: 20, name: 'unit', url: `${run.url}/job/20`, logPath: expect.any(String) }],
+        [{ id: 21, name: 'macos', url: `${run.url}/job/21`, logPath: null, notStarted: true }],
+      ]);
+      expect(JSON.parse(result.details)).toMatchObject({ unavailable: [],
+        checks: [{ jobs: [{ id: 20 }] }, { jobs: [{ id: 21, notStarted: true }] }] });
+    });
+
+    it('未開始jobだけの証拠は完全でも、保存したjobログの件数は0になる', async () => {
+      const h = fixture();
+      h.fetchPrCiFailure.mockResolvedValue(onlyNotStarted());
+      expect(await h.service.resolveSystemInput(input, h.state)).toMatchObject({ complete: true, logCount: 0 });
+    });
+
+    it.each([
+      ['診断できる失敗と混在', mixed],
+      ['未開始jobだけ', onlyNotStarted],
+    ])('外部要因と判断された%sの証拠は再実行できる', async (_label, evidence) => {
+      const h = fixture();
+      h.fetchPrCiFailure.mockResolvedValue(evidence());
+      const collected = await h.service.resolveSystemInput(input, h.state) as PrCiFailure;
+      h.state.systemContexts.set('collect_ci_failure', { failure: collected });
+      h.state.currentStep = 'rerun_ci';
+
+      expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: collected }, h.state))
+        .toMatchObject({ success: true });
+      expect(h.rerunPrCi).toHaveBeenCalledOnce();
+    });
+
+    it('実行されたjobのログが欠けていれば、未開始jobが隣にあっても不完全のまま再実行しない', async () => {
+      const h = fixture();
+      h.fetchPrCiFailure.mockResolvedValue({ ...mixed(), checks: [
+        { name: 'unit', run, jobs: [{ id: 20, name: 'unit', url: `${run.url}/job/20` }] },
+        { name: 'macos', run, jobs: [notStartedJob] },
+      ] });
+      const collected = await h.service.resolveSystemInput(input, h.state) as PrCiFailure;
+      expect(collected).toMatchObject({ complete: false,
+        unavailable: [{ name: 'unit', url: `${run.url}/job/20`, reason: 'Failed job log is missing' }] });
+      h.state.currentStep = 'rerun_ci';
+
+      for (const evidence of [collected, { ...collected, complete: true, unavailable: [] }]) {
+        h.state.systemContexts.set('collect_ci_failure', { failure: evidence });
+        expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: evidence }, h.state))
+          .toMatchObject({ success: false });
+      }
+      expect(h.rerunPrCi).not.toHaveBeenCalled();
     });
   });
 

@@ -111,6 +111,8 @@ interface Scenario {
   largeCiLogs?: boolean;
   /** Adds a failed external status beside the diagnosable check. */
   externalCiCheck?: boolean;
+  /** Adds a job cancelled before any step ran beside the diagnosable check, or leaves only that job. */
+  notStartedCiJob?: 'mixed' | 'only';
 }
 
 describe('Builtin PR merge workflow execution', () => {
@@ -391,6 +393,12 @@ describe('Builtin PR merge workflow execution', () => {
       const check = { name: scenario.ciName?.field === 'check' ? scenario.ciName.value : `unit-round-${pushes}`,
         run: { id: 10 + pushes, attempt: reruns + 1, headSha, url: `https://github.com/org/repo/actions/runs/${10 + pushes}` },
         jobs };
+      if (scenario.notStartedCiJob !== undefined) {
+        const notStarted = { name: 'macos', run: check.run, jobs: [{ id: 90, name: 'macos',
+          url: `${check.run.url}/job/90`, notStarted: true }] };
+        return { number, headSha, complete: true, unavailable: [],
+          checks: scenario.notStartedCiJob === 'mixed' ? [check, notStarted] : [notStarted] };
+      }
       return { number, headSha, complete, checks: scenario.largeCiLogs ? [check, { ...check, name: 'second-check' }] : [check],
         ...(scenario.externalCiCheck ? { external: [{ name: 'Check unresolved comments', url: 'https://github.com/org/repo/actions/runs/99' }] } : {}),
         unavailable: complete ? [] : [{ name: scenario.ciName?.field === 'unavailable' ? scenario.ciName.value : `unit-round-${pushes}`, reason: 'HTTP 403: cannot read logs' }] };
@@ -1155,7 +1163,7 @@ describe('Builtin PR merge workflow execution', () => {
       expect(path).toBeDefined();
       return JSON.parse(readFileSync(path!, 'utf8')) as {
         checks: Array<{ name: string; run: { id: number; attempt: number; headSha: string };
-          jobs: Array<{ id: number; logPath: string | null }> }>;
+          jobs: Array<{ id: number; logPath: string | null; notStarted?: boolean }> }>;
         external?: Array<{ name: string }>;
         unavailable: Array<{ reason: string }>;
       };
@@ -1218,6 +1226,38 @@ describe('Builtin PR merge workflow execution', () => {
       const index = evidenceIndex(investigation);
       expect(index.unavailable).toEqual([]);
       expect(index.external).toEqual([expect.objectContaining({ name: 'Check unresolved comments' })]);
+    });
+
+    it('開始前に取り消されたjobが混ざっても診断できた欠陥はci_stoppedへ落ちず修正へ進む', async () => {
+      const h = await runRecovery({ ciFailures: [defect()], notStartedCiJob: 'mixed' });
+      expect(h.state.status).toBe('completed');
+      expect(h.calls.filter((call) => call.startsWith('agent:'))).toEqual([
+        'agent:investigate_ci', 'agent:fix_ci', 'agent:review_ci_fix',
+      ]);
+      const investigation = h.recoveryPrompts[0]!.prompt;
+      for (const count of ['complete=true', 'unique job logs=1', 'not started jobs=1', 'unavailable=0']) {
+        expect(investigation).toContain(count);
+      }
+      const index = evidenceIndex(investigation);
+      expect(index.unavailable).toEqual([]);
+      expect(index.checks.map(({ jobs }) => jobs.map(({ logPath, notStarted }) => [logPath !== null, notStarted === true])))
+        .toEqual([[[true, false]], [[false, true]]]);
+    });
+
+    it('失敗したjobがすべて開始前の取消なら、欠陥と判断されてもログのない修正へ進まず止まる', async () => {
+      const h = await runRecovery({ ciFailures: [defect()], notStartedCiJob: 'only' });
+      expect(h.state.status).toBe('aborted');
+      expect(h.calls).not.toContain('agent:fix_ci');
+      expect(h.calls).not.toContain('merge_pr');
+      expect(h.rerunPrCi).not.toHaveBeenCalled();
+      expect(h.recoveryPrompts[0]!.prompt).toContain('unique job logs=0');
+    });
+
+    it('失敗したjobがすべて開始前の取消で、外部要因と判断されれば1回の再実行へ進む', async () => {
+      const h = await runRecovery({ ciFailures: [external], notStartedCiJob: 'only' });
+      expect(h.state.status).toBe('completed');
+      expect(h.rerunPrCi).toHaveBeenCalledOnce();
+      expect(h.calls).not.toContain('agent:fix_ci');
     });
 
     it('同じrunの複数checkと6件の長いjobログを一度だけ保存し3段階のpromptから参照できる', async () => {
