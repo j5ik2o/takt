@@ -1216,7 +1216,8 @@ describe('runReportPhase retry with new session', () => {
     queueRunAgentResponses([
       {
         persona: 'coder', status: 'error', content: '', timestamp: new Date('2026-11-25T00:00:00Z'),
-        error: 'ENOENT: open /Users/alice/.takt/config.yaml at commit 7868714bb04d20e71c498fb5653a45e523880935',
+        error: 'ENOENT: open /Users/alice/.takt/config.yaml at commit 7868714bb04d20e71c498fb5653a45e523880935'
+          + ' request 0f8fad5b-d9cb-469f-a165-70867728950e',
       },
       { persona: 'coder', status: 'done', content: '# Report\nRecovered on retry', timestamp: new Date('2026-11-25T00:00:01Z') },
     ]);
@@ -1224,7 +1225,8 @@ describe('runReportPhase retry with new session', () => {
     await runReportPhase(step, 1, ctx);
 
     expect(phaseComplete.mock.calls[0]?.[5]).toBe(
-      'Report phase provider returned status "error": ENOENT: open /Users/<user>/.takt/config.yaml at commit [REDACTED]',
+      'Report phase provider returned status "error": ENOENT: open /Users/<user>/.takt/config.yaml at commit [REDACTED]'
+      + ' request 0f8fad5b-d9cb-469f-a165-70867728950e',
     );
   });
 
