@@ -570,6 +570,22 @@ describe('runWithWorkerPool', () => {
     });
   });
 
+  it('claim で失敗として保存されたゴールのタスクを run の失敗に数える', async () => {
+    const passed = createTask('passed');
+    const runner = createRunner();
+    runner.claimNextTasks
+      .mockImplementationOnce(((_count: number, _reason: unknown, onSetupFailed: (task: unknown) => void) => {
+        onSetupFailed({ name: 'goal-task', status: 'failed', goalId: 'goal-1' });
+        return [passed];
+      }) as never)
+      .mockReturnValue([]);
+
+    const result = await runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 10, 'run');
+
+    expect(result).toEqual({ success: 1, fail: 1, executedTaskNames: ['goal-task', 'passed'] });
+    expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(1);
+  });
+
   it('空の入力では実行せずゼロ件を返す', async () => {
     const runner = createRunner();
 
