@@ -12,7 +12,7 @@ export interface BackupTarget {
   readonly name: string;
   readonly kind: 'config' | 'managed-provider';
   /** `copied`: the generation holds at least one file of the target. */
-  readonly status: 'copied' | 'link' | 'empty' | 'absent';
+  readonly status: 'copied' | 'empty' | 'absent';
   readonly files: number;
   readonly generation?: string;
 }
@@ -20,7 +20,6 @@ export interface BackupTarget {
 export interface BackupTotals {
   readonly files: number;
   readonly bytes: number;
-  readonly externalLinks: number;
 }
 
 export interface GenerationSummary {

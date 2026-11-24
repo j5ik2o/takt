@@ -46,6 +46,7 @@ const LATEST = 'latest';
 const LOG = 'backup.log';
 const LOCK = '.lock';
 const STAGING_PREFIX = '.staging-';
+const UNPUBLISHED_PREFIX = '.unpublished-';
 const MANIFEST = 'manifest.json';
 const DATA = 'data';
 const GENERATION_NAME = /^\d{8}T\d{6}Z$/u;
@@ -109,8 +110,16 @@ function isInsideOrEqual(parent, child) {
   return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
+/**
+ * The spelling under which two paths are compared. macOS and Windows volumes usually ignore case, and the part
+ * of a path that does not exist yet has no spelling on disk to resolve to, so `.TAKT` must count as `.takt`.
+ */
+function comparable(path) {
+  return ['darwin', 'win32'].includes(process.platform) ? path.normalize('NFC').toLowerCase() : path;
+}
+
 async function overlaps(first, second) {
-  const [realFirst, realSecond] = [await realpathOfMaybeMissing(first), await realpathOfMaybeMissing(second)];
+  const [realFirst, realSecond] = [comparable(await realpathOfMaybeMissing(first)), comparable(await realpathOfMaybeMissing(second))];
   return isInsideOrEqual(realFirst, realSecond) || isInsideOrEqual(realSecond, realFirst);
 }
 
@@ -147,7 +156,7 @@ async function prepareBackupRoot(source, dest, env) {
       throw new BackupError('DEST_OVERLAPS_SOURCE', 'The backup directory must not contain, or lie inside, a TAKT config directory: the one being copied, TAKT_CONFIG_DIR, or ~/.takt.');
     }
   }
-  if (await realpathOfMaybeMissing(dest) !== resolve(dest)) {
+  if (comparable(await realpathOfMaybeMissing(dest)) !== comparable(resolve(dest))) {
     throw new BackupError('DEST_IS_LINK', 'The backup directory path passes through a symbolic link. Name the real path.');
   }
   if (await lstatOrUndefined(dest) === undefined) await mkdir(dest, { recursive: true, mode: 0o700 });
@@ -218,9 +227,20 @@ async function withLock(dest, action) {
   }
 }
 
-async function removeStagingLeftovers(dest) {
+/**
+ * Remove what an interrupted or failed run left behind: staging directories, and a generation that reached
+ * `generations` without `latest` ever pointing at it. Such a generation is named by a marker written before it
+ * moved there, so it is never counted among the published ones.
+ */
+async function removeLeftovers(dest) {
+  const latest = await latestGeneration(dest);
   for (const name of await readdir(dest)) {
     if (name.startsWith(STAGING_PREFIX)) await rm(join(dest, name), { recursive: true, force: true });
+    if (name.startsWith(UNPUBLISHED_PREFIX)) {
+      const generation = name.slice(UNPUBLISHED_PREFIX.length);
+      if (GENERATION_NAME.test(generation) && generation !== latest) await rm(join(dest, GENERATIONS, generation), { recursive: true, force: true });
+      await rm(join(dest, name), { force: true });
+    }
   }
 }
 
@@ -249,7 +269,7 @@ function parseManifest(text) {
     throw damaged('manifest is malformed', MANIFEST);
   }
   for (const target of manifest.targets) {
-    if (typeof target?.name !== 'string' || !['copied', 'link', 'empty', 'absent'].includes(target.status)
+    if (typeof target?.name !== 'string' || !['copied', 'empty', 'absent'].includes(target.status)
       || !['config', 'managed-provider'].includes(target.kind)) throw damaged('manifest is malformed', MANIFEST);
   }
   const directories = new Set(['.']);
@@ -309,7 +329,7 @@ function storedDirectoryMode(mode) {
 
 /**
  * Copy one tree entry into the staged generation and record it.
- * Symbolic links are copied as links and never followed.
+ * Symbolic links are copied as links and never followed; one that leaves its backup target fails the run.
  */
 async function copyEntry(context, relativePath) {
   const sourcePath = join(context.source, relativePath);
@@ -319,7 +339,12 @@ async function copyEntry(context, relativePath) {
   if (before.isSymbolicLink()) {
     const target = await readlink(sourcePath);
     await symlink(target, stagedPath);
-    if (!isInsideOrEqual(context.realSource, resolve(dirname(join(context.realSource, relativePath)), target))) context.totals.externalLinks += 1;
+    // A link is only kept when it stays inside the backup target it belongs to. Anything else would make a
+    // copy of the generation read, or write, a file that is not in the backup.
+    const targetRoot = relativePath.split(sep)[0];
+    if (isAbsolute(target) || !isInsideOrEqual(targetRoot, join(dirname(relativePath), target))) {
+      throw new BackupError('EXTERNAL_LINK', 'A symbolic link points outside the backup target it is in. Replace it with the files themselves.', relativePath);
+    }
     context.entries.push({ path: relativePath, type: 'link', target });
     return;
   }
@@ -347,11 +372,10 @@ async function copyEntry(context, relativePath) {
 /** `copied` means the generation holds at least one file of the target. */
 async function copyTarget(context, name, kind, copy) {
   const filesBefore = context.totals.files;
-  const entriesBefore = context.entries.length;
   const extra = await copy();
   if (extra === undefined) return { name, kind, status: 'absent', files: 0 };
   const files = context.totals.files - filesBefore;
-  const status = files > 0 ? 'copied' : (context.entries[entriesBefore]?.type === 'link' ? 'link' : 'empty');
+  const status = files > 0 ? 'copied' : 'empty';
   return { name, kind, status, files, ...extra };
 }
 
@@ -385,7 +409,7 @@ async function copyManagedProvider(context, name) {
 
 /** Stage, check, and publish one generation. Runs under the lock. */
 async function createGeneration({ source, dest, keep, acceptRemoved, name, startedAt, log, readBack }) {
-  await removeStagingLeftovers(dest);
+  await removeLeftovers(dest);
   if (!await isRealDirectory(await realpathOfMaybeMissing(source))) throw new BackupError('SOURCE_MISSING', 'The TAKT config directory does not exist.');
   const published = await listGenerations(dest);
   if (published.includes(name)) throw new BackupError('GENERATION_EXISTS', 'A generation with this timestamp already exists.');
@@ -399,10 +423,9 @@ async function createGeneration({ source, dest, keep, acceptRemoved, name, start
     await mkdir(staging, { mode: 0o700 });
     const context = {
       source,
-      realSource: await realpath(source),
       data: join(staging, DATA),
       entries: [],
-      totals: { files: 0, bytes: 0, externalLinks: 0 },
+      totals: { files: 0, bytes: 0 },
     };
     await mkdir(context.data, { mode: 0o700 });
     const targets = [];
@@ -410,6 +433,7 @@ async function createGeneration({ source, dest, keep, acceptRemoved, name, start
     for (const target of MANAGED_PROVIDER_TARGETS) targets.push(await copyTarget(context, target, 'managed-provider', () => copyManagedProvider(context, target)));
     const copied = new Set(targets.filter((target) => target.status === 'copied').map((target) => target.name));
     if (copied.size === 0) throw new BackupError('NOTHING_TO_COPY', 'The TAKT config directory holds no file of any backup target.');
+    if (!copied.has('config.yaml')) throw new BackupError('CONFIG_MISSING', 'The TAKT config directory has no config.yaml.');
     const lost = (previous?.targets ?? []).filter((target) => target.status === 'copied' && !copied.has(target.name)).map((target) => target.name);
     if (lost.length > 0 && !acceptRemoved) {
       throw new BackupError('TARGET_DISAPPEARED', `Held files in the previous generation but holds none now: ${lost.join(', ')}. Pass --accept-removed if this is intended.`);
@@ -420,7 +444,7 @@ async function createGeneration({ source, dest, keep, acceptRemoved, name, start
     if (emptied !== undefined && !acceptRemoved) {
       throw new BackupError('FILE_EMPTIED', 'A file that held content is empty now. Pass --accept-removed if this is intended.', emptied.path);
     }
-    const manifest = { version: 1, generation: name, createdAt: startedAt, source: context.realSource, targets, totals: context.totals, entries: context.entries };
+    const manifest = { version: 1, generation: name, createdAt: startedAt, source: await realpath(source), targets, totals: context.totals, entries: context.entries };
     await writeFile(join(staging, MANIFEST), JSON.stringify(manifest), { flag: 'wx', mode: 0o600 });
     // What is about to be published must pass the same check a later verify runs, or it replaces nothing.
     await verifyTree(context.data, parseManifest(await readBack(join(staging, MANIFEST), 'utf8')).entries);
@@ -428,16 +452,19 @@ async function createGeneration({ source, dest, keep, acceptRemoved, name, start
     const summary = { generation: name, targets, totals: context.totals, pruned };
 
     // The link is made before the generation is published, so that pointing latest at it is one rename.
-    // If that rename fails, latest still names what it named before, and the generation is taken back.
+    // If that rename fails, latest still names what it named before, and the generation is removed.
     const pendingLatest = join(dest, `${STAGING_PREFIX}latest-${randomBytes(4).toString('hex')}`);
     await symlink(join(GENERATIONS, name), pendingLatest);
-    await rename(staging, final);
+    await writeFile(join(dest, `${UNPUBLISHED_PREFIX}${name}`), '', { flag: 'wx', mode: 0o600 });
     try {
+      await rename(staging, final);
       await rename(pendingLatest, join(dest, LATEST));
     } catch (error) {
-      await rename(final, staging);
+      // Still unpublished: remove it now, or leave the marker for the next run to do so.
+      await removeLeftovers(dest).catch(() => {});
       throw error;
     }
+    await rm(join(dest, `${UNPUBLISHED_PREFIX}${name}`), { force: true });
     try {
       await log.write({ time: startedAt, action: 'backup', source, result: 'ok', ...summary });
     } catch (error) {
@@ -479,11 +506,21 @@ export async function backupSharedTakt({ source, dest, keep = DEFAULT_KEEP, acce
   }
 }
 
+/** The tree under `root` is exactly what the manifest lists: nothing changed, nothing missing, nothing added. */
 async function verifyTree(root, entries) {
   for (const entry of entries) {
     const difference = await entryDifference(root, entry);
     if (difference !== undefined) throw damaged(difference, entry.path);
   }
+  const listed = new Set(entries.map((entry) => entry.path));
+  const walk = async (relativePath) => {
+    for (const name of await readdir(join(root, relativePath))) {
+      const path = join(relativePath, name);
+      if (!listed.has(path)) throw damaged('not in the manifest', path);
+      if ((await lstat(join(root, path))).isDirectory()) await walk(path);
+    }
+  };
+  await walk('');
 }
 
 /** Compare one manifest entry with what is on disk under `root`. Returns the difference, if any. */
@@ -504,6 +541,8 @@ async function entryDifference(root, entry) {
 async function openVerifiedGeneration(dest, generation) {
   const opened = await openGeneration(dest, generation);
   if (!await isRealDirectory(join(opened.directory, DATA))) throw damaged('data is missing', DATA);
+  const stray = (await readdir(opened.directory)).find((name) => name !== DATA && name !== MANIFEST);
+  if (stray !== undefined) throw damaged('not in the manifest', stray);
   await verifyTree(join(opened.directory, DATA), opened.manifest.entries);
   return opened;
 }
@@ -564,9 +603,8 @@ export async function main(argv, { stdout = process.stdout, stderr = process.std
         env,
       });
       stdout.write(summaryLine('backup', summary));
-      const unsaved = summary.targets.filter((target) => target.status === 'link' || target.status === 'empty').map((target) => `${target.name} (${target.status})`);
-      if (unsaved.length > 0) stdout.write(`note: no file was saved for ${unsaved.join(', ')}\n`);
-      if (summary.totals.externalLinks > 0) stdout.write(`note: ${summary.totals.externalLinks} symbolic link(s) point outside the config directory; their targets are not in the backup\n`);
+      const empty = summary.targets.filter((target) => target.status === 'empty').map((target) => target.name);
+      if (empty.length > 0) stdout.write(`note: no file was saved for ${empty.join(', ')} (empty)\n`);
       return 0;
     }
     if (command === 'verify') {

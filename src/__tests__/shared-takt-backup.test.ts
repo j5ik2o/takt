@@ -154,6 +154,52 @@ describe('backup', () => {
     await expect(verifyGeneration({ dest })).resolves.toMatchObject({ generation: first.generation });
   });
 
+  it('fails on a symbolic link that leaves its backup target, and keeps one that stays inside', async () => {
+    const elsewhere = join(root, 'elsewhere.yaml');
+    writeFileSync(elsewhere, CONFIG);
+    symlinkSync('custom.yaml', join(source, 'workflows', 'alias.yaml'));
+    const first = await backupSharedTakt({ source, dest, now: at(20) });
+    expect(readlinkSync(generationPath(first.generation, 'data', 'workflows', 'alias.yaml'))).toBe('custom.yaml');
+
+    const cases: Array<[string, string]> = [
+      ['workflows/absolute.yaml', elsewhere],
+      ['workflows/absolute-inside.yaml', join(source, 'workflows', 'custom.yaml')],
+      ['workflows/sibling.yaml', '../config.yaml'],
+      ['facets/personas/outside.md', '../../../elsewhere.yaml'],
+      ['schemas', elsewhere],
+    ];
+    for (const [path, target] of cases) {
+      symlinkSync(target, join(source, path));
+      expect(await failureCode(backupSharedTakt({ source, dest, now: at(21) }))).toBe('EXTERNAL_LINK');
+      rmSync(join(source, path));
+    }
+    rmSync(join(source, 'config.yaml'));
+    symlinkSync(elsewhere, join(source, 'config.yaml'));
+    expect(await failureCode(backupSharedTakt({ source, dest, now: at(22) }))).toBe('EXTERNAL_LINK');
+
+    expect(await listGenerations(dest)).toEqual([first.generation]);
+  });
+
+  it('requires config.yaml', async () => {
+    const first = await backupSharedTakt({ source, dest, keep: 1, now: at(24) });
+    rmSync(join(source, 'config.yaml'));
+
+    expect(await failureCode(backupSharedTakt({ source, dest, keep: 1, now: at(25), acceptRemoved: true }))).toBe('CONFIG_MISSING');
+    expect(await listGenerations(dest)).toEqual([first.generation]);
+  });
+
+  it('removes a generation that was never published before counting the ones to keep', async () => {
+    await backupSharedTakt({ source, dest, keep: 2, now: at(24) });
+    await backupSharedTakt({ source, dest, keep: 2, now: at(25) });
+    mkdirSync(generationPath(nameAt(26), 'data'), { recursive: true });
+    writeFileSync(join(dest, `.unpublished-${nameAt(26)}`), '');
+
+    await backupSharedTakt({ source, dest, keep: 2, now: at(27) });
+
+    expect(await listGenerations(dest)).toEqual([nameAt(25), nameAt(27)]);
+    expect(readdirSync(dest).filter((name) => name.startsWith('.'))).toEqual([]);
+  });
+
   it('takes the generation back and leaves latest alone when latest cannot be pointed at it', async () => {
     await backupSharedTakt({ source, dest, now: at(25) });
     await backupSharedTakt({ source, dest, now: at(24) });
@@ -163,6 +209,7 @@ describe('backup', () => {
 
     await expect(backupSharedTakt({ source, dest, now: at(26) })).rejects.toThrow();
     expect(await listGenerations(dest)).toEqual([nameAt(24), nameAt(25)]);
+    expect(readdirSync(dest).filter((name) => name.startsWith('.'))).toEqual([]);
 
     rmSync(join(dest, 'latest'), { recursive: true });
     symlinkSync(join('generations', nameAt(24)), join(dest, 'latest'));
@@ -347,6 +394,15 @@ describe('backup', () => {
     expect(existsSync(home) ? readdirSync(home).sort() : undefined).toEqual(homeBefore);
   });
 
+  it.skipIf(!['darwin', 'win32'].includes(process.platform))('refuses a config directory that does not exist yet under another spelling of its name', async () => {
+    const missing = join(root, 'not-yet', '.takt');
+
+    for (const target of [join(root, 'not-yet', '.TAKT'), join(root, 'NOT-YET', '.takt', 'backup')]) {
+      expect(await failureCode(backupSharedTakt({ source, dest: target, env: { TAKT_CONFIG_DIR: missing } }))).toBe('DEST_OVERLAPS_SOURCE');
+    }
+    expect(existsSync(join(root, 'not-yet'))).toBe(false);
+  });
+
   it('refuses a backup directory reached through a link in its path', async () => {
     const real = join(root, 'real');
     mkdirSync(real, { mode: 0o700 });
@@ -419,6 +475,24 @@ describe('verify', () => {
     expect(statSync(generationPath(next.generation, 'data', 'config.yaml')).mode & 0o777).toBe(0o600);
     expect(readFileSync(generationPath(next.generation, 'data', 'workflows', 'custom.yaml'), 'utf8')).toBe('name: custom\n');
     await expect(verifyGeneration({ dest })).resolves.toMatchObject({ generation: next.generation });
+  });
+
+  it('reports anything in a generation that its manifest does not list', async () => {
+    const { generation } = await backupSharedTakt({ source, dest, now: at(24) });
+
+    writeFileSync(generationPath(generation, 'data', 'workflows', 'added.yaml'), 'name: added\n');
+    expect(await failureCode(verifyGeneration({ dest }))).toBe('GENERATION_DAMAGED');
+    rmSync(generationPath(generation, 'data', 'workflows', 'added.yaml'));
+
+    mkdirSync(generationPath(generation, 'data', 'pi', 'sdk-11111111', 'node_modules', 'added'));
+    expect(await failureCode(verifyGeneration({ dest }))).toBe('GENERATION_DAMAGED');
+    rmSync(generationPath(generation, 'data', 'pi', 'sdk-11111111', 'node_modules', 'added'), { recursive: true });
+
+    writeFileSync(generationPath(generation, 'added.yaml'), 'name: added\n');
+    expect(await failureCode(verifyGeneration({ dest }))).toBe('GENERATION_DAMAGED');
+    rmSync(generationPath(generation, 'added.yaml'));
+
+    await expect(verifyGeneration({ dest })).resolves.toBeDefined();
   });
 
   it('checks the generation that latest points at', async () => {
