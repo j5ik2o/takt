@@ -281,10 +281,13 @@ function selectRuntimeAssignment(
     return { runtimeFile: file };
   }
   const assignment = Object.hasOwn(assignments, assignmentName) ? assignments[assignmentName] : undefined;
-  if (
-    file === undefined || provider === undefined || assignment === undefined
-    || (input.runtimeAssignment !== undefined && !hasActiveProviderSection(file))
-  ) {
+  if (assignment !== undefined && input.runtimeAssignment !== undefined && !hasActiveProviderSection(file)) {
+    throw new RuntimeAssignmentSelectionError(
+      assignmentName,
+      `Cannot select runtime assignment "${assignmentName}". The assignment is defined, but the runtime.yaml provider section is not active: it has no usable defaults, profiles, targets, or assignments.`,
+    );
+  }
+  if (file === undefined || provider === undefined || assignment === undefined) {
     const names = Object.keys(assignments);
     const available = names.length === 0
       ? 'No assignments are defined.'

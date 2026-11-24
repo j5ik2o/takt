@@ -1117,5 +1117,20 @@ describe('runtime-provider loader', () => {
       expect(() => select('cost')).toThrow('cost');
       expect(() => select('cost')).toThrow(/no.*assignment|assignment.*(?:none|not defined|undefined)|定義.*(?:ない|なし)/i);
     });
+
+    it('explains that a defined assignment cannot be selected because the provider section is inactive', () => {
+      writeRuntimeYaml(globalDir, stringifyYaml({
+        version: 1,
+        companion: { enabled: false },
+        provider: {
+          profiles: { review: { provider: 'mock' } },
+          assignments: { 'companion-only': { targets: { companions: { reviewer: { profile: 'review' } } } } },
+        },
+      }).split('\n'));
+
+      expect(() => select('companion-only')).toThrow('Cannot select runtime assignment "companion-only"');
+      expect(() => select('companion-only')).toThrow(/is defined, but .*provider section is not active/);
+      expect(() => select('companion-only')).not.toThrow(/Available assignments/);
+    });
   });
 });
