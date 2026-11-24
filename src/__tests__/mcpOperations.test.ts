@@ -607,6 +607,19 @@ describe('MCP goal pull request state', () => {
     expect(readGoalPullRequestStatus.mock.calls.map(([, goal]) => goal.pullRequest?.number)).toEqual([2001, 2002]);
   });
 
+  it('reads pull request status only for goals that fit in the size-limited page', async () => {
+    const goals = Array.from({ length: 50 }, (_, index) => ({ ...prGoal(index), branch: `takt/${'x'.repeat(2000)}`,
+      pullRequest: { number: 3000 + index, url: `https://github.com/example/project/pull/${3000 + index}` } }));
+    goalDoubles.list.mockResolvedValue({ goals, errors: [] });
+    readGoalPullRequestStatus.mockResolvedValue(available('MERGED'));
+    const listed = JSON.parse(firstTextContent((await listTaktGoals({ cwd: '/repo' }, deps)).content));
+    expect(listed.goals.length).toBeLessThan(50);
+    expect(listed.nextOffset).toBe(listed.goals.length);
+    expect(listed.goals.every((goal: { pullRequest: { state: string } }) => goal.pullRequest.state === 'merged')).toBe(true);
+    expect(readGoalPullRequestStatus.mock.calls.map(([, goal]) => goal.pullRequest?.number))
+      .toEqual(listed.goals.map((goal: { pullRequest: { number: number } }) => goal.pullRequest.number));
+  });
+
   it('passes only the pull request reference and branch fields to the status read when listing', async () => {
     goalDoubles.list.mockResolvedValue({ goals: [prGoal()], errors: [] });
     readGoalPullRequestStatus.mockResolvedValue(available('OPEN'));
