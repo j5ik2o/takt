@@ -1551,6 +1551,44 @@ describe('saved resume position on a step that can only abort', () => {
     expect(model.defaultId).toBe('resume-checkpoint');
   });
 
+  it('does not propose a restart at the notification step it just refused to resume', () => {
+    const workflow = makeWorkflow({
+      name: 'default',
+      ref: 'project:root',
+      steps: [
+        withRules(agentStep('report_failure'), ['ABORT']),
+        withRules(agentStep('work'), ['report_failure', 'COMPLETE']),
+      ],
+    });
+
+    const model = buildTaskRetryStartOptions(workflow, {
+      ...pathContext,
+      resumePoint: rootResumePoint('report_failure', 'agent'),
+      preferredRootStep: 'report_failure',
+    });
+
+    expect(model.resumeFailureReason).toContain('can only abort');
+    expect(model.options.find((option) => option.id === model.defaultId)?.label).toContain('work');
+    expect(model.options.filter((option) => option.selectable).map((option) => option.label))
+      .toEqual(['"report_failure"', '"work"']);
+  });
+
+  it('keeps resuming a step that can wait for user input instead of aborting', () => {
+    const asking: WorkflowStep = {
+      ...agentStep('ask'),
+      rules: [{ condition: { kind: 'when', expression: 'true' }, next: 'ABORT', requiresUserInput: true }],
+    };
+    const workflow = makeWorkflow({ name: 'default', ref: 'project:root', steps: [asking] });
+
+    const model = buildTaskRetryStartOptions(workflow, {
+      ...pathContext,
+      resumePoint: rootResumePoint('ask', 'agent'),
+    });
+
+    expect(model.resumeFailureReason).toBeUndefined();
+    expect(model.defaultId).toBe('resume-checkpoint');
+  });
+
   it('keeps resuming a waiting step whose timeout leads elsewhere', () => {
     const waiting: WorkflowStep = {
       name: 'wait',

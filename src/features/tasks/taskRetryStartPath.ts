@@ -51,6 +51,8 @@ export interface TaskRetryRestartTreeLeaf {
   /** Unique position path within the tree, used to derive a stable row value. */
   id: string;
   restartPoint: WorkflowRestartPoint;
+  /** Every exit of the step ends its workflow in ABORT; never proposed as the default. */
+  onlyAborts: boolean;
 }
 
 /** A non-selectable workflow_call heading that expands its child steps. */
@@ -195,6 +197,7 @@ function buildTaskRetryTreeLevel(
       depth: level.depth,
       id,
       restartPoint: { stack: [...level.stack, entry] },
+      onlyAborts: stepOnlyAborts(level.workflow.steps, step.name),
     });
   });
   return nodes;

@@ -195,6 +195,10 @@ function flattenRestartTree(
       promptOptions.push({ label: `${indent}${stepLabel}`, value });
       selections.set(value, { kind: 'restart', restartPoint: node.restartPoint });
       resultLabels.set(value, stepLabel);
+      // A step that can only abort stays selectable but is never the proposed default.
+      if (node.onlyAborts) {
+        continue;
+      }
       if (firstLeafValue === undefined) {
         firstLeafValue = value;
       }
@@ -229,7 +233,8 @@ function buildTaskRetryStartCatalog(
   const defaultId = resumeOption?.value
     ?? (initialStart ? INITIAL_SELECTION_VALUE : undefined)
     ?? flattened.preferredLeafValue
-    ?? flattened.firstLeafValue;
+    ?? flattened.firstLeafValue
+    ?? flattened.selections.keys().next().value;
   if (defaultId === undefined) {
     if (resumeResolution !== undefined && 'reason' in resumeResolution) {
       throw new InvalidTaskRetryResumeWithoutRestartError(resumeResolution.reason);
