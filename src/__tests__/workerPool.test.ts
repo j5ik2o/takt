@@ -699,7 +699,7 @@ describe('runWithWorkerPool', () => {
       10,
     );
 
-    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith(name, { maxAttempts: 2 });
+    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith(name, { maxAttempts: 2, restartOnlyAborts: expect.any(Function) });
     expect(console.log).toHaveBeenCalledWith(chalk.blue(`[INFO] Task "${displayName}" auto-requeued (1/2)`));
     expect(result).toMatchObject({ success: 1, fail: 0 });
     expect(executeRunTaskAndComplete).toHaveBeenCalledTimes(2);
@@ -764,9 +764,9 @@ describe('requeue provider preparation interruption', () => {
     await runWithWorkerPool(runner as never, [], 1, '/cwd', undefined,
       { autoRequeueMaxAttempts: 1 }, 10, 'watch');
 
-    expect(runner.isAutoRequeueEligible).toHaveBeenCalledWith('ineligible', 1);
+    expect(runner.isAutoRequeueEligible).toHaveBeenCalledWith('ineligible', 1, expect.any(Function));
     expect(checkQueuedTaskProviders).not.toHaveBeenCalled();
-    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith('ineligible', { maxAttempts: 1 });
+    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith('ineligible', { maxAttempts: 1, restartOnlyAborts: expect.any(Function) });
     expect(process.rawListeners('SIGINT')).toEqual(listeners);
   });
 
@@ -778,9 +778,9 @@ describe('requeue provider preparation interruption', () => {
     const result = await runWithWorkerPool(runner as never, [createTask('failed')], 1,
       '/cwd', undefined, { autoRequeueMaxAttempts: 1 }, 10);
 
-    expect(runner.isAutoRequeueEligible).toHaveBeenCalledWith('failed', 1);
+    expect(runner.isAutoRequeueEligible).toHaveBeenCalledWith('failed', 1, expect.any(Function));
     expect(checkQueuedTaskProviders).not.toHaveBeenCalled();
-    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith('failed', { maxAttempts: 1 });
+    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith('failed', { maxAttempts: 1, restartOnlyAborts: expect.any(Function) });
     expect(result.fail).toBe(1);
   });
 
@@ -828,7 +828,7 @@ describe('requeue provider preparation interruption', () => {
 describe('requeueExistingFailedTasks', () => {
   it.each([undefined, 0])('上限=%s では failed を取得しない', (maxAttempts) => {
     const runner = createRunner();
-    expect(requeueExistingFailedTasks(runner as never, maxAttempts)).toBe(0);
+    expect(requeueExistingFailedTasks(runner as never, '/cwd', maxAttempts)).toBe(0);
     expect(runner.listFailedTasks).not.toHaveBeenCalled();
     expect(console.log).not.toHaveBeenCalled();
   });
@@ -839,9 +839,10 @@ describe('requeueExistingFailedTasks', () => {
     runner.autoRequeueFailedTask.mockReturnValueOnce({
       requeued: true, attempt: 1, maxAttempts: 1, reason: 'requeued',
     });
-    expect(requeueExistingFailedTasks(runner as never, 1)).toBe(1);
+    expect(requeueExistingFailedTasks(runner as never, '/cwd', 1)).toBe(1);
     expect(runner.autoRequeueFailedTask.mock.calls).toEqual([
-      ['eligible', { maxAttempts: 1 }], ['ineligible', { maxAttempts: 1 }],
+      ['eligible', { maxAttempts: 1, restartOnlyAborts: expect.any(Function) }],
+      ['ineligible', { maxAttempts: 1, restartOnlyAborts: expect.any(Function) }],
     ]);
   });
 
@@ -849,7 +850,7 @@ describe('requeueExistingFailedTasks', () => {
     const runner = createRunner();
     const controller = new AbortController();
     controller.abort();
-    expect(requeueExistingFailedTasks(runner as never, 1, controller.signal)).toBe(0);
+    expect(requeueExistingFailedTasks(runner as never, '/cwd', 1, controller.signal)).toBe(0);
     expect(runner.listFailedTasks).not.toHaveBeenCalled();
     expect(runner.autoRequeueFailedTask).not.toHaveBeenCalled();
   });
@@ -857,9 +858,9 @@ describe('requeueExistingFailedTasks', () => {
   it('requeues the checked snapshot without reading a second failed-task list', () => {
     const runner = createRunner();
     runner.autoRequeueFailedTask.mockReturnValue({ requeued: true, attempt: 1, maxAttempts: 1, reason: 'requeued' });
-    expect(requeueExistingFailedTasks(runner as never, 1, undefined, [createTask('checked')])).toBe(1);
+    expect(requeueExistingFailedTasks(runner as never, '/cwd', 1, undefined, [createTask('checked')])).toBe(1);
     expect(runner.listFailedTasks).not.toHaveBeenCalled();
-    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith('checked', { maxAttempts: 1 });
+    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith('checked', { maxAttempts: 1, restartOnlyAborts: expect.any(Function) });
   });
 });
 
@@ -868,8 +869,8 @@ describe('attemptAutoRequeueTask の端末表示', () => {
     const runner = createRunner();
     runner.autoRequeueFailedTask.mockReturnValue({ requeued: true, attempt: 1, maxAttempts: 1, reason: 'requeued' });
 
-    expect(attemptAutoRequeueTask(runner as never, name, 1)).toBe(true);
-    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith(name, { maxAttempts: 1 });
+    expect(attemptAutoRequeueTask(runner as never, '/cwd', name, 1)).toBe(true);
+    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith(name, { maxAttempts: 1, restartOnlyAborts: expect.any(Function) });
     expect(console.log).toHaveBeenCalledExactlyOnceWith(chalk.blue(`[INFO] Task "${displayName}" auto-requeued (1/1)`));
   });
 
@@ -879,19 +880,20 @@ describe('attemptAutoRequeueTask の端末表示', () => {
     ['failure_not_retryable', 'failure is not retryable'],
     ['missing_failed_step', 'failed step is missing'],
     ['missing_failure_detail', 'failure detail is missing'],
+    ['restart_only_aborts', 'restart position can only abort the workflow'],
   ] as const)('スキップ理由 %s でも名前を安全に表示する', (reason, description) => {
     const { name, displayName } = taskNames[1]!;
     const runner = createRunner();
     runner.autoRequeueFailedTask.mockReturnValue({ requeued: false, attempt: 0, maxAttempts: 1, reason });
 
-    expect(attemptAutoRequeueTask(runner as never, name, 1)).toBe(false);
-    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith(name, { maxAttempts: 1 });
+    expect(attemptAutoRequeueTask(runner as never, '/cwd', name, 1)).toBe(false);
+    expect(runner.autoRequeueFailedTask).toHaveBeenCalledWith(name, { maxAttempts: 1, restartOnlyAborts: expect.any(Function) });
     expect(console.log).toHaveBeenCalledExactlyOnceWith(chalk.blue(`[INFO] Task "${displayName}" was not auto-requeued: ${description} (0/1)`));
   });
 
   it('上限0では再投入とログ出力を行わない', () => {
     const runner = createRunner();
-    expect(attemptAutoRequeueTask(runner as never, taskNames[1]!.name, 0)).toBe(false);
+    expect(attemptAutoRequeueTask(runner as never, '/cwd', taskNames[1]!.name, 0)).toBe(false);
     expect(runner.autoRequeueFailedTask).not.toHaveBeenCalled();
     expect(console.log).not.toHaveBeenCalled();
   });

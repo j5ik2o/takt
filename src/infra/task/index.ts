@@ -24,6 +24,7 @@ export { TaskRunner } from './runner.js';
 export type {
   AutoRequeueResult,
   AutoRequeueSkipReason,
+  AutoRequeueRestartCheck,
   TaskRetryOptions,
 } from './taskRetryService.js';
 export { buildAutoRequeueNote } from './retryNote.js';

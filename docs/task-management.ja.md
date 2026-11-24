@@ -187,6 +187,8 @@ concurrency が 1 より大きい場合、TAKT はワーカープールを使用
 
 設定で `auto_requeue_max_attempts` を指定すると、`takt run` / `takt watch` は起動時に一度だけ適格な failed タスクを再投入し、実行中の失敗も保存済み回数の上限まで再投入します。watch の常駐中は起動時の一括処理を繰り返さず、SIGINT 後は claim・再投入を行いません。両コマンドとも入力待ち中は claim を抑止します。デフォルトは `0`（手動 requeue のみ）です。詳細は[設定ガイド](./configuration.ja.md)を参照してください。
 
+再開する位置が、失敗の通知だけを行って必ず ABORT へ進む step にある failed タスクは、自動では再投入しません（条件は[失敗タスクの操作](#失敗タスクの操作)の説明と同じです）。そこから再開しても、何も直せないまま同じ ABORT で終わり、再投入の回数だけを使い切るためです。TAKT は `was not auto-requeued: restart position can only abort the workflow` と表示し、タスクを `failed` のまま残します。回数は増えません。手動で requeue し、再実行する step を選んでください。判定する位置は、実行時に使う位置と同じです。保存済みの再実行位置があればその位置、なければ保存済みの再開位置、どちらもなければ失敗した step を見ます。行き先に ABORT 以外がある step で失敗したタスクは、これまでどおり自動で再投入します。
+
 ## タスクの監視（`takt watch`）
 
 `.takt/tasks.yaml` を監視し、タスクが追加されると自動実行する常駐プロセスを起動します。

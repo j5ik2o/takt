@@ -325,17 +325,25 @@ export function resolveTaskRetryStackPath(
   });
 }
 
+export function resolveTaskRetryRestartPath(
+  rootWorkflow: WorkflowConfig,
+  restartPoint: WorkflowRestartPoint,
+  context: TaskRetryStartPathContext,
+): TaskRetryPathResolution {
+  return resolveTaskRetryStackPathWithOptions(rootWorkflow, restartPoint.stack, context, {
+    allowParallelEntries: false,
+    requireRestartTarget: true,
+    requireRestartIdentity: true,
+  });
+}
+
 export function validateTaskRetryRestartPoint(
   rootWorkflow: WorkflowConfig,
   restartPoint: WorkflowRestartPoint,
   context: TaskRetryStartPathContext,
 ): void {
   new WorkflowRestartNavigator(restartPoint).resolveRootStartStep(rootWorkflow, undefined);
-  const resolved = resolveTaskRetryStackPathWithOptions(rootWorkflow, restartPoint.stack, context, {
-    allowParallelEntries: false,
-    requireRestartTarget: true,
-    requireRestartIdentity: true,
-  });
+  const resolved = resolveTaskRetryRestartPath(rootWorkflow, restartPoint, context);
   if ('segments' in resolved) {
     return;
   }

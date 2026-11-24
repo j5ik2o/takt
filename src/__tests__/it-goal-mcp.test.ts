@@ -807,8 +807,8 @@ describe('manager goal task enqueue', () => {
     });
 
     const count = entry === 'startup'
-      ? requeueExistingFailedTasks(new TaskRunner(cwd), 1)
-      : Number(attemptAutoRequeueTask(new TaskRunner(cwd), running.name, 1));
+      ? requeueExistingFailedTasks(new TaskRunner(cwd), cwd, 1)
+      : Number(attemptAutoRequeueTask(new TaskRunner(cwd), cwd, running.name, 1));
 
     expect(count).toBe(belongsToGoal ? 0 : 1);
     const restored = new TaskRunner(cwd).listAllTaskItems()[0]!;

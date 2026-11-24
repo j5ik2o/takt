@@ -187,6 +187,8 @@ If `takt run` is interrupted (e.g., process crash, Ctrl+C), tasks left in `runni
 
 When `auto_requeue_max_attempts` is set, `takt run` and `takt watch` requeue eligible failed workflow tasks once at startup and after execution failures, up to the saved attempt limit. Watch does not repeat the startup scan while resident; after SIGINT, it neither claims nor requeues tasks. Both commands pause task claims while waiting for user input. The default is `0` (manual requeue only). See the [Configuration Guide](./configuration.md) for details.
 
+A failed task is not requeued automatically when the position it would restart from is a step that only reports the failure and always goes to ABORT (the same condition as in [Actions for Failed Tasks](#actions-for-failed-tasks)). Restarting there would end in the same ABORT without running anything that can fix the failure, and would only use up the attempt limit. TAKT prints `was not auto-requeued: restart position can only abort the workflow`, leaves the task `failed`, and does not count the attempt. Requeue it manually and choose the step to restart from. The position checked is the one execution would use: the saved restart position, otherwise the saved resume point, otherwise the failed step. A task that failed on a step with any other exit is requeued as before.
+
 ## Watching Tasks (`takt watch`)
 
 Run a resident process that monitors `.takt/tasks.yaml` and auto-executes tasks as they appear:

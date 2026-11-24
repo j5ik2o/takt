@@ -10,6 +10,7 @@ import type { RunResumeSource } from '../../core/workflow/run/run-meta.js';
 import {
   TaskRetryService,
   type AutoRequeueResult,
+  type AutoRequeueRestartCheck,
   type TaskRetryOptions,
 } from './taskRetryService.js';
 import type { PrExecutionContext } from '../../core/workflow/system/pr-execution-context.js';
@@ -179,12 +180,15 @@ export class TaskRunner {
     return this.retry.requeueFailedTask(taskRef, startStep, retryNote);
   }
 
-  autoRequeueFailedTask(taskRef: string, options: { maxAttempts: number }): AutoRequeueResult {
+  autoRequeueFailedTask(
+    taskRef: string,
+    options: { maxAttempts: number; restartOnlyAborts?: AutoRequeueRestartCheck },
+  ): AutoRequeueResult {
     return this.retry.autoRequeueFailedTask(taskRef, options);
   }
 
-  isAutoRequeueEligible(taskRef: string, maxAttempts: number): boolean {
-    return this.retry.isAutoRequeueEligible(taskRef, maxAttempts);
+  isAutoRequeueEligible(taskRef: string, maxAttempts: number, restartOnlyAborts?: AutoRequeueRestartCheck): boolean {
+    return this.retry.isAutoRequeueEligible(taskRef, maxAttempts, restartOnlyAborts);
   }
 
   requeueTask(

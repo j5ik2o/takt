@@ -15,7 +15,7 @@ import {
 } from '../../../shared/utils/index.js';
 import { getLabel } from '../../../shared/i18n/index.js';
 import type { RunAllTasksOptions, TaskExecutionOptions } from './types.js';
-import { attemptAutoRequeueTask, runWithWorkerPool } from './parallelExecution.js';
+import { attemptAutoRequeueTask, isAutoRequeueCandidate, runWithWorkerPool } from './parallelExecution.js';
 import { toSlackTaskDetail } from './slackSummaryAdapter.js';
 import { failInterruptedTasksWithGoalEvents, isClaimLockTimeoutFailure } from './claimTasks.js';
 import { checkQueuedTaskProviders, checkPendingTaskProviders, runtimeAssignmentUnavailableReason, terminalProviderConfirmation } from './providerPreflight.js';
@@ -80,14 +80,14 @@ export async function runAllTasks(
     }
     for (const task of failedTasks) {
       if (shutdownSignals.schedulingSignal.aborted) break;
-      if (!await retryLockTimeout(() => taskRunner.isAutoRequeueEligible(task.name, maxAttempts))) continue;
+      if (!await retryLockTimeout(() => isAutoRequeueCandidate(taskRunner, cwd, task.name, maxAttempts))) continue;
       await checkQueuedTaskProviders(cwd, task, agentOverrides ?? {}, confirmation, shutdownSignals.schedulingSignal);
     }
     let requeuedExistingFailed = 0;
     for (const task of failedTasks) {
       if (schedulingSignal.aborted) break;
       // Keep successful writes and provider checks completed when a later write needs a retry.
-      if (await retryLockTimeout(() => attemptAutoRequeueTask(taskRunner, task.name, maxAttempts))) {
+      if (await retryLockTimeout(() => attemptAutoRequeueTask(taskRunner, cwd, task.name, maxAttempts))) {
         requeuedExistingFailed++;
       }
     }
