@@ -102,6 +102,18 @@ module fixedCodeTest {
       .then(registerExisting)
       .expect(s.pc == Idle and s.approval == Reserved and s.verification == Pending and s.explicitRuns == 0)
 
+  /// A reservation without a saved goal: the turn stopped after the reservation was saved.
+  run reverifyWithoutSavedGoalCreatesNothingTest =
+    initWith(true, false, Pending, 0)
+      .then(startApprove(false))
+      .then(crash)
+      .expect(s.approval == Reserved and not(s.goalExists))
+      .then(startApprove(true))
+      .then(rejectReverifyWithoutGoal)
+      .expect(s.approval == NoApproval and not(s.goalExists) and not(s.branch) and s.goalCreates == 0)
+      .expect(s.freshRuns + s.explicitRuns == 0)
+      .expect(safety)
+
   run freshFailedVerificationReleasesReservationTest =
     initWith(true, false, Pending, 0)
       .then(startApprove(false))

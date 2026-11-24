@@ -13,7 +13,7 @@ The header of the `.qnt` file maps each part of the model to its source file.
 
 ## Invariants
 
-All three instances are checked against the same five invariants. None was weakened to make the fix pass.
+All three instances are checked against the same six invariants. None was weakened to make the fix pass.
 
 | Invariant | Meaning |
 |---|---|
@@ -21,6 +21,7 @@ All three instances are checked against the same five invariants. None was weake
 | `reservationMatchesArtifacts` | A registered approval has its goal, branch, and event. A released reservation has left no goal and no branch. |
 | `noUnpassedConfirmation` | An approval is never registered while the saved verification is pending, failed, or error. |
 | `savedGoalVerifiedOnlyOnRequest` | The verifier runs for a saved goal only when a person asks for it. |
+| `reverificationCreatesNothing` | A verifier run that was asked for belongs to a goal that was saved before; it never creates a goal. |
 | `interruptedVerificationRecoverable` | A reservation whose saved goal still needs verification has a command that the conversation accepts and that does not end in a recovery rejection. |
 
 ## Runs
@@ -29,14 +30,15 @@ All runs used `quint` 0.32.0 with `quint run goalRegistrationRecovery.qnt --seed
 
 | `--main` | `--invariant` | Samples | `--max-steps` | Result |
 |---|---|---|---|---|
-| `currentCode` | `interruptedVerificationRecoverable` | 10000 | 30 | Violation in state 0 (reproduce seed `0x240`) |
-| `currentCode` | `noUnpassedConfirmation` | 10000 | 30 | Violation (reproduce seed `0x1ca4`) |
+| `currentCode` | `interruptedVerificationRecoverable` | 10000 | 30 | Violation in state 0 (reproduce seed `0x1152`) |
+| `currentCode` | `noUnpassedConfirmation` | 10000 | 30 | Violation (reproduce seed `0x43ba`) |
 | `currentCode` | `noDuplicateRegistration` | 10000 | 30 | No violation found |
 | `currentCode` | `reservationMatchesArtifacts` | 10000 | 30 | No violation found |
 | `currentCode` | `savedGoalVerifiedOnlyOnRequest` | 10000 | 30 | No violation found |
-| `revertedRetryFix` | `savedGoalVerifiedOnlyOnRequest` | 10000 | 30 | Violation (reproduce seed `0x240`) |
+| `currentCode` | `reverificationCreatesNothing` | 10000 | 30 | No violation found |
+| `revertedRetryFix` | `savedGoalVerifiedOnlyOnRequest` | 10000 | 30 | Violation (reproduce seed `0x18c6`) |
 | `revertedRetryFix` | `interruptedVerificationRecoverable` | 10000 | 30 | No violation found |
-| `fixedCode` | `safety` (all five) | 100000 | 40 | No violation found |
+| `fixedCode` | `safety` (all six) | 100000 | 40 | No violation found |
 
 Every trace reached the step limit (31 or 41 states), so no run stopped in a deadlock.
 
@@ -44,12 +46,12 @@ The `fixedCode` run also passed `--witnesses`. Each witness was reached, so the 
 
 | Witness | Traces out of 100000 |
 |---|---|
-| `registeredAfterReverification` | 2600 |
-| `registeredFresh` | 345 |
-| `reverificationRejected` | 8800 |
-| `reservationReleased` | 10787 |
+| `registeredAfterReverification` | 2538 |
+| `registeredFresh` | 274 |
+| `reverificationRejected` | 8976 |
+| `reservationReleased` | 9510 |
 
-`quint test goalRegistrationRecovery_test.qnt --main=currentCodeTest` passed 3 tests, and `--main=fixedCodeTest` passed 8 tests.
+`quint test goalRegistrationRecovery_test.qnt --main=currentCodeTest` passed 3 tests, and `--main=fixedCodeTest` passed 9 tests.
 
 ## Counterexamples in the code before the fix
 
@@ -68,7 +70,7 @@ The reverted commit d6871605f made every retry run the verifier. `revertedRetryF
 
 ## The fix
 
-`approve_summary` accepts the flag `reverifyRegistration`. The conversation admits it only for an existing reservation of the same revision. `registerReservedGoal` keeps rejecting a goal whose verification is pending, and now also rejects a saved failed or error verdict. `reverifyReservedGoal` passes the same reservation checks and then runs the verifier. A verdict other than passed changes nothing. A passed verdict is written under the goal lock, and only if the record still needs verification.
+`approve_summary` accepts the flag `reverifyRegistration`. The conversation admits it only for an existing reservation of the same revision. `registerReservedGoal` keeps rejecting a goal whose verification is pending, and now also rejects a saved failed or error verdict. `reverifyReservedGoal` passes the same reservation checks and then runs the verifier. A reservation without a saved goal is rejected and creates nothing; with no artifact left, the conversation releases the reservation. A verdict other than passed changes nothing. A passed verdict is written under the goal lock, and only if the record still needs verification.
 
 The model and the code are not linked mechanically. The code regressions are in `src/__tests__/goal-service.test.ts`, `src/__tests__/manager-conversation-turn-service.test.ts`, `src/__tests__/daemon-conversation-events.integration.test.ts`, and `src/__tests__/manager-summary-dialog.test.ts`.
 

@@ -537,7 +537,7 @@ assistant:
 
 验证使用现有验证器及 `assistant.formal_spec.model_check_timeout_seconds`。只有总体判定为 `passed` 时注册才完成；合格时判定会保存到 goal 的 `registrationVerification`，并将总体判定和各语言结果记录到同一 goal 的工作记录中。`failed`（规格未通过验证）或 `error`（验证未能完成）都会使注册失败，不创建 goal 和 goal 分支，错误中包含总体判定和各语言结果。注册提案会保留，可以修改规格后重新注册。在保存 goal 之前取消也会使注册失败。
 
-早期版本保存的 goal 可能仍保留注册预约，而其 `registrationVerification` 为 `pending`（验证被中断），或记录了 `failed`、`error` 判定。再次批准注册提案不会运行验证器，并提示注册需要恢复。预约保留期间，manager TUI 对话框会多出一个选项“重新验证已保存的 goal 并注册”（界面显示为英文或日文）。只有该选项会对已保存的 goal 运行验证器。判定为 `passed` 时记录结果并完成注册，不会再创建 goal、分支或注册事件。其他判定不会改变已保存的 goal 和预约，可以再次选择该选项。如果验证已被禁用，则记录 `not_required` 并完成注册。
+早期版本保存的 goal 可能仍保留注册预约，而其 `registrationVerification` 为 `pending`（验证被中断），或记录了 `failed`、`error` 判定。再次批准注册提案不会运行验证器，并提示注册需要恢复。预约保留期间，manager TUI 对话框会多出一个选项“重新验证已保存的 goal 并注册”（界面显示为英文或日文）。只有该选项会对已保存的 goal 运行验证器。如果预约没有已保存的 goal，该选项不会创建任何内容并释放预约，之后可用普通的注册选项完成注册。判定为 `passed` 时记录结果并完成注册，不会再创建 goal、分支或注册事件。其他判定不会改变已保存的 goal 和预约，可以再次选择该选项。如果验证已被禁用，则记录 `not_required` 并完成注册。
 
 ## manager 的任务 workflow
 

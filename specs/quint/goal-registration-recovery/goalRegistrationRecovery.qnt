@@ -143,6 +143,7 @@ module goalRegistrationRecoveryCore {
     s.pc == ReservationSaved,
     not(s.goalExists),
     not(s.branch),
+    not(s.turnReverify),
     s' = if (not(s.verificationRequired)) { ...s, pc: Creating }
       else if (verdict == VerdictPassed) { ...s, pc: Creating, freshRuns: s.freshRuns + 1 }
       else { ...s, pc: Idle, approval: NoApproval, freshRuns: s.freshRuns + 1 },
@@ -151,6 +152,16 @@ module goalRegistrationRecoveryCore {
   action verifyBeforeCreate = {
     nondet verdict = VERDICTS.oneOf()
     verifyBeforeCreateWith(verdict)
+  }
+
+  /// Re-verification recovers a saved goal and creates nothing. With no artifact left, the
+  /// conversation releases the reservation, and a plain approval can register the proposal.
+  action rejectReverifyWithoutGoal = all {
+    s.pc == ReservationSaved,
+    not(s.goalExists),
+    not(s.branch),
+    s.turnReverify,
+    s' = { ...s, pc: Idle, approval: NoApproval },
   }
 
   action createBranch = all {
@@ -223,6 +234,7 @@ module goalRegistrationRecoveryCore {
     registerExisting,
     rejectOrphanBranch,
     verifyBeforeCreate,
+    rejectReverifyWithoutGoal,
     createBranch,
     storeGoal,
     storeGoalFails,
@@ -254,6 +266,9 @@ module goalRegistrationRecoveryCore {
   /// Verification of a saved goal runs only when a person asks for it.
   val savedGoalVerifiedOnlyOnRequest = s.implicitRuns == 0
 
+  /// Re-verification never creates a goal: every explicit run belongs to a goal that was saved before.
+  val reverificationCreatesNothing = s.explicitRuns > 0 implies (s.goalExists and s.goalCreates == 1 and s.freshRuns == 0)
+
   /// Issue #84: a reservation whose saved goal still needs verification has a command that the
   /// conversation accepts and that does not end in a recovery rejection.
   val interruptedVerificationRecoverable =
@@ -269,6 +284,7 @@ module goalRegistrationRecoveryCore {
     reservationMatchesArtifacts,
     noUnpassedConfirmation,
     savedGoalVerifiedOnlyOnRequest,
+    reverificationCreatesNothing,
     interruptedVerificationRecoverable,
   }
 

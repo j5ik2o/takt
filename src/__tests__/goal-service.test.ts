@@ -529,6 +529,21 @@ describe('formal verification before goal registration', () => {
       } finally { tasks.mockRestore(); delivered.mockRestore(); }
     });
 
+    it('creates nothing when the reservation has no saved goal', async () => {
+      await expect(reverifyReservedGoal(input())).rejects.toThrow(GoalRegistrationRecoveryError);
+      expect(doubles.verify).not.toHaveBeenCalled();
+      expect(doubles.prepare).not.toHaveBeenCalled();
+      expect(doubles.createBranch).not.toHaveBeenCalled();
+      expect(doubles.create).not.toHaveBeenCalled();
+      expect(saveManagerEvent).not.toHaveBeenCalled();
+      expect(saved).toBeUndefined();
+
+      doubles.refs.mockResolvedValue({ output: Buffer.from('refs/heads/takt/20261024T0000-goal-11111111'), truncated: false, code: 0 });
+      await expect(reverifyReservedGoal(input())).rejects.toThrow('explicit reconciliation');
+      doubles.refs.mockResolvedValue({ output: Buffer.alloc(0), truncated: false, code: 0 });
+      expect((await registerReservedGoal(input())).registrationVerification).toMatchObject({ status: 'completed', verdict: 'passed' });
+    });
+
     it('rejects a reservation that conflicts with the saved goal without running the verifier', async () => {
       saved = pendingGoal();
       await expect(reverifyReservedGoal({ ...input(), objective: 'Different proposal' })).rejects.toThrow('conflicts');

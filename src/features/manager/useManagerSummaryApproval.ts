@@ -1,24 +1,23 @@
-import { useRef, useState, type RefObject } from 'react';
+import { useState, type RefObject } from 'react';
 import type { Key } from 'ink';
 import type { PendingSummary } from '../../infra/conversations/schema.js';
 
-export function useManagerSummaryApproval({ selected, setApprove, resetChoice, dismissSummary, reverifyAvailable }: {
+export function useManagerSummaryApproval({ selected, setApprove, resetChoice, dismissSummary, reverifyAvailable, reverifyRow, reverifySelected, selectReverify }: {
   selected: RefObject<boolean>;
   setApprove: (approve: boolean) => void;
+  /** Returns the dialog to its default row, including the re-verification row. */
   resetChoice: () => void;
   dismissSummary: (revision: number) => Promise<void>;
   /** True while the proposal's registration is reserved and can be recovered by re-verification. */
   reverifyAvailable: boolean;
+  /** The proposal revision whose re-verification row is selected. Keys read the ref so that an arrow followed by Enter in one input chunk sees the new row. */
+  reverifyRow: RefObject<number | null>;
+  reverifySelected: number | null;
+  selectReverify: (revision: number | null) => void;
 }) {
   const [pending, setPending] = useState<PendingSummary | null>(null);
-  // The selection is the proposal revision it was made for, so it never carries over to another proposal.
-  const [reverifySelected, setReverifySelected] = useState<number | null>(null);
-  // Keys read the row from a ref so that an arrow followed by Enter in one input chunk sees the new row.
-  const reverifyRow = useRef<number | null>(null);
-  const selectReverify = (revision: number | null): void => { reverifyRow.current = revision; setReverifySelected(revision); };
 
   const dismiss = (target: PendingSummary): void => {
-    selectReverify(null);
     void dismissSummary(target.revision);
     setPending(null);
     resetChoice();
@@ -35,10 +34,8 @@ export function useManagerSummaryApproval({ selected, setApprove, resetChoice, d
       return true;
     }
     if (key.return) {
-      if (reverifyAvailable && reverifyRow.current === target.revision) {
-        selectReverify(null);
-        void register(target.revision, true);
-      } else if (selected.current) void register(target.revision);
+      if (reverifyAvailable && reverifyRow.current === target.revision) void register(target.revision, true);
+      else if (selected.current) void register(target.revision);
       else dismiss(target);
       return true;
     }

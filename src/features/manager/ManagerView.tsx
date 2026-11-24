@@ -109,7 +109,11 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   const contentWidth = Math.max(1, (columns ?? 80) - 6);
   const bodyWidth = Math.max(1, (columns ?? 80) - 2);
   const ja = lang === 'ja';
-  const resetChoice = (): void => { selected.current = false; setApprove(false); };
+  // The re-verification row of the summary dialog, as the proposal revision it was selected for.
+  const [reverifySelected, setReverifySelected] = useState<number | null>(null);
+  const reverifyRow = useRef<number | null>(null);
+  const selectReverify = (revision: number | null): void => { reverifyRow.current = revision; setReverifySelected(revision); };
+  const resetChoice = (): void => { selected.current = false; setApprove(false); selectReverify(null); };
   const abortConfirmation = useManagerAbortConfirmation({ selected, setApprove, resetChoice });
   const { abortTarget, setAbortTarget } = abortConfirmation;
   const questionAnswer = useManagerQuestionAnswer(bodyWidth);
@@ -179,7 +183,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     finally { submitting.current--; if (mounted.current) setSending(submitting.current > 0); }
   };
   const reservedApproval = snapshot.state?.approval?.state === 'reserved' ? snapshot.state.approval : undefined;
-  const summaryApproval = useManagerSummaryApproval({ selected, setApprove, resetChoice,
+  const summaryApproval = useManagerSummaryApproval({ selected, setApprove, resetChoice, reverifyRow, reverifySelected, selectReverify,
     reverifyAvailable: reservedApproval !== undefined && reservedApproval.revision === snapshot.state?.pending?.revision,
     dismissSummary: async (revision) => {
       const conversationId = client.getSnapshot().state?.conversationId;

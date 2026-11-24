@@ -206,6 +206,21 @@ describe.each(['ja', 'en'] as const)('re-verification of a reserved registration
   });
 });
 
+it('returns the re-verification row to the default choice after another view was opened', async () => {
+  const context = mount('en');
+  await showProposal(context);
+  context.client.change({ state: { ...context.client.getSnapshot().state!, approval: { state: 'reserved', revision: 4,
+    goalId: '11111111-1111-4111-8111-111111111111', repositoryDirectory: cwd } } });
+  await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.summary.reverify', 'en')));
+  context.app.stdin.write(UP);
+  context.app.stdin.write('\u0014');
+  await waitFor(() => expect(context.app.lastFrame()).not.toContain(getLabel('manager.summary.confirmation', 'en')));
+  context.app.stdin.write(ESC);
+  await waitFor(() => expect(context.app.lastFrame()).toContain(getLabel('manager.summary.confirmation', 'en')));
+  context.app.stdin.write(ENTER);
+  await waitFor(() => expect(context.client.commands()).toEqual([{ kind: 'dismiss_summary', revision: 4, conversationId: managerConversationId }]));
+});
+
 it('does not carry a re-verification selection over to a later reserved proposal', async () => {
   const context = mount('en');
   await showProposal(context);

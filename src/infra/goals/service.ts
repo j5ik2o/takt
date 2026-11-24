@@ -112,5 +112,7 @@ async function recoverReservedGoal(input: GoalCreateInput, signal: AbortSignal |
   if (await hasGoalRegistrationBranch(input.cwd, input.id, signal)) {
     throw new GoalRegistrationRecoveryError('A branch for this reservation requires explicit reconciliation');
   }
+  // Re-verification recovers a saved goal. Creating one stays with the plain approval.
+  if (reverify) throw new GoalRegistrationRecoveryError('Reserved goal does not exist, so there is nothing to verify again');
   return createGoal(input, signal);
 }
