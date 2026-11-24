@@ -372,6 +372,7 @@ export class AgentRunner {
               timestamp: response.timestamp,
               sessionId: response.sessionId,
               providerUsage: response.providerUsage,
+              retryCount: response.retryCount,
               status: 'rate_limited',
               content: '',
               error,
