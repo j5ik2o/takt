@@ -209,7 +209,8 @@ export class TaskRetryService {
       const index = findTaskIndex(current.tasks, taskName, taskRef);
 
       const target = current.tasks[index]!;
-      const recheckSkipResult = getAutoRequeueSkipResult(target, options.maxAttempts, options.restartOnlyAborts);
+      // The restart position depends on workflow files, which this lock does not guard: keep the judgement made above.
+      const recheckSkipResult = getAutoRequeueSkipResult(target, options.maxAttempts, undefined);
       if (recheckSkipResult) {
         result = recheckSkipResult;
         return current;
