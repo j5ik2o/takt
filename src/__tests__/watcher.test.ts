@@ -37,7 +37,10 @@ import { runAllTasks } from '../features/tasks/execute/runAllTasks.js';
 import { attemptAutoRequeueTask, requeueExistingFailedTasks } from '../features/tasks/execute/parallelExecution.js';
 import * as providerPreflight from '../features/tasks/execute/providerPreflight.js';
 import { enterInputWait, leaveInputWait } from '../features/tasks/execute/inputWait.js';
-import { invalidateGlobalConfigCache } from '../infra/config/index.js';
+import { invalidateAllResolvedConfigCache, invalidateGlobalConfigCache, loadWorkflowByIdentifier } from '../infra/config/index.js';
+import { createAutoRequeueRestartCheck } from '../features/tasks/execute/autoRequeueRestart.js';
+import { buildWorkflowRestartPointEntry, buildWorkflowResumePointEntry } from '../core/workflow/workflow-reference.js';
+import type { WorkflowConfig, WorkflowRestartPoint, WorkflowResumePoint } from '../core/models/index.js';
 import * as privateFiles from '../shared/utils/private-file.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
@@ -52,7 +55,7 @@ interface Execution {
   parallel: TaskExecutionParallelOptions | undefined;
   options: Parameters<typeof ExecuteRunTask>[3];
   runContext: Parameters<typeof ExecuteRunTask>[5];
-  finish: (success: boolean) => void;
+  finish: (success: boolean, failureStep?: string) => void;
   settled: boolean;
 }
 
@@ -98,6 +101,32 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
       failure: { step: 'implement', error: 'retryable failure', retryable: true },
       ...overrides,
     }] }));
+  }
+
+  /** work reaches report_failure on failure; report_failure can only abort. */
+  function writeNotifyWorkflow(): WorkflowConfig {
+    mkdirSync(join(projectDir, '.takt', 'workflows'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'workflows', 'notify.yaml'), [
+      'name: notify', 'max_steps: 10', 'initial_step: work', 'steps:',
+      '  - name: work', '    instruction: "{task}"',
+      '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+      '      - condition: when(false)', '        next: report_failure',
+      '  - name: report_failure', '    instruction: Report the failure',
+      '    rules:', '      - condition: when(true)', '        next: ABORT',
+    ].join('\n'));
+    invalidateAllResolvedConfigCache();
+    return loadWorkflowByIdentifier('notify', projectDir)!;
+  }
+
+  function resumePointAt(workflow: WorkflowConfig, step: string): WorkflowResumePoint {
+    return {
+      version: 2, stack: [buildWorkflowResumePointEntry(workflow, step, 'agent', 1)], iteration: 2, elapsed_ms: 0,
+      workflow_call_invocations: {}, workflow_step_participations: {},
+    };
+  }
+
+  function restartPointAt(workflow: WorkflowConfig, step: string): WorkflowRestartPoint {
+    return { stack: [buildWorkflowRestartPointEntry(workflow, step, 'agent')] };
   }
 
   function interrupt(): void {
@@ -202,12 +231,12 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
         const onAbort = () => execution.finish(false);
         const execution: Execution = {
           task, parallel, options, runContext, settled: false,
-          finish: (success) => {
+          finish: (success, failureStep = 'implement') => {
             if (execution.settled) return;
             execution.settled = true;
             signal?.removeEventListener('abort', onAbort);
             const result = {
-              task, success, response: success ? 'done' : 'retryable failure', failureStep: 'implement',
+              task, success, response: success ? 'done' : 'retryable failure', failureStep,
               executionLog: [], startedAt: task.createdAt, completedAt: task.createdAt,
             };
             if (success) taskRunner.completeTask(result);
@@ -418,6 +447,135 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
   });
 
   it.each([
+    { position: 'failure.step', failedStep: 'report_failure', saved: () => ({}) },
+    { position: 'resume_point', failedStep: 'report_failure',
+      saved: (workflow: WorkflowConfig) => ({ resume_point: resumePointAt(workflow, 'report_failure') }) },
+    { position: 'restart_point', failedStep: 'work',
+      saved: (workflow: WorkflowConfig) => ({ restart_point: restartPointAt(workflow, 'report_failure') }) },
+  ])('再開位置（$position）が ABORT にしか進めない step の失敗タスクは自動で再投入せず、理由を表示する', ({ failedStep, saved }) => {
+    const { name, displayName } = taskNames[1]!;
+    const workflow = writeNotifyWorkflow();
+    writeSavedTask(name, {
+      workflow: 'notify', failure: { step: failedStep, error: 'reported failure', retryable: true }, ...saved(workflow),
+    });
+    const before = records();
+
+    expect(runner.isAutoRequeueEligible(name, 2, createAutoRequeueRestartCheck(projectDir))).toBe(false);
+    expect(attemptAutoRequeueTask(runner, projectDir, name, 2)).toBe(false);
+
+    expect(records()).toEqual(before);
+    expect(console.log).toHaveBeenCalledWith(chalk.blue(
+      `[INFO] Task "${displayName}" was not auto-requeued: restart position can only abort the workflow (0/2)`,
+    ));
+  });
+
+  it.each([
+    { position: 'failure.step', failedStep: 'work', saved: () => ({}), expected: { start_step: 'work' } },
+    { position: 'resume_point', failedStep: 'work',
+      saved: (workflow: WorkflowConfig) => ({ resume_point: resumePointAt(workflow, 'work') }), expected: { start_step: 'work' } },
+    { position: 'restart_point', failedStep: 'report_failure',
+      saved: (workflow: WorkflowConfig) => ({ restart_point: restartPointAt(workflow, 'work') }), expected: {} },
+  ])('再開位置（$position）の行き先に ABORT 以外がある失敗タスクは従来どおり自動で再投入する', ({ failedStep, saved, expected }) => {
+    const { name } = taskNames[0]!;
+    const workflow = writeNotifyWorkflow();
+    writeSavedTask(name, {
+      workflow: 'notify', failure: { step: failedStep, error: 'retryable failure', retryable: true }, ...saved(workflow),
+    });
+
+    expect(runner.isAutoRequeueEligible(name, 2, createAutoRequeueRestartCheck(projectDir))).toBe(true);
+    expect(attemptAutoRequeueTask(runner, projectDir, name, 2)).toBe(true);
+
+    expect(state(name)).toMatchObject({ status: 'pending', auto_requeue_count: 1, ...expected });
+  });
+
+  it.each([
+    { position: 'failure.step', saved: () => ({}) },
+    { position: 'resume_point', saved: (workflow: WorkflowConfig) => ({ resume_point: resumePointAt(workflow, 'work') }) },
+  ])('ほかの step から進んでこない step（$position）は、ABORT にしか進めなくても自動で再投入する', ({ saved }) => {
+    const { name } = taskNames[0]!;
+    mkdirSync(join(projectDir, '.takt', 'workflows'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'workflows', 'notify.yaml'), [
+      'name: notify', 'max_steps: 10', 'initial_step: work', 'steps:',
+      '  - name: work', '    instruction: "{task}"',
+      '    rules:', '      - condition: when(true)', '        next: ABORT',
+    ].join('\n'));
+    invalidateAllResolvedConfigCache();
+    const workflow = loadWorkflowByIdentifier('notify', projectDir)!;
+    writeSavedTask(name, {
+      workflow: 'notify', failure: { step: 'work', error: 'retryable failure', retryable: true }, ...saved(workflow),
+    });
+
+    expect(attemptAutoRequeueTask(runner, projectDir, name, 1)).toBe(true);
+
+    expect(state(name)).toMatchObject({ status: 'pending', auto_requeue_count: 1, start_step: 'work' });
+  });
+
+  it('workflow を読めない失敗タスクは従来どおり自動で再投入する', () => {
+    const { name } = taskNames[0]!;
+    writeSavedTask(name, { workflow: 'missing-workflow' });
+
+    expect(attemptAutoRequeueTask(runner, projectDir, name, 1)).toBe(true);
+
+    expect(state(name)).toMatchObject({ status: 'pending', auto_requeue_count: 1 });
+  });
+
+  it('watch は通知 step で ABORT したタスクを再実行せず、failed のまま残す', async () => {
+    const name = 'notify-task';
+    writeConfig({ auto_requeue_max_attempts: 2 });
+    writeNotifyWorkflow();
+    writeSavedTask(name, { workflow: 'notify', status: 'pending', started_at: null, completed_at: null, failure: undefined });
+    const preflight = vi.spyOn(providerPreflight, 'checkQueuedTaskProviders');
+    startWatch();
+    await vi.advanceTimersByTimeAsync(0);
+    preflight.mockClear();
+
+    executions[0]!.finish(false, 'report_failure');
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(executions.map(({ task }) => task.name)).toEqual([name]);
+    expect(state(name)).toMatchObject({ status: 'failed', auto_requeue_count: 0 });
+    expect(preflight).not.toHaveBeenCalled();
+    expect(console.log).toHaveBeenCalledWith(chalk.blue(
+      `[INFO] Task "${name}" was not auto-requeued: restart position can only abort the workflow (0/2)`,
+    ));
+  });
+
+  it('watch は同じ workflow でも作業 step で失敗したタスクは再実行する', async () => {
+    const name = 'notify-task';
+    writeConfig({ auto_requeue_max_attempts: 2 });
+    writeNotifyWorkflow();
+    writeSavedTask(name, { workflow: 'notify', status: 'pending', started_at: null, completed_at: null, failure: undefined });
+    startWatch();
+    await vi.advanceTimersByTimeAsync(0);
+
+    executions[0]!.finish(false, 'work');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(executions.map(({ task }) => task.name)).toEqual([name, name]);
+    expect(state(name)).toMatchObject({ status: 'running', auto_requeue_count: 1 });
+  });
+
+  it.each(['run', 'watch'] as const)('%s 起動時、通知 step で失敗済みのタスクは provider 確認も再投入もしない', async (mode) => {
+    const name = 'notify-task';
+    writeConfig({ auto_requeue_max_attempts: 2 });
+    writeFileSync(join(process.env.TAKT_CONFIG_DIR!, 'config.yaml'), stringifyYaml({ notification_sound: false }));
+    writeNotifyWorkflow();
+    writeSavedTask(name, { workflow: 'notify', failure: { step: 'report_failure', error: 'reported failure', retryable: true } });
+    const before = records();
+    const preflight = vi.spyOn(providerPreflight, 'checkQueuedTaskProviders');
+
+    if (mode === 'run') await runAllTasks(projectDir);
+    else {
+      startWatch();
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+
+    expect(executions).toHaveLength(0);
+    expect(preflight).not.toHaveBeenCalled();
+    expect(records()).toEqual(before);
+  });
+
+  it.each([
     { reason: 'task_not_failed', status: 'pending', overrides: { status: 'pending', started_at: null, completed_at: null, failure: undefined } },
     { reason: 'max_attempts_reached', status: 'failed', overrides: { auto_requeue_count: 1 } },
     { reason: 'failure_not_retryable', status: 'failed', overrides: { failure: { step: 'implement', error: 'retryable failure', retryable: false } } },
@@ -429,7 +587,7 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     const before = records();
     const requeue = vi.spyOn(runner, 'autoRequeueFailedTask');
 
-    expect(attemptAutoRequeueTask(runner, name, 1)).toBe(false);
+    expect(attemptAutoRequeueTask(runner, projectDir, name, 1)).toBe(false);
 
     expect(requeue.mock.results[0]?.value).toMatchObject({ requeued: false, reason });
     expect(records()).toEqual(before);
@@ -443,7 +601,7 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
   it.each([undefined, 0])('再投入上限=%s では保存状態を変えずログを出さない', (maxAttempts) => {
     writeSavedTask(taskNames[1]!.name);
     const before = records();
-    expect(requeueExistingFailedTasks(runner, maxAttempts)).toBe(0);
+    expect(requeueExistingFailedTasks(runner, projectDir, maxAttempts)).toBe(0);
     expect(records()).toEqual(before);
     expect(console.log).not.toHaveBeenCalled();
   });
@@ -461,7 +619,7 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     const fresh = runner.startPrMergeTask({ ...mergeInput, worktreePath: join(projectDir, 'new-clone') });
     const next = addFailedTask('another failed task');
 
-    expect(requeueExistingFailedTasks(runner, 1)).toBe(1);
+    expect(requeueExistingFailedTasks(runner, projectDir, 1)).toBe(1);
 
     expect(state(old.name)).toEqual(oldRecord);
     expect(state(fresh.name)?.status).toBe('running');

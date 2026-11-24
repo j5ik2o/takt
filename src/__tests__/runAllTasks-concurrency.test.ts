@@ -760,6 +760,7 @@ describe('runAllTasks concurrency', () => {
 
       expect(mockAutoRequeueFailedTask).toHaveBeenCalledWith('config-auto-requeue-task', {
         maxAttempts: 1,
+        restartOnlyAborts: expect.any(Function),
       });
       expect(mockStatus).toHaveBeenCalledWith('Success', '1', 'green');
       expect(mockStatus).not.toHaveBeenCalledWith('Failed', expect.any(String), 'red');
@@ -776,9 +777,9 @@ describe('runAllTasks concurrency', () => {
 
       await runAllTasks('/project');
 
-      expect(mockIsAutoRequeueEligible).toHaveBeenCalledWith('ineligible', 1);
+      expect(mockIsAutoRequeueEligible).toHaveBeenCalledWith('ineligible', 1, expect.any(Function));
       expect(vi.mocked(checkQueuedTaskProviders)).not.toHaveBeenCalled();
-      expect(mockAutoRequeueFailedTask).toHaveBeenCalledWith('ineligible', { maxAttempts: 1 });
+      expect(mockAutoRequeueFailedTask).toHaveBeenCalledWith('ineligible', { maxAttempts: 1, restartOnlyAborts: expect.any(Function) });
     });
 
     it('prepares an eligible failed clone with its saved worktree before auto-requeue', async () => {
@@ -799,7 +800,7 @@ describe('runAllTasks concurrency', () => {
       expect(checkQueuedTaskProviders).toHaveBeenCalledWith(
         '/project', failedTask, {}, undefined, expect.any(AbortSignal),
       );
-      expect(mockAutoRequeueFailedTask).toHaveBeenCalledWith('eligible', { maxAttempts: 1 });
+      expect(mockAutoRequeueFailedTask).toHaveBeenCalledWith('eligible', { maxAttempts: 1, restartOnlyAborts: expect.any(Function) });
     });
 
     it.each(['interrupted-task read', 'read', 'eligibility', 'requeue write'] as const)(
@@ -902,7 +903,7 @@ describe('runAllTasks concurrency', () => {
       expect(mockAutoRequeueFailedTask).toHaveBeenNthCalledWith(
         2,
         'config-auto-requeue-exhausted-task',
-        { maxAttempts: 1 },
+        { maxAttempts: 1, restartOnlyAborts: expect.any(Function) },
       );
       expect(mockFailTask).toHaveBeenCalledTimes(2);
       expect(mockCompleteTask).not.toHaveBeenCalled();

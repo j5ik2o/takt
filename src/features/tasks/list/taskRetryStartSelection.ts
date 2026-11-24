@@ -128,7 +128,7 @@ function createResumeOption(
     const { reachedFrom } = resolved.onlyAborts;
     return {
       reason: `Saved resume position ${resolvedPath} can only abort the workflow`
-        + (reachedFrom.length === 0 ? '' : `; it was reached from ${reachedFrom.map((step) => formatTaskRetryPath([step])).join(', ')}`),
+        + `; it was reached from ${reachedFrom.map((step) => formatTaskRetryPath([step])).join(', ')}`,
     };
   }
   return {

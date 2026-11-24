@@ -9,8 +9,12 @@ import { buildAutoRequeueNote } from './retryNote.js';
 import { buildRetryTaskRecord, normalizeTaskRef } from './taskRecordMutations.js';
 import { findActiveTaskTargetConflict } from './activeTaskTarget.js';
 
+/** True when the position the task would restart from can only abort its workflow. */
+export type AutoRequeueRestartCheck = (task: TaskRecord) => boolean;
+
 interface AutoRequeueOptions {
   maxAttempts: number;
+  restartOnlyAborts?: AutoRequeueRestartCheck;
 }
 
 export interface TaskRetryOptions {
@@ -40,7 +44,8 @@ export type AutoRequeueSkipReason =
   | 'max_attempts_reached'
   | 'failure_not_retryable'
   | 'missing_failed_step'
-  | 'missing_failure_detail';
+  | 'missing_failure_detail'
+  | 'restart_only_aborts';
 
 export type AutoRequeueResult =
   | {
@@ -85,6 +90,7 @@ function findTaskIndex(tasks: readonly TaskRecord[], taskName: string, taskRef: 
 function getAutoRequeueSkipResult(
   target: TaskRecord,
   maxAttempts: number,
+  restartOnlyAborts: AutoRequeueRestartCheck | undefined,
 ): AutoRequeueResult | undefined {
   const currentAttempts = target.auto_requeue_count ?? 0;
 
@@ -132,6 +138,14 @@ function getAutoRequeueSkipResult(
       reason: 'missing_failure_detail',
     };
   }
+  if (restartOnlyAborts?.(target)) {
+    return {
+      requeued: false,
+      attempt: currentAttempts,
+      maxAttempts,
+      reason: 'restart_only_aborts',
+    };
+  }
 
   return undefined;
 }
@@ -156,13 +170,13 @@ export class TaskRetryService {
     private readonly store: TaskStore,
   ) {}
 
-  isAutoRequeueEligible(taskRef: string, maxAttempts: number): boolean {
+  isAutoRequeueEligible(taskRef: string, maxAttempts: number, restartOnlyAborts?: AutoRequeueRestartCheck): boolean {
     if (maxAttempts <= 0) return false;
     const taskName = normalizeTaskRef(taskRef);
     const current = this.store.read();
     const index = findTaskIndex(current.tasks, taskName, taskRef);
     const target = current.tasks[index]!;
-    return getAutoRequeueSkipResult(target, maxAttempts) === undefined
+    return getAutoRequeueSkipResult(target, maxAttempts, restartOnlyAborts) === undefined
       && findRetryTargetConflict(current.tasks, index, target) === undefined;
   }
 
@@ -186,7 +200,7 @@ export class TaskRetryService {
     const current = this.store.read();
     const currentIndex = findTaskIndex(current.tasks, taskName, taskRef);
     const currentTarget = current.tasks[currentIndex]!;
-    const skipResult = getAutoRequeueSkipResult(currentTarget, options.maxAttempts);
+    const skipResult = getAutoRequeueSkipResult(currentTarget, options.maxAttempts, options.restartOnlyAborts);
     if (skipResult) {
       return skipResult;
     }
@@ -195,7 +209,8 @@ export class TaskRetryService {
       const index = findTaskIndex(current.tasks, taskName, taskRef);
 
       const target = current.tasks[index]!;
-      const recheckSkipResult = getAutoRequeueSkipResult(target, options.maxAttempts);
+      // The restart position depends on workflow files, which this lock does not guard: keep the judgement made above.
+      const recheckSkipResult = getAutoRequeueSkipResult(target, options.maxAttempts, undefined);
       if (recheckSkipResult) {
         result = recheckSkipResult;
         return current;

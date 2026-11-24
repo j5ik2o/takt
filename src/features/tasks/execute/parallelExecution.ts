@@ -16,6 +16,7 @@ import { ActiveTaskTargetConflictError } from '../../../infra/task/activeTaskTar
 import { info, warn, blankLine } from '../../../shared/ui/index.js';
 import { TaskPrefixWriter } from '../../../shared/ui/TaskPrefixWriter.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { createAutoRequeueRestartCheck } from './autoRequeueRestart.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import { executeRunTaskAndComplete, executeRunTaskAndCompleteWithDetails } from './runTaskExecution.js';
@@ -202,10 +203,10 @@ export async function runWithWorkerPool(
       const maxAttempts = runOptions?.autoRequeueMaxAttempts ?? 0;
       const failedTasks = maxAttempts > 0 ? taskRunner.listFailedTasks() : [];
       for (const task of failedTasks) {
-        if (!taskRunner.isAutoRequeueEligible(task.name, maxAttempts)) continue;
+        if (!isAutoRequeueCandidate(taskRunner, cwd, task.name, maxAttempts)) continue;
         await checkRequeueProviders(cwd, task, taskExecutionOptions, schedulingSignal);
       }
-      requeueExistingFailedTasks(taskRunner, maxAttempts, schedulingSignal, failedTasks);
+      requeueExistingFailedTasks(taskRunner, cwd, maxAttempts, schedulingSignal, failedTasks);
       await claimPreparedTasks();
     } else if (initialTasks.length === 0) {
       await claimPreparedTasks();
@@ -259,7 +260,7 @@ export async function runWithWorkerPool(
         if (task) {
           const maxAttempts = runOptions?.autoRequeueMaxAttempts ?? 0;
           if (!settled.result && !schedulingSignal.aborted && preparationFailure === undefined
-            && maxAttempts > 0 && taskRunner.isAutoRequeueEligible(task.name, maxAttempts)) {
+            && maxAttempts > 0 && isAutoRequeueCandidate(taskRunner, cwd, task.name, maxAttempts)) {
             try {
               const failedState = taskRunner.listTaskStateItems()
                 .find((candidate) => candidate.name === task.name && candidate.kind === 'failed');
@@ -280,7 +281,7 @@ export async function runWithWorkerPool(
           }
           const failed = !settled.result
             && (schedulingSignal.aborted || preparationFailure !== undefined
-              || !tryAutoRequeueFailedTask(taskRunner, task, runOptions));
+              || !tryAutoRequeueFailedTask(taskRunner, cwd, task, runOptions));
           if (mode === 'run') {
             executedTaskNames.push(task.name);
             if (settled.result) successCount++;
@@ -346,6 +347,7 @@ async function claimAvailableTasks(
 
 export function requeueExistingFailedTasks(
   taskRunner: TaskRunner,
+  cwd: string,
   maxAttempts: number | undefined,
   signal?: AbortSignal,
   failedTasks?: readonly Pick<TaskInfo, 'name'>[],
@@ -354,13 +356,24 @@ export function requeueExistingFailedTasks(
   let requeuedCount = 0;
   for (const task of failedTasks ?? taskRunner.listFailedTasks()) {
     if (signal?.aborted) break;
-    if (attemptAutoRequeueTask(taskRunner, task.name, maxAttempts)) requeuedCount++;
+    if (attemptAutoRequeueTask(taskRunner, cwd, task.name, maxAttempts)) requeuedCount++;
   }
   return requeuedCount;
 }
 
+/** Whether an automatic requeue of the failed task would be accepted right now. */
+export function isAutoRequeueCandidate(
+  taskRunner: TaskRunner,
+  cwd: string,
+  taskName: string,
+  maxAttempts: number,
+): boolean {
+  return taskRunner.isAutoRequeueEligible(taskName, maxAttempts, createAutoRequeueRestartCheck(cwd));
+}
+
 export function attemptAutoRequeueTask(
   taskRunner: TaskRunner,
+  cwd: string,
   taskName: string,
   maxAttempts: number,
 ): boolean {
@@ -369,7 +382,10 @@ export function attemptAutoRequeueTask(
   }
   let result: AutoRequeueResult;
   try {
-    result = taskRunner.autoRequeueFailedTask(taskName, { maxAttempts });
+    result = taskRunner.autoRequeueFailedTask(taskName, {
+      maxAttempts,
+      restartOnlyAborts: createAutoRequeueRestartCheck(cwd),
+    });
   } catch (error) {
     if (error instanceof ActiveTaskTargetConflictError) return false;
     throw error;
@@ -388,6 +404,7 @@ export function attemptAutoRequeueTask(
 
 function tryAutoRequeueFailedTask(
   taskRunner: TaskRunner,
+  cwd: string,
   task: TaskInfo,
   runOptions: RunWorkerOptions | undefined,
 ): boolean {
@@ -395,7 +412,7 @@ function tryAutoRequeueFailedTask(
   if (maxAttempts === undefined) {
     return false;
   }
-  return attemptAutoRequeueTask(taskRunner, task.name, maxAttempts);
+  return attemptAutoRequeueTask(taskRunner, cwd, task.name, maxAttempts);
 }
 
 function formatAutoRequeueSkipReason(reason: AutoRequeueSkipReason): string {
@@ -414,6 +431,8 @@ function formatAutoRequeueSkipReason(reason: AutoRequeueSkipReason): string {
       return 'failed step is missing';
     case 'missing_failure_detail':
       return 'failure detail is missing';
+    case 'restart_only_aborts':
+      return 'restart position can only abort the workflow';
   }
 }
 

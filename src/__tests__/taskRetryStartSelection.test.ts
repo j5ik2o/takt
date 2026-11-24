@@ -1573,6 +1573,49 @@ describe('saved resume position on a step that can only abort', () => {
       .toEqual(['"report_failure"', '"work"']);
   });
 
+  it('keeps resuming an aborting step that no other step routes into', () => {
+    const workflow = makeWorkflow({
+      name: 'default',
+      ref: 'project:root',
+      steps: [withRules(agentStep('work'), ['ABORT'])],
+    });
+
+    const model = buildTaskRetryStartOptions(workflow, {
+      ...pathContext,
+      resumePoint: rootResumePoint('work', 'agent'),
+    });
+
+    expect(model.resumeFailureReason).toBeUndefined();
+    expect(model.defaultId).toBe('resume-checkpoint');
+  });
+
+  it('does not resume from a notification at the entry of a called workflow', () => {
+    const child = makeWorkflow({
+      name: 'notify-pr',
+      ref: 'project:child',
+      callable: true,
+      steps: [withRules(agentStep('post'), ['ABORT'])],
+    });
+    const root = makeWorkflow({
+      name: 'default',
+      ref: 'project:root',
+      steps: [withRules(agentStep('implement'), ['notify', 'COMPLETE']), withRules(callStep('notify', 'notify-pr'), ['ABORT'])],
+    });
+    mockResolveWorkflowCallTarget.mockReturnValue(child);
+    const resumePoint: WorkflowResumePoint = {
+      ...rootResumePoint('notify', 'agent'),
+      stack: [
+        { workflow: 'default', workflow_ref: 'project:root', step: 'notify', kind: 'workflow_call', occurrence: 1 },
+        { workflow: 'notify-pr', workflow_ref: 'project:child', step: 'post', kind: 'agent', occurrence: 1 },
+      ],
+    };
+
+    const model = buildTaskRetryStartOptions(root, { ...pathContext, resumePoint });
+
+    expect(model.resumeFailureReason).toContain('can only abort');
+    expect(model.resumeFailureReason).toContain('reached from "implement"');
+  });
+
   it('keeps resuming a step that can wait for user input instead of aborting', () => {
     const asking: WorkflowStep = {
       ...agentStep('ask'),

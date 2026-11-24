@@ -6,7 +6,7 @@ import {
   type WorkflowResumePointEntry,
   type WorkflowStep,
 } from '../../core/models/index.js';
-import { stepOnlyAborts, stepsRoutingTo } from '../../core/workflow/abort-only-step.js';
+import { failureReportSources, type StartPositionFrame } from '../../core/workflow/abort-only-step.js';
 import { WorkflowRestartNavigator } from '../../core/workflow/engine/WorkflowRestartNavigator.js';
 import { getWorkflowResumeFrameError, resumeWorkflowMatches } from '../../core/workflow/run/resume-point.js';
 import { getWorkflowStepKind, isWorkflowCallStep } from '../../core/workflow/step-kind.js';
@@ -32,9 +32,9 @@ export interface ResolvedTaskRetryPath {
   segments: TaskRetryPathSegment[];
   headings: readonly { readonly path: string; readonly description?: string }[];
   /**
-   * Set when every frame of the position can only end in ABORT, so running
-   * from it cannot change the outcome. Lists the steps that route into the
-   * terminal frame.
+   * Set when running from the position only repeats the report of a failure
+   * that happened elsewhere (see failureReportSources). Lists the steps that
+   * route into the innermost frame entered from another step.
    */
   onlyAborts?: { readonly reachedFrom: readonly string[] };
 }
@@ -51,7 +51,7 @@ export interface TaskRetryRestartTreeLeaf {
   /** Unique position path within the tree, used to derive a stable row value. */
   id: string;
   restartPoint: WorkflowRestartPoint;
-  /** Every exit of the step ends its workflow in ABORT; never proposed as the default. */
+  /** The step only reports a failure that happened elsewhere; never proposed as the default. */
   onlyAborts: boolean;
 }
 
@@ -197,7 +197,7 @@ function buildTaskRetryTreeLevel(
       depth: level.depth,
       id,
       restartPoint: { stack: [...level.stack, entry] },
-      onlyAborts: stepOnlyAborts(level.workflow.steps, step.name),
+      onlyAborts: failureReportSources([{ steps: level.workflow.steps, stepName: step.name }]) !== undefined,
     });
   });
   return nodes;
@@ -254,7 +254,7 @@ function resolveTaskRetryStackPathWithOptions(
   const ancestors = [getWorkflowReference(rootWorkflow)];
   const segments: TaskRetryPathSegment[] = [rootWorkflow.name];
   const headings: { path: string; description?: string }[] = [];
-  let everyFrameOnlyAborts = true;
+  const frames: StartPositionFrame[] = [];
   for (let index = 0; index < stack.length; index += 1) {
     const entry = stack[index]!;
     const reason = options.requireRestartIdentity
@@ -269,8 +269,9 @@ function resolveTaskRetryStackPathWithOptions(
     if (step === undefined || (options.requireRestartIdentity && getWorkflowStepKind(step) !== entry.kind)) {
       return { reason: `Saved restart position ${formatTaskRetryPath([entry.workflow, entry.step])} has a missing step or step kind mismatch` };
     }
-    everyFrameOnlyAborts &&= stepOnlyAborts(steps, step.name);
-    const onlyAborts = everyFrameOnlyAborts ? { onlyAborts: { reachedFrom: stepsRoutingTo(steps, step.name) } } : {};
+    frames.push({ steps, stepName: step.name });
+    const reachedFrom = failureReportSources(frames);
+    const onlyAborts = reachedFrom === undefined ? {} : { onlyAborts: { reachedFrom } };
     const isTerminalEntry = index === stack.length - 1;
     if (isTerminalEntry && options.requireRestartTarget && !isWorkflowRestartTarget(step)) {
       return { reason: `Step ${formatTaskRetryPath([step.name])} is not a restart target` };
@@ -325,17 +326,25 @@ export function resolveTaskRetryStackPath(
   });
 }
 
+export function resolveTaskRetryRestartPath(
+  rootWorkflow: WorkflowConfig,
+  restartPoint: WorkflowRestartPoint,
+  context: TaskRetryStartPathContext,
+): TaskRetryPathResolution {
+  return resolveTaskRetryStackPathWithOptions(rootWorkflow, restartPoint.stack, context, {
+    allowParallelEntries: false,
+    requireRestartTarget: true,
+    requireRestartIdentity: true,
+  });
+}
+
 export function validateTaskRetryRestartPoint(
   rootWorkflow: WorkflowConfig,
   restartPoint: WorkflowRestartPoint,
   context: TaskRetryStartPathContext,
 ): void {
   new WorkflowRestartNavigator(restartPoint).resolveRootStartStep(rootWorkflow, undefined);
-  const resolved = resolveTaskRetryStackPathWithOptions(rootWorkflow, restartPoint.stack, context, {
-    allowParallelEntries: false,
-    requireRestartTarget: true,
-    requireRestartIdentity: true,
-  });
+  const resolved = resolveTaskRetryRestartPath(rootWorkflow, restartPoint, context);
   if ('segments' in resolved) {
     return;
   }

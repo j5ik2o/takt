@@ -13,7 +13,7 @@ function exitsOf(step: WorkflowStep): (string | undefined)[] | undefined {
  * through steps that themselves can only abort. A step whose outcome is not
  * fully described by `next` targets is never reported.
  */
-export function stepOnlyAborts(
+function stepOnlyAborts(
   steps: readonly WorkflowStep[],
   stepName: string,
   visiting: ReadonlySet<string> = new Set(),
@@ -29,8 +29,32 @@ export function stepOnlyAborts(
 }
 
 /** Names of the steps that route directly into `stepName`. */
-export function stepsRoutingTo(steps: readonly WorkflowStep[], stepName: string): string[] {
+function stepsRoutingTo(steps: readonly WorkflowStep[], stepName: string): string[] {
   return steps
     .filter((step) => step.name !== stepName && (exitsOf(step) ?? []).includes(stepName))
     .map((step) => step.name);
+}
+
+/** One level of a start position: a step among the steps of its workflow or parallel parent. */
+export interface StartPositionFrame {
+  readonly steps: readonly WorkflowStep[];
+  readonly stepName: string;
+}
+
+/**
+ * Tells whether starting at a position only repeats the report of a failure
+ * that happened elsewhere: every frame (outermost first) can only abort, and
+ * at least one of them is entered from another step. Returns the steps routing
+ * into the innermost such frame, or undefined when the position is not one.
+ * A position nothing routes into is the workflow's own work, even if it can
+ * only abort.
+ */
+export function failureReportSources(frames: readonly StartPositionFrame[]): string[] | undefined {
+  let sources: string[] | undefined;
+  for (const { steps, stepName } of frames) {
+    if (!stepOnlyAborts(steps, stepName)) return undefined;
+    const routing = stepsRoutingTo(steps, stepName);
+    if (routing.length > 0) sources = routing;
+  }
+  return sources;
 }

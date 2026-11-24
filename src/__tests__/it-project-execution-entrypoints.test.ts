@@ -32,7 +32,6 @@ vi.mock('../infra/task/index.js', () => ({
     getTasksFilePath(): string { return '/project/.takt/tasks.yaml'; }
     listTasksForProviderPreflight(): never[] { return []; }
     listFailedTasks = mocks.listFailed;
-    isAutoRequeueEligible(): boolean { return false; }
     listAllTaskItems(): never[] { return []; }
     listTaskStateItems = mocks.states;
   },
@@ -40,6 +39,7 @@ vi.mock('../infra/task/index.js', () => ({
 vi.mock('../features/tasks/execute/parallelExecution.js', () => ({
   runWithWorkerPool: mocks.pool,
   attemptAutoRequeueTask: mocks.requeue,
+  isAutoRequeueCandidate: () => false,
 }));
 vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({
   executeRunTaskAndComplete: mocks.executeTask,
