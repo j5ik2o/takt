@@ -3,7 +3,7 @@ import { saveManagerEvent } from '../../../infra/goals/events.js';
 import { PrivateFileLockAcquisitionError } from '../../../shared/utils/private-file-lock.js';
 import { TaskClaimLockAcquisitionError, type TaskClaimLockFailureCode } from '../../../infra/task/taskLifecycleService.js';
 import { isFileLockTimeoutError } from '../../../infra/fs/file-lock.js';
-import { runtimeAssignmentUnavailableReason } from './runtimeAssignmentGuard.js';
+import { createRuntimeAssignmentSetupGuard } from './runtimeAssignmentGuard.js';
 
 export class TaskClaimLockUnavailableError extends Error {
   constructor(message: string, readonly code: TaskClaimLockFailureCode, options: ErrorOptions) {
@@ -29,7 +29,7 @@ export function claimTasksWithGoalCompletions(
     const setupFailedTaskNames: string[] = [];
     const tasks = taskRunner.claimNextTasks(
       count,
-      (task) => runtimeAssignmentUnavailableReason(cwd, task.data),
+      createRuntimeAssignmentSetupGuard(cwd),
       (task) => {
         setupFailedTaskNames.push(task.name);
         publishGoalCompletion(cwd, task);

@@ -5,6 +5,7 @@ import {
   withTaskRuntimeAssignment,
 } from '../../../infra/config/runtime-provider/invocation.js';
 import { RuntimeAssignmentSelectionError } from '../../../infra/config/runtime-provider/loader.js';
+import type { GoalTaskSetupGuard } from '../../../infra/task/index.js';
 
 /**
  * タスク自身の runtime_assignment を選択できないときだけ、選択エラーの文面を返す。
@@ -32,4 +33,11 @@ export function runtimeAssignmentUnavailableReason(
     return undefined;
   }
   return undefined;
+}
+
+/** goal タスクの runtime_assignment を選択できないとき、そのタスクを実行へ渡さない。 */
+export function createRuntimeAssignmentSetupGuard(cwd: string): GoalTaskSetupGuard {
+  return {
+    setupFailureReason: (task) => runtimeAssignmentUnavailableReason(cwd, task.data),
+  };
 }

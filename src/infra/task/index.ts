@@ -21,6 +21,7 @@ export { AutoCommitter } from './autoCommit.js';
 export { BranchManager } from './branchList.js';
 
 export { TaskRunner } from './runner.js';
+export type { GoalTaskSetupGuard } from './goalTaskSetupGuard.js';
 export type {
   AutoRequeueResult,
   AutoRequeueSkipReason,

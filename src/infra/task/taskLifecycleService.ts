@@ -1,6 +1,7 @@
 import { TaskRecordSchema, type TaskFileData, type TaskRecord, type TaskFailure } from './schema.js';
 import type { TaskInfo, TaskResult, TaskState } from './types.js';
 import { resolveTaskContent, toTaskInfo, toTaskState } from './mapper.js';
+import type { GoalTaskSetupGuard } from './goalTaskSetupGuard.js';
 import { cleanupTaskSpecDirectory, prepareTaskSpecDirectory, type PreparedTaskSpecDirectory } from './enqueueService.js';
 import { TaskStore } from './store.js';
 import { isFileLockTimeoutError } from '../fs/file-lock.js';
@@ -247,7 +248,7 @@ export class TaskLifecycleService {
 
   claimNextTasks(
     count: number,
-    goalSetupFailure?: (task: TaskInfo) => string | undefined,
+    goalSetupGuard?: GoalTaskSetupGuard,
     onSetupFailed?: (task: TaskState) => void,
   ): TaskInfo[] {
     if (count <= 0) {
@@ -292,8 +293,8 @@ export class TaskLifecycleService {
             const reason = sanitizeSensitiveText(getErrorMessage(error));
             return recordSetupFailure(task, next, reason);
           }
-          if (task.goal_id !== undefined && goalSetupFailure !== undefined) {
-            const reason = goalSetupFailure(info);
+          if (task.goal_id !== undefined && goalSetupGuard !== undefined) {
+            const reason = goalSetupGuard.setupFailureReason(info);
             if (reason !== undefined) {
               this.onWarning?.(`Task ${task.name} cannot run: ${sanitizeSensitiveText(reason)}`);
               return recordSetupFailure(task, next, reason);
