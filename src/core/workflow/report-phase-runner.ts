@@ -14,6 +14,7 @@ import { runWithPhaseSpan } from './observability/workflowSpans.js';
 import { writeReportFile } from './report-writer.js';
 import { reportPhaseEventTools } from './report-phase-tools.js';
 import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitive-text.js';
 
 const log = createLogger('phase-runner');
 const REPORT_PHASE_MAX_TURNS = 3;
@@ -269,6 +270,7 @@ async function executeReportPhase(
         step: step.name,
         fileName,
         reason: firstAttempt.failureReason,
+        detail: firstAttempt.diagnostic,
       });
 
       const retryAttempt = await runSingleReportAttempt(
@@ -327,6 +329,7 @@ async function executeReportPhase(
       step: step.name,
       fileName,
       reason: retryFailure.failureReason,
+      detail: retryFailure.diagnostic,
       provider: fallbackOptions.resolvedProvider,
     });
 
@@ -454,6 +457,8 @@ type ReportAttemptResult =
     errorMessage: string;
     failureReason: ReportRetryFailureReason;
     errorKind?: AgentResponse['errorKind'];
+    /** Redacted, bounded provider error for events and logs. `errorMessage` keeps the raw text. */
+    diagnostic?: string;
   };
 
 export type ReportRetryFailureReason =
@@ -642,13 +647,14 @@ async function runSingleReportAttempt(
   if (response.status !== 'done') {
     const fallbackMessage = response.error || response.content || 'Unknown error';
     const errorMessage = resolveAgentErrorMessage(response.errorKind, fallbackMessage);
+    const diagnostic = buildProviderErrorEventMessage(response);
     ctx.onPhaseComplete?.(
       step,
       2,
       'report',
       '',
       response.status,
-      buildRetryableFailureEventError('provider_error', response.status),
+      diagnostic,
       phaseExecutionId,
       ctx.iteration,
     );
@@ -657,6 +663,7 @@ async function runSingleReportAttempt(
       errorMessage,
       failureReason: 'provider_error',
       errorKind: response.errorKind,
+      diagnostic,
     };
   }
 
@@ -738,30 +745,21 @@ function classifyRetryableFailure(
     }
     return {
       failureReason: 'provider_error',
-      errorMessage: buildRetryableFailureEventError(
-        'provider_error',
-        response.status,
-      ),
+      errorMessage: buildProviderErrorEventMessage(response),
     };
   }
   const finalReportContent = response.content.trim();
   if (finalReportContent.length === 0) {
     return {
       failureReason: 'empty_output',
-      errorMessage: buildRetryableFailureEventError(
-        'empty_output',
-        response.status,
-      ),
+      errorMessage: buildRetryableFailureEventError('empty_output'),
     };
   }
   const validation = validateReportContent?.(finalReportContent);
   if (validation !== undefined && !validation.valid) {
     return {
       failureReason: 'invalid_output',
-      errorMessage: buildRetryableFailureEventError(
-        'invalid_output',
-        response.status,
-      ),
+      errorMessage: buildRetryableFailureEventError('invalid_output'),
     };
   }
   return undefined;
@@ -808,8 +806,7 @@ function buildReportAttemptIdentity(
 }
 
 function buildRetryableFailureEventError(
-  failureReason: ReportRetryFailureReason,
-  status: AgentResponse['status'],
+  failureReason: Exclude<ReportRetryFailureReason, 'provider_error'>,
 ): string {
   if (failureReason === 'empty_output') {
     return 'Report output is empty';
@@ -817,10 +814,23 @@ function buildRetryableFailureEventError(
   if (failureReason === 'tool_call') {
     return 'Report phase emitted a tool call';
   }
-  if (failureReason === 'invalid_output') {
-    return 'Report output failed deterministic validation';
-  }
-  return `Report phase provider returned status "${status}"`;
+  return 'Report output failed deterministic validation';
+}
+
+const MAX_PROVIDER_ERROR_SUMMARY_CHARS = 300;
+
+/**
+ * Event and log message for a provider error: status, failure category, and the provider's
+ * error text with credentials redacted, on one line, bounded. Never the response content.
+ */
+function buildProviderErrorEventMessage(response: AgentResponse): string {
+  const category = response.failureCategory === undefined ? '' : ` (${response.failureCategory})`;
+  const text = sanitizeSensitiveText(response.error ?? '').replace(/\s+/g, ' ').trim();
+  const summary = text.length > MAX_PROVIDER_ERROR_SUMMARY_CHARS
+    ? `${text.slice(0, MAX_PROVIDER_ERROR_SUMMARY_CHARS)}…`
+    : text;
+  const detail = summary.length === 0 ? '' : `: ${summary}`;
+  return `Report phase provider returned status "${response.status}"${category}${detail}`;
 }
 
 function resolveReportAttemptProviderInfo(

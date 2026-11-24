@@ -1092,7 +1092,112 @@ describe('runReportPhase retry with new session', () => {
     expect(secondFileOptions.sessionId).toBe('session-resume-1');
   });
 
-  it('should log only classified retry failure reasons when fallback succeeds', async () => {
+  it('should report the redacted provider error on phase complete and in the retry log', async () => {
+    // Given
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-provider-error-summary.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    const phaseComplete = vi.fn();
+    ctx.onPhaseComplete = phaseComplete;
+    queueRunAgentResponses([
+      {
+        persona: 'coder',
+        status: 'error',
+        content: 'RESPONSE_BODY_MARKER partial report text',
+        timestamp: new Date('2026-11-25T00:00:00Z'),
+        error: [
+          'connect ECONNREFUSED 10.0.0.5:8000',
+          'Authorization: Bearer header-credential-1',
+          'api_key=key-credential-2 sk-abcdefgh12345678',
+        ].join('\n'),
+        failureCategory: 'provider_error',
+      },
+      {
+        persona: 'coder',
+        status: 'done',
+        content: '# Report\nRecovered on retry',
+        timestamp: new Date('2026-11-25T00:00:01Z'),
+      },
+    ]);
+
+    // When
+    await runReportPhase(step, 1, ctx);
+
+    // Then
+    const eventError = phaseComplete.mock.calls[0]?.[5] as string;
+    expect(eventError).toBe(
+      'Report phase provider returned status "error" (provider_error): '
+      + 'connect ECONNREFUSED 10.0.0.5:8000 Authorization: Bearer [REDACTED] api_key=[REDACTED] [REDACTED]',
+    );
+    expect(phaseComplete.mock.calls[0]?.[3]).toBe('');
+    expect(phaseComplete.mock.calls[0]?.[4]).toBe('error');
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ reason: 'provider_error', detail: eventError }),
+    );
+    const observed = JSON.stringify([phaseComplete.mock.calls, infoSpy.mock.calls]);
+    for (const secret of ['header-credential-1', 'key-credential-2', 'sk-abcdefgh12345678', 'RESPONSE_BODY_MARKER']) {
+      expect(observed).not.toContain(secret);
+    }
+  });
+
+  it('should bound a long provider error on phase complete', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-provider-error-bounded.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    const phaseComplete = vi.fn();
+    ctx.onPhaseComplete = phaseComplete;
+    queueRunAgentResponses([
+      {
+        persona: 'coder',
+        status: 'error',
+        content: '',
+        timestamp: new Date('2026-11-25T00:00:00Z'),
+        error: `upstream timeout ${'x'.repeat(5000)}`,
+      },
+      {
+        persona: 'coder',
+        status: 'done',
+        content: '# Report\nRecovered on retry',
+        timestamp: new Date('2026-11-25T00:00:01Z'),
+      },
+    ]);
+
+    await runReportPhase(step, 1, ctx);
+
+    const eventError = phaseComplete.mock.calls[0]?.[5] as string;
+    expect(eventError.startsWith('Report phase provider returned status "error": upstream timeout xxx')).toBe(true);
+    expect(eventError.endsWith('…')).toBe(true);
+    expect(eventError.length).toBeLessThan(400);
+  });
+
+  it('should keep the status-only message when the provider gives no error text', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-provider-error-no-text.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    const phaseComplete = vi.fn();
+    ctx.onPhaseComplete = phaseComplete;
+    queueRunAgentResponses([
+      {
+        persona: 'coder',
+        status: 'error',
+        content: 'RESPONSE_BODY_MARKER only content',
+        timestamp: new Date('2026-11-25T00:00:00Z'),
+      },
+      {
+        persona: 'coder',
+        status: 'done',
+        content: '# Report\nRecovered on retry',
+        timestamp: new Date('2026-11-25T00:00:01Z'),
+      },
+    ]);
+
+    await runReportPhase(step, 1, ctx);
+
+    expect(phaseComplete.mock.calls[0]?.[5]).toBe('Report phase provider returned status "error"');
+  });
+
+  it('should keep credentials and response content out of retry logs when fallback succeeds', async () => {
     // Given
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('03-redacted-fallback-log.md');
@@ -1126,9 +1231,11 @@ describe('runReportPhase retry with new session', () => {
 
     // Then
     const infoPayload = JSON.stringify(infoSpy.mock.calls);
-    expect(infoPayload).not.toContain('SECRET_TOKEN');
+    expect(infoPayload).not.toContain('abc123');
+    expect(infoPayload).not.toContain('retry content');
     const phaseCompletePayload = JSON.stringify(phaseComplete.mock.calls);
-    expect(phaseCompletePayload).not.toContain('SECRET_TOKEN');
+    expect(phaseCompletePayload).not.toContain('abc123');
+    expect(phaseCompletePayload).not.toContain('retry content');
     expect(phaseComplete).toHaveBeenNthCalledWith(
       2,
       step,
@@ -1136,7 +1243,7 @@ describe('runReportPhase retry with new session', () => {
       'report',
       '',
       'error',
-      'Report phase provider returned status "error"',
+      'Report phase provider returned status "error": SECRET_TOKEN=[REDACTED] from retry error',
       undefined,
       undefined,
     );
@@ -2280,7 +2387,7 @@ describe('runReportPhase provider info', () => {
     });
   });
 
-  it('does not attach raw retry failure content to observability outcomes before fallback succeeds', async () => {
+  it('attaches only the redacted provider error to observability outcomes before fallback succeeds', async () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createProviderInfoStep('fallback-redacted.md');
     const ctx = createProviderInfoContext(reportDir);
@@ -2310,11 +2417,12 @@ describe('runReportPhase provider info', () => {
 
     expect(readFileSync(join(reportDir, 'fallback-redacted.md'), 'utf-8'))
       .toContain('Fallback OK');
-    expect(JSON.stringify(capturedOutcomes)).not.toContain('SECRET_TOKEN');
+    expect(JSON.stringify(capturedOutcomes)).not.toContain('retry-content');
+    expect(JSON.stringify(capturedOutcomes)).not.toContain('retry-error');
     expect(capturedOutcomes[1]).toMatchObject({
       status: 'error',
       content: '',
-      error: 'Report phase provider returned status "error"',
+      error: 'Report phase provider returned status "error": SECRET_TOKEN=[REDACTED]',
     });
   });
 
