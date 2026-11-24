@@ -89,6 +89,25 @@ describe('PR status system input target ownership', () => {
   });
 });
 
+describe('CI failure evidence in shipped and project merge workflows', () => {
+  const root = join(import.meta.dirname, '..', '..');
+  const workflows = ['builtins/en/workflows', 'builtins/ja/workflows', '.takt/workflows']
+    .flatMap((directory) => readdirSync(join(root, directory)).filter((name) => name.endsWith('.yaml'))
+      .map((name) => join(directory, name)))
+    .filter((path) => readFileSync(join(root, path), 'utf8').includes('type: pr_ci_failure'));
+
+  it('pr_ci_failureを使うworkflowを見つけている', () => {
+    expect(workflows.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it.each(workflows)('%s は保存したjobログがあるときだけ欠陥の修正へ進む', (path) => {
+    const defectRules = readFileSync(join(root, path), 'utf8').split('\n')
+      .filter((line) => line.includes('investigate_ci.verdict == "defect"'));
+    expect(defectRules.length).toBeGreaterThan(0);
+    for (const rule of defectRules) expect(rule).toContain('collect_ci_failure.failure.logCount > 0');
+  });
+});
+
 describe('CI failure system input and rerun effect', () => {
   let runDirectory: string;
   beforeEach(() => { runDirectory = mkdtempSync(join(tmpdir(), 'takt-ci-status-')); });

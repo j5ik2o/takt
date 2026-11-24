@@ -430,6 +430,15 @@ describe('PR status acquisition', () => {
       expect(evidence).not.toHaveProperty('external');
     });
 
+    it('クエリ文字列にActionsのrunのパスを含むだけの外部URLは、外部チェックのまま扱う', async () => {
+      const detailsUrl = 'https://ci.example.test/builds/1?from=/actions/runs/10';
+      install([actionsCheck('unit', 20), { ...check('COMPLETED', 'FAILURE'), name: 'third-party', detailsUrl }],
+        [job(20, 'unit', 'failure', ranStep)], { 20: 'expected 2 to equal 3' });
+
+      expect(await failureEvidence()).toMatchObject({ complete: true, unavailable: [],
+        external: [{ name: 'third-party', url: detailsUrl }] });
+    });
+
     it('失敗チェックが成功したjobを指し、runに失敗jobが1つもなければ成功扱いにせず不完全にする', async () => {
       install([actionsCheck('lint', 22)], [job(22, 'lint', 'success', ranStep)]);
 

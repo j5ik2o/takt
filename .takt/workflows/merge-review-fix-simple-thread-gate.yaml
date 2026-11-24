@@ -226,7 +226,7 @@ steps:
         next: ci_stopped
       - condition: when(context.collect_ci_failure.failure.rerunCount > 0)
         next: ci_stopped
-      - condition: when(structured.investigate_ci.verdict == "defect" && context.collect_ci_failure.failure.fixRounds < 2)
+      - condition: when(structured.investigate_ci.verdict == "defect" && context.collect_ci_failure.failure.logCount > 0 && context.collect_ci_failure.failure.fixRounds < 2)
         next: fix_ci
       - condition: when(structured.investigate_ci.verdict == "external")
         next: rerun_ci

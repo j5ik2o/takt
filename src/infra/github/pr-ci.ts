@@ -53,7 +53,10 @@ async function readRun(id: number, cwd: string, options?: PrStatusFetchOptions, 
 function actionsCheckReference(check: { kind: string; url: string | null }) {
   if (check.kind !== 'CheckRun' || check.url === null) return undefined;
   try { return { ...actionsReference(check.url), url: check.url }; }
-  catch { return /\/actions\/runs\//.test(check.url) ? 'unreadable' as const : undefined; }
+  catch {
+    try { return new URL(check.url).pathname.includes('/actions/runs/') ? 'unreadable' as const : undefined; }
+    catch { return undefined; }
+  }
 }
 
 function errorText(error: unknown): string {
