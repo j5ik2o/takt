@@ -30,7 +30,10 @@ any of four ways (`HookOutcome`); none of them writes to the state.
 | `AtEverySave` | Next to every terminal save, including the one inside `executePersistedPrMergeTask`, plus the queue entry. |
 | `AtEntryPoints` | One wrapper around each of the two entry points (the implementation). |
 
-Not modelled: a second execution of the same task (retry, requeue), another process changing the
+Not modelled: terminal states saved without an execution (a `pr_failed` task published later, a
+goal task that fails while it is claimed, pending tasks of an aborted goal) — the code calls the
+command at each of those three save sites, outside both entry points, and `noMissedExit` says
+nothing about them; a second execution of the same task (retry, requeue), another process changing the
 task between the save and the hook's read, the content of the environment passed to the command,
 and process-group termination at the timeout. The code tests in
 `src/__tests__/it-task-finish-hook.test.ts` cover the environment, the timeout, and a task handed

@@ -67,6 +67,8 @@ vi.mock('node:child_process', async (importOriginal) => ({
   execFileSync: (...args: unknown[]) => mockExecFileSync(...args),
 }));
 
+const mockRunTaskFinishHooks = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('../features/tasks/execute/taskFinishHook.js', () => ({ runTaskFinishHooks: mockRunTaskFinishHooks }));
 vi.mock('../infra/task/index.js', async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   TaskRunner: class {
@@ -914,6 +916,9 @@ describe('publishPrFailedTask', () => {
       expect.objectContaining({ cwd: '/worktree/failed-task' }));
     expect(mockCreatePullRequestSafely).not.toHaveBeenCalled();
     expect(mockCompletePublishedTask).toHaveBeenCalledWith('failed-task', 'https://example.test/pull/9', publishedTaskSha);
+    // The task reached a new final state without an execution, so the finish hook is called for it.
+    expect(mockRunTaskFinishHooks).toHaveBeenCalledWith('/project', expect.anything(), ['failed-task']);
+    expect(mockCompletePublishedTask).toHaveBeenCalledBefore(mockRunTaskFinishHooks);
   });
 
   it('creates a PR when none exists and reports the created URL', async () => {

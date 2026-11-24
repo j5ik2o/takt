@@ -519,6 +519,8 @@ The provider is `vcs_provider` when set (project overrides global), otherwise de
 
 `task_finish_hook` in the project's `.takt/config.yaml` names one command that TAKT runs each time a queued task's final state is saved. Use it to notify another tool that a task ended. It is a project-only key: the global config rejects it.
 
+TAKT runs this command on its own, at the end of every task, for anyone who runs TAKT in the project. Run TAKT only in a repository whose `.takt/config.yaml` you trust, as with the other project settings that name commands.
+
 ```yaml
 task_finish_hook:
   command: [/usr/local/bin/notify-task, --source, takt]   # argv; the first entry is the executable
@@ -530,8 +532,10 @@ task_finish_hook:
 The command runs:
 
 - once for each saved final state: `completed`, `failed`, `exceeded`, or `pr_failed`. A stop, an interruption, a goal pause, and an execution error are all saved as `failed`. A retry or requeue saves a new final state later and calls the command again for it.
-- after the state is written to `.takt/tasks.yaml`, in the project root as the working directory, with TAKT's own environment plus the variables below.
+- after the state is written to `.takt/tasks.yaml`, in the project root as the working directory.
+- with a small environment: `PATH`, `SHELL`, `TMPDIR`, `TMP`, `TEMP` (on Windows also `SystemRoot`, `WINDIR`, `COMSPEC`, `PATHEXT`) and the variables below. `HOME`, API keys, tokens, and every other variable of TAKT's environment are not passed. A command that needs one of them sets it itself.
 - for every task taken from the queue (`takt run`, `takt watch`, the manager's daemon, the `takt list` actions that execute a task) and for PR merge tasks, including `takt merge`.
+- for a final state saved without an execution: a `pr_failed` task that becomes `completed` when its PR is published later, a goal task that fails while it is taken from the queue, and each pending task that an aborted goal saves as `failed` (these run side by side).
 
 It does not run for a direct run without the queue (`takt "task"`, `--pipeline`), when the final state could not be saved, or when no TAKT process is executing the task at the time its state is saved (a task whose process died and that is later recovered or force-failed).
 
@@ -550,13 +554,16 @@ It does not run for a direct run without the queue (`takt "task"`, `--pipeline`)
 | `TAKT_FINISH_GOAL_ID` | Goal ID of a goal task |
 | `TAKT_FINISH_FAILURE_REASON` | Saved failure message, cut at 4,096 characters |
 
-A variable without a value is unset, not empty. Variables that start with `TAKT_FINISH_` in TAKT's own environment are not passed on.
+A variable without a value is unset, not empty.
 
 The command only observes the result. Its exit code, a timeout, or a failure to start never changes the saved state, the resume point, or the task's result; TAKT prints a warning and continues. When the timeout expires, TAKT ends the command's process group with `SIGTERM` and then `SIGKILL`. Standard output and standard error are captured up to 64 KiB and are not shown, except that standard error goes to the debug log when the command fails.
 
-Two limits to plan for:
+Limits to plan for:
 
-- **The execution slot stays occupied while the command runs.** TAKT waits for the command before it starts the next task in that slot, so a command that hangs delays the queue by `timeout_ms` (plus about one second to end the process group) per task. Keep the command short, and start long work in the background from it.
+- **The execution slot stays occupied while the command runs.** TAKT waits for the command before it starts the next task in that slot, so a command that hangs delays the queue by `timeout_ms` (plus about one second to end the process group) per task. Keep the command short.
+- **Long work started from the command must not keep the command's output open.** TAKT waits until the command's standard output and standard error are closed. A background process that inherits them keeps the command "running" after it exits: with `[sh, -c, 'sleep 5 & exit 0']` and a 1.5-second timeout, TAKT reported a timeout after 2.6 seconds and ended the background `sleep` with the process group. Redirect the output of the background process, for example `[sh, -c, 'long-job >/dev/null 2>&1 &']`; the same test then returned in 31 ms and the process kept running.
+- **An interruption does not stop the command.** The command runs in its own process group, so Ctrl+C does not reach it, and TAKT waits for it (up to the timeout) even while it shuts down. If TAKT itself is killed, a running command is left behind.
+- **On Windows, `.cmd` and `.bat` files cannot be started directly.** Name the interpreter: `[cmd, /c, notify.cmd]`.
 - **`TAKT_FINISH_RUN_DIR` is not kept for the command.** For a task that ran in a clone, the directory is inside the clone and disappears with it when the task is deleted or the goal's clones are cleaned up. A successful PR merge task removes its clone before the command starts, so the variable can then be unset. Copy what you need while the command runs.
 
 ## Environment Variable Overrides

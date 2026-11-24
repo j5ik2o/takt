@@ -32,6 +32,9 @@ vi.mock('../infra/git/index.js', async (importOriginal) => ({
 
 import { executeTaskAndCompleteWithDetails } from '../features/tasks/execute/taskExecution.js';
 import { executePrWorkflow, resolveMergeSettings } from '../features/merge/index.js';
+import { invalidatePendingGoalTasksWithFinishHook, runTaskFinishHooks } from '../features/tasks/execute/taskFinishHook.js';
+import { claimTasksWithGoalCompletions } from '../features/tasks/execute/claimTasks.js';
+import { goalId } from './helpers/goal-fixtures.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/index.js';
 
@@ -39,13 +42,15 @@ interface HookCall {
   argv: string[];
   cwd: string;
   env: Record<string, string>;
+  inherited: string[];
 }
 
 const HOOK_SCRIPT = `
 const fs = require('node:fs');
 const [out, mode] = process.argv.slice(2);
 const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith('TAKT_FINISH_')));
-fs.appendFileSync(out, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), env }) + '\\n');
+const inherited = ['HOME', 'FINISH_HOOK_TEST_SECRET', 'PATH'].filter((key) => process.env[key] !== undefined);
+fs.appendFileSync(out, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), env, inherited }) + '\\n');
 if (mode === 'fail') process.exit(3);
 if (mode === 'hang') setInterval(() => {}, 1000);
 `;
@@ -59,7 +64,7 @@ interface Project {
   runner: TaskRunner;
 }
 
-function createProject(hook?: { mode?: string; timeoutMs?: number; extraArgs?: string[] } | 'none'): Project {
+function createProject(hook?: { mode?: string; timeoutMs?: number; extraArgs?: string[]; executable?: string } | 'none'): Project {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'takt-finish-hook-')));
   tempDirs.add(dir);
   const script = path.join(dir, 'hook.cjs');
@@ -69,7 +74,7 @@ function createProject(hook?: { mode?: string; timeoutMs?: number; extraArgs?: s
   const config: Record<string, unknown> = { language: 'en', provider: 'mock' };
   if (hook !== 'none') {
     config.task_finish_hook = {
-      command: [process.execPath, script, out, hook?.mode ?? 'ok', ...(hook?.extraArgs ?? [])],
+      command: [hook?.executable ?? process.execPath, script, out, hook?.mode ?? 'ok', ...(hook?.extraArgs ?? [])],
       ...(hook?.timeoutMs === undefined ? {} : { timeout_ms: hook.timeoutMs }),
     };
   }
@@ -124,6 +129,7 @@ afterEach(() => {
   for (const key of Object.keys(process.env).filter((name) => name.startsWith('TAKT_FINISH_'))) delete process.env[key];
   for (const [key, value] of savedFinishEnv) if (value !== undefined) process.env[key] = value;
   savedFinishEnv.clear();
+  vi.unstubAllEnvs();
   for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true });
   tempDirs.clear();
   invalidateAllResolvedConfigCache();
@@ -135,6 +141,7 @@ describe('task finish hook', () => {
     const task = claimTask(project);
     stubResolution(project);
     process.env.TAKT_FINISH_PR_URL = 'https://example.invalid/stale';
+    vi.stubEnv('FINISH_HOOK_TEST_SECRET', 'credential');
     const statusSeenByExecutor: string[] = [];
 
     const result = await run(project, task, async () => {
@@ -151,6 +158,8 @@ describe('task finish hook', () => {
     // No shell: the argument arrives as written and nothing in it is executed.
     expect(calls[0]!.argv.slice(2)).toEqual(['$(touch injected); two words']);
     expect(fs.existsSync(path.join(project.dir, 'injected'))).toBe(false);
+    // Only the base command allowlist is inherited: no credentials, no HOME.
+    expect(calls[0]!.inherited).toEqual(['PATH']);
     const saved = project.runner.listTaskStateItems().find((item) => item.name === task.name)!;
     expect(saved.status).toBe('completed');
     expect(calls[0]!.env).toEqual({
@@ -356,5 +365,76 @@ describe('task finish hook', () => {
     const calls = hookCalls(project);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.env).toMatchObject({ TAKT_FINISH_TASK_NAME: saved[0]!.name, TAKT_FINISH_STATUS: 'failed' });
+  });
+  it.each([
+    ['exits with a non-zero code', { mode: 'fail' }, 1],
+    ['cannot be started', { executable: '/nonexistent/finish-hook' }, 0],
+  ])('leaves a completed task and its result alone when the command %s', async (_label, hook, expectedCalls) => {
+    const project = createProject(hook);
+    const task = claimTask(project);
+    stubResolution(project);
+
+    const result = await run(project, task, async () => ({ success: true }));
+
+    expect(result.success).toBe(true);
+    expect(hookCalls(project)).toHaveLength(expectedCalls);
+    expect(project.runner.listTaskStateItems().find((item) => item.name === task.name)!.status).toBe('completed');
+  });
+
+  it('runs again when a pr_failed task is saved as completed after its PR is published', async () => {
+    const project = createProject();
+    const task = claimTask(project);
+    const worktreePath = path.join(project.dir, 'clone');
+    stubResolution(project, {
+      execCwd: worktreePath, isWorktree: true, worktreePath, branch: 'takt/work', autoPr: true,
+      taskSpec: { taskPrompt: 'Do the work' },
+    });
+    doubles.postExecutionFlow.mockResolvedValue({ prFailed: true, prError: 'gh: not authenticated' });
+    fs.mkdirSync(worktreePath);
+    await run(project, task, async () => ({ success: true }));
+
+    project.runner.completePublishedTask(task.name, 'https://example.invalid/pull/1', 'b'.repeat(40));
+    await runTaskFinishHooks(project.dir, project.runner, [task.name], { emitStatusLog: false });
+
+    const calls = hookCalls(project);
+    expect(calls.map((call) => call.env.TAKT_FINISH_STATUS)).toEqual(['pr_failed', 'completed']);
+    expect(calls[1]!.env.TAKT_FINISH_PR_URL).toBe('https://example.invalid/pull/1');
+  });
+
+  it('runs for each pending task that an aborted goal saves as failed, and for no other task', async () => {
+    const project = createProject();
+    const first = project.runner.addTask('Goal work 1', { workflow: 'default', goal_id: goalId });
+    const second = project.runner.addTask('Goal work 2', { workflow: 'default', goal_id: goalId });
+    const unrelated = project.runner.addTask('Other work', { workflow: 'default' });
+
+    await invalidatePendingGoalTasksWithFinishHook(project.dir, project.runner, goalId);
+
+    const calls = hookCalls(project);
+    expect(calls.map((call) => call.env.TAKT_FINISH_TASK_NAME).sort()).toEqual([first.name, second.name].sort());
+    expect(calls.every((call) => call.env.TAKT_FINISH_STATUS === 'failed' && call.env.TAKT_FINISH_GOAL_ID === goalId)).toBe(true);
+    expect(project.runner.listTaskStateItems().find((item) => item.name === unrelated.name)!.status).toBe('pending');
+  });
+
+  it('reports a goal task that is saved as failed while it is claimed', async () => {
+    const project = createProject();
+    const task = project.runner.addTask('Goal work', { workflow: 'default' });
+    const claimForReal = project.runner.claimNextTasks.bind(project.runner);
+    // Stand-in for the claim-time setup failure of a goal task: the task is saved as failed and
+    // reported through the callback, and never handed out for execution.
+    vi.spyOn(project.runner, 'claimNextTasks').mockImplementation((count, _setupFailure, onSetupFailed) => {
+      const claimed = claimForReal(count)[0]!;
+      const now = new Date().toISOString();
+      project.runner.failTask({ task: claimed, success: false, response: 'runtime assignment is gone',
+        executionLog: [], startedAt: now, completedAt: now });
+      onSetupFailed?.(project.runner.listTaskStateItems().find((item) => item.name === claimed.name)!);
+      return [];
+    });
+
+    const claimed = claimTasksWithGoalCompletions(project.runner, 1, project.dir, new AbortController().signal);
+
+    expect(claimed).toEqual({ tasks: [], setupFailedTaskNames: [task.name] });
+    await runTaskFinishHooks(project.dir, project.runner, claimed.setupFailedTaskNames, { emitStatusLog: false });
+    expect(hookCalls(project).map((call) => [call.env.TAKT_FINISH_TASK_NAME, call.env.TAKT_FINISH_STATUS]))
+      .toEqual([[task.name, 'failed']]);
   });
 });

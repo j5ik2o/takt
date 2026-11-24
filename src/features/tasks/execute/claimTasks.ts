@@ -14,8 +14,8 @@ export class TaskClaimLockUnavailableError extends Error {
 export function claimTasksWithGoalCompletions(
   taskRunner: TaskRunner, count: number, cwd: string, signal: AbortSignal,
   goalTasksOnly = false,
-): { tasks: TaskInfo[] } {
-  if (count <= 0 || signal.aborted) return { tasks: [] };
+): { tasks: TaskInfo[]; setupFailedTaskNames: string[] } {
+  if (count <= 0 || signal.aborted) return { tasks: [], setupFailedTaskNames: [] };
   let taskStates: TaskState[];
   try {
     taskStates = taskRunner.listTaskStateItems();
@@ -25,12 +25,17 @@ export function claimTasksWithGoalCompletions(
   const hasPending = taskStates.some((task) => task.status === 'pending'
     && (!goalTasksOnly || task.goalId !== undefined));
   try {
+    // Goal tasks saved as failed while being claimed never reach an execution; the caller runs their finish hook.
+    const setupFailedTaskNames: string[] = [];
     const tasks = taskRunner.claimNextTasks(
       count,
       (task) => runtimeAssignmentUnavailableReason(cwd, task.data),
-      (task) => publishGoalCompletion(cwd, task),
+      (task) => {
+        setupFailedTaskNames.push(task.name);
+        publishGoalCompletion(cwd, task);
+      },
     );
-    return { tasks };
+    return { tasks, setupFailedTaskNames };
   } catch (error) {
     if (hasPending || isClaimLockTimeoutFailure(error)) throw classifyClaimLockFailure(error);
     throw error;

@@ -1,3 +1,4 @@
+import { invalidatePendingGoalTasksWithFinishHook } from '../tasks/execute/taskFinishHook.js';
 import { randomUUID } from 'node:crypto';
 import { DaemonEpicFiles } from '../../infra/daemon/epicFiles.js';
 import { isDeepStrictEqual } from 'node:util';
@@ -287,7 +288,7 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             const repository = await findAssignedGoalRepository(command.goalId, assignment);
             const status = command.kind === 'pause_goal' ? 'paused' : command.kind === 'resume_goal' ? 'active' : 'aborted';
             await setGoalExecutionStatus(repository, command.goalId, status, io.signal, 'human');
-            if (status === 'aborted') new TaskRunner(repository).invalidatePendingGoalTasks(command.goalId);
+            if (status === 'aborted') await invalidatePendingGoalTasksWithFinishHook(repository, new TaskRunner(repository), command.goalId);
             if (status === 'active') await ensureManagerRun(repository);
             result = { kind: 'notice', message: getLabel(status === 'paused' ? 'manager.goalPaused' : status === 'active' ? 'manager.goalResumed' : 'manager.goalAborted', language, { goalId: command.goalId }) };
             break;

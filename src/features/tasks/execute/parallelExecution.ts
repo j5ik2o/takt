@@ -23,6 +23,7 @@ import { ShutdownManager } from './shutdownManager.js';
 import { forceExitAfterOpenCodeCleanup } from './forceShutdown.js';
 import { isInputWaiting } from './inputWait.js';
 import type { TaskExecutionOptions } from './types.js';
+import { runTaskFinishHooks } from './taskFinishHook.js';
 import { claimTasksWithGoalCompletions, isClaimLockTimeoutFailure, TaskClaimLockUnavailableError } from './claimTasks.js';
 import { checkQueuedTaskProviders, checkPendingTaskProviders } from './providerPreflight.js';
 
@@ -329,9 +330,10 @@ async function claimAvailableTasks(
   if (freeSlots <= 0) return false;
   await checkPendingTaskProviders(taskRunner, cwd, overrides ?? {}, undefined, [], signal, goalTasksOnly);
   if (signal.aborted || isInputWaiting()) return false;
-  const { tasks: newTasks } = claimTasksWithGoalCompletions(
+  const { tasks: newTasks, setupFailedTaskNames } = claimTasksWithGoalCompletions(
     taskRunner, freeSlots, cwd, signal, goalTasksOnly,
   );
+  await runTaskFinishHooks(cwd, taskRunner, setupFailedTaskNames);
   log.trace('poll_tick', { active: activeCount, queued: queue.length, freeSlots });
   if (newTasks.length > 0) {
     log.debug('poll_new_tasks', { count: newTasks.length });

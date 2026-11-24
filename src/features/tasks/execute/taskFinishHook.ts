@@ -9,8 +9,9 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { TaskRunner, TaskState } from '../../../infra/task/index.js';
+import type { TaskFinishHookConfig } from '../../../core/models/task-finish-hook.js';
 import { loadProjectConfig } from '../../../infra/config/project/projectConfig.js';
-import { runBoundedCommand } from '../../../shared/utils/bounded-command-runner.js';
+import { buildCommandEnv, runBoundedCommand } from '../../../shared/utils/bounded-command-runner.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { warn } from '../../../shared/ui/index.js';
@@ -61,11 +62,8 @@ function buildHookEnv(projectCwd: string, state: TaskState & { status: TerminalS
     TAKT_FINISH_GOAL_ID: state.goalId,
     TAKT_FINISH_FAILURE_REASON: failureReason?.slice(0, MAX_FAILURE_REASON_CHARS),
   };
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  // A value inherited from the parent environment must not pass as this task's value.
-  for (const key of Object.keys(env)) {
-    if (key.startsWith('TAKT_FINISH_')) delete env[key];
-  }
+  // The same allowlist as the other bounded commands: credentials in TAKT's environment are not passed on.
+  const env = buildCommandEnv(process.env);
   env.TAKT_FINISH_TASK_NAME = state.name;
   env.TAKT_FINISH_STATUS = state.status;
   env.TAKT_FINISH_PROJECT_DIR = projectCwd;
@@ -76,18 +74,13 @@ function buildHookEnv(projectCwd: string, state: TaskState & { status: TerminalS
   return env;
 }
 
-async function runHook(
+async function callHook(
   projectCwd: string,
-  taskRunner: TaskRunner,
-  taskName: string,
-  stampBefore: string | undefined,
+  hook: TaskFinishHookConfig,
+  state: TaskState & { status: TerminalStatus },
   options: TaskFinishHookOptions | undefined,
 ): Promise<void> {
-  const state = readTaskState(taskRunner, taskName);
-  if (!isTerminal(state) || terminalStamp(state) === stampBefore) return;
-  const hook = loadProjectConfig(projectCwd).taskFinishHook;
-  if (hook === undefined) return;
-
+  const taskName = state.name;
   const [file, ...args] = hook.command;
   const result = await runBoundedCommand({
     command: file,
@@ -109,6 +102,62 @@ async function runHook(
   if (options?.emitStatusLog !== false) {
     warn(`Task finish hook for "${sanitizeTerminalText(taskName)}" ${sanitizeTerminalText(reason)}; the task state is unchanged`);
   }
+}
+
+async function runHook(
+  projectCwd: string,
+  taskRunner: TaskRunner,
+  taskName: string,
+  stampBefore: string | undefined,
+  options: TaskFinishHookOptions | undefined,
+): Promise<void> {
+  const state = readTaskState(taskRunner, taskName);
+  if (!isTerminal(state) || terminalStamp(state) === stampBefore) return;
+  const hook = loadProjectConfig(projectCwd).taskFinishHook;
+  if (hook === undefined) return;
+  await callHook(projectCwd, hook, state, options);
+}
+
+/**
+ * Call the hook for tasks whose terminal state was just saved without an execution: a published
+ * `pr_failed` task, a goal task that failed while it was claimed, a pending task of an aborted goal.
+ * The caller names only tasks it has just saved. Never throws.
+ */
+export async function runTaskFinishHooks(
+  projectCwd: string,
+  taskRunner: TaskRunner,
+  taskNames: readonly string[],
+  options?: TaskFinishHookOptions,
+): Promise<void> {
+  if (taskNames.length === 0) return;
+  try {
+    const hook = loadProjectConfig(projectCwd).taskFinishHook;
+    if (hook === undefined) return;
+    const names = new Set(taskNames);
+    const states = taskRunner.listTaskStateItems().filter((item) => names.has(item.name)).filter(isTerminal);
+    // Side by side: aborting a goal with many pending tasks waits for one timeout, not one per task.
+    await Promise.all(states.map((state) => callHook(projectCwd, hook, state, options)));
+  } catch (error) {
+    log.error('Task finish hook could not run', { taskNames, error: getErrorMessage(error) });
+  }
+}
+
+/** Fail the pending tasks of an aborted goal, then call the hook for each task this saved as failed. */
+export async function invalidatePendingGoalTasksWithFinishHook(
+  projectCwd: string,
+  taskRunner: TaskRunner,
+  goalId: string,
+): Promise<void> {
+  let pendingNames: string[] = [];
+  try {
+    pendingNames = taskRunner.listTaskStateItems()
+      .filter((item) => item.status === 'pending' && item.goalId === goalId)
+      .map((item) => item.name);
+  } catch (error) {
+    log.error('Task state was unreadable before goal task invalidation', { goalId, error: getErrorMessage(error) });
+  }
+  taskRunner.invalidatePendingGoalTasks(goalId);
+  await runTaskFinishHooks(projectCwd, taskRunner, pendingNames);
 }
 
 /**
