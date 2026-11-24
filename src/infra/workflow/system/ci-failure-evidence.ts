@@ -49,6 +49,10 @@ async function saveIndex(
     }
     for (const job of check.jobs) {
       signal?.throwIfAborted();
+      if (job.notStarted === true) {
+        jobs.push({ id: job.id, name: job.name, url: job.url, logPath: null, notStarted: true });
+        continue;
+      }
       if (!job.log?.trim()) {
         if (!unavailable.some((item) => item.name === check.name && item.url === job.url)) {
           addUnavailable({ name: check.name, url: job.url, reason: 'Failed job log is missing' });
@@ -91,7 +95,7 @@ export async function saveCiFailureEvidence(
   rerunCount: number,
   recoveryError: unknown,
   signal?: AbortSignal,
-): Promise<{ failure: PrCiFailure; promptEvidence: string }> {
+): Promise<{ failure: PrCiFailure; promptEvidence: string; logCount: number }> {
   const canonicalDirectory = join(runPaths.runRootAbs, 'ci-evidence');
   const viewRelativeDirectory = join('.takt', 'runs', runPaths.slug, 'ci-evidence');
   const viewDirectory = join(workspaceCwd, viewRelativeDirectory);
@@ -113,10 +117,12 @@ export async function saveCiFailureEvidence(
   const view = resolve(canonicalDirectory) === resolve(viewDirectory)
     ? canonical
     : await saveIndex(canonical.failure, viewDirectory, fixRounds, rerunCount, recoveryError, signal);
+  const notStarted = view.failure.checks.flatMap(({ jobs }) => jobs).filter((job) => job.notStarted === true).length;
   const external = view.failure.external?.length ?? 0;
-  return { failure: view.failure,
+  return { failure: view.failure, logCount: view.logCount,
     promptEvidence: [
-      `PR #${failure.number}; HEAD ${failure.headSha}; complete=${view.failure.complete}; checks=${view.failure.checks.length}; unique job logs=${view.logCount}; external checks=${external}; unavailable=${view.failure.unavailable.length}; fixRounds=${fixRounds}; rerunCount=${rerunCount}.`,
+      `PR #${failure.number}; HEAD ${failure.headSha}; complete=${view.failure.complete}; checks=${view.failure.checks.length}; unique job logs=${view.logCount}; not started jobs=${notStarted}; external checks=${external}; unavailable=${view.failure.unavailable.length}; fixRounds=${fixRounds}; rerunCount=${rerunCount}.`,
+      ...(notStarted === 0 ? [] : [`${notStarted} failed job(s) are marked notStarted: cancelled before any step ran, so no log exists. They never ran the code; judge why they did not start, and do not treat them as passed.`]),
       ...(external === 0 ? [] : [`${external} failed check(s) are listed under external: they have no Actions log and cannot be diagnosed or rerun here. They remain failed; judge the other checks on their own evidence.`]),
       `Evidence index: ${view.manifestPath}`,
     ].join('\n'),

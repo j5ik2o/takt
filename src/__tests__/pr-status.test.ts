@@ -340,6 +340,74 @@ describe('PR status acquisition', () => {
     });
   });
 
+  describe('開始前に取り消されたjob', () => {
+    const run = 'https://github.com/org/repo/actions/runs/10';
+    const actionsCheck = (name: string, jobId: number, conclusion = 'FAILURE') => ({
+      ...check('COMPLETED', conclusion), name, detailsUrl: `${run}/job/${jobId}` });
+    const job = (databaseId: number, name: string, conclusion: string, steps?: unknown[]) => ({
+      databaseId, name, url: `${run}/job/${databaseId}`, status: 'completed', conclusion,
+      ...(steps === undefined ? {} : { steps }) });
+    const ranStep = [{ name: 'Run tests', status: 'completed', conclusion: 'failure', number: 1 }];
+
+    function install(checks: unknown[], jobs: unknown[], logs: Record<number, string | Error> = {}) {
+      response.mockImplementation(() => {
+        const args = execFile.mock.calls.at(-1)?.[1] as string[];
+        if (args[0] === 'pr') return JSON.stringify(status(checks));
+        if (args.includes('--log-failed')) {
+          const log = logs[Number(args[args.indexOf('--job') + 1])] ?? '';
+          if (log instanceof Error) throw log;
+          return log;
+        }
+        return JSON.stringify({ databaseId: 10, url: run, headSha: 'a'.repeat(40), attempt: 1,
+          status: 'completed', conclusion: 'failure', jobs });
+      });
+    }
+    const logReads = () => execFile.mock.calls.filter(([, args]) => args.includes('--log-failed'))
+      .map(([, args]) => Number(args[args.indexOf('--job') + 1]));
+
+    it('stepが1つも実行されないまま取り消されたjobは、ログを読まず証拠の欠落にもせず、未開始として残す', async () => {
+      install([actionsCheck('macos', 21, 'CANCELLED')], [job(21, 'macos', 'cancelled', [])]);
+
+      const evidence = await failureEvidence() as PrCiFailure;
+      expect(evidence).toMatchObject({ complete: true, unavailable: [],
+        checks: [{ name: 'macos', jobs: [{ id: 21, notStarted: true }] }] });
+      expect(evidence.checks[0]!.jobs[0]).not.toHaveProperty('log');
+      expect(logReads()).toEqual([]);
+    });
+
+    it('診断できる失敗は、同じrunに開始前に取り消されたjobが混ざっても完全な証拠になる', async () => {
+      install([actionsCheck('unit', 20), actionsCheck('macos', 21, 'CANCELLED')],
+        [job(20, 'unit', 'failure', ranStep), job(21, 'macos', 'cancelled', []), job(22, 'lint', 'success', ranStep)],
+        { 20: 'math.test.ts > adds\nAssertionError: expected 2 to equal 3' });
+
+      const evidence = await failureEvidence() as PrCiFailure;
+      expect(evidence).toMatchObject({ complete: true, unavailable: [] });
+      for (const { jobs } of evidence.checks) {
+        expect(jobs).toEqual([
+          expect.objectContaining({ id: 20, log: expect.stringContaining('expected 2 to equal 3') }),
+          { id: 21, name: 'macos', url: `${run}/job/21`, notStarted: true },
+        ]);
+      }
+      expect(new Set(logReads())).toEqual(new Set([20]));
+    });
+
+    it.each([
+      ['実行されたjobのログが空', job(22, 'e2e', 'failure', ranStep), ''],
+      ['実行されたjobのログ取得が拒否された', job(22, 'e2e', 'failure', ranStep), new Error('HTTP 403: Resource not accessible')],
+      ['実行途中で取り消されたjobのログが空', job(22, 'e2e', 'cancelled', ranStep), ''],
+      ['取消jobのstepの情報がない', job(22, 'e2e', 'cancelled'), ''],
+      ['stepがないのに失敗と報告されたjob', job(22, 'e2e', 'failure', []), ''],
+    ] as const)('必要な証拠が実際に欠ける場合（%s）は、未開始にせず不完全にする', async (_label, missingJob, log) => {
+      install([actionsCheck('unit', 20), actionsCheck('e2e', 22)],
+        [job(20, 'unit', 'failure', ranStep), missingJob], { 20: 'expected 2 to equal 3', 22: log });
+
+      const evidence = await failureEvidence() as PrCiFailure;
+      expect(evidence.complete).toBe(false);
+      expect(evidence.unavailable).toContainEqual(expect.objectContaining({ url: `${run}/job/22` }));
+      expect(evidence.checks.flatMap(({ jobs }) => jobs).some((item) => item.notStarted === true)).toBe(false);
+    });
+  });
+
   it.each(['', 'HTTP 403: Resource not accessible by integration'])('ログ不足%jを完全な証拠や外部要因へ変換しない', async (log) => {
     installFailureResponses([{ ...check('COMPLETED', 'FAILURE'),
       detailsUrl: 'https://github.com/org/repo/actions/runs/10/job/20' }], 'a'.repeat(40), log);
