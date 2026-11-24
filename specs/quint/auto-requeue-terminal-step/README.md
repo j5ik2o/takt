@@ -23,7 +23,7 @@ Notify --常に-->   ABORT
 
 `guardAbortOnly` で挙動を切り替える。`current` は修正前（false）、`fixed` は修正後（true）。再投入の上限（`maxAttempts`）はどちらも 3。
 
-扱っていないもの：`workflow_call` の入れ子、並列 step、保存済みの `resume_point` と `restart_point`（モデルでは開始位置を `failure.step` だけで表す）、ゴールに属するタスク（`goal_owned` で自動の再投入から外れる）、手動の再投入、実行上限に達したタスクの再投入。
+扱っていないもの：「ほかの step から進んでこない step は、ABORT にしか進めなくても見送らない」という条件（モデルの Notify は常に Work から進んでくる。この条件と `workflow_call` の階層の扱いはコードのテストで確かめている）、`workflow_call` の入れ子、並列 step、保存済みの `resume_point` と `restart_point`（モデルでは開始位置を `failure.step` だけで表す）、ゴールに属するタスク（`goal_owned` で自動の再投入から外れる）、手動の再投入、実行上限に達したタスクの再投入。
 
 ## 不変条件
 
