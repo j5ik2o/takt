@@ -31,6 +31,7 @@ import { getWorkflowSourcePath } from '../infra/config/loaders/workflowSourceMet
 import { getGlobalConfigDir, getRepertoireDir } from '../infra/config/paths.js';
 import { invalidateGlobalConfigCache, saveGlobalConfig } from '../infra/config/global/globalConfig.js';
 import { GoalStore } from '../infra/goals/store.js';
+import { clearGoalPullRequestStatusCache } from '../infra/goals/pull-request-status.js';
 import * as goalBranchSync from '../infra/goals/branch-sync.js';
 import { isGoalContentIncluded } from '../infra/goals/git-command.js';
 import { GoalSchema } from '../infra/goals/schema.js';
@@ -65,6 +66,8 @@ const sameTipCorrection = /same expectedSha[^.]*only (?:if|when)[^.]*current goa
 const advancedTipCorrection = /(?:if|when)[^.]*tip[^.]*advanced[^.]*review[^.]*new expectedSha[^.]*summary[^.]*humanChecks/i;
 vi.mock('../infra/github/pr-command.js', () => ({ runPrCommand: prStatus.command }));
 beforeEach(() => {
+  // Each test reuses the same PR URL in a new repository, so the process-wide PR status cache must start empty.
+  clearGoalPullRequestStatusCache();
   prStatus.command.mockReset().mockRejectedValue(new Error('GitHub fake is unavailable'));
 });
 
