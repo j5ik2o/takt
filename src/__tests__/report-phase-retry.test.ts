@@ -352,6 +352,45 @@ describe('runReportPhase retry with new session', () => {
     expect(vi.mocked(runAgent)).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ['a rate-limited response', { status: 'rate_limited', errorKind: 'rate_limit' }],
+    ['a rate limit reported with status error', { status: 'error', errorKind: 'rate_limit' }],
+    ['a provider stream parse error', { status: 'error', failureCategory: 'provider_stream_parse_error' }],
+    ['a changed credential binding', { status: 'error', failureCategory: 'credential_binding_changed' }],
+    ['an unsupported session continuation', { status: 'error', failureCategory: 'session_continuation_unsupported' }],
+  ] as const)('keeps credentials and response content out of the event and span for %s', async (_name, fields) => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('02-coder.md');
+    const ctx = createContext(reportDir, 'Implemented feature X');
+    const phaseComplete = vi.fn();
+    ctx.onPhaseComplete = phaseComplete;
+    const rawError = 'upstream refused api_key=LEAKED1 Bearer LEAKED2TOKEN99';
+    queueRunAgentResponses([{
+      persona: 'coder',
+      content: 'BODY_MARKER',
+      error: rawError,
+      timestamp: new Date('2026-11-25T00:00:00Z'),
+      ...fields,
+    }]);
+
+    // The caller still receives the provider's own error text.
+    if ('errorKind' in fields) {
+      const result = await runReportPhase(step, 1, ctx);
+      expect(result).toMatchObject({ rateLimited: true, response: { error: rawError } });
+    } else {
+      await expect(generateReportPhase(step, 1, ctx)).rejects.toThrow(rawError);
+    }
+
+    expect(phaseComplete).toHaveBeenCalledOnce();
+    expect(phaseComplete.mock.calls[0]?.[3]).toBe('');
+    expect(phaseComplete.mock.calls[0]?.[5]).toContain('upstream refused api_key=[REDACTED] Bearer [REDACTED]');
+    expect(capturedOutcomes.at(-1)).toMatchObject({ content: '' });
+    const observed = JSON.stringify([phaseComplete.mock.calls, capturedOutcomes.at(-1)]);
+    for (const secret of ['LEAKED1', 'LEAKED2TOKEN99', 'BODY_MARKER']) {
+      expect(observed).not.toContain(secret);
+    }
+  });
+
   it.each(['session_continuation_unsupported', 'credential_binding_changed'] as const)('does not retry %s or replace the saved session', async (failureCategory) => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('02-coder.md');

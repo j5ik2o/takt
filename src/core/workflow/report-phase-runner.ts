@@ -613,7 +613,7 @@ async function runSingleReportAttempt(
 
   if (response.status === 'rate_limited' || response.errorKind === 'rate_limit') {
     const errorMessage = resolveAgentErrorMessage(response.errorKind, response.error || response.content);
-    ctx.onPhaseComplete?.(step, 2, 'report', response.content, response.status, errorMessage, phaseExecutionId, ctx.iteration);
+    ctx.onPhaseComplete?.(step, 2, 'report', '', response.status, buildProviderErrorEventMessage(response), phaseExecutionId, ctx.iteration);
     return {
       kind: 'rate_limited',
       providerInfo: attemptProviderInfo,
@@ -635,7 +635,7 @@ async function runSingleReportAttempt(
     )
   ) {
     const errorMessage = resolveAgentErrorMessage(response.errorKind, response.error || response.content);
-    ctx.onPhaseComplete?.(step, 2, 'report', '', response.status, errorMessage, phaseExecutionId, ctx.iteration);
+    ctx.onPhaseComplete?.(step, 2, 'report', '', response.status, buildProviderErrorEventMessage(response), phaseExecutionId, ctx.iteration);
     return {
       kind: 'non_retryable_failure',
       response,
@@ -714,6 +714,15 @@ function buildReportAttemptSpanOutcome(
       status: 'error',
       content: '',
       error: retryableFailure.errorMessage,
+      providerUsage: result.providerUsage,
+    };
+  }
+
+  if (result.status === 'error' || result.status === 'rate_limited' || result.errorKind === 'rate_limit') {
+    return {
+      status: result.status,
+      content: '',
+      error: buildProviderErrorEventMessage(result),
       providerUsage: result.providerUsage,
     };
   }
