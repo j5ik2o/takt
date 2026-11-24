@@ -366,8 +366,12 @@ export class AgentRunner {
               type: 'result',
               data: { result: error, sessionId: responseSessionId ?? 'unknown', success: false, error },
             });
+            // The candidate was not accepted, so none of its output fields are carried over.
             return withCompactionUsage({
-              ...response,
+              persona: response.persona,
+              timestamp: response.timestamp,
+              sessionId: response.sessionId,
+              providerUsage: response.providerUsage,
               status: 'rate_limited',
               content: '',
               error,

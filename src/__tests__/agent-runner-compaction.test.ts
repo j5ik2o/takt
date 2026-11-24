@@ -348,7 +348,7 @@ describe('AgentRunner compaction recovery', () => {
     const call = vi.fn<ProviderAgent['call']>(async (_instruction, options) => {
       options.onStream?.({ type: 'context_compacted', data: { sessionId: 'current-thread' } });
       options.onStream?.({ type: 'result', data: { result: 'candidate', sessionId: 'current-thread', success: true } });
-      return makeResponse('candidate', 'current-thread');
+      return { ...makeResponse('candidate', 'current-thread'), structuredOutput: { step: 1 }, partialOutput: 'candidate' };
     });
     const recoverFromCompaction = vi.fn<NonNullable<ProviderAgent['recoverFromCompaction']>>();
     const rateLimitInfo = {
@@ -376,6 +376,8 @@ describe('AgentRunner compaction recovery', () => {
       sessionId: 'current-thread',
     });
     expect(result.failureCategory).toBeUndefined();
+    expect(result.structuredOutput).toBeUndefined();
+    expect(result.partialOutput).toBeUndefined();
     expect(recoverFromCompaction).not.toHaveBeenCalled();
     expect(onStream.mock.calls.filter(([event]) => event.type === 'result')).toEqual([[
       {
