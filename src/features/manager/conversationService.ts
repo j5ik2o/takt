@@ -20,7 +20,7 @@ import { answerConversationInquiry } from './conversationAnswers.js';
 import { CLEAR_COMMAND } from './conversationCommands.js';
 import { GoalStore } from '../../infra/goals/store.js';
 import type { Goal } from '../../infra/goals/schema.js';
-import { hasGoalRegistrationArtifacts, registerReservedGoal } from '../../infra/goals/service.js';
+import { hasGoalRegistrationArtifacts, registerReservedGoal, reverifyReservedGoal } from '../../infra/goals/service.js';
 import { validateGoalBranchReferences } from '../../infra/goals/git.js';
 import { setGoalExecutionStatus } from '../../infra/goals/execution.js';
 import { deleteFinishedGoal } from '../../infra/goals/deletion.js';
@@ -176,6 +176,8 @@ export function createConversationTurnService(configDirectory: string, runtime: 
             result = { kind: 'goal_registered', goal: await new GoalStore(existing.repositoryDirectory).get(existing.goalId) };
           } else {
             if (priorPending === null || priorPending.revision !== command.revision || state.current.revision !== command.revision) throw new ConversationError('stale_summary');
+            // Re-verification recovers a reservation that already exists; it never starts a registration.
+            if (command.reverifyRegistration && (existing?.state !== 'reserved' || existing.revision !== command.revision)) throw new ConversationError('invalid_input');
             if (!assignment.repositoryDirectories.includes(priorPending.repositoryDirectory)) throw new ConversationError('invalid_assignment');
             validateManagerSummary(priorPending.summary);
             nextRevision(state.current.revision);
@@ -192,7 +194,8 @@ export function createConversationTurnService(configDirectory: string, runtime: 
                 reservationSaved = true;
               }
               io.signal.throwIfAborted();
-              const goal = await registerReservedGoal({ ...priorPending.summary, cwd: reservation.repositoryDirectory, id: reservation.goalId }, io.signal);
+              const goal = await (command.reverifyRegistration ? reverifyReservedGoal : registerReservedGoal)(
+                { ...priorPending.summary, cwd: reservation.repositoryDirectory, id: reservation.goalId }, io.signal);
               return { kind: 'completed', result: { kind: 'goal_registered', goal }, change: state.change({
                 approval: { ...reservation, state: 'registered' }, proposal: { revision: nextRevision(state.current.revision), pending: null },
               }) };

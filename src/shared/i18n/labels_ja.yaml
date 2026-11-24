@@ -556,6 +556,7 @@ manager:
     constraints: "作業の制約"
     none: "なし"
     approve: "登録する"
+    reverify: "保存済みのゴールを再検証して登録する"
     continue: "登録せずに会話に戻る"
     dismissHint: "会話に戻るか、修正内容を入力すると、この登録案は取り下げられます。"
   inputUnavailableDuringAbort: "中止の確認中は文字を入力できません。確認を終えてから入力してください。"

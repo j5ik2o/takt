@@ -1,6 +1,6 @@
 vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: vi.fn(), readManagerEvents: vi.fn() }));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createGoal, GoalRegistrationRecoveryError, hasGoalRegistrationArtifacts, registerReservedGoal } from '../infra/goals/service.js';
+import { createGoal, GoalRegistrationRecoveryError, hasGoalRegistrationArtifacts, registerReservedGoal, reverifyReservedGoal } from '../infra/goals/service.js';
 import { GoalRegistrationVerificationError } from '../infra/goals/registrationVerification.js';
 import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
 import { registerProject } from '../infra/config/global/projectRegistry.js';
@@ -424,6 +424,116 @@ describe('formal verification before goal registration', () => {
     expect(doubles.verify).not.toHaveBeenCalled();
     expect(doubles.update).not.toHaveBeenCalled();
     expect(saved).toEqual({ ...original, registrationVerification: { status: 'pending' } });
+  });
+
+  describe('explicit re-verification of a saved registration', () => {
+    const pendingGoal = (): Goal => GoalSchema.parse({ ...goalRecord(), specifications: input().specifications,
+      registrationVerification: { status: 'pending' } });
+    const unpassedGoal = (verdict: 'failed' | 'error'): Goal => {
+      const logged = appendGoalWorkLog(pendingGoal(), { summary: `Formal specification verification: ${verdict}` });
+      return GoalSchema.parse({ ...logged, registrationVerification: { status: 'completed', verdict, workLogId: logged.workLog[0]!.id } });
+    };
+
+    it('completes an interrupted verification once without another goal, branch or registration event', async () => {
+      saved = pendingGoal();
+      const controller = new AbortController();
+      const goal = await reverifyReservedGoal(input(), controller.signal);
+      expect(goal).toEqual(saved);
+      expect(goal.workLog).toHaveLength(1);
+      expect(goal.workLog[0]!.summary).toMatch(/passed/iu);
+      expect(goal.registrationVerification).toEqual({ status: 'completed', verdict: 'passed', workLogId: goal.workLog[0]!.id });
+      expect(doubles.verify).toHaveBeenCalledOnce();
+      expect(doubles.verify.mock.calls[0]![2]).toMatchObject({ abortSignal: controller.signal });
+      expect(doubles.cleanup).toHaveBeenCalledOnce();
+      expect(doubles.create).not.toHaveBeenCalled();
+      expect(doubles.createBranch).not.toHaveBeenCalled();
+      expect(saveManagerEvent).not.toHaveBeenCalled();
+
+      expect(await reverifyReservedGoal(input())).toEqual(goal);
+      expect(await registerReservedGoal(input())).toEqual(goal);
+      expect(doubles.verify).toHaveBeenCalledOnce();
+      expect(saved!.workLog).toHaveLength(1);
+    });
+
+    it.each(['failed', 'error'] as const)('keeps the saved goal pending when re-verification returns %s', async (verdict) => {
+      saved = pendingGoal();
+      doubles.verify.mockResolvedValue(result(verdict));
+      const error = await reverifyReservedGoal(input()).then(() => undefined, (caught: unknown) => caught);
+      expect(error).toBeInstanceOf(GoalRegistrationVerificationError);
+      expect((error as GoalRegistrationVerificationError).verdict).toBe(verdict);
+      expect(saved).toEqual(pendingGoal());
+      expect(doubles.update).not.toHaveBeenCalled();
+      expect(doubles.cleanup).toHaveBeenCalledOnce();
+      await expect(registerReservedGoal(input())).rejects.toThrow(GoalRegistrationRecoveryError);
+    });
+
+    it.each(['failed', 'error'] as const)('does not confirm a saved %s verdict until re-verification passes', async (verdict) => {
+      saved = unpassedGoal(verdict);
+      const original = structuredClone(saved);
+      await expect(registerReservedGoal(input())).rejects.toThrow(GoalRegistrationRecoveryError);
+      expect(saved).toEqual(original);
+      expect(doubles.verify).not.toHaveBeenCalled();
+
+      const goal = await reverifyReservedGoal(input());
+      expect(goal.workLog).toHaveLength(2);
+      expect(goal.registrationVerification).toEqual({ status: 'completed', verdict: 'passed', workLogId: goal.workLog[1]!.id });
+      expect(await registerReservedGoal(input())).toEqual(goal);
+      expect(doubles.verify).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      { verifyOnRegister: false, mode: true },
+      { verifyOnRegister: true, mode: false },
+    ])('records that verification is no longer required without running it: %j', async ({ verifyOnRegister, mode }) => {
+      saved = pendingGoal();
+      doubles.manager.mockReturnValue({ verifyOnRegister });
+      doubles.formal.mockReturnValue({ mode, comments: true, modelCheckTimeoutSeconds: 17 });
+      const goal = await reverifyReservedGoal(input());
+      expect(goal.registrationVerification).toEqual({ status: 'not_required' });
+      expect(goal.workLog).toEqual([]);
+      expect(doubles.verify).not.toHaveBeenCalled();
+    });
+
+    it('does not record a second verification when the goal was completed while the verifier ran', async () => {
+      saved = pendingGoal();
+      doubles.verify.mockImplementation(async () => {
+        const logged = appendGoalWorkLog(saved!, { summary: 'Formal specification verification: passed' });
+        saved = GoalSchema.parse({ ...logged, registrationVerification: { status: 'completed', verdict: 'passed', workLogId: logged.workLog[0]!.id } });
+        return result('passed');
+      });
+      const goal = await reverifyReservedGoal(input());
+      expect(goal).toEqual(saved);
+      expect(goal.workLog).toHaveLength(1);
+    });
+
+    it('rejects the result when the saved specifications changed while the verifier ran', async () => {
+      saved = pendingGoal();
+      doubles.verify.mockImplementation(async () => {
+        saved = GoalSchema.parse({ ...saved, specifications: { quint: 'module changed {}' } });
+        return result('passed');
+      });
+      await expect(reverifyReservedGoal(input())).rejects.toThrow(GoalRegistrationRecoveryError);
+      expect(saved!.registrationVerification).toEqual({ status: 'pending' });
+      expect(saved!.workLog).toEqual([]);
+    });
+
+    it('requires confirmed registration event delivery before running the verifier', async () => {
+      saved = pendingGoal();
+      vi.mocked(readManagerEvents).mockReturnValue([]);
+      const tasks = vi.spyOn(TaskRunner.prototype, 'listTaskStateItems').mockReturnValue([]);
+      const delivered = vi.spyOn(FileEventStore.prototype, 'hasGoalRegistration').mockResolvedValue(false);
+      try {
+        await expect(reverifyReservedGoal(input())).rejects.toThrow('cannot be confirmed');
+        expect(doubles.verify).not.toHaveBeenCalled();
+        expect(saved).toEqual(pendingGoal());
+      } finally { tasks.mockRestore(); delivered.mockRestore(); }
+    });
+
+    it('rejects a reservation that conflicts with the saved goal without running the verifier', async () => {
+      saved = pendingGoal();
+      await expect(reverifyReservedGoal({ ...input(), objective: 'Different proposal' })).rejects.toThrow('conflicts');
+      expect(doubles.verify).not.toHaveBeenCalled();
+    });
   });
 });
 

@@ -178,7 +178,9 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     }
     finally { submitting.current--; if (mounted.current) setSending(submitting.current > 0); }
   };
+  const reservedApproval = snapshot.state?.approval?.state === 'reserved' ? snapshot.state.approval : undefined;
   const summaryApproval = useManagerSummaryApproval({ selected, setApprove, resetChoice,
+    reverifyAvailable: reservedApproval !== undefined && reservedApproval.revision === snapshot.state?.pending?.revision,
     dismissSummary: async (revision) => {
       const conversationId = client.getSnapshot().state?.conversationId;
       if (conversationId === undefined) return;
@@ -340,14 +342,15 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     }, refreshIntervalMs);
     return () => { mounted.current = false; clearInterval(timer); unsubscribeState(); unsubscribe(); client.close(); };
   }, [client]);
-  const register = async (revision: number): Promise<void> => {
+  const register = async (revision: number, reverifyRegistration?: true): Promise<void> => {
     const current = client.getSnapshot();
     if (current.connection !== 'connected' || current.readStatus !== 'complete'
       || registering.current || current.state?.pending?.revision !== revision) return;
     const conversationId = current.state.conversationId;
     registering.current = true;
     resetChoice();
-    if (await send({ kind: 'approve_summary', revision, conversationId }) === null) registering.current = false;
+    if (await send({ kind: 'approve_summary', revision, conversationId,
+      ...(reverifyRegistration === undefined ? {} : { reverifyRegistration }) }) === null) registering.current = false;
   };
   const submit = (text: string): void => {
     const summaryRequest = text.trim() === MAKE_GOAL_COMMAND;
@@ -505,7 +508,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
   }
   const toolContentHeight = epicsOpen || selection.selection !== null || answerTarget !== null || abortTarget !== null ? 0
     : Math.max(0, (rows ?? 24) - promptRows - 2 - completionRows - 1 - hintRows - queueRows
-      - (splitStatus ? 2 : 1) - (summaryVisible ? 6 : 0)
+      - (splitStatus ? 2 : 1) - (summaryVisible ? (summaryApproval.reverify === undefined ? 6 : 7) : 0)
       - Number(snapshot.connection !== 'connected') - Number(snapshot.readStatus !== 'complete') - Number(state?.interrupted === true));
   const toolHeight = !toolReady || allToolGroups.length === 0 ? 0
     : toolGroups.length === 0 ? Math.min(1, toolContentHeight) : toolContentHeight;
@@ -560,7 +563,7 @@ export function ManagerView({ cwd, lang, client, initialDiagnostics, onExit, ass
     {selection.selection !== null && <ManagerSelectionDialog selection={selection.selection} lang={lang} />}
     {answerTarget !== null && selection.selection === null && <ManagerAnswerDialog answerTarget={answerTarget} bodyText={questionAnswer.bodyText} lang={lang} />}
     {!epicsOpen && abortTarget !== null && selection.selection === null && <ManagerAbortDialog abortTarget={abortTarget} approve={approve} lang={lang} />}
-    {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} />}
+    {summaryVisible && <ManagerSummaryDialog approve={approve} lang={lang} reverify={summaryApproval.reverify} />}
     {!epicsOpen && toolHeight > 0 && <ToolActivityView page={toolPage} state={currentToolView} labels={toolLabels} height={toolHeight} />}
     <StatusLine busy={busy} label={statusLabel} streamed="" />
     {queueRows > 0 && <QueueView heading={queueHeading}

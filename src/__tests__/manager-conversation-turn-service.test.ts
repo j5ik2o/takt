@@ -16,6 +16,8 @@ import { mergeTaktGoalPr } from '../features/mcp/goalIntegrationOperations.js';
 import type { TurnEvent } from '../core/daemon/events.js';
 import type { ConversationChange } from '../core/daemon/messages.js';
 import { getLabel } from '../shared/i18n/index.js';
+import { ConversationCommandSchema } from '../features/manager/conversationCommands.js';
+import { GoalRegistrationVerificationError } from '../infra/goals/registrationVerification.js';
 import { createManagerTurnExecutor } from '../features/manager/turnExecutor.js';
 import { runFormalSpecVerification, cleanupFormalSpecVerificationArtifacts } from '../features/interactive/formalSpecVerification.js';
 import type { ProviderAgent } from '../infra/providers/types.js';
@@ -29,7 +31,7 @@ vi.mock('../features/interactive/formalSpecVerification.js', () => ({
 vi.mock('../features/interactive/taskInstructionFormat.js', () => ({ resolveFormalSpecConfigurationWithoutPrompt: doubles.formalSpec }));
 
 const doubles = vi.hoisted(() => ({ epics: vi.fn(), readTasks: vi.fn(), assignment: vi.fn(), formalSpec: vi.fn(), register: vi.fn(), artifacts: vi.fn(),
-  validateBranches: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), findGoal: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn(), setStatus: vi.fn(), invalidate: vi.fn() }));
+  validateBranches: vi.fn(), autoRun: vi.fn(), notify: vi.fn(), reconcile: vi.fn(), findGoal: vi.fn(), getGoal: vi.fn(), mergePr: vi.fn(), updateGoal: vi.fn(), setStatus: vi.fn(), invalidate: vi.fn(), reverify: vi.fn() }));
 vi.mock('../infra/daemon/epicFiles.js', () => ({ DaemonEpicFiles: class { async *list(workspaceId: string) { yield* await doubles.epics(workspaceId); } } }));
 vi.mock('../features/daemon/watchers/state.js', () => ({ readWatchTasks: doubles.readTasks }));
 vi.mock('../infra/goals/execution.js', async (original) => ({ ...await original<typeof import('../infra/goals/execution.js')>(), setGoalExecutionStatus: doubles.setStatus }));
@@ -41,7 +43,7 @@ vi.mock('../features/manager/assignment.js', async (original) => ({ ...await ori
   resolveCurrentManagerAssignment: doubles.assignment, resolveAssignedProjectRoot: async (path: string) => path,
   findAssignedGoalRepository: async () => '/repository' }));
 vi.mock('../infra/goals/service.js', async (original) => ({ ...await original<typeof import('../infra/goals/service.js')>(),
-  registerReservedGoal: doubles.register, hasGoalRegistrationArtifacts: doubles.artifacts }));
+  registerReservedGoal: doubles.register, reverifyReservedGoal: doubles.reverify, hasGoalRegistrationArtifacts: doubles.artifacts }));
 vi.mock('../infra/goals/git.js', async (original) => ({ ...await original<typeof import('../infra/goals/git.js')>(),
   validateGoalBranchReferences: doubles.validateBranches }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.autoRun }));
@@ -683,6 +685,70 @@ it('resumes a saved goal when its approved branch disappears before approval is 
     outOfScope: goal.outOfScope, startBranch: goal.startBranch, integrationBranch: goal.integrationBranch }), f.io.signal);
   expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'goal_registered', goal },
     change: { approval: { state: 'registered', goalId: goal.id }, proposal: { pending: null } } });
+});
+it('accepts the re-verification request only as an explicit flag on the summary approval', () => {
+  const approval = { kind: 'approve_summary', revision: 1, conversationId: turnConversationId };
+  expect(ConversationCommandSchema.parse({ ...approval, reverifyRegistration: true })).toEqual({ ...approval, reverifyRegistration: true });
+  expect(ConversationCommandSchema.parse(approval)).toEqual(approval);
+  expect(ConversationCommandSchema.safeParse({ ...approval, reverifyRegistration: false }).success).toBe(false);
+  expect(ConversationCommandSchema.safeParse({ kind: 'dismiss_summary', revision: 1, conversationId: turnConversationId, reverifyRegistration: true }).success).toBe(false);
+});
+function reservedRegistration() {
+  const f = fixture(); const goal = goalRecord();
+  f.input.state.pending = { revision: 1, repositoryDirectory: '/repository', summary: {
+    objective: goal.objective, acceptanceCriteria: goal.acceptanceCriteria, constraints: goal.constraints,
+    outOfScope: goal.outOfScope, startBranch: goal.startBranch, integrationBranch: goal.integrationBranch,
+  } };
+  f.input.state.approval = { state: 'reserved', revision: 1, goalId: goal.id, repositoryDirectory: '/repository' };
+  doubles.findGoal.mockReturnValue(goal);
+  doubles.artifacts.mockResolvedValue(true);
+  const approve = (reverifyRegistration?: true, revision = 1) => {
+    f.input.event.event = { kind: 'human_command', speaker: { namespace: 'human', id: 'test' },
+      command: { kind: 'approve_summary', revision, conversationId: turnConversationId,
+        ...(reverifyRegistration === undefined ? {} : { reverifyRegistration }) } };
+    return f.service.execute(f.input, f.io);
+  };
+  return { f, goal, approve };
+}
+it('re-verifies a reserved registration only when the approval asks for it', async () => {
+  const { f, goal, approve } = reservedRegistration();
+  doubles.register.mockRejectedValue(Object.assign(new Error('Reserved goal verification has not completed'), { code: 'registration_recovery' }));
+  doubles.reverify.mockResolvedValue(goal);
+
+  expect(await approve()).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'registration_recovery' } });
+  expect(doubles.reverify).not.toHaveBeenCalled();
+
+  const outcome = await approve(true);
+  expect(doubles.reverify).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cwd: '/repository', id: goal.id, objective: goal.objective }), f.io.signal);
+  expect(doubles.register).toHaveBeenCalledOnce();
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'goal_registered', goal },
+    change: { approval: { state: 'registered', goalId: goal.id }, proposal: { pending: null } } });
+});
+it('keeps the reservation and reports the verdict when the requested re-verification does not pass', async () => {
+  const { f, goal, approve } = reservedRegistration();
+  doubles.reverify.mockRejectedValue(new GoalRegistrationVerificationError('failed', 'Formal specification verification: failed'));
+
+  const outcome = await approve(true);
+  expect(outcome).toMatchObject({ kind: 'completed', result: { kind: 'error', code: 'operation_failed',
+    message: expect.stringContaining('Formal specification verification: failed') } });
+  expect(outcome.change).toBeUndefined();
+  expect(f.request).not.toHaveBeenCalledWith(expect.objectContaining({ change: expect.objectContaining({ approval: null }) }));
+  expect(doubles.artifacts).toHaveBeenCalledExactlyOnceWith('/repository', goal.id);
+});
+it.each([
+  ['no reservation', null],
+  ['a reservation of another revision', { state: 'reserved' as const, revision: 2, goalId: goalRecord().id, repositoryDirectory: '/repository' }],
+])('rejects a re-verification request with %s before touching the goal', async (_name, approval) => {
+  const { f, approve } = reservedRegistration();
+  f.input.state.approval = approval;
+  if (approval !== null) {
+    f.input.state.pending = { ...f.input.state.pending!, revision: 2 };
+    f.input.state.revision = 2;
+  }
+  expect(await approve(true)).toMatchObject({ kind: 'completed', result: { kind: 'error' } });
+  expect(doubles.reverify).not.toHaveBeenCalled();
+  expect(doubles.register).not.toHaveBeenCalled();
+  expect(f.request).not.toHaveBeenCalled();
 });
 it('validates approved branches when only the reserved goal branch remains', async () => {
   const f = fixture(); const goal = goalRecord();

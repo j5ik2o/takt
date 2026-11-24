@@ -34,7 +34,7 @@ export function useManagerInput({
   selectTarget: (target: ManagerSelectedTarget) => void;
   confirmGoalOperation: (target: ManagerGoalConfirmationTarget) => Promise<void>;
   saveAnswer: SaveManagerAnswer;
-  register: (revision: number) => Promise<void>;
+  register: (revision: number, reverifyRegistration?: true) => Promise<void>;
   onInputUnavailable: (confirming: ManagerGoalConfirmationTarget['kind']) => void;
   openMenu: (kind: ManagerSelectionCommand) => void;
   epicsOpen: boolean;
