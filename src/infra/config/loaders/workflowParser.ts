@@ -2,7 +2,6 @@
  * Workflow YAML parsing and normalization.
  */
 
-import { normalizeTaskFinishHook } from '../../../core/models/task-finish-hook.js';
 import { join } from 'node:path';
 import type { WorkflowArpeggioConfig, WorkflowCommandGatesConfig, WorkflowSystemCommandsConfig, WorkflowMcpServersConfig, WorkflowOverrides, WorkflowRuntimePrepareConfig } from '../../../core/models/config-types.js';
 import { WorkflowConfigRawSchema } from '../../../core/models/index.js';
@@ -224,7 +223,6 @@ export function normalizeWorkflowConfig(
     ...(workflowWideRules === undefined ? {} : { allStepsRules: workflowWideRules }),
     steps,
     ...(parsed.repository_identity === undefined ? {} : { repositoryIdentity: parsed.repository_identity }),
-    ...(parsed.task_finish_hook === undefined ? {} : { taskFinishHook: normalizeTaskFinishHook(parsed.task_finish_hook) }),
     initialStep: parsed.initial_step ?? steps[0]!.name,
     maxSteps: parsed.max_steps,
     loopMonitors,

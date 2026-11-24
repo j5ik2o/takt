@@ -3,7 +3,6 @@
  */
 
 import { z } from 'zod/v4';
-import { TaskFinishHookConfigSchema } from './task-finish-hook.js';
 import { isReviewMode, REVIEW_MODE_VALUES } from './review-mode.js';
 import { getWorkflowStepKind } from './workflow-step-kind.js';
 import {
@@ -1140,8 +1139,6 @@ export const WorkflowConfigRawSchema = z.object({
   capabilities: WorkflowCapabilitiesRefSchema,
   // Opt-in: name the project's repository for `gh` / `glab` in a task that runs in a clone.
   repository_identity: z.boolean().optional(),
-  // Honored only for workflows loaded from the project root; see TaskFinishHookConfigSchema.
-  task_finish_hook: TaskFinishHookConfigSchema.optional(),
   mcp_servers: McpServersSchema,
   auto_routing: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_ROUTING_MESSAGE),
   rate_limit_fallback: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_ROUTING_MESSAGE),

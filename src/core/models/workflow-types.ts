@@ -1,4 +1,3 @@
-import type { TaskFinishHookConfig } from './task-finish-hook.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import type {
   CanonicalWorkflowResumeFrame,
@@ -600,11 +599,6 @@ export interface WorkflowConfig {
    * runs in a clone. Off by default; each workflow decides for itself, called ones included.
    */
   repositoryIdentity?: boolean;
-  /**
-   * `task_finish_hook`: run once after the task's terminal state is saved. Only a workflow whose
-   * trust source is the project root is honored, and project config takes precedence.
-   */
-  taskFinishHook?: TaskFinishHookConfig;
   maxSteps: WorkflowMaxSteps;
   loopDetection?: LoopDetectionConfig;
   loopMonitors?: LoopMonitorConfig[];

@@ -3,7 +3,7 @@ import { z } from 'zod/v4';
 export const TASK_FINISH_HOOK_DEFAULT_TIMEOUT_MS = 10_000;
 export const TASK_FINISH_HOOK_MAX_TIMEOUT_MS = 60_000;
 
-/** `task_finish_hook` in `.takt/config.yaml` or at the top level of a workflow. */
+/** `task_finish_hook` in the project's `.takt/config.yaml`. */
 export const TaskFinishHookConfigSchema = z.object({
   /** argv: the first entry is the executable, the rest are literal arguments. No shell is used. */
   command: z.array(z.string().min(1)).min(1),
