@@ -18,6 +18,7 @@ const RunSchema = z.object({
   jobs: z.array(z.object({
     databaseId: z.number().int().positive(), name: z.string(), url: z.string().url(),
     status: z.string(), conclusion: z.string().nullable(),
+    steps: z.array(z.unknown()).optional(),
   })),
 });
 type CiRun = z.infer<typeof RunSchema>;
@@ -103,6 +104,10 @@ export async function collectPrCiFailure(
           throw new Error('Failed job reference does not match the Actions run');
         }
         const details = { id: job.databaseId, name: job.name, url: job.url };
+        if (job.conclusion === 'cancelled' && job.steps?.length === 0) {
+          jobs.push({ ...details, notStarted: true });
+          continue;
+        }
         try {
           const logKey = `${key}/${run.attempt}/${job.databaseId}`;
           let pendingLog = logs.get(logKey);
