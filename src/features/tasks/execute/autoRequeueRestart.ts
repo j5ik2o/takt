@@ -1,5 +1,5 @@
 import type { WorkflowRestartPoint } from '../../../core/models/index.js';
-import { stepOnlyAborts } from '../../../core/workflow/abort-only-step.js';
+import { stepOnlyAborts, stepsRoutingTo } from '../../../core/workflow/abort-only-step.js';
 import { loadWorkflowByIdentifier } from '../../../infra/config/index.js';
 import {
   resolveTaskWorkflowValue,
@@ -29,7 +29,9 @@ function restartOnlyAborts(projectCwd: string, task: TaskRecord): boolean {
     return 'segments' in resolved && resolved.onlyAborts !== undefined;
   }
   const failedStep = task.failure?.step?.trim();
-  return failedStep !== undefined && stepOnlyAborts(workflow.steps, failedStep);
+  // Same condition as a saved position: an aborting step that another step routes into.
+  return failedStep !== undefined && stepOnlyAborts(workflow.steps, failedStep)
+    && stepsRoutingTo(workflow.steps, failedStep).length > 0;
 }
 
 /**

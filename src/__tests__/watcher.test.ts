@@ -488,6 +488,28 @@ describe('watch の共有 worker pool と tasks.yaml', () => {
     expect(state(name)).toMatchObject({ status: 'pending', auto_requeue_count: 1, ...expected });
   });
 
+  it.each([
+    { position: 'failure.step', saved: () => ({}) },
+    { position: 'resume_point', saved: (workflow: WorkflowConfig) => ({ resume_point: resumePointAt(workflow, 'work') }) },
+  ])('ほかの step から進んでこない step（$position）は、ABORT にしか進めなくても自動で再投入する', ({ saved }) => {
+    const { name } = taskNames[0]!;
+    mkdirSync(join(projectDir, '.takt', 'workflows'), { recursive: true });
+    writeFileSync(join(projectDir, '.takt', 'workflows', 'notify.yaml'), [
+      'name: notify', 'max_steps: 10', 'initial_step: work', 'steps:',
+      '  - name: work', '    instruction: "{task}"',
+      '    rules:', '      - condition: when(true)', '        next: ABORT',
+    ].join('\n'));
+    invalidateAllResolvedConfigCache();
+    const workflow = loadWorkflowByIdentifier('notify', projectDir)!;
+    writeSavedTask(name, {
+      workflow: 'notify', failure: { step: 'work', error: 'retryable failure', retryable: true }, ...saved(workflow),
+    });
+
+    expect(attemptAutoRequeueTask(runner, projectDir, name, 1)).toBe(true);
+
+    expect(state(name)).toMatchObject({ status: 'pending', auto_requeue_count: 1, start_step: 'work' });
+  });
+
   it('workflow を読めない失敗タスクは従来どおり自動で再投入する', () => {
     const { name } = taskNames[0]!;
     writeSavedTask(name, { workflow: 'missing-workflow' });
