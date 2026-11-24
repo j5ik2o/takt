@@ -5,6 +5,7 @@ import { synchronizeGoalBranch } from '../infra/goals/branch-sync.js';
 import { projectManagerDisplayEvents } from '../features/manager/savedEvents.js';
 import { GoalPullRequestUnavailableError, prepareGoalPullRequest } from '../infra/goals/pull-request.js';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
+import { clearGoalPullRequestStatusCache } from '../infra/goals/pull-request-status.js';
 import { checkGoalCompletion,completeGoal,integrateGoalTask,reopenGoal,updateGoalBranches } from '../infra/goals/integration.js';
 import type { Goal,GoalQuestion } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
@@ -100,6 +101,7 @@ function syncGitResult(args: string[], target: string, included: boolean) {
   return { pid: 1, output: [null, stdout, stderr], stdout, stderr, status, signal: null };
 }
 beforeEach(() => {
+  clearGoalPullRequestStatusCache();
   vi.resetAllMocks(); goal = goalRecord();
   clones.load.mockReturnValue({ clonePath: '/takt-worktrees/task-clone' });
   github.command.mockRejectedValue(new Error('GitHub fake is unavailable'));
@@ -150,6 +152,15 @@ describe('completion from the saved merged PR', () => {
       'number', 'url', 'headRefName', 'baseRefName', 'state', 'baseRefOid', 'mergeCommit',
     ]));
     expect(doubles.merge).not.toHaveBeenCalled();
+  });
+
+  it.each(['OPEN', 'CLOSED'])('re-reads a PR that was %s moments ago instead of reusing that state', async (state) => {
+    goal = { ...goal, status: 'created' };
+    github.command.mockResolvedValueOnce(prResponse({ state }));
+    await expect(checkGoalCompletion('/project', goal.id, undefined, policy)).rejects.toThrow('Goal is not awaiting a human merge');
+    expect(await checkGoalCompletion('/project', goal.id, undefined, policy))
+      .toMatchObject({ included: true, targetSha, goal: { status: 'completed' } });
+    expect(github.command).toHaveBeenCalledTimes(2);
   });
 
   it('accepts a merged PR whose head SHA differs from the approved SHA', async () => {

@@ -1488,3 +1488,157 @@ describe('persisted task retry restart validation', () => {
       .not.toThrow();
   });
 });
+
+describe('saved resume position on a step that can only abort', () => {
+  function withRules(step: WorkflowStep, next: string[]): WorkflowStep {
+    return { ...step, rules: next.map((target) => ({ condition: { kind: 'when', expression: 'true' }, next: target })) };
+  }
+
+  function notifyingWorkflow(notifyRules: string[] = ['ABORT', 'ABORT']): WorkflowConfig {
+    return makeWorkflow({
+      name: 'default',
+      ref: 'project:root',
+      steps: [
+        withRules(agentStep('plan'), ['work']),
+        withRules(systemStep('work', [{ type: 'merge_pr', pr: 42 }]), ['work_failed', 'COMPLETE']),
+        withRules(systemStep('work_failed', [{ type: 'comment_pr', pr: 42, body: 'failed' }]), notifyRules),
+      ],
+    });
+  }
+
+  it('does not resume from a failure notification and names the step that led there', () => {
+    const model = buildTaskRetryStartOptions(notifyingWorkflow(), {
+      ...pathContext,
+      resumePoint: rootResumePoint('work_failed', 'system'),
+    });
+
+    expect(model.resumeFailureReason).toContain('"work_failed"');
+    expect(model.resumeFailureReason).toContain('can only abort');
+    expect(model.resumeFailureReason).toContain('"work"');
+    expect(model.options.map((option) => option.id)).not.toContain('resume-checkpoint');
+    expect(model.options.find((option) => option.id === model.defaultId)?.label).toContain('plan');
+  });
+
+  it('follows a chain of steps that all end in ABORT', () => {
+    const workflow = makeWorkflow({
+      name: 'default',
+      ref: 'project:root',
+      steps: [
+        withRules(agentStep('plan'), ['notify']),
+        withRules(agentStep('notify'), ['cleanup']),
+        withRules(agentStep('cleanup'), ['ABORT']),
+      ],
+    });
+
+    const model = buildTaskRetryStartOptions(workflow, {
+      ...pathContext,
+      resumePoint: rootResumePoint('notify', 'agent'),
+    });
+
+    expect(model.resumeFailureReason).toContain('can only abort');
+  });
+
+  it.each([
+    ['another step', ['ABORT', 'plan']],
+    ['COMPLETE', ['ABORT', 'COMPLETE']],
+  ])('keeps resuming when one rule leads to %s', (_label, notifyRules) => {
+    const model = buildTaskRetryStartOptions(notifyingWorkflow(notifyRules), {
+      ...pathContext,
+      resumePoint: rootResumePoint('work_failed', 'system'),
+    });
+
+    expect(model.resumeFailureReason).toBeUndefined();
+    expect(model.defaultId).toBe('resume-checkpoint');
+  });
+
+  it('does not propose a restart at the notification step it just refused to resume', () => {
+    const workflow = makeWorkflow({
+      name: 'default',
+      ref: 'project:root',
+      steps: [
+        withRules(agentStep('report_failure'), ['ABORT']),
+        withRules(agentStep('work'), ['report_failure', 'COMPLETE']),
+      ],
+    });
+
+    const model = buildTaskRetryStartOptions(workflow, {
+      ...pathContext,
+      resumePoint: rootResumePoint('report_failure', 'agent'),
+      preferredRootStep: 'report_failure',
+    });
+
+    expect(model.resumeFailureReason).toContain('can only abort');
+    expect(model.options.find((option) => option.id === model.defaultId)?.label).toContain('work');
+    expect(model.options.filter((option) => option.selectable).map((option) => option.label))
+      .toEqual(['"report_failure"', '"work"']);
+  });
+
+  it('keeps resuming a step that can wait for user input instead of aborting', () => {
+    const asking: WorkflowStep = {
+      ...agentStep('ask'),
+      rules: [{ condition: { kind: 'when', expression: 'true' }, next: 'ABORT', requiresUserInput: true }],
+    };
+    const workflow = makeWorkflow({ name: 'default', ref: 'project:root', steps: [asking] });
+
+    const model = buildTaskRetryStartOptions(workflow, {
+      ...pathContext,
+      resumePoint: rootResumePoint('ask', 'agent'),
+    });
+
+    expect(model.resumeFailureReason).toBeUndefined();
+    expect(model.defaultId).toBe('resume-checkpoint');
+  });
+
+  it('keeps resuming a waiting step whose timeout leads elsewhere', () => {
+    const waiting: WorkflowStep = {
+      name: 'wait',
+      kind: 'system',
+      personaDisplayName: 'wait',
+      instruction: 'wait instruction',
+      wait: { until: 'when(true)', intervalMs: 1, maxRetries: 1, onTimeout: 'plan' },
+      rules: [{ condition: { kind: 'when', expression: 'true' }, next: 'ABORT' }],
+    };
+    const workflow = makeWorkflow({
+      name: 'default',
+      ref: 'project:root',
+      steps: [withRules(agentStep('plan'), ['wait']), waiting],
+    });
+
+    const model = buildTaskRetryStartOptions(workflow, {
+      ...pathContext,
+      resumePoint: rootResumePoint('wait', 'system'),
+    });
+
+    expect(model.resumeFailureReason).toBeUndefined();
+  });
+
+  it.each([
+    ['the caller can only abort', ['ABORT'], true],
+    ['the caller can recover', ['ABORT', 'fix'], false],
+  ])('judges a nested notification by its callers when %s', (_label, callerRules, blocked) => {
+    const child = makeWorkflow({
+      name: 'coding',
+      ref: 'project:child',
+      callable: true,
+      steps: [withRules(agentStep('implement'), ['report_failure']), withRules(agentStep('report_failure'), ['ABORT'])],
+    });
+    const root = makeWorkflow({
+      name: 'default',
+      ref: 'project:root',
+      steps: [withRules(callStep('delegate', 'coding'), callerRules), withRules(agentStep('fix'), ['COMPLETE'])],
+    });
+    mockResolveWorkflowCallTarget.mockReturnValue(child);
+    const resumePoint: WorkflowResumePoint = {
+      ...rootResumePoint('delegate', 'agent'),
+      stack: [
+        { workflow: 'default', workflow_ref: 'project:root', step: 'delegate', kind: 'workflow_call', occurrence: 1 },
+        { workflow: 'coding', workflow_ref: 'project:child', step: 'report_failure', kind: 'agent', occurrence: 1 },
+      ],
+    };
+
+    const model = buildTaskRetryStartOptions(root, { ...pathContext, resumePoint });
+
+    expect(model.resumeFailureReason !== undefined).toBe(blocked);
+    expect(model.defaultId === 'resume-checkpoint').toBe(!blocked);
+  });
+});

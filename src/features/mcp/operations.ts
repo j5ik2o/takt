@@ -7,7 +7,7 @@ import { readRunMetaBySlug } from '../../core/workflow/run/run-meta.js';
 import { getGitProvider, initGitProvider } from '../../infra/git/index.js';
 import { TaskRunner } from '../../infra/task/index.js';
 import { loadRunSessionPage } from '../interactive/runSessionReader.js';
-import { jsonResult, textResult, pagedResult, MCP_TEXT_PAGE_BYTES } from './response.js';
+import { jsonResult, textResult, pagedResult, pageFitCount, MCP_TEXT_PAGE_BYTES } from './response.js';
 import { goalSummary, goalValuePage, selectGoalValue, type GoalPullRequestState } from './goalResponse.js';
 import { readGoalPullRequestStatus as defaultReadGoalPullRequestStatus } from '../../infra/goals/pull-request-status.js';
 import type { PrMergeStatus } from '../../infra/github/pr-status.js';
@@ -93,30 +93,33 @@ export async function listTaktGoals(input: ListGoalsInput, deps: McpOperationDep
         target: { pullRequest: goal.pullRequest, branch: goal.branch, integrationBranch: goal.integrationBranch },
       };
     });
-    const goals = await Promise.all(pageEntries.map(async (entry) => {
-      const state = await goalPullRequestState(input.cwd, entry.target, deps, signal);
-      return state === undefined || entry.target.pullRequest === undefined
-        ? entry.summary
-        : { ...entry.summary, pullRequest: { ...entry.target.pullRequest, state } };
-    }));
     const errorOffset = input.errorOffset ?? 0;
     const selectedErrors = errors.slice(errorOffset, errorOffset + limit)
       .map(({ goalId, error }) => ({ goalId, error: safeExternalErrorMessage(error) }));
-    return pagedResult('goals', goals, totalCount, offset, errors.length > 0, {
-      ...(errors.length > 0 ? {
-        errors: selectedErrors,
-        errorPage: {
-          collection: 'errors',
-          totalCount: errors.length,
-          returnedCount: selectedErrors.length,
-          omittedCount: errors.length - selectedErrors.length,
-          offset: errorOffset,
-          nextOffset: errorOffset + selectedErrors.length < errors.length ? errorOffset + selectedErrors.length : null,
-          truncated: selectedErrors.length < errors.length,
-          retrieval: 'Pass errorPage.nextOffset as errorOffset to read more errors.',
-        },
-      } : {}),
-    });
+    const extra = errors.length > 0 ? {
+      errors: selectedErrors,
+      errorPage: {
+        collection: 'errors',
+        totalCount: errors.length,
+        returnedCount: selectedErrors.length,
+        omittedCount: errors.length - selectedErrors.length,
+        offset: errorOffset,
+        nextOffset: errorOffset + selectedErrors.length < errors.length ? errorOffset + selectedErrors.length : null,
+        truncated: selectedErrors.length < errors.length,
+        retrieval: 'Pass errorPage.nextOffset as errorOffset to read more errors.',
+      },
+    } : {};
+    // Size the page before reading PR states so that goals cut from this page are not read from GitHub.
+    // 'closed' is the longest state, so the page still fits once the real states are filled in.
+    const withState = (entry: typeof pageEntries[number], state: GoalPullRequestState | undefined) =>
+      state === undefined || entry.target.pullRequest === undefined
+        ? entry.summary
+        : { ...entry.summary, pullRequest: { ...entry.target.pullRequest, state } };
+    const fitCount = pageFitCount('goals', pageEntries.map((entry) => withState(entry, 'closed')),
+      totalCount, offset, errors.length > 0, extra);
+    const goals = await Promise.all(pageEntries.slice(0, fitCount).map(async (entry) =>
+      withState(entry, await goalPullRequestState(input.cwd, entry.target, deps, signal))));
+    return pagedResult('goals', goals, totalCount, offset, errors.length > 0, extra);
   } catch (error) {
     return errorResult('Goal list failed', error);
   }

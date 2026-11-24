@@ -123,6 +123,14 @@ function createResumeOption(
     return resolved;
   }
   const resolvedPath = formatTaskRetryPath(resolved.segments);
+  if (resolved.onlyAborts !== undefined) {
+    // Resuming here would abort again without running anything that can fix the failure.
+    const { reachedFrom } = resolved.onlyAborts;
+    return {
+      reason: `Saved resume position ${resolvedPath} can only abort the workflow`
+        + (reachedFrom.length === 0 ? '' : `; it was reached from ${reachedFrom.map((step) => formatTaskRetryPath([step])).join(', ')}`),
+    };
+  }
   return {
     value: RESUME_SELECTION_VALUE,
     path: resolvedPath,
@@ -187,6 +195,10 @@ function flattenRestartTree(
       promptOptions.push({ label: `${indent}${stepLabel}`, value });
       selections.set(value, { kind: 'restart', restartPoint: node.restartPoint });
       resultLabels.set(value, stepLabel);
+      // A step that can only abort stays selectable but is never the proposed default.
+      if (node.onlyAborts) {
+        continue;
+      }
       if (firstLeafValue === undefined) {
         firstLeafValue = value;
       }
@@ -221,7 +233,8 @@ function buildTaskRetryStartCatalog(
   const defaultId = resumeOption?.value
     ?? (initialStart ? INITIAL_SELECTION_VALUE : undefined)
     ?? flattened.preferredLeafValue
-    ?? flattened.firstLeafValue;
+    ?? flattened.firstLeafValue
+    ?? flattened.selections.keys().next().value;
   if (defaultId === undefined) {
     if (resumeResolution !== undefined && 'reason' in resumeResolution) {
       throw new InvalidTaskRetryResumeWithoutRestartError(resumeResolution.reason);

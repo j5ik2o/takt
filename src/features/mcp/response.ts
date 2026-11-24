@@ -106,13 +106,20 @@ export function textResult(text: string, isError?: boolean): CallToolResult {
   return responseBytes(complete) <= MCP_RESPONSE_MAX_BYTES ? complete : jsonResult({ message: text }, isError);
 }
 
-export function pagedResult(key: string, values: readonly unknown[], totalCount: number, offset: number, isError?: boolean, extra: Record<string, unknown> = {}): CallToolResult {
+function pageValue(key: string, values: readonly unknown[], count: number, totalCount: number, offset: number, extra: Record<string, unknown>) {
+  return { ...extra, [key]: values.slice(0, count), collection: key, totalCount, returnedCount: count,
+    omittedCount: totalCount - count, offset, nextOffset: offset + count < totalCount ? offset + count : null,
+    truncated: count < totalCount };
+}
+
+/** How many leading values fit in one response; at least one is always returned. */
+export function pageFitCount(key: string, values: readonly unknown[], totalCount: number, offset: number, isError?: boolean, extra: Record<string, unknown> = {}): number {
   let count = values.length;
-  for (;;) {
-    const value = { ...extra, [key]: values.slice(0, count), collection: key, totalCount, returnedCount: count,
-      omittedCount: totalCount - count, offset, nextOffset: offset + count < totalCount ? offset + count : null,
-      truncated: count < totalCount };
-    if (count <= 1 || responseBytes(envelope(JSON.stringify(value), isError)) <= MCP_RESPONSE_MAX_BYTES) return jsonResult(value, isError);
-    count--;
-  }
+  while (count > 1 && responseBytes(envelope(JSON.stringify(pageValue(key, values, count, totalCount, offset, extra)), isError)) > MCP_RESPONSE_MAX_BYTES) count--;
+  return count;
+}
+
+export function pagedResult(key: string, values: readonly unknown[], totalCount: number, offset: number, isError?: boolean, extra: Record<string, unknown> = {}): CallToolResult {
+  const count = pageFitCount(key, values, totalCount, offset, isError, extra);
+  return jsonResult(pageValue(key, values, count, totalCount, offset, extra), isError);
 }
