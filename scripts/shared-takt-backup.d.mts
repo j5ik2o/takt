@@ -11,22 +11,27 @@ export declare class BackupError extends Error {
 export interface BackupTarget {
   readonly name: string;
   readonly kind: 'config' | 'managed-provider';
-  readonly status: 'copied' | 'absent';
+  /** `copied`: the generation holds at least one file of the target. */
+  readonly status: 'copied' | 'link' | 'empty' | 'absent';
+  readonly files: number;
   readonly generation?: string;
 }
 
 export interface BackupTotals {
   readonly files: number;
   readonly bytes: number;
-  readonly linkedFiles: number;
   readonly externalLinks: number;
-  readonly skippedSpecial: number;
 }
 
 export interface GenerationSummary {
   readonly generation: string;
   readonly targets: readonly BackupTarget[];
   readonly totals: BackupTotals;
+}
+
+export interface BackupLog {
+  write(record: { readonly result: string }): Promise<unknown>;
+  close(): Promise<unknown>;
 }
 
 export function listGenerations(dest: string): Promise<string[]>;
@@ -37,6 +42,7 @@ export function backupSharedTakt(input: {
   readonly keep?: number;
   readonly acceptRemoved?: boolean;
   readonly now?: Date;
+  readonly openLogFile?: (dest: string) => Promise<BackupLog>;
 }): Promise<GenerationSummary & { readonly pruned: readonly string[] }>;
 
 export function verifyGeneration(input: { readonly dest: string; readonly generation?: string }): Promise<GenerationSummary>;
@@ -45,19 +51,22 @@ export function restoreGeneration(input: {
   readonly dest: string;
   readonly generation?: string;
   readonly to: string;
+  readonly env?: NodeJS.ProcessEnv;
 }): Promise<GenerationSummary>;
 
 export interface BuiltTakt {
   readonly loadConfig: () => void;
-  readonly providers: readonly string[];
   readonly inspectProvider: (provider: string) => Promise<{ readonly state: 'missing' | 'stale' | 'ready' }>;
 }
 
 export function checkRestoredConfigDirectory(input: {
+  readonly dest: string;
+  readonly generation?: string;
   readonly configDirectory: string;
   readonly taktRoot: string;
+  readonly env?: NodeJS.ProcessEnv;
   readonly importTakt?: (taktRoot: string) => Promise<BuiltTakt>;
-}): Promise<{ config: string; providers: Record<string, string>; ok: boolean }>;
+}): Promise<{ generation: string; restored: string; config: string; providers: Record<string, string>; ok: boolean }>;
 
 export function main(
   argv: readonly string[],
