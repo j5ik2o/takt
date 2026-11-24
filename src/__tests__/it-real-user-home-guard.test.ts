@@ -193,6 +193,24 @@ describe('real user home guard', () => {
     }
   });
 
+  it('removes the isolated root when the process that created it exits', () => {
+    const script = pathToFileURL(join(process.cwd(), 'scripts', 'test-user-isolation.mjs')).href;
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env[ISOLATION_ROOT_ENV];
+    const root = execFileSync(process.execPath, [
+      '--input-type=module',
+      '-e',
+      `import { isolateUserDirectoriesForTestRun } from ${JSON.stringify(script)};`
+        + 'import { existsSync } from "node:fs";'
+        + 'const root = isolateUserDirectoriesForTestRun();'
+        + 'if (!existsSync(process.env.TAKT_CONFIG_DIR)) process.exit(2);'
+        + 'process.stdout.write(root);',
+    ], { encoding: 'utf-8', env });
+
+    expect(root.startsWith(`${process.env[ISOLATION_ROOT_ENV]}${sep}`)).toBe(true);
+    expect(existsSync(root)).toBe(false);
+  });
+
   it('moves every user directory of a runner environment under one temporary root and reuses it when nested', () => {
     const playwrightCache = process.platform === 'darwin'
       ? join(fakeRealHome, 'Library', 'Caches', 'ms-playwright')
