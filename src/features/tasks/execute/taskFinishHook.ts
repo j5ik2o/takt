@@ -126,22 +126,19 @@ export async function withTaskFinishHook<T>(
   options?: TaskFinishHookOptions,
 ): Promise<T> {
   let stampBefore: string | undefined;
-  let armed = true;
   try {
     stampBefore = terminalStamp(readTaskState(taskRunner, taskName));
   } catch (error) {
-    armed = false;
-    log.error('Task finish hook skipped: task state is unreadable', { taskName, error: getErrorMessage(error) });
+    // An execution starts from a running task, so an unreadable state is taken as "nothing saved yet".
+    log.error('Task state was unreadable before execution', { taskName, error: getErrorMessage(error) });
   }
   try {
     return await execute();
   } finally {
-    if (armed) {
-      try {
-        await runHook(projectCwd, taskRunner, taskName, stampBefore, options);
-      } catch (error) {
-        log.error('Task finish hook could not run', { taskName, error: getErrorMessage(error) });
-      }
+    try {
+      await runHook(projectCwd, taskRunner, taskName, stampBefore, options);
+    } catch (error) {
+      log.error('Task finish hook could not run', { taskName, error: getErrorMessage(error) });
     }
   }
 }

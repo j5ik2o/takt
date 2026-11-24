@@ -467,6 +467,7 @@
     "src/__tests__/it-system-workflow-execution.test.ts",
     "src/__tests__/it-task-list-terminal-output.test.ts",
     "src/__tests__/it-task-owner-identity.test.ts",
+    "src/__tests__/it-task-finish-hook.test.ts",
     "src/__tests__/it-task-restart-point.test.ts",
     "src/__tests__/it-task-store-process-lock.test.ts",
     "src/__tests__/it-tell-command-file-store.test.ts",

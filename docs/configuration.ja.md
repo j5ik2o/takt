@@ -391,6 +391,15 @@ Pi の認証には Pi SDK の credential store または provider 固有の環�
 
 `guards.call_timeout_ms` は provider から応答や tool event が届かない時間の上限です。値は 60,000〜86,400,000 ms、既定は 3,600,000 ms（60分）です。event が届くたびに待機時間を数え直すため、実行全体を60分で打ち切る設定ではありません。`codex`、`opencode`、Claude 系、`cursor`、`copilot`、`kiro`、`devin`、`pi` に適用されます。旧 `claude_terminal.timeout_ms` はこの設定がない場合に使われます。
 
+応答のない OpenCode の呼び出しを既定の60分より早く打ち切るには、プロジェクト設定かグローバル設定でこの値を小さくします。指定できる最小値は1分で、それより小さい値は設定の読み込み時にエラーになります。
+
+```yaml
+provider_options:
+  opencode:
+    guards:
+      call_timeout_ms: 600000   # 応答も tool event もない状態が10分続いたら打ち切る
+```
+
 OpenCode の `provider_options.opencode.guards.profile` は既定で `standard` です。`minimal` はヒューリスティックなループ検出を無効にしますが、時間と出力量の上限は維持します。model ごとに変更する場合は `model_profiles` を記述順に評価し、`*` をワイルドカードとして使えます。global と project で個々の guard 設定は統合されますが、`model_profiles` は優先度が高い map 全体に置き換わります。
 
 OpenCode の `event_limit` は既定で 500,000、`text_byte_limit` は 1 MiB、`reasoning_byte_limit` は 4 MiB です。`event_limit` は `TAKT_OPENCODE_STREAM_EVENT_LIMIT` でも上書きできます。tool の実行中は通常の無応答判定を一時停止し、終了通知が届かない場合は `call_timeout_ms` の6倍で `PART_TIMEOUT` になります。
@@ -428,6 +437,7 @@ OpenCode の `event_limit` は既定で 500,000、`text_byte_limit` は 1 MiB、
 | `workflow_command_gates` | object | - | workflow YAML command quality gate ポリシー（グローバルを上書き） |
 | `workflow_system_commands` | object | - | workflow の system command input を許可するポリシー |
 | `sync_conflict_resolver` | object | - | sync conflict resolver ポリシー（グローバルを上書き） |
+| `task_finish_hook` | object | - | キューのタスクの最終状態を保存した後に1回実行するコマンド。プロジェクト専用。[タスク終了フック](#タスク終了フック)を参照 |
 | `observability` | object | - | プロジェクトレベルの OpenTelemetry opt-in 上書き。`enabled` で SDK を初期化し、`monitor` は workflow metric を `.takt/runs/<run>/monitor.json` に出力し、`session_log_exporter` は span 由来の shadow session log を出力します。`usage_events_phase` は phase 粒度の usage events を `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl` に出力します。`enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃うと、TAKT は標準の `OTEL_EXPORTER_OTLP_*` 環境変数で span と metric も OTLP 送信します。TAKT 独自の OTLP config キーはありません。 |
 
 プロジェクト設定の値は両方が設定されている場合にグローバル設定を上書きします。
@@ -500,6 +510,50 @@ pipeline または対話モードが現在のディレクトリに PR をチェ�
 利用者がすでに設定している変数は上書きしません。リモートや認証情報は追加せず、URL に含まれるユーザー名やトークンも使いません。`repository_identity` のない workflow、プロジェクトルートで動くタスク、`origin` がないか URL として認識できない場合、プロバイダーが分からない場合は何も追加しません。system の `command` 入力は `HOME` なしで動くため、そこでの `gh` / `glab` には別途認証が必要です。
 
 プロバイダーは `vcs_provider` が設定されていればそれ（プロジェクトがグローバルを上書き）を使い、なければ `origin` のホスト名から検出します。`github.com` は GitHub、`gitlab.com` は GitLab です。`*.ghe.com` の GitHub Enterprise Cloud、GitHub Enterprise Server、セルフホストの GitLab など、それ以外のホストは検出しないので、`vcs_provider` を設定してください。`origin` のホストが ssh 専用のホスト（`ssh.github.com`、`altssh.gitlab.com` など）や `~/.ssh/config` の別名（`github.com-work` など）で、Web や API を提供していない場合は、`vcs_provider` を設定しても正しい値になりません。`GH_REPO` / `GITLAB_REPO` を自分で設定してください。設定した値はそのまま渡されます（上記のとおり）。
+
+## タスク終了フック
+
+プロジェクトの `.takt/config.yaml` に `task_finish_hook` を書くと、キューのタスクの最終状態を保存するたびに、指定したコマンドを1回実行します。タスクが終わったことを別のツールへ知らせる用途に使います。プロジェクト専用のキーで、グローバル設定に書くとエラーになります。
+
+```yaml
+task_finish_hook:
+  command: [/usr/local/bin/notify-task, --source, takt]   # 引数の並び。先頭が実行ファイル
+  timeout_ms: 10000                                        # 省略可。既定 10000、上限 60000
+```
+
+`command` はシェルの1行ではなく、引数の並びです。TAKT は実行ファイルを直接起動するので、引数の中の `$VAR`、`|`、`;`、引用符は書いたとおりに渡ります。シェルの記法を使うときは、`[sh, -c, 'echo "$TAKT_FINISH_STATUS" >> finished.log']` のようにシェルを自分で指定します。
+
+コマンドを実行するのは次の場合です。
+
+- 保存した最終状態（`completed`、`failed`、`exceeded`、`pr_failed`）ごとに1回。停止、中断、ゴールの一時停止、実行エラーは、どれも `failed` として保存されます。再試行や再投入で後から新しい最終状態が保存されると、その状態に対してもう一度実行します。
+- 状態を `.takt/tasks.yaml` に書いた後。作業ディレクトリはプロジェクトルートで、TAKT 自身の環境変数に下表の変数を加えて渡します。
+- キューから取り出して実行するすべてのタスク（`takt run`、`takt watch`、manager の daemon、`takt list` からのタスクの実行）と、PR マージのタスク（`takt merge` を含む）。
+
+キューを通さない直接実行（`takt "タスク"`、`--pipeline`）、最終状態を保存できなかった場合、状態を保存する時点でそのタスクを実行している TAKT のプロセスがない場合（プロセスが落ちた後で回収・強制失敗されたタスク）には実行しません。
+
+| 変数 | 値 |
+|---|---|
+| `TAKT_FINISH_TASK_NAME` | タスク名 |
+| `TAKT_FINISH_STATUS` | `completed`、`failed`、`exceeded`、`pr_failed` のいずれか |
+| `TAKT_FINISH_PROJECT_DIR` | プロジェクトルート |
+| `TAKT_FINISH_INTERRUPTED` | 保存した結果に中断の記録があれば `true`（ゴールのタスクと、停止されたタスク）。それ以外は `false` |
+| `TAKT_FINISH_COMPLETED_AT` | 状態と一緒に保存した完了時刻（ISO 8601） |
+| `TAKT_FINISH_RUN_SLUG` | run の名前（保存されている場合） |
+| `TAKT_FINISH_RUN_DIR` | その run の `.takt/runs/<run>`。コマンドの開始時にディレクトリがある場合だけ |
+| `TAKT_FINISH_BRANCH` | タスクのブランチ（保存されている場合） |
+| `TAKT_FINISH_WORKTREE_PATH` | clone のパス（保存されている場合） |
+| `TAKT_FINISH_PR_URL` | プルリクエストの URL（保存されている場合） |
+| `TAKT_FINISH_GOAL_ID` | ゴールのタスクのゴール ID |
+| `TAKT_FINISH_FAILURE_REASON` | 保存した失敗の理由。4,096 文字で切ります |
+
+値のない変数は、空文字ではなく未設定になります。TAKT 自身の環境にある `TAKT_FINISH_` で始まる変数は渡しません。
+
+コマンドは結果を見るだけです。終了コード、タイムアウト、起動の失敗のどれも、保存済みの状態、再開位置、タスクの結果を変えません。TAKT は警告を表示して先へ進みます。タイムアウトすると、コマンドのプロセスグループを `SIGTERM`、続いて `SIGKILL` で終了させます。標準出力と標準エラーは 64 KiB まで取り込みますが、表示しません。コマンドが失敗したときだけ、標準エラーをデバッグログに書きます。
+
+あらかじめ考えておく制約が2つあります。
+
+- **コマンドの実行中は、実行枠を使ったままになります。** TAKT はコマンドの終了を待ってから、その枠で次のタスクを始めます。コマンドが止まると、タスク1件ごとに `timeout_ms`（プロセスグループの終了にさらに1秒ほど）だけキューが遅れます。コマンドは短くし、時間のかかる処理はコマンドからバックグラウンドで起動してください。
+- **`TAKT_FINISH_RUN_DIR` は、コマンドのために残しません。** clone で実行したタスクでは、このディレクトリは clone の中にあり、タスクの削除やゴールの clone の片付けで clone と一緒に消えます。成功した PR マージのタスクは、コマンドを始める前に clone を消すので、この変数は未設定になることがあります。必要なものはコマンドの実行中にコピーしてください。
 
 ## 環境変数上書き
 
