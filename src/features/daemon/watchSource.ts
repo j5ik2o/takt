@@ -73,7 +73,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
       const owner: DaemonInquiryOwner = assignment.kind === 'workspace'
         ? { kind: 'workspace', workspaceId: assignment.workspaceId }
         : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory };
-      if ((await files.listPendingInquiryAnswerPublications(owner)).length > 0) return true;
+      if ((await files.listPendingInquiryAnswerPublications(owner, this.onError)).length > 0) return true;
     }
     return false;
   }
@@ -201,7 +201,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     for (const [id, { assignment, directory }] of assignments) {
       const pendingInquiries: string[] = [];
       try {
-        for await (const question of readWatchInquiries(directory)) {
+        for await (const question of readWatchInquiries(directory, this.onError)) {
           if (question.status === 'pending' && question.recipient === 'human') pendingInquiries.push(question.id);
           yield { conversationId: id, target: { goalId: null, owner: assignment }, question };
         }

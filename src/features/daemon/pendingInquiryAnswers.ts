@@ -12,7 +12,7 @@ export async function publishPendingInquiryAnswers(configDirectory: string, owne
   const files = new DaemonPersistedFiles(configDirectory);
   for (const owner of owners) {
     let questions: GoalQuestion[];
-    try { questions = await files.listPendingInquiryAnswerPublications(owner); }
+    try { questions = await files.listPendingInquiryAnswerPublications(owner, onError); }
     catch (error) { onError(error); continue; }
     for (const question of questions) {
       try {

@@ -13,6 +13,7 @@ import { FileAsyncLock } from './lock.js';
 import { readDisplayFile } from './displayFiles.js';
 import { hasCode, readPrivateFile, writePrivateFile } from './privateFile.js';
 import { readInboxJson } from './inboxFiles.js';
+import { InvalidInquiryFileError, parseInquiryFile } from './inquiryFiles.js';
 
 const MAX_PROJECTION_BYTES = 256 * 1024;
 // 業務 schema の値 import は run の同期読取まで到達するため、ここでは保存形式だけを検証する。
@@ -39,7 +40,8 @@ export class DaemonPersistedFiles {
     return this.readInquiry({ kind: 'workspace', workspaceId }, questionId);
   }
 
-  async listPendingInquiryAnswerPublications(owner: DaemonInquiryOwner) {
+  /** 読めない 1 件は onInvalid へ知らせて飛ばす。読めない記録は公開もできないため、公開待ちには数えない。 */
+  async listPendingInquiryAnswerPublications(owner: DaemonInquiryOwner, onInvalid: (error: unknown) => void) {
     const directory = await this.inquiryDirectory(owner);
     let entries;
     try { entries = await readdir(directory, { withFileTypes: true }); }
@@ -50,8 +52,13 @@ export class DaemonPersistedFiles {
     const questions: GoalQuestion[] = [];
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-      const id = inquiryId.parse(entry.name.slice(0, -'.json'.length));
-      const question = await this.readInquiry(owner, id);
+      let question;
+      try { question = await this.readInquiry(owner, entry.name.slice(0, -'.json'.length)); }
+      catch (error) {
+        // 列挙のあとに削除された問い合わせは、無いものとして扱う。
+        if (!hasCode(error, 'ENOENT')) onInvalid(new InvalidInquiryFileError(join(directory, entry.name), error));
+        continue;
+      }
       if (question.answerPublicationPending === true) questions.push(question);
     }
     return questions;
@@ -177,8 +184,6 @@ export class DaemonPersistedFiles {
   private async readInquiryWithPath(owner: DaemonInquiryOwner, questionId: string) {
     const id = inquiryId.parse(questionId);
     const path = join(await this.inquiryDirectory(owner), `${id}.json`);
-    const question = GoalQuestionSchema.parse(JSON.parse(await readFile(path, 'utf8')) as unknown);
-    if (question.id !== id) throw new Error('Saved question ID differs from its filename');
-    return { path, question };
+    return { path, question: parseInquiryFile(`${id}.json`, JSON.parse(await readFile(path, 'utf8')) as unknown) };
   }
 }

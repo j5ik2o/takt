@@ -9,10 +9,11 @@ import { readWatchGoals } from '../features/daemon/watchers/state.js';
 import { FileDaemonWatchSource } from '../features/daemon/watchSource.js';
 import { DaemonConversations } from '../features/daemon/conversationState.js';
 import { DaemonRouting } from '../features/daemon/routing.js';
-import { registerProject } from '../infra/config/global/projectRegistry.js';
+import { projectIdForCanonicalDirectory, registerProject } from '../infra/config/global/projectRegistry.js';
 import { ConversationStateStore } from '../infra/daemon/conversationStateStore.js';
 import { DaemonNotifications } from '../infra/daemon/notifications.js';
-import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
+import { DaemonPersistedFiles, type DaemonInquiryOwner } from '../infra/daemon/persistedFiles.js';
+import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import { GoalSchema, type Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { GoalStore } from '../infra/goals/store.js';
@@ -365,4 +366,57 @@ it('republishes only goal answers left pending for publication and clears their 
   expect(stored.questions!.map((question) => question.answerPublicationPending)).toEqual([undefined, undefined]);
   expect(stored.questions!.map((question) => question.answer)).toEqual([savedAnswer, savedAnswer]);
   expect(await readFile(otherPath, 'utf8')).toBe(otherBefore);
+});
+
+// status が answered なのに answer が無い（#107 で実際に保存されていた形）。名前順で正常な問い合わせより先に読まれる。
+const invalidInquiryId = '00000000-0000-4000-8000-000000000001';
+const invalidInquiryBody = 'unpublished-inquiry-body';
+async function saveInvalidInquiry(inquiries: string): Promise<{ path: string; saved: string }> {
+  const path = join(inquiries, `${invalidInquiryId}.json`);
+  const saved = JSON.stringify({ id: invalidInquiryId, body: invalidInquiryBody, recipient: 'human', status: 'answered' });
+  await mkdir(inquiries, { recursive: true });
+  await writeFile(path, saved);
+  return { path, saved };
+}
+
+it.each(['repository', 'workspace'] as const)('keeps watching the other %s inquiries when one saved inquiry is invalid', async (kind) => {
+  const globalDirectory = join(directory, 'global');
+  const errors = vi.fn();
+  const published: string[] = [];
+  const answers: string[] = [];
+  let owner: DaemonInquiryOwner = { kind: 'repository', repositoryDirectory: directory };
+  if (kind === 'workspace') {
+    const workspace = await createWorkspace({ globalConfigDirectory: globalDirectory, name: '問い合わせ', repositoryDirectories: [] });
+    await writeFile(join(globalDirectory, 'workspaces', workspace.id, 'workspace.json'), JSON.stringify({
+      ...workspace, repositoryDirectories: [directory],
+    }));
+    owner = { kind: 'workspace', workspaceId: workspace.id };
+  }
+  const { files } = await watchSource(errors);
+  await source!.close();
+  source = new FileDaemonWatchSource(conversations!, async (notice) => { published.push(notice.question.id); }, errors, undefined,
+    async (_owner, question) => { answers.push(question.id); });
+  const store = new StandaloneInquiryStore(globalDirectory, owner);
+  const answered = await store.create({ body: 'Which output format?' });
+  const invalid = await saveInvalidInquiry(join(globalDirectory, owner.kind === 'workspace' ? join('workspaces', owner.workspaceId)
+    : join('projects', projectIdForCanonicalDirectory(directory)), 'inquiries'));
+
+  await source.inquiries();
+  const asked = await store.create({ body: 'Which branch?' });
+  await store.answerForPublication(answered.id, { text: 'CSV' });
+  expect(await source.hasWork(files)).toBe(true);
+  await source.inquiries();
+
+  expect(published).toContain(asked.id);
+  expect(answers).toEqual([answered.id]);
+  expect((await store.get(answered.id)).answerPublicationPending).toBeUndefined();
+  expect(await source.hasWork(files)).toBe(false);
+  const messages = errors.mock.calls.map(([error]) => (error as Error).message);
+  expect(messages.length).toBeGreaterThan(0);
+  for (const message of messages) {
+    expect(message).toContain(invalid.path);
+    expect(message).toContain('answer: Only answered questions require an answer');
+    expect(message).not.toContain(invalidInquiryBody);
+  }
+  expect(await readFile(invalid.path, 'utf8')).toBe(invalid.saved);
 });

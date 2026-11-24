@@ -2,7 +2,8 @@ import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { parseDocument } from 'yaml';
 import { z } from 'zod/v4';
-import { GoalQuestionSchema, type GoalQuestion } from '../../../infra/goals/schema.js';
+import type { GoalQuestion } from '../../../infra/goals/schema.js';
+import { InvalidInquiryFileError, parseInquiryFile } from '../../../infra/daemon/inquiryFiles.js';
 import type { WatchGoalReader, WatchGoal } from './goalReader.js';
 import { isMissing, listWatchEntries } from './files.js';
 import { watchGoalDirectory } from './goalPaths.js';
@@ -54,11 +55,18 @@ export async function* readWatchGoals(cwd: string, onError: (error: unknown) => 
   }
 }
 
-export async function* readWatchInquiries(directory: string): AsyncGenerator<GoalQuestion> {
+/** 読めない 1 件は onInvalid へ知らせて飛ばし、残りの問い合わせを返し続ける。 */
+export async function* readWatchInquiries(directory: string, onInvalid: (error: unknown) => void): AsyncGenerator<GoalQuestion> {
   for (const entry of await listWatchEntries(directory)) {
     if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-    const question = GoalQuestionSchema.parse(JSON.parse(await readFile(join(directory, entry.name), 'utf8')) as unknown);
-    if (`${question.id}.json` !== entry.name) throw new Error('Question ID differs from its filename');
+    const path = join(directory, entry.name);
+    let question;
+    try { question = parseInquiryFile(entry.name, JSON.parse(await readFile(path, 'utf8')) as unknown); }
+    catch (error) {
+      // 列挙のあとに削除された問い合わせは、無いものとして扱う。
+      if (!isMissing(error)) onInvalid(new InvalidInquiryFileError(path, error));
+      continue;
+    }
     yield question;
   }
 }

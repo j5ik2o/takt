@@ -1,5 +1,5 @@
 import * as privateFiles from '../shared/utils/private-file.js';
-import { mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
@@ -18,6 +18,7 @@ import { DaemonDisplayFiles } from '../infra/daemon/displayFiles.js';
 import { DaemonEpicFiles } from '../infra/daemon/epicFiles.js';
 import { EpicStore } from '../infra/epics/store.js';
 import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
+import { projectIdForCanonicalDirectory } from '../infra/config/global/projectRegistry.js';
 import { epicDefinition, epicRecord, secondGoalId } from './helpers/epic-fixtures.js';
 import { createEpic, getEpic, updateEpicDefinition } from '../infra/epics/index.js';
 import { buildTurnBusinessContext } from '../features/daemonTurn/turnContext.js';
@@ -157,6 +158,30 @@ it('reports corrupt tasks while projecting goals and inquiries with awaiting-mer
   expect(items.filter((item) => item.kind === 'display_event')).toEqual([{ kind: 'display_event', event: {
     id: JSON.stringify(['diagnostic', tasksPath]), message: expect.stringContaining(tasksPath),
   } }]);
+});
+
+it.each(['repository', 'workspace'] as const)('projects the other %s inquiries and one diagnostic when saved inquiries are invalid', async (kind) => {
+  const identity = kind === 'repository' ? assignment()
+    : { kind, workspaceId: (await createWorkspace({ globalConfigDirectory: directory, name: 'Inquiries', repositoryDirectories: [] })).id };
+  const kept = await new StandaloneInquiryStore(directory, identity).create({ body: 'Standalone question' });
+  const inquiries = join(directory, ...(identity.kind === 'workspace' ? ['workspaces', identity.workspaceId]
+    : ['projects', projectIdForCanonicalDirectory(repository)]), 'inquiries');
+  // 名前順で正常な問い合わせより先に読まれる。1 件目は #107 で実際に保存されていた形（answered なのに answer が無い）。
+  const unanswered = '00000000-0000-4000-8000-000000000001';
+  const invalid = [
+    { path: join(inquiries, `${unanswered}.json`), saved: JSON.stringify({ id: unanswered, body: 'unpublished-inquiry-body', recipient: 'human', status: 'answered' }),
+      reason: 'answer: Only answered questions require an answer' },
+    { path: join(inquiries, '00000000-0000-4000-8000-000000000002.json'), saved: '{"body": "unpublished-inquiry-body"', reason: 'invalid JSON' },
+  ];
+  for (const { path, saved } of invalid) writeFileSync(path, saved);
+
+  const items = await collect(conversationProjection(new DaemonRouting(directory), new DaemonDisplayFiles(), identity));
+
+  expect(items.filter((item) => item.kind === 'inquiry').map((item) => item.inquiry.question.id)).toEqual([kept.id]);
+  expect(items.filter((item) => item.kind === 'display_event')).toEqual(invalid.map(({ path, reason }) => ({ kind: 'display_event', event: {
+    id: JSON.stringify(['diagnostic', path]), message: `${path}: ${reason}`,
+  } })));
+  expect(invalid.map(({ path }) => readFileSync(path, 'utf8'))).toEqual(invalid.map(({ saved }) => saved));
 });
 
 it.each(['the goal directory', 'goal.json'] as const)('skips a goal whose %s disappears after listing without a diagnostic', async (target) => {

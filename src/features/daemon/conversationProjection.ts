@@ -4,7 +4,7 @@ import { epicVerificationRecovery } from '../../infra/epics/state.js';
 import type { EpicSnapshot } from '../../infra/epics/projection.js';
 import type { SnapshotItem } from '../manager/conversationPort.js';
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
-import { GoalQuestionSchema } from '../../infra/goals/schema.js';
+import { inquiryFileFailureReason, parseInquiryFile } from '../../infra/daemon/inquiryFiles.js';
 import { DaemonDisplayFiles, readDisplayFile } from '../../infra/daemon/displayFiles.js';
 import { getErrorMessage } from '../../shared/utils/error.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitive-text.js';
@@ -81,8 +81,14 @@ export async function* conversationProjection(routing: DaemonRouting, files: Dae
     for (const entry of await listWatchEntries(root)) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
       reading = join(root, entry.name);
-      const question = GoalQuestionSchema.parse(await readDisplayFile(reading));
-      if (`${question.id}.json` !== entry.name) throw new Error('Display inquiry identity mismatch');
+      let question;
+      try { question = parseInquiryFile(entry.name, await readDisplayFile(reading)); }
+      catch (error) {
+        // 読めない 1 件は診断だけを残して飛ばし、残りの問い合わせと会話の読み取りを続ける。
+        // 列挙のあとに削除された問い合わせは、無いものとして扱う。
+        if (!isMissing(error)) yield readDiagnostic(reading, new Error(inquiryFileFailureReason(error)));
+        continue;
+      }
       if (question.status === 'pending') yield { kind: 'inquiry', inquiry: { target: { goalId: null, owner: identity }, question } };
     }
   } catch (error) {

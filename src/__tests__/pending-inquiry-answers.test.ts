@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -53,6 +53,29 @@ it('reports one owner listing failure and continues publishing for later owners'
   expect(errors).toHaveLength(1);
   expect(publish).toHaveBeenCalledExactlyOnceWith(workingOwner, expect.objectContaining({ id: question.id }));
   expect((await store.get(question.id)).answerPublicationPending).toBeUndefined();
+});
+
+it('publishes the other answers of an owner whose inquiry directory holds one invalid file and leaves that file unchanged', async () => {
+  directory = await mkdtemp(join(tmpdir(), 'takt-inquiry-outbox-'));
+  const owner = { kind: 'workspace' as const, workspaceId: '750e8400-e29b-41d4-a716-446655440001' };
+  const store = new StandaloneInquiryStore(directory, owner);
+  const question = await store.create({ body: 'Which output format?' });
+  await store.answerForPublication(question.id, { text: 'CSV' });
+  // 名前順で正常な問い合わせより先に読まれる。answered なのに answer が無い（#107 で実際に保存されていた形）。
+  const invalidId = '00000000-0000-4000-8000-000000000001';
+  const invalidPath = join(directory, 'workspaces', owner.workspaceId, 'inquiries', `${invalidId}.json`);
+  const saved = JSON.stringify({ id: invalidId, body: 'unpublished-inquiry-body', recipient: 'human', status: 'answered', answerPublicationPending: true });
+  await writeFile(invalidPath, saved);
+  const errors: unknown[] = [];
+  const publish = vi.fn().mockResolvedValue(undefined);
+
+  await publishPendingInquiryAnswers(directory, [owner], publish, (error) => errors.push(error));
+
+  expect(publish).toHaveBeenCalledExactlyOnceWith(owner, expect.objectContaining({ id: question.id }));
+  expect((await store.get(question.id)).answerPublicationPending).toBeUndefined();
+  expect(errors.map((error) => (error as Error).message))
+    .toEqual([`Skipped invalid inquiry file ${invalidPath}: answer: Only answered questions require an answer`]);
+  expect(await readFile(invalidPath, 'utf8')).toBe(saved);
 });
 
 it('reports one goal answer publication failure and continues publishing later goal answers', async () => {
