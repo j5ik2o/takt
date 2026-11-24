@@ -80,8 +80,9 @@ export class ConversationStateStore {
 
   private toolHistoryPath(id: string): string { return join(this.toolHistoryDirectory, `${ConversationIdSchema.parse(id)}.jsonl`); }
 
-  private async load(id: string): Promise<StoredConversation | undefined> {
-    const content = await readEntirePrivateFile(this.path(id));
+  private async load(id: string, signal?: AbortSignal): Promise<StoredConversation | undefined> {
+    signal?.throwIfAborted();
+    const content = await readEntirePrivateFile(this.path(id), signal);
     if (content === undefined) return undefined;
     const value: unknown = JSON.parse(content.toString('utf8'));
     if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid stored conversation');
@@ -103,8 +104,8 @@ export class ConversationStateStore {
       ...(record.interruptedMessage === undefined ? {} : { interruptedMessage: record.interruptedMessage }) };
   }
 
-  async read(id: string): Promise<{ record: ConversationRecord; state: ConversationTurnState } | undefined> {
-    const stored = await this.load(id);
+  async read(id: string, signal?: AbortSignal): Promise<{ record: ConversationRecord; state: ConversationTurnState } | undefined> {
+    const stored = await this.load(id, signal);
     return stored === undefined ? undefined : { record: stored.record, state: this.state(stored) };
   }
 

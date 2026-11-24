@@ -90,6 +90,22 @@ function controlReads(method: 'open' | 'snapshot') {
   return reads;
 }
 
+it('reads history using the owned attachment and requested count without submitting a message', async () => {
+  doubles.connect.mockImplementation(() => {
+    const socket = new FakeSocket((request, target) => {
+      if (request.method === 'recent_messages') target.response(request, { messages: [], truncated: false });
+      else void respond(request, target);
+    });
+    sockets.push(socket); queueMicrotask(() => socket.emit('connect')); return socket;
+  });
+  const value = client();
+  await expect(value.recentMessages(2)).rejects.toThrow();
+  await value.connect();
+  expect(await value.recentMessages(2)).toEqual({ messages: [], truncated: false });
+  expect(sockets[0]!.requests.at(-1)).toMatchObject({ method: 'recent_messages', params: { attachmentId: expect.any(String), limit: 2 } });
+  expect(sockets[0]!.requests.some(({ method }) => method === 'submit')).toBe(false);
+});
+
 async function snapshotWire(revision: number, stateSequence: number) {
   const read = { conversationId: record.id, transferId: randomUUID(), mode: 'initial' as const, revision, stateSequence, operationId: null };
   const pending = { ...record.pending!, revision };

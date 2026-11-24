@@ -28,6 +28,234 @@ import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import * as goalService from '../infra/goals/service.js';
 import { ConversationTransferReceiver } from '../features/manager/conversationTransferReceiver.js';
 import type { ConversationDelivery } from '../features/manager/conversationPort.js';
+import * as daemonProcess from '../infra/daemon/process.js';
+import * as privateFile from '../infra/daemon/privateFile.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash, randomUUID } from 'node:crypto';
+import * as searchFiles from '../features/daemon/watchers/files.js';
+import * as searchFs from 'node:fs/promises';
+import { createWorkspace } from '../infra/config/global/workspaceRegistry.js';
+import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
+import { conversationId } from '../infra/conversations/identity.js';
+import { FileEventStore } from '../infra/daemon/eventStore.js';
+import { DaemonRouting } from '../features/daemon/routing.js';
+
+it.each(['reassigned-to-workspace', 'route-removed', 'wrong-hash'] as const)(
+  'preserves the legacy answer body when restoring after %s', async (format) => {
+    const registration = await registerProject({ globalConfigDirectory: directory, projectDirectory: repository, command: 'manager', managerUsed: true });
+    const questionId = randomUUID(); const inbox = await new DaemonPersistedFiles(directory).inboxDirectory(repository);
+    const expectedId = `standalone-answer-${createHash('sha256').update(JSON.stringify([inbox, questionId])).digest('hex')}`;
+    const eventId = format === 'wrong-hash' ? `standalone-answer-${'0'.repeat(64)}` : expectedId;
+    const event = { kind: 'director_message' as const, directorConversationId: conversationId({ kind: 'daemon' }),
+      text: `A person answered a standalone inquiry. ${JSON.stringify({ questionId, question: 'What next?',
+        answer: { text: 'Continue', source: 'slack', answeredAt: '2026-11-03T00:00:00Z' } })}` };
+    await fixture.events.accept({ eventId, requestId: eventId, operationId: randomUUID(), conversationId: selected.conversationId,
+      source: 'run', lane: 'other', acceptedSequence: 1, occurredAt: '2026-11-03T00:00:00Z', event });
+    const restore = async () => {
+      const state = await new FileEventStore(directory, new DaemonRouting(directory)).restore();
+      const records = []; for await (const record of state.pending) records.push(record);
+      return records.find((record) => record.event.eventId === eventId)!.event.event;
+    };
+    if (format !== 'wrong-hash') expect(await restore()).toMatchObject({ inquiryAnswer: { questionId } });
+    if (format === 'route-removed') await searchFs.unlink(join(directory, 'projects', `${registration.locationId}.json`));
+    if (format === 'reassigned-to-workspace') {
+      const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'New assignment', repositoryDirectories: [] });
+      writeFileSync(join(directory, 'workspaces', workspace.id, 'workspace.json'), JSON.stringify({ ...workspace, repositoryDirectories: [repository] }));
+    }
+    expect(await restore()).toEqual(event);
+  },
+);
+
+it.each((['manager', 'director'] as const).flatMap((recipient) =>
+  (['registration-json', 'registration-realpath', 'workspace-access'] as const).flatMap((pause) =>
+    [false, true].map((disconnect) => ({ recipient, pause, disconnect })))))
+('releases legacy answer routing for $recipient at $pause, disconnect=$disconnect', async ({ recipient, pause, disconnect }) => {
+  await registerProject({ globalConfigDirectory: directory, projectDirectory: repository, command: 'manager', managerUsed: true });
+  let assignment: { kind: 'repository'; repositoryDirectory: string } | { kind: 'workspace'; workspaceId: string } =
+    { kind: 'repository', repositoryDirectory: repository };
+  if (pause === 'workspace-access') {
+    const workspace = await createWorkspace({ globalConfigDirectory: directory, name: 'Legacy answers', repositoryDirectories: [] });
+    writeFileSync(join(directory, 'workspaces', workspace.id, 'workspace.json'), JSON.stringify({ ...workspace, repositoryDirectories: [repository] }));
+    assignment = { kind: 'workspace', workspaceId: workspace.id };
+    doubles.assignment.mockResolvedValue({ ...assignment, repositoryDirectories: [repository] });
+    await fixture.conversations.ensure(assignment);
+    selected = await createTuiConversationPort(directory, { deliver: async () => ({ kind: 'delivered' }) }).resolve(assignment);
+  }
+  if (recipient === 'director') selected = await createTuiConversationPort(directory, { deliver: async () => ({ kind: 'delivered' }) }).resolve({ kind: 'daemon' });
+  const a = await authenticated(); const b = await authenticated();
+  const aa = await opened(a); const bb = await opened(b);
+  await a.items(aa.read.transferId); await b.items(bb.read.transferId);
+  const submit = (text: string) => b.request('submit', { attachmentId: bb.attachmentId, speaker: selected.speaker, command: { kind: 'message', text } });
+  await submit('seed'); await fixture.settled();
+  const files = new DaemonPersistedFiles(directory);
+  const inbox = await files.inboxDirectory(repository);
+  const questionId = randomUUID();
+  const answer = { text: 'Continue the work', source: 'slack' as const, answeredAt: '2026-11-03T00:00:00Z' };
+  const eventId = `standalone-answer-${createHash('sha256').update(JSON.stringify([inbox, questionId])).digest('hex')}`;
+  await fixture.events.accept({ eventId, requestId: eventId, operationId: randomUUID(), conversationId: conversationId(assignment),
+    source: 'run', lane: 'other', acceptedSequence: 100, occurredAt: answer.answeredAt,
+    event: { kind: 'director_message', directorConversationId: conversationId({ kind: 'daemon' }),
+      text: `A person answered a standalone inquiry. ${JSON.stringify({ questionId, question: 'What next?', answer })}` } });
+  const scope = new AsyncLocalStorage<boolean>(); const order: string[] = []; const additional: string[] = [];
+  let held = false; let inWorkspace = false;
+  let reached!: () => void; const entered = new Promise<void>((resolve) => { reached = resolve; });
+  let resume!: () => void; const gate = new Promise<void>((resolve) => { resume = resolve; }); release = resume;
+  const hold = async () => { held = true; order.push('held'); reached(); await gate; order.push('io-return'); };
+  const nativeJson = searchFiles.readSmallJson;
+  vi.spyOn(searchFiles, 'readSmallJson').mockImplementation(async (...args) => {
+    const value = await nativeJson(...args);
+    if (scope.getStore()) {
+      if (args[0].endsWith('workspace.json')) inWorkspace = true;
+      if (!held && pause === 'registration-json' && args[0].startsWith(join(directory, 'projects'))) await hold();
+    }
+    return value;
+  });
+  const nativeRealpath = searchFs.realpath; const nativeAccess = searchFs.access; const nativeStat = searchFs.stat;
+  vi.spyOn(searchFs, 'realpath').mockImplementation(async (...args) => {
+    if (scope.getStore() && held) additional.push('realpath');
+    const value = await nativeRealpath(...args);
+    if (scope.getStore() && !held && pause === 'registration-realpath') await hold();
+    return value;
+  });
+  vi.spyOn(searchFs, 'access').mockImplementation(async (...args) => {
+    if (scope.getStore() && held) additional.push('access');
+    await nativeAccess(...args);
+    if (scope.getStore() && !held && inWorkspace && pause === 'workspace-access') await hold();
+  });
+  vi.spyOn(searchFs, 'stat').mockImplementation((...args) => {
+    if (scope.getStore() && held) additional.push('stat');
+    return nativeStat(...args);
+  });
+  const nativeHistory = fixture.events.recentMessages.bind(fixture.events);
+  vi.spyOn(fixture.events, 'recentMessages').mockImplementation((...args) => scope.run(true, async () => {
+    try { return await nativeHistory(...args); } finally { order.push('history-end'); }
+  }));
+  const detach = vi.spyOn(service, 'detach'); const accept = fixture.events.accept.bind(fixture.events);
+  vi.spyOn(fixture.events, 'accept').mockImplementation((event) => {
+    if (event.event.kind === 'human_command' && event.event.command.kind === 'message' && event.event.command.text === 'following') order.push('following-store');
+    return accept(event);
+  });
+  const requestId = 'legacy-history';
+  a.socket.write(encodeConversationFrame({ protocolVersion: 1, type: 'request', requestId, method: 'recent_messages', params: { attachmentId: aa.attachmentId, limit: 50 } }));
+  await entered;
+  const following = submit('following').then((response) => { order.push('accepted'); return response; });
+  await vi.waitFor(() => expect(order).toContain('following-store'));
+  if (disconnect) { a.socket.destroy(); await vi.waitFor(() => expect(detach).toHaveBeenCalledWith(aa.attachmentId)); order.push('disconnect'); }
+  expect(order).not.toContain('accepted'); resume();
+  const response = await following; await fixture.settled();
+  await vi.waitFor(() => expect(order).toContain('history-end'));
+  console.info('legacy-routing-disconnect', { recipient, pause, disconnect, additional, order });
+  if (disconnect) expect(additional).toEqual([]);
+  else {
+    expect(additional.length).toBeGreaterThan(0);
+    await vi.waitFor(() => expect(a.frames.find((frame) => frame.requestId === requestId)).toMatchObject({ result: { messages: expect.any(Array) } }));
+  }
+  expect(order.indexOf('io-return')).toBeLessThan(order.indexOf('history-end'));
+  expect(order.indexOf('history-end')).toBeLessThan(order.indexOf('accepted'));
+  expect((await nativeHistory(selected.conversationId, 50)).messages).toContainEqual(expect.objectContaining({ text: 'following', operationId: response.result!.operationId }));
+  const restored = await fixture.events.restore();
+  const pending = []; for await (const record of restored.pending) pending.push(record);
+  expect(pending.find((record) => record.event.eventId === eventId)?.event.event).toMatchObject({ inquiryAnswer: { questionId, answer } });
+});
+
+const historyIo = vi.hoisted(() => ({ scan: undefined as (() => void) | undefined }));
+vi.mock('node:fs/promises', async (original) => {
+  const fs = await original<typeof import('node:fs/promises')>();
+  return { ...fs, opendir: (...args: Parameters<typeof fs.opendir>) => { historyIo.scan?.(); return fs.opendir(...args); } };
+});
+
+it.each((['manager', 'director'] as const).flatMap((recipient) => (['queued', 'scanning'] as const)
+  .flatMap((phase) => [false, true].map((disconnect) => ({ recipient, phase, disconnect })))))
+('releases $recipient history: $phase, disconnect=$disconnect', async ({ recipient, phase, disconnect }) => {
+  if (recipient === 'director') {
+    selected = await createTuiConversationPort(directory, { deliver: async () => ({ kind: 'delivered' }) }).resolve({ kind: 'daemon' });
+  }
+  const a = await authenticated(); const b = await authenticated();
+  const aa = await opened(a); const bb = await opened(b);
+  await a.items(aa.read.transferId); await b.items(bb.read.transferId);
+  const submit = (text: string) => b.request('submit', { attachmentId: bb.attachmentId, speaker: selected.speaker,
+    command: { kind: 'message', text } });
+  for (const text of ['one', 'two', 'three']) { await submit(text); await fixture.settled(); }
+  const scope = new AsyncLocalStorage<boolean>();
+  const order: string[] = [];
+  let reads = 0;
+  let scans = 0;
+  historyIo.scan = () => { if (scope.getStore()) scans++; };
+  let reached!: () => void;
+  const stopped = new Promise<void>((resolve) => { reached = resolve; });
+  let resume!: () => void;
+  const gate = new Promise<void>((resolve) => { resume = resolve; });
+  release = resume;
+  const originalRead = privateFile.readEntirePrivateFile;
+  const originalWrite = privateFile.writePrivateFile;
+  let held = false;
+  const reading = vi.spyOn(privateFile, 'readEntirePrivateFile').mockImplementation(async (...args) => {
+    const content = await originalRead(...args);
+    if (scope.getStore()) {
+      reads++; order.push(`read-${reads}`);
+      if (phase === 'scanning' && !held) { held = true; reached(); await gate; }
+    }
+    return content;
+  });
+  const writing = vi.spyOn(privateFile, 'writePrivateFile').mockImplementation(async (...args) => {
+    await originalWrite(...args);
+    if (phase === 'queued' && args[0].includes('daemon-events') && !held) { held = true; reached(); await gate; }
+  });
+  const originalHistory = fixture.events.recentMessages.bind(fixture.events);
+  let historyReached!: () => void;
+  const entered = new Promise<void>((resolve) => { historyReached = resolve; });
+  const history = vi.spyOn(fixture.events, 'recentMessages').mockImplementation((...args) => scope.run(true, async () => {
+    historyReached();
+    try { return await originalHistory(...args); }
+    finally { order.push('history-end'); }
+  }));
+  const detach = vi.spyOn(service, 'detach');
+  const originalAccept = fixture.events.accept.bind(fixture.events);
+  const admissions = vi.spyOn(fixture.events, 'accept').mockImplementation(async (event) => {
+    if (event.event.kind === 'human_command' && event.event.command.kind === 'message'
+      && event.event.command.text === 'following') order.push('following-store');
+    return originalAccept(event);
+  });
+  let earlier: ReturnType<typeof submit> | undefined;
+  if (phase === 'queued') { earlier = submit('earlier'); await stopped; }
+  const requestId = `history-${phase}-${disconnect}`;
+  a.socket.write(encodeConversationFrame({ protocolVersion: 1, type: 'request', requestId,
+    method: 'recent_messages', params: { attachmentId: aa.attachmentId, limit: 1 } }));
+  await entered;
+  if (phase === 'scanning') await stopped;
+  const accepting = submit('following').then((response) => { order.push('accepted'); return response; });
+  await vi.waitFor(() => expect(order).toContain('following-store'));
+  if (disconnect) {
+    a.socket.destroy();
+    await vi.waitFor(() => expect(detach).toHaveBeenCalledWith(aa.attachmentId));
+    order.push('disconnect');
+    if (phase === 'queued') await vi.waitFor(() => expect(order).toContain('history-end'));
+  } else if (phase === 'scanning') {
+    const snapshot = await a.request('snapshot', { attachmentId: aa.attachmentId });
+    expect(snapshot.result!.read.transferId).toEqual(expect.any(String));
+  }
+  expect(order).not.toContain('accepted');
+  resume();
+  try {
+    if (earlier !== undefined) expect(await earlier).toMatchObject({ result: { kind: 'accepted' } });
+    const response = await accepting;
+    expect(response).toMatchObject({ result: { kind: 'accepted', operationId: expect.any(String) } });
+    await fixture.settled();
+    await vi.waitFor(() => expect(order).toContain('history-end'));
+    const observed = reads;
+    console.info('history-disconnect', { recipient, phase, disconnect, scans, reads: observed, order });
+    if (disconnect) expect(observed).toBe(phase === 'queued' ? 0 : 1);
+    else {
+      expect(observed).toBeGreaterThan(1);
+      await vi.waitFor(() => expect(a.frames.find((frame) => frame.requestId === requestId))
+        .toMatchObject({ result: { messages: [expect.any(Object)], truncated: true } }));
+    }
+    expect(scans).toBe(disconnect && phase === 'queued' ? 0 : 1);
+    expect(order.indexOf('history-end')).toBeLessThan(order.indexOf('accepted'));
+    const persisted = await originalHistory(selected.conversationId, 50);
+    expect(persisted.messages).toContainEqual(expect.objectContaining({ kind: 'message', text: 'following', operationId: response.result!.operationId }));
+  } finally { resume(); historyIo.scan = undefined; reading.mockRestore(); writing.mockRestore(); history.mockRestore(); detach.mockRestore(); admissions.mockRestore(); }
+});
 
 const doubles = vi.hoisted(() => ({ assignment: vi.fn() }));
 vi.mock('../features/manager/assignment.js', async (original) => ({ ...await original<typeof import('../features/manager/assignment.js')>(),
@@ -62,7 +290,26 @@ function saveGoal(goal: Goal) {
   mkdirSync(path, { recursive: true }); writeFileSync(join(path, 'goal.json'), JSON.stringify(goal));
 }
 
+it('rejects history reads for an attachment owned by a different connection', async () => {
+  const first = await authenticated();
+  const second = await authenticated();
+  const attachment = await opened(first);
+  await first.items(attachment.read.transferId);
+  const admission = await first.request('submit', { attachmentId: attachment.attachmentId,
+    speaker: selected.speaker, command: { kind: 'message', text: 'owned input' } });
+  expect(admission).toMatchObject({ result: { kind: 'accepted' } });
+  await fixture.settled();
+  expect(await second.request('recent_messages', { attachmentId: attachment.attachmentId, limit: 2 }))
+    .toMatchObject({ error: { code: 'unavailable_attachment' } });
+  expect(await first.request('recent_messages', { attachmentId: attachment.attachmentId, limit: 2 }))
+    .toMatchObject({ result: { messages: [
+      { kind: 'message', speaker: 'human', text: 'owned input', operationId: admission.result!.operationId },
+      { kind: 'reply', speaker: 'manager', text: 'reply', operationId: admission.result!.operationId },
+    ], truncated: false } });
+});
+
 beforeEach(async () => {
+  vi.spyOn(daemonProcess, 'readProcessOwner').mockResolvedValue({ pid: owner.pid, startTime: owner.identity.startTime });
   directory = getGlobalConfigDir();
   repository = join(directory, 'repository'); mkdirSync(repository, { recursive: true });
   const assignment: ManagerAssignment = { kind: 'repository', repositoryDirectory: repository, repositoryDirectories: [repository] };
@@ -79,6 +326,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   release?.();
+  historyIo.scan = undefined;
   for (const value of clients) value.socket.destroy();
   await fixture.close();
   await server.close();
@@ -703,6 +951,23 @@ it('returns assignment-change rejection without waiting for a notice behind that
   expect((await value.request('submit', { attachmentId: first.attachmentId, speaker: selected.speaker,
     command: { kind: 'message', text: 'old assignment' } })).result).toMatchObject({ kind: 'error', code: 'invalid_assignment' });
   expect(execute).not.toHaveBeenCalled(); expect(fixture.activeOperationCount).toBe(0);
+});
+
+it('rejects old history after assignment changes on the same connection and attachment', async () => {
+  const value = await authenticated();
+  const first = await opened(value); await value.items(first.read.transferId);
+  const admission = await value.request('submit', { attachmentId: first.attachmentId, speaker: selected.speaker,
+    command: { kind: 'message', text: 'saved before reassignment' } });
+  await fixture.settled();
+  const request = { attachmentId: first.attachmentId, limit: 2 };
+  expect(await value.request('recent_messages', request)).toMatchObject({ result: { messages: [
+    { text: 'saved before reassignment', operationId: admission.result!.operationId },
+    { text: 'reply', operationId: admission.result!.operationId },
+  ] } });
+  doubles.assignment.mockResolvedValue({ kind: 'workspace', workspaceId: '11111111-1111-4111-8111-111111111111', name: 'Workspace', repositoryDirectories: [repository] });
+  const denied = await value.request('recent_messages', request);
+  expect(denied).toMatchObject({ error: { code: 'invalid_assignment' } });
+  expect(denied).not.toHaveProperty('result');
 });
 
 it('reports a failed display read as incomplete and permits a complete refresh after repair', async () => {

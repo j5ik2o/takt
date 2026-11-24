@@ -78,6 +78,7 @@ async function createServerOptions(options: TaktMcpServerSettingsOptions) {
       : managerAssignmentSchema.parse(JSON.parse(rawAssignment));
   return {
     toolSet: options.toolSet, managerAssignment,
+    conversationTools: options.toolSet === 'all',
     includeReferenceMarkers: options.includeReferenceMarkers,
   };
 }
@@ -128,7 +129,8 @@ export async function connectTaktMcpServerToHttp(
 ): Promise<void> {
   const argv = process.argv.slice(2);
   if (argv.includes('--help') || argv.includes('-h')) {
-    (input.writeHelp ?? ((line: string) => { process.stdout.write(line); }))(TAKT_MCP_USAGE);
+    // MCP の stdio では stdout がプロトコル専用のため、ヘルプは stderr へ出す。
+    (input.writeHelp ?? ((line: string) => { process.stderr.write(line); }))(TAKT_MCP_USAGE);
     return;
   }
   if (!argv.includes('--http')) {

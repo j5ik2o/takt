@@ -2,7 +2,7 @@ import { conversationId, conversationIdentity } from '../../infra/conversations/
 import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import type { ConversationDelivery, ConversationPort } from './conversationPort.js';
 
-export function createTuiConversationPort(_configDirectory: string, delivery: ConversationDelivery): ConversationPort<ConversationAssignment> {
+export function createTuiConversationPort(_configDirectory: string, delivery: ConversationDelivery, port: 'tui' | 'mcp' = 'tui'): ConversationPort<ConversationAssignment> {
   return {
     delivery,
     async resolve(selected) {
@@ -11,7 +11,7 @@ export function createTuiConversationPort(_configDirectory: string, delivery: Co
           : { kind: 'repository', repositoryDirectory: selected.repositoryDirectory };
       const actor = { namespace: 'local', id: 'operator' };
       return { conversationId: conversationId(assignment), assignment, speaker: actor,
-        binding: { port: 'tui', key: JSON.stringify(conversationIdentity(assignment)), counterpart: actor } };
+        binding: { port, key: JSON.stringify(conversationIdentity(assignment)), counterpart: actor } };
     },
   };
 }

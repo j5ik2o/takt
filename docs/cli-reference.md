@@ -305,6 +305,22 @@ You can also add it with the Codex MCP CLI:
 codex mcp add takt -- takt-mcp
 ```
 
+`takt-mcp` serves MCP over stdio by default. Add `--http` to listen for Streamable HTTP on `127.0.0.1` only:
+
+```bash
+takt-mcp --http
+```
+
+With `--http`, the server binds `127.0.0.1` and requires a bearer token on every request (`/` only).
+
+| Option | Description |
+|--------|-------------|
+| `--http` | Serve Streamable HTTP instead of stdio on `127.0.0.1`. |
+| `--http-port N` | TCP port to bind on `127.0.0.1`. Default `0`, which lets the OS assign a free port. |
+| `--http-token TOKEN` | Bearer token clients must send. When omitted, the server generates one and prints `Authorization: Bearer <token>` at startup. When supplied, the startup line masks the value as `Authorization: Bearer ********`. |
+
+Without `--http`, `takt-mcp` keeps serving stdio; the port and token options apply only to the HTTP mode.
+
 The server exposes these tools:
 
 | Tool | Description |

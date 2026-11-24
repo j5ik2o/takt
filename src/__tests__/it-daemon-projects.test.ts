@@ -3,12 +3,17 @@ import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import * as filesystem from 'node:fs/promises';
+import { DaemonRouting } from '../features/daemon/routing.js';
+import { ConversationError } from '../features/manager/conversationErrors.js';
 import { readDaemonProjectRoutes } from '../features/daemon/projects.js';
 import { listWatchEntries, MAX_WATCH_ENTRIES, MAX_WATCH_FILE_BYTES, readSmallText } from '../features/daemon/watchers/files.js';
 import { readWatchTasks } from '../features/daemon/watchers/state.js';
 import { registerProject, readProjectRegistry } from '../infra/config/global/projectRegistry.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
+
+vi.mock('node:fs/promises', async (original) => ({ ...await original<typeof import('node:fs/promises')>() }));
 
 async function projects(directory: string) { return (await readDaemonProjectRoutes(directory)).map((route) => route.repositoryDirectory); }
 
@@ -19,7 +24,67 @@ beforeEach(() => {
   cwd = join(root, 'project');
   mkdirSync(cwd);
 });
-afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+afterEach(() => { vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }); });
+
+it.each(['file-open', 'file-stat', 'file-read', 'directory-open', 'directory-read'] as const)(
+  'finishes in-flight %s and closes the handle before rejecting cancellation', async (pause) => {
+    const path = join(root, pause.startsWith('file') ? 'data.json' : 'entries');
+    if (pause.startsWith('file')) await writeFile(path, '{}');
+    else { await mkdir(path); await writeFile(join(path, 'one'), '{}'); await writeFile(join(path, 'two'), '{}'); }
+    const abort = new AbortController(); const reason = new Error('read disconnected');
+    let reached!: () => void; const entered = new Promise<void>((resolve) => { reached = resolve; });
+    let resume!: () => void; const gate = new Promise<void>((resolve) => { resume = resolve; });
+    let reads = 0; let stats = 0; let closed = false; let finished = false;
+    const hold = async () => { reached(); await gate; };
+    const nativeOpen = filesystem.open; const nativeOpendir = filesystem.opendir;
+    vi.spyOn(filesystem, 'open').mockImplementation(async (...args) => {
+      const file = await nativeOpen(...args);
+      if (args[0] !== path) return file;
+      if (pause === 'file-open') await hold();
+      return new Proxy(file, { get(target, property) {
+        if (property === 'stat') return async () => { stats++; const result = await target.stat(); if (pause === 'file-stat') await hold(); return result; };
+        if (property === 'read') return async (buffer: Buffer, offset: number, length: number, position: number | null) => {
+          reads++; const result = await target.read(buffer, offset, length, position); if (pause === 'file-read') await hold(); return result;
+        };
+        if (property === 'close') return async () => { await target.close(); closed = true; };
+        const value: unknown = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      } });
+    });
+    vi.spyOn(filesystem, 'opendir').mockImplementation(async (...args) => {
+      const directory = await nativeOpendir(...args);
+      if (args[0] !== path) return directory;
+      if (pause === 'directory-open') await hold();
+      return new Proxy(directory, { get(target, property) {
+        if (property === 'read') return async () => { reads++; const result = await target.read(); if (pause === 'directory-read') await hold(); return result; };
+        if (property === 'close') return async () => { await target.close(); closed = true; };
+        const value: unknown = Reflect.get(target, property);
+        return typeof value === 'function' ? value.bind(target) : value;
+      } });
+    });
+    const operation = (pause.startsWith('file') ? readSmallText(path, abort.signal) : listWatchEntries(path, abort.signal))
+      .finally(() => { finished = true; });
+    const rejected = expect(operation).rejects.toBe(reason);
+    try {
+      await entered; abort.abort(reason);
+      expect(finished).toBe(false); expect(closed).toBe(false);
+      resume(); await rejected;
+      expect(closed).toBe(true);
+      expect(reads).toBe(pause.endsWith('read') ? 1 : 0);
+      expect(stats).toBe(pause === 'file-stat' || pause === 'file-read' ? 1 : 0);
+    } finally { resume(); await rejected; }
+  },
+);
+
+it('does not report cancellation as a project read error or convert it to a denied assignment', async () => {
+  const directory = getGlobalConfigDir();
+  await registerProject({ globalConfigDirectory: directory, projectDirectory: cwd, command: 'manager', managerUsed: true });
+  const abort = new AbortController(); const reason = new ConversationError('invalid_assignment'); const errors = vi.fn();
+  vi.spyOn(filesystem, 'realpath').mockImplementation(async () => { abort.abort(reason); throw new Error('lookup interrupted'); });
+  await expect(readDaemonProjectRoutes(directory, errors, abort.signal)).rejects.toBe(reason);
+  expect(errors).not.toHaveBeenCalled();
+  await expect(new DaemonRouting(directory).permits({ kind: 'repository', repositoryDirectory: cwd }, 'unused', abort.signal)).rejects.toBe(reason);
+});
 
 it('preserves the manager mark across other commands and keeps legacy registrations valid', async () => {
   const options = { globalConfigDirectory: getGlobalConfigDir(), projectDirectory: cwd };

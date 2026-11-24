@@ -115,9 +115,9 @@ export class DaemonPersistedFiles {
     return join(this.configDirectory, 'manager-inbox', createHash('sha256').update(canonical).digest('hex'));
   }
 
-  async readWorkspaceRepositories(workspaceId: string): Promise<readonly string[]> {
+  async readWorkspaceRepositories(workspaceId: string, signal?: AbortSignal): Promise<readonly string[]> {
     const path = join(this.configDirectory, 'workspaces', inquiryId.parse(workspaceId), 'workspace.json');
-    const content = await readPrivateFile(path, MAX_PROJECTION_BYTES);
+    const content = await readPrivateFile(path, MAX_PROJECTION_BYTES, signal);
     if (content === undefined) return [];
     const workspace = workspaceRepositories.parse(JSON.parse(content.toString('utf8')) as unknown);
     if (workspace.id !== workspaceId) throw new Error('Workspace ID differs from its directory');

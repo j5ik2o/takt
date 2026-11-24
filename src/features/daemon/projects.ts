@@ -30,42 +30,56 @@ function reportProjectReadError(error: unknown): void {
 }
 
 export async function readDaemonProjectRoutes(globalConfigDirectory: string,
-  onReadError: (error: unknown) => void = reportProjectReadError): Promise<readonly DaemonProjectRoute[]> {
+  onReadError: (error: unknown) => void = reportProjectReadError, signal?: AbortSignal): Promise<readonly DaemonProjectRoute[]> {
+  signal?.throwIfAborted();
   const registrations = new Map<string, { available: boolean; managerUsed: boolean }>();
   const projectsDirectory = join(globalConfigDirectory, 'projects');
-  for (const entry of await listWatchEntries(projectsDirectory)) {
+  for (const entry of await listWatchEntries(projectsDirectory, signal)) {
+    signal?.throwIfAborted();
     if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
     try {
-      const project = RegistrationSchema.parse(await readSmallJson(join(projectsDirectory, entry.name)));
+      const project = RegistrationSchema.parse(await readSmallJson(join(projectsDirectory, entry.name), signal));
+      signal?.throwIfAborted();
       if (`${project.locationId}.json` !== entry.name || projectLocation(project.canonicalDirectory) !== project.locationId) {
         throw new Error('Project registration identity differs from its filename');
       }
       let available = false;
       try {
         const directory = await realpath(project.canonicalDirectory);
+        signal?.throwIfAborted();
         await access(directory, constants.R_OK | constants.X_OK);
+        signal?.throwIfAborted();
         const info = await stat(directory);
+        signal?.throwIfAborted();
         available = directory === project.canonicalDirectory && info.isDirectory();
-      } catch (error) { onReadError(error); }
+      } catch (error) { signal?.throwIfAborted(); onReadError(error); }
       registrations.set(project.canonicalDirectory, { available, managerUsed: project.managerUsed === true });
-    } catch (error) { onReadError(error); }
+    } catch (error) { signal?.throwIfAborted(); onReadError(error); }
   }
   const routes = new Map<string, DaemonProjectRoute>();
   for (const [directory, project] of registrations) {
     if (project.available && project.managerUsed) routes.set(directory, { repositoryDirectory: directory, workspaceId: null });
   }
   const workspacesDirectory = join(globalConfigDirectory, 'workspaces');
-  for (const entry of await listWatchEntries(workspacesDirectory)) {
+  signal?.throwIfAborted();
+  for (const entry of await listWatchEntries(workspacesDirectory, signal)) {
+    signal?.throwIfAborted();
     if (!entry.isDirectory() || !z.uuid().safeParse(entry.name).success) continue;
-    const workspace = WorkspaceSchema.parse(await readSmallJson(join(workspacesDirectory, entry.name, 'workspace.json')));
+    const workspace = WorkspaceSchema.parse(await readSmallJson(join(workspacesDirectory, entry.name, 'workspace.json'), signal));
+    signal?.throwIfAborted();
     if (workspace.id !== entry.name) throw new Error('Workspace ID differs from its directory');
     for (const candidate of workspace.repositoryDirectories) {
+      signal?.throwIfAborted();
       let directory;
       try {
         directory = await realpath(candidate);
+        signal?.throwIfAborted();
         await access(directory, constants.R_OK | constants.X_OK);
-        if (!(await stat(directory)).isDirectory()) throw new Error('Workspace project is not a directory');
-      } catch (error) { onReadError(error); continue; }
+        signal?.throwIfAborted();
+        const info = await stat(directory);
+        signal?.throwIfAborted();
+        if (!info.isDirectory()) throw new Error('Workspace project is not a directory');
+      } catch (error) { signal?.throwIfAborted(); onReadError(error); continue; }
       if (registrations.get(directory)?.available === false) continue;
       const assigned = routes.get(directory);
       if (assigned !== undefined && assigned.workspaceId !== null && assigned.workspaceId !== workspace.id) {
@@ -75,5 +89,6 @@ export async function readDaemonProjectRoutes(globalConfigDirectory: string,
       if (routes.size > MAX_WATCH_ENTRIES) throw new Error('Daemon project count exceeds the watch limit');
     }
   }
+  signal?.throwIfAborted();
   return [...routes.values()].sort((left, right) => left.repositoryDirectory.localeCompare(right.repositoryDirectory));
 }

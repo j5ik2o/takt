@@ -22,13 +22,14 @@ export async function ensurePrivateDirectory(path: string): Promise<void> {
   }
 }
 
-async function readRegularFile(path: string, read: (file: FileHandle, size: number) => Promise<Buffer>): Promise<Buffer | undefined> {
+async function readRegularFile(path: string, read: (file: FileHandle, size: number) => Promise<Buffer>, signal?: AbortSignal): Promise<Buffer | undefined> {
   const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)).catch((error: unknown) => {
     if (hasCode(error, 'ENOENT')) return undefined;
     throw error;
   });
   if (file === undefined) return undefined;
   try {
+    signal?.throwIfAborted();
     const stat = await file.stat();
     if (!stat.isFile()) throw new Error(`Invalid private file: ${path}`);
     return await read(file, stat.size);
@@ -38,26 +39,29 @@ async function readRegularFile(path: string, read: (file: FileHandle, size: numb
 }
 
 /** サイズ確認後に同じ記述子から読む。増大中のファイルも上限を越えて保持しない。 */
-export async function readPrivateFile(path: string, maxBytes: number): Promise<Buffer | undefined> {
+export async function readPrivateFile(path: string, maxBytes: number, signal?: AbortSignal): Promise<Buffer | undefined> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error('Invalid file capacity');
   return readRegularFile(path, async (file, initialSize) => {
     if (initialSize > maxBytes) throw new Error(`Invalid or oversized private file: ${path}`);
     const chunks: Buffer[] = [];
     let size = 0;
     while (true) {
+      signal?.throwIfAborted();
       const buffer = Buffer.alloc(Math.min(64 * 1024, maxBytes + 1 - size));
       const { bytesRead } = await file.read(buffer);
+      signal?.throwIfAborted();
       if (bytesRead === 0) return Buffer.concat(chunks, size);
       size += bytesRead;
       if (size > maxBytes) throw new Error(`Private file exceeds capacity: ${path}`);
       chunks.push(buffer.subarray(0, bytesRead));
     }
-  });
+  }, signal);
 }
 
 /** 業務データとして保存したファイルを、大きさで拒否せず全体を読む。 */
-export async function readEntirePrivateFile(path: string): Promise<Buffer | undefined> {
-  return readRegularFile(path, (file) => file.readFile());
+export async function readEntirePrivateFile(path: string, signal?: AbortSignal): Promise<Buffer | undefined> {
+  signal?.throwIfAborted();
+  return readRegularFile(path, (file) => file.readFile(signal === undefined ? undefined : { signal }), signal);
 }
 
 /** 完了したJSONL記録を追記する。初回のファイルは所有者だけが読める権限で作る。 */

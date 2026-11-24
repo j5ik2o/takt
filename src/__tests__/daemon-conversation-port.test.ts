@@ -53,6 +53,36 @@ it('admits messages while an earlier save is paused and permits snapshot and int
     agentOverrides: { provider: 'codex', model: 'selected-model' } } }));
 });
 
+it('admits a local MCP message once with its own source and human speaker', async () => {
+  const f = await fixture();
+  const selected = { ...f.selected, binding: { ...f.selected.binding, port: 'mcp' } };
+  try {
+    const opened = await f.port.open(selected, f.delivery);
+    opened.read.cancel();
+    const result = await f.port.submit({ attachmentId: opened.attachmentId, requestId: 'mcp-message',
+      speaker: selected.speaker, command: { kind: 'message', text: 'manager への直接入力' } });
+    expect(result).toMatchObject({ kind: 'accepted', operationId: 'queued' });
+    expect(f.ingress.accept).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      conversationId: selected.conversationId, requestId: 'mcp-message', source: 'mcp',
+      event: { kind: 'human_command', speaker: selected.speaker,
+        command: { kind: 'message', text: 'manager への直接入力' } },
+    }));
+    f.port.detach(opened.attachmentId);
+    expect(f.port.connectedPorts(selected.conversationId)).toEqual(['tui']);
+  } finally { f.opened.read.cancel(); f.port.close(); }
+});
+
+it('rejects MCP approval commands before admission', async () => {
+  const f = await fixture();
+  try {
+    const opened = await f.port.open({ ...f.selected, binding: { ...f.selected.binding, port: 'mcp' } }, f.delivery);
+    opened.read.cancel();
+    await expect(f.port.submit({ attachmentId: opened.attachmentId, requestId: 'approval', speaker: f.selected.speaker,
+      command: { kind: 'approve_summary', revision: 3, conversationId: f.selected.conversationId } })).rejects.toMatchObject({ code: 'invalid_input' });
+    expect(f.ingress.accept).not.toHaveBeenCalled();
+  } finally { f.opened.read.cancel(); f.port.close(); }
+});
+
 it.each(['tui', 'slack'] as const)('exposes tool history through live output and snapshots only to TUI attachments (port: %s)', async (port) => {
   const f = await fixture(); f.opened.read.cancel();
   const snapshot = await f.ingress.snapshot(f.selected.conversationId);

@@ -16,18 +16,44 @@ export interface StartTaktMcpHttpConnectionOptions {
   readonly token?: string;
 }
 
+export interface LocalMcpServerFactorySession {
+  assertConnected(): Promise<void>;
+}
+
+export interface StartLocalMcpHttpConnectionOptions {
+  createServer(request: IncomingMessage, session: LocalMcpServerFactorySession): McpServer;
+}
+
+export interface LocalMcpHttpConnection {
+  readonly url: string;
+  readonly authorization: string;
+  assertConnected(): Promise<void>;
+  invalidate(): void;
+  dispose(): Promise<void>;
+}
+
 interface TaktMcpHttpSession {
   server: McpServer;
   transport: StreamableHTTPServerTransport;
 }
 
-export async function startTaktMcpHttpConnection(
-  options: StartTaktMcpHttpConnectionOptions,
-): Promise<TaktMcpHttpConnection> {
+interface HttpListenerOptions {
+  readonly host: string;
+  readonly port: number;
+  readonly token: string | undefined;
+  createServer(request: IncomingMessage, assertConnected: () => Promise<void>): McpServer;
+  readonly invalidateOnDispose: boolean;
+}
+
+async function startHttpListener(options: HttpListenerOptions): Promise<LocalMcpHttpConnection> {
   const authorization = `Bearer ${options.token ?? randomBytes(32).toString('hex')}`;
   const expected = Buffer.from(authorization);
   const sessions = new Map<string, TaktMcpHttpSession>();
   let active = true;
+  const invalidate = (): void => { active = false; };
+  const assertConnected = async (): Promise<void> => {
+    if (!active || !listener.listening) throw new Error('MCP HTTP connection is closed');
+  };
   const closeSession = async (session: TaktMcpHttpSession): Promise<void> => {
     try { await session.server.close(); }
     finally { await session.transport.close(); }
@@ -53,12 +79,15 @@ export async function startTaktMcpHttpConnection(
       enableJsonResponse: true,
       onsessionclosed: () => { sessions.delete(id); },
     });
-    const server = options.createServer();
+    let server: McpServer;
+    try { server = options.createServer(req, assertConnected); }
+    catch { req.resume(); res.writeHead(400); res.end(); return; }
     const session = { server, transport };
     sessions.set(id, session);
     let connected = false;
     try {
       await server.connect(transport);
+      await assertConnected();
       await transport.handleRequest(req, res);
       connected = transport.sessionId !== undefined;
     } finally {
@@ -76,7 +105,8 @@ export async function startTaktMcpHttpConnection(
     });
   });
   const dispose = async (): Promise<void> => {
-    active = false;
+    if (options.invalidateOnDispose) invalidate();
+    else active = false;
     const results = await Promise.allSettled([...sessions.values()].map(closeSession));
     sessions.clear();
     listener.closeAllConnections();
@@ -93,11 +123,36 @@ export async function startTaktMcpHttpConnection(
       listener.listen(options.port, options.host, () => { listener.removeListener('error', reject); resolve(); });
     });
     const address = listener.address();
-    if (address === null || typeof address === 'string') throw new Error('Takt MCP HTTP endpoint has no TCP address');
-    return { url: `http://${options.host}:${address.port}/`, authorization, dispose };
+    if (address === null || typeof address === 'string') throw new Error('MCP HTTP endpoint has no TCP address');
+    return { url: `http://${options.host}:${address.port}/`, authorization, assertConnected, invalidate, dispose };
   } catch (error) {
     try { await dispose(); }
-    catch (cleanupError) { throw new AggregateError([error, cleanupError], 'Takt MCP HTTP startup and cleanup failed'); }
+    catch (cleanupError) { throw new AggregateError([error, cleanupError], 'MCP HTTP startup and cleanup failed'); }
     throw error;
   }
+}
+
+export async function startTaktMcpHttpConnection(
+  options: StartTaktMcpHttpConnectionOptions,
+): Promise<TaktMcpHttpConnection> {
+  const connection = await startHttpListener({
+    host: options.host,
+    port: options.port,
+    token: options.token,
+    createServer: () => options.createServer(),
+    invalidateOnDispose: false,
+  });
+  return { url: connection.url, authorization: connection.authorization, dispose: connection.dispose };
+}
+
+export async function startLocalMcpHttpConnection(
+  options: StartLocalMcpHttpConnectionOptions,
+): Promise<LocalMcpHttpConnection> {
+  return startHttpListener({
+    host: '127.0.0.1',
+    port: 0,
+    token: undefined,
+    createServer: (request, assertConnected) => options.createServer(request, { assertConnected }),
+    invalidateOnDispose: true,
+  });
 }

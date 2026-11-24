@@ -17,6 +17,15 @@ const change = { operationId: 'save-1', expectedVersion: 0, session: turnState()
 const request: TurnProcessMessage = { ...common, kind: 'daemon_request', turn, requestId: 'rpc-1', request: { kind: 'save_conversation', change } };
 
 describe('daemon turn process protocol', () => {
+  it('preserves MCP input source and human speaker through persisted records and turn IPC', () => {
+    const event = { ...acceptedEvent, source: 'mcp', event: { kind: 'human_command',
+      command: { kind: 'message', text: 'human input' }, speaker: { namespace: 'local', id: 'operator' } } };
+    const record = { state: 'queued', event };
+    expect(EventRecordWriteSchema.parse(record)).toEqual(record);
+    expect(EventRecordSchema.parse(JSON.parse(JSON.stringify(record)))).toEqual(record);
+    const message = { ...common, kind: 'start_turn', input: { event, turn, state: turnState() } };
+    expect(parseDaemonProcessMessage(JSON.parse(JSON.stringify(message)), common.launchId)).toEqual(message);
+  });
   it('roundtrips tool identities, batched completions and results larger than the intermediate text limit', () => {
     const toolActivity = { callId: 'call', operationId: turn.operationId, generation: turn.generation };
     const toolId = 'provider-tool-'.repeat(30);

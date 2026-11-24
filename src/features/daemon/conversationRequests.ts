@@ -1,5 +1,6 @@
 import { z } from 'zod/v4';
 import { ConversationCommandSchema } from '../manager/conversationCommands.js';
+import { RecentMessageLimitSchema } from '../../core/daemon/conversationHistory.js';
 import { ConversationActorSchema, ConversationAssignmentSchema, ConversationIdSchema, PortBindingSchema, ConversationAgentOverridesSchema } from '../../infra/conversations/schema.js';
 
 const id = z.uuid();
@@ -11,6 +12,7 @@ export const ConversationRequestSchema = z.discriminatedUnion('method', [
     agentOverrides: ConversationAgentOverridesSchema.optional() }).strict() }).strict(),
   z.object({ ...common, method: z.literal('submit'), params: z.object({ attachmentId: id,
     speaker: ConversationActorSchema, command: ConversationCommandSchema }).strict() }).strict(),
+  z.object({ ...common, method: z.literal('recent_messages'), params: z.object({ attachmentId: id, limit: RecentMessageLimitSchema }).strict() }).strict(),
   ...(['snapshot', 'detach'] as const).map((method) => z.object({ ...common, method: z.literal(method),
     params: z.object({ attachmentId: id }).strict() }).strict()),
 ]);

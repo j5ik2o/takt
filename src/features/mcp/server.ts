@@ -2,6 +2,11 @@ import { WaitCommandInputSchema } from '../../core/daemon/waitCommand.js';
 import type { DaemonStateReply, DaemonStateRequest } from '../../core/daemon/processProtocol.js';
 import { jsonResult } from './response.js';
 import { EPIC_TOOL_NAMES, registerEpicTools } from './epicOperations.js';
+import { sendTaktMessage, listTaktRecentMessages } from './messageOperations.js';
+import { ConversationIpcClient } from '../manager/conversationIpcClient.js';
+import { createTuiConversationPort } from '../manager/tuiConversationPort.js';
+import { sendMessageInputSchema, listRecentMessagesInputSchema } from './schemas.js';
+import type { ConversationAssignment } from '../../infra/conversations/schema.js';
 import * as fs from 'node:fs';
 import * as process from 'node:process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -136,6 +141,7 @@ export const TAKT_MCP_MANAGER_TOOL_NAMES = [
 import type { TurnToolScope } from '../daemonTurn/toolScope.js';
 
 export interface TaktMcpServerOptions {
+  conversationTools?: boolean;
   requestDaemon?: (request: DaemonStateRequest) => Promise<DaemonStateReply>;
   turnScope?: TurnToolScope;
   managerAssignment?: ManagerAssignmentIdentity;
@@ -227,6 +233,23 @@ export function createTaktMcpServer(
     name: 'takt',
     version: packageVersion,
   });
+  if (options.conversationTools === true && options.toolSet === 'all') {
+    const messageDeps = { allowedProjectRoot: operationDeps.allowedProjectRoot!, configDirectory: globalConfigDirectory,
+      createClient: (assignment: ConversationAssignment) =>
+        new ConversationIpcClient(assignment, undefined, { reconnect: false,
+          port: createTuiConversationPort(globalConfigDirectory, { deliver: async () => ({ kind: 'unavailable', reason: 'IPC delivery only' }) }, 'mcp') }),
+    };
+    server.registerTool('takt_send_message', {
+      title: 'Send a conversation message',
+      description: 'Send a human message to manager (requires absolute cwd) or director (omit cwd). Returns durable acceptance and an operationId, not a reply. Read takt_list_recent_messages for the same recipient afterwards. Failed or ambiguous requests are not automatically resent.',
+      inputSchema: sendMessageInputSchema,
+    }, (input) => sendTaktMessage(input, messageDeps));
+    server.registerTool('takt_list_recent_messages', {
+      title: 'Read recent conversation messages',
+      description: 'Read the selected recipient conversation: manager requires absolute cwd; director must omit cwd. Returns human, manager, director and unknown speakers; unknown means author information is absent from legacy records. Includes operationId, status and relay origin. kind distinguishes message, reply and unsuccessful relay result. limit selects the latest 1-50 entries (default 20), in acceptance order. Text and total output are bounded with explicit truncation. Acceptance, failed and interrupted operations are not successful replies.',
+      inputSchema: listRecentMessagesInputSchema,
+    }, (input) => listTaktRecentMessages(input, messageDeps));
+  }
   const workspaceOperation = async (
     action: () => Promise<Workspace | undefined>,
     input: Pick<ListTasksInput, 'limit' | 'offset' | 'path' | 'textOffset' | 'maxBytes'> = {},

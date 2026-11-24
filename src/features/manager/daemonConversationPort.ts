@@ -7,10 +7,12 @@ import { ConversationError } from './conversationErrors.js';
 import { ConversationCommandSchema } from './conversationCommands.js';
 import type { ConversationDelivery, ConversationInput, ConversationOpen, OutputVersion, PortOutput, SnapshotRead, SnapshotItem } from './conversationPort.js';
 import { SnapshotChanges } from './snapshotChanges.js';
+import { RecentMessageLimitSchema, type ConversationHistory } from '../../core/daemon/conversationHistory.js';
 
 /** 配送先の解決は登録済みの routing 情報で行い、業務 Store を読まない。 */
 export function createDaemonConversationInput(options: {
   ingress: DaemonIngress;
+  history?: ConversationHistory;
   resolveAssignment(selected: ConversationAssignment): Promise<ConversationAssignment>;
 }) {
   const attachments = new Map<string, { input: ConversationOpen; delivery: ConversationDelivery; changes: SnapshotChanges; startedAt: number; validation: Promise<void>; activitySequence?: number }>();
@@ -66,7 +68,7 @@ export function createDaemonConversationInput(options: {
     async open(request, delivery, enqueueSnapshot) {
       if (!accepting) throw new ConversationError('shutting_down');
       request = structuredClone(request);
-      if (!['tui', 'slack', 'slack-inquiry'].includes(request.binding.port)) throw new ConversationError('invalid_input');
+      if (!['tui', 'mcp', 'slack', 'slack-inquiry'].includes(request.binding.port)) throw new ConversationError('invalid_input');
       const assignment = await options.resolveAssignment(request.assignment);
       if (conversationId(assignment) !== request.conversationId) throw new ConversationError('invalid_assignment');
       const attachment = { input: { ...request, assignment }, delivery, changes: new SnapshotChanges(), startedAt: Date.now(), validation: Promise.resolve() };
@@ -86,6 +88,7 @@ export function createDaemonConversationInput(options: {
         throw new ConversationError('invalid_input');
       }
       const command = ConversationCommandSchema.parse(request.command);
+      if (attachment.input.binding.port === 'mcp' && command.kind !== 'message') throw new ConversationError('invalid_input');
       const id = attachment.input.conversationId;
       let finishValidation = (): void => {};
       if (command.kind !== 'abort_turn') {
@@ -125,7 +128,7 @@ export function createDaemonConversationInput(options: {
           } finally { snapshot.cancel(); }
         }
         const accepted = options.ingress.accept({ eventId: randomUUID(), requestId: request.requestId, conversationId: id,
-          source: attachment.input.binding.port === 'tui' ? 'tui' : 'slack', occurredAt: new Date().toISOString(),
+          source: attachment.input.binding.port === 'mcp' ? 'mcp' : attachment.input.binding.port === 'tui' ? 'tui' : 'slack', occurredAt: new Date().toISOString(),
           event: command.kind === 'answer_question' ? { kind: 'inquiry_answer', command }
             : { kind: 'human_command', command, speaker: attachment.input.speaker,
               ...(attachment.input.agentOverrides === undefined ? {} : { agentOverrides: attachment.input.agentOverrides }) } });
@@ -143,6 +146,14 @@ export function createDaemonConversationInput(options: {
       return read(attachment.input.conversationId, attachment, (snapshot, captured) => {
         request?.enqueueSnapshot?.(replayActivityAfterRead(attachmentId, attachment, captured, snapshot));
       });
+    },
+    async recentMessages(attachmentId, limit, signal) {
+      signal?.throwIfAborted();
+      const attachment = attached(attachmentId);
+      const id = attachment.input.conversationId;
+      if (conversationId(await options.resolveAssignment(attachment.input.assignment)) !== id) throw new ConversationError('invalid_assignment');
+      if (options.history === undefined) throw new ConversationError('operation_failed');
+      return options.history.recentMessages(id, RecentMessageLimitSchema.parse(limit), signal);
     },
     detach(attachmentId) { attachments.delete(attachmentId); },
   };

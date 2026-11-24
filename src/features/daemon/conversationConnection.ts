@@ -15,6 +15,7 @@ export function attachConversationConnection(socket: Socket, service: Conversati
   onInitializingChange: (difference: number) => void) {
   const decoder = new ConversationFrameDecoder();
   const owned = new Set<string>();
+  const historyLifetime = new AbortController();
   let authenticated = false;
   let awaitingOpen = false;
   const finishInitializing = (): void => {
@@ -29,6 +30,7 @@ export function attachConversationConnection(socket: Socket, service: Conversati
   const queue: QueuedSend[] = [];
   let current: QueuedSend | undefined;
   const fail = (): void => {
+    historyLifetime.abort();
     finishInitializing();
     current?.fail?.();
     for (const pending of queue.splice(0)) pending.fail?.();
@@ -127,8 +129,9 @@ export function attachConversationConnection(socket: Socket, service: Conversati
       if (request.method === 'open') {
         onInitializingChange(1);
         try {
-          if (request.params.binding.port !== 'tui') throw new ConversationError('invalid_input');
-          const resolved = await port.resolve(request.params.assignment);
+          const localPort = request.params.binding.port;
+          if (localPort !== 'tui' && localPort !== 'mcp') throw new ConversationError('invalid_input');
+          const resolved = await createTuiConversationPort(configDirectory, delivery, localPort).resolve(request.params.assignment);
           if (JSON.stringify(request.params.binding) !== JSON.stringify(resolved.binding)
             || JSON.stringify(request.params.speaker) !== JSON.stringify(resolved.speaker)) throw new ConversationError('invalid_input');
           // 応答は、それが知らせる read より先に届ける。
@@ -143,6 +146,11 @@ export function attachConversationConnection(socket: Socket, service: Conversati
       } else {
         if (!owned.has(request.params.attachmentId)) throw new ConversationError('unavailable_attachment');
         switch (request.method) {
+          case 'recent_messages': {
+            if (service.recentMessages === undefined) throw new ConversationError('operation_failed');
+            response(await service.recentMessages(request.params.attachmentId, request.params.limit, historyLifetime.signal));
+            break;
+          }
           case 'submit': {
             const result = await service.submit({ ...request.params, requestId: request.requestId });
             response(result);
