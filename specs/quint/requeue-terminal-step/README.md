@@ -21,6 +21,8 @@ Notify --常に--> ABORT
 
 `guardAbortOnly` で挙動を切り替える。`current` は修正前（false）、`fixed` は修正後（true）。
 
+前提：Notify は再実行位置に選べない step である（builtin の通知 step は effects を持つ system step で、`isWorkflowRestartTarget` が対象外にする）。このため `requeueExplicit` の行き先は Work だけにしている。agent 型のように再実行位置に選べる通知 step は、明示的に選べば同じ ABORT になる。この場合はモデルの範囲外で、コード側では既定の候補から外すことだけを行う（選択自体は妨げない）。
+
 扱っていないもの：`workflow_call` の入れ子、並列 step、自動の再投入（`autoRequeueFailedTask`）、実行上限に達したタスクの再投入。
 
 ## 不変条件
