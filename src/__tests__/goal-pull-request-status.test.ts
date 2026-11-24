@@ -1,16 +1,24 @@
-import { beforeEach, expect, it, vi } from 'vitest';
-import { readGoalPullRequestStatus } from '../infra/goals/pull-request-status.js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readGoalPullRequestStatus as readStatus, type ReadGoalPullRequestStatusOptions } from '../infra/goals/pull-request-status.js';
+import { PrMergeStatusCache } from '../infra/goals/pull-request-status-cache.js';
+import type { PrMergeStatus } from '../infra/github/pr-status.js';
 import type { Goal } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 
 const fetch = vi.hoisted(() => vi.fn());
 vi.mock('../infra/github/pr-status.js', () => ({ fetchPrMergeStatus: fetch }));
 let goal: Goal;
+let now = 0;
+let cache: PrMergeStatusCache;
+const readGoalPullRequestStatus = (cwd: string, target: Goal, signal: AbortSignal | undefined, options: ReadGoalPullRequestStatusOptions = {}) =>
+  readStatus(cwd, target, signal, { cache, ...options });
 const response = () => ({ number: 1950, url: goal.pullRequest!.url, headRefName: goal.branch,
   baseRefName: goal.integrationBranch, baseRefOid: 'b'.repeat(40), mergeCommit: { oid: 'c'.repeat(40) }, state: 'MERGED' as const });
 beforeEach(() => {
   goal = { ...goalRecord(), pullRequest: { number: 1950, url: 'https://github.com/example/project/pull/1950' } };
   fetch.mockReset().mockResolvedValue(response());
+  now = 0;
+  cache = new PrMergeStatusCache(fetch, () => now);
 });
 
 it.each(['OPEN', 'CLOSED', 'MERGED'])('returns matching PR evidence with state %s', async (state) => {
@@ -64,4 +72,84 @@ it('does not start a lookup after cancellation', async () => {
   controller.abort();
   await expect(readGoalPullRequestStatus('/project', goal, controller.signal)).rejects.toBe(controller.signal.reason);
   expect(fetch).not.toHaveBeenCalled();
+});
+
+describe('gh pr view call budget', () => {
+  const read = () => readGoalPullRequestStatus('/project', goal, undefined);
+  const rateLimited = () => new Error('GraphQL: API rate limit exceeded');
+
+  it.each(['MERGED', 'CLOSED'] as const)('reads a %s PR once per process', async (state) => {
+    fetch.mockResolvedValue({ ...response(), state });
+    for (const elapsed of [0, 1, 60_000, 3_600_000]) {
+      now = elapsed;
+      expect(await read()).toMatchObject({ status: 'available', pullRequest: { state } });
+    }
+    expect(await readGoalPullRequestStatus('/project', goal, undefined, { refreshOpen: true }))
+      .toMatchObject({ pullRequest: { state } });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses an open PR within 60 seconds and re-reads it after', async () => {
+    fetch.mockResolvedValue({ ...response(), state: 'OPEN' });
+    await read();
+    now = 59_999;
+    await read();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    now = 60_000;
+    await read();
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-reads an open PR when the caller asks for a fresh state', async () => {
+    fetch.mockResolvedValueOnce({ ...response(), state: 'OPEN' }).mockResolvedValueOnce(response());
+    await read();
+    expect(await readGoalPullRequestStatus('/project', goal, undefined, { refreshOpen: true }))
+      .toMatchObject({ pullRequest: { state: 'MERGED' } });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads each PR once when one request lists it several times concurrently', async () => {
+    let resolve!: (value: PrMergeStatus) => void;
+    fetch.mockReturnValue(new Promise((r) => { resolve = r; }));
+    const other = { ...goal, pullRequest: { number: 1951, url: 'https://github.com/example/project/pull/1951' } };
+    const reads = [read(), read(), read(), readGoalPullRequestStatus('/project', other, undefined)];
+    resolve({ ...response(), state: 'OPEN' });
+    await Promise.all(reads);
+    expect(fetch.mock.calls.map(([target]) => target.number)).toEqual([1950, 1951]);
+  });
+
+  it('returns the last status without retrying while gh is rate limited', async () => {
+    fetch.mockResolvedValueOnce({ ...response(), state: 'OPEN' }).mockRejectedValue(rateLimited());
+    await read();
+    now = 60_000;
+    expect(await read()).toMatchObject({ status: 'available', pullRequest: { state: 'OPEN' } });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    for (const elapsed of [60_001, 90_000, 119_999]) {
+      now = elapsed;
+      expect(await read()).toMatchObject({ status: 'available', pullRequest: { state: 'OPEN' } });
+    }
+    expect(fetch).toHaveBeenCalledTimes(2);
+    now = 120_000;
+    await read();
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retry a failed first read until the backoff passes', async () => {
+    fetch.mockRejectedValue(rateLimited());
+    expect(await read()).toEqual({ status: 'unavailable' });
+    now = 59_999;
+    expect(await read()).toEqual({ status: 'unavailable' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not treat a cancelled read as a gh failure', async () => {
+    const controller = new AbortController();
+    fetch.mockImplementationOnce(async () => {
+      controller.abort();
+      throw controller.signal.reason;
+    });
+    await expect(readGoalPullRequestStatus('/project', goal, controller.signal)).rejects.toBe(controller.signal.reason);
+    expect(await read()).toMatchObject({ status: 'available' });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
 });

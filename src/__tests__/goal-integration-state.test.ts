@@ -5,6 +5,7 @@ import { synchronizeGoalBranch } from '../infra/goals/branch-sync.js';
 import { projectManagerDisplayEvents } from '../features/manager/savedEvents.js';
 import { GoalPullRequestUnavailableError, prepareGoalPullRequest } from '../infra/goals/pull-request.js';
 import { afterEach,beforeEach,describe,expect,it,vi } from 'vitest';
+import { clearGoalPullRequestStatusCache } from '../infra/goals/pull-request-status.js';
 import { checkGoalCompletion,completeGoal,integrateGoalTask,reopenGoal,updateGoalBranches } from '../infra/goals/integration.js';
 import type { Goal,GoalQuestion } from '../infra/goals/schema.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
@@ -100,6 +101,7 @@ function syncGitResult(args: string[], target: string, included: boolean) {
   return { pid: 1, output: [null, stdout, stderr], stdout, stderr, status, signal: null };
 }
 beforeEach(() => {
+  clearGoalPullRequestStatusCache();
   vi.resetAllMocks(); goal = goalRecord();
   clones.load.mockReturnValue({ clonePath: '/takt-worktrees/task-clone' });
   github.command.mockRejectedValue(new Error('GitHub fake is unavailable'));
