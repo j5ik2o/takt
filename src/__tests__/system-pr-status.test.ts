@@ -89,6 +89,25 @@ describe('PR status system input target ownership', () => {
   });
 });
 
+describe('CI failure evidence in shipped and project merge workflows', () => {
+  const root = join(import.meta.dirname, '..', '..');
+  const workflows = ['builtins/en/workflows', 'builtins/ja/workflows', '.takt/workflows']
+    .flatMap((directory) => readdirSync(join(root, directory)).filter((name) => name.endsWith('.yaml'))
+      .map((name) => join(directory, name)))
+    .filter((path) => readFileSync(join(root, path), 'utf8').includes('type: pr_ci_failure'));
+
+  it('pr_ci_failureを使うworkflowを見つけている', () => {
+    expect(workflows.length).toBeGreaterThanOrEqual(6);
+  });
+
+  it.each(workflows)('%s は保存したjobログがあるときだけ欠陥の修正へ進む', (path) => {
+    const defectRules = readFileSync(join(root, path), 'utf8').split('\n')
+      .filter((line) => line.includes('investigate_ci.verdict == "defect"'));
+    expect(defectRules.length).toBeGreaterThan(0);
+    for (const rule of defectRules) expect(rule).toContain('collect_ci_failure.failure.logCount > 0');
+  });
+});
+
 describe('CI failure system input and rerun effect', () => {
   let runDirectory: string;
   beforeEach(() => { runDirectory = mkdtempSync(join(tmpdir(), 'takt-ci-status-')); });
@@ -316,6 +335,96 @@ describe('CI failure system input and rerun effect', () => {
     };
     expect(index.unavailable).toHaveLength(1);
     expect(index.checks[0]!.jobs[0]!.logPath).toBeNull();
+  });
+
+  describe('開始前取消と外部ステータスを含む証拠', () => {
+    const run = failure().checks[0]!.run;
+    const notStartedJob = { id: 21, name: 'macos', url: `${run.url}/job/21`, notStarted: true };
+    const external = [{ name: 'Check unresolved comments', url: 'https://github.com/org/repo/actions/runs/99' }];
+    const mixed = (): PrCiFailure => ({ ...failure(), external,
+      checks: [...failure().checks, { name: 'macos', run, jobs: [notStartedJob] }] });
+
+    it('診断できるjobのログだけを保存し、未開始jobと外部チェックを不足証拠にせず索引と調査promptへ区別して渡す', async () => {
+      const h = fixture();
+      h.fetchPrCiFailure.mockResolvedValue(mixed());
+
+      const result = await h.service.resolveSystemInput(input, h.state) as PrCiFailure & {
+        promptEvidence: string; details: string;
+      };
+      expect(result).toMatchObject({ complete: true, unavailable: [], external });
+      const [summary, ...notes] = result.promptEvidence.split('\n').slice(0, -1);
+      for (const count of ['complete=true', 'unique job logs=1', 'not started jobs=1', 'external checks=1', 'unavailable=0']) {
+        expect(summary).toContain(count);
+      }
+      // The index marks these with `notStarted` and `external`; the prompt must say what each field means.
+      expect(notes.some((note) => note.includes('notStarted'))).toBe(true);
+      expect(notes.some((note) => note.includes('external'))).toBe(true);
+      const index = JSON.parse(readFileSync(/^Evidence index: (.+)$/m.exec(result.promptEvidence)![1]!, 'utf8')) as {
+        complete: boolean; external: typeof external; unavailable: unknown[];
+        checks: Array<{ jobs: Array<{ id: number; logPath: string | null; notStarted?: boolean }> }>;
+      };
+      expect(index).toMatchObject({ complete: true, external, unavailable: [] });
+      expect(index.checks.map(({ jobs }) => jobs)).toEqual([
+        [{ id: 20, name: 'unit', url: `${run.url}/job/20`, logPath: expect.any(String) }],
+        [{ id: 21, name: 'macos', url: `${run.url}/job/21`, logPath: null, notStarted: true }],
+      ]);
+      expect(JSON.parse(result.details)).toMatchObject({ external, unavailable: [],
+        checks: [{ jobs: [{ id: 20 }] }, { jobs: [{ id: 21, notStarted: true }] }] });
+    });
+
+    it.each([
+      ['診断できるjobのログが1件ある', mixed(), 1],
+      ['未開始jobだけでログが1件もない', { ...failure(), checks: [{ name: 'macos', run, jobs: [notStartedJob] }] }, 0],
+    ] satisfies Array<[string, PrCiFailure, number]>)('%s証拠は、修正へ進めるかの判断に使う保存ログ件数を返す', async (_label, evidence, logCount) => {
+      const h = fixture();
+      h.fetchPrCiFailure.mockResolvedValue(evidence);
+      expect(await h.service.resolveSystemInput(input, h.state)).toMatchObject({ complete: true, logCount });
+    });
+
+    it('未開始jobと外部チェックがない証拠のpromptには区別の注記を足さない', async () => {
+      const h = fixture();
+      const result = await h.service.resolveSystemInput(input, h.state) as { promptEvidence: string };
+      expect(result.promptEvidence).toContain('not started jobs=0');
+      expect(result.promptEvidence).toContain('external checks=0');
+      expect(result.promptEvidence).not.toContain('notStarted');
+    });
+
+    it.each([
+      ['診断できる失敗と混在', mixed()],
+      ['未開始jobだけ', { ...failure(), checks: [{ name: 'macos', run, jobs: [notStartedJob] }] }],
+    ])('外部要因と判断された%sの証拠は再実行できる', async (_label, evidence) => {
+      const h = fixture();
+      h.fetchPrCiFailure.mockResolvedValue(evidence);
+      const collected = await h.service.resolveSystemInput(input, h.state) as PrCiFailure;
+      h.state.systemContexts.set('wait_ci', { status: { headSha } });
+      h.state.systemContexts.set('collect_ci_failure', { failure: collected });
+      h.state.structuredOutputs.set('investigate_ci', { verdict: 'external', summary: 'Hosted runner was never acquired' });
+      h.state.currentStep = 'rerun_ci';
+
+      expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: collected }, h.state))
+        .toMatchObject({ success: true });
+      expect(h.rerunPrCi).toHaveBeenCalledOnce();
+    });
+
+    it('実行されたjobのログが欠けていれば、未開始jobが隣にあっても不完全のまま再実行しない', async () => {
+      const h = fixture();
+      h.fetchPrCiFailure.mockResolvedValue({ ...mixed(), checks: [
+        { name: 'unit', run, jobs: [{ id: 20, name: 'unit', url: `${run.url}/job/20` }] },
+        { name: 'macos', run, jobs: [notStartedJob] },
+      ] });
+      const collected = await h.service.resolveSystemInput(input, h.state) as PrCiFailure;
+      expect(collected).toMatchObject({ complete: false,
+        unavailable: [{ name: 'unit', url: `${run.url}/job/20`, reason: 'Failed job log is missing' }] });
+      h.state.systemContexts.set('wait_ci', { status: { headSha } });
+      h.state.structuredOutputs.set('investigate_ci', { verdict: 'external', summary: 'Runner outage' });
+      h.state.currentStep = 'rerun_ci';
+
+      for (const evidence of [collected, { ...collected, complete: true, unavailable: [] }]) {
+        expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: evidence }, h.state))
+          .toMatchObject({ success: false });
+      }
+      expect(h.rerunPrCi).not.toHaveBeenCalled();
+    });
   });
 
   it('jobのない複数checkを原本とclone側で同じ不足証拠として保持し再保存しても増やさない', async () => {

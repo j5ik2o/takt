@@ -109,6 +109,10 @@ interface Scenario {
   recoveryPushFails?: boolean;
   ciName?: { field: 'check' | 'job' | 'unavailable'; value: string };
   largeCiLogs?: boolean;
+  /** Adds a job cancelled before start and an external status beside the diagnosable check. */
+  mixedCiEvidence?: boolean;
+  /** Every failed job was cancelled before start: complete evidence with no log at all. */
+  notStartedOnlyCiEvidence?: boolean;
 }
 
 describe('Builtin PR merge workflow execution', () => {
@@ -377,6 +381,16 @@ describe('Builtin PR merge workflow execution', () => {
       const check = { name: scenario.ciName?.field === 'check' ? scenario.ciName.value : `unit-round-${pushes}`,
         run: { id: 10 + pushes, attempt: reruns + 1, headSha, url: `https://github.com/org/repo/actions/runs/${10 + pushes}` },
         jobs };
+      if (scenario.notStartedOnlyCiEvidence) {
+        return { number, headSha, complete: true, unavailable: [], checks: [{ ...check, jobs: [{ id: 90, name: 'macos',
+          url: `${check.run.url}/job/90`, notStarted: true }] }] };
+      }
+      if (scenario.mixedCiEvidence) {
+        return { number, headSha, complete, unavailable: [],
+          checks: [check, { name: 'macos', run: check.run, jobs: [{ id: 90, name: 'macos',
+            url: `${check.run.url}/job/90`, notStarted: true }] }],
+          external: [{ name: 'Check unresolved comments', url: 'https://github.com/org/repo/actions/runs/99' }] };
+      }
       return { number, headSha, complete, checks: scenario.largeCiLogs ? [check, { ...check, name: 'second-check' }] : [check],
         unavailable: complete ? [] : [{ name: scenario.ciName?.field === 'unavailable' ? scenario.ciName.value : `unit-round-${pushes}`, reason: 'HTTP 403: cannot read logs' }] };
     });
@@ -1166,7 +1180,8 @@ describe('Builtin PR merge workflow execution', () => {
       expect(path).toBeDefined();
       return JSON.parse(readFileSync(path!, 'utf8')) as {
         checks: Array<{ name: string; run: { id: number; attempt: number; headSha: string };
-          jobs: Array<{ id: number; logPath: string | null }> }>;
+          jobs: Array<{ id: number; logPath: string | null; notStarted?: boolean }> }>;
+        external?: Array<{ name: string }>;
         unavailable: Array<{ reason: string }>;
       };
     }
@@ -1212,6 +1227,48 @@ describe('Builtin PR merge workflow execution', () => {
       expect(h.comments[0]).toContain('c'.repeat(40));
       expect(h.rerunPrCi).not.toHaveBeenCalled();
       expect(h.calls.filter((call) => call.startsWith('call:'))).toHaveLength(0);
+    });
+
+    it('開始前取消と外部ステータスが混在しても診断できた欠陥はci_stoppedへ落ちず修正へ進む', async () => {
+      const h = await runRecovery({ ciFailures: [defect()], mixedCiEvidence: true });
+      expect(h.state.status).toBe('completed');
+      expect(h.calls.filter((call) => call.startsWith('agent:'))).toEqual([
+        'agent:investigate_ci', 'agent:fix_ci', 'agent:review_ci_fix',
+      ]);
+      expect(h.rerunPrCi).not.toHaveBeenCalled();
+      const investigation = h.recoveryPrompts[0]!.prompt;
+      for (const count of ['complete=true', 'unique job logs=1', 'not started jobs=1', 'external checks=1', 'unavailable=0']) {
+        expect(investigation).toContain(count);
+      }
+      const index = evidenceIndex(investigation);
+      expect(index.unavailable).toEqual([]);
+      expect(index.external).toEqual([expect.objectContaining({ name: 'Check unresolved comments' })]);
+      expect(index.checks.map(({ jobs }) => jobs.map(({ logPath, notStarted }) => [logPath !== null, notStarted === true])))
+        .toEqual([[[true, false]], [[false, true]]]);
+    });
+
+    it('開始前取消と外部ステータスが混在しても外部要因の判断は1回の再実行へ進む', async () => {
+      const h = await runRecovery({ ciFailures: [external], mixedCiEvidence: true });
+      expect(h.state.status).toBe('completed');
+      expect(h.rerunPrCi).toHaveBeenCalledOnce();
+      expect(h.calls).not.toContain('agent:fix_ci');
+      expect(h.calls.indexOf('agent:investigate_ci')).toBeLessThan(h.calls.indexOf('rerun_ci'));
+    });
+
+    it('開始前取消だけでログが1件もなければ、欠陥と判断されても修正へ進まず停止する', async () => {
+      const h = await runRecovery({ ciFailures: [defect()], notStartedOnlyCiEvidence: true });
+      expect(h.state.status).toBe('aborted');
+      expect(h.calls).not.toContain('agent:fix_ci');
+      expect(h.calls).not.toContain('merge_pr');
+      expect(h.rerunPrCi).not.toHaveBeenCalled();
+      expect(h.comments).toHaveLength(1);
+    });
+
+    it('開始前取消だけの失敗は、外部要因と判断されれば1回の再実行へ進む', async () => {
+      const h = await runRecovery({ ciFailures: [external], notStartedOnlyCiEvidence: true });
+      expect(h.state.status).toBe('completed');
+      expect(h.rerunPrCi).toHaveBeenCalledOnce();
+      expect(h.calls).not.toContain('agent:fix_ci');
     });
 
     it('同じrunの複数checkと6件の長いjobログを一度だけ保存し3段階のpromptから参照できる', async () => {

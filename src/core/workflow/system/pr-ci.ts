@@ -12,8 +12,13 @@ export const PrCiFailureSchema = z.object({
     }),
     jobs: z.array(z.object({
       id: z.number().int().positive(), name: z.string(), url: z.string().url(), log: z.string().optional(),
+      // Cancelled before any step ran: no log exists, and none is missing.
+      notStarted: z.boolean().optional(),
     })),
   })),
+  // Failed checks with no Actions log reference (commit statuses, third-party checks).
+  // They stay failed; they are listed apart from evidence that should exist but could not be read.
+  external: z.array(z.object({ name: z.string(), url: z.string().nullable().optional() })).optional(),
   unavailable: z.array(z.object({ name: z.string(), url: z.string().nullable().optional(), reason: z.string() })),
 });
 

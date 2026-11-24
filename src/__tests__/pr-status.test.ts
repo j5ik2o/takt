@@ -290,11 +290,8 @@ describe('PR status acquisition', () => {
     ], 'b'.repeat(40), 'FOREIGN_HEAD_LOG: expected 2 to equal 3');
     const evidence = await failureEvidence();
     expect(evidence).toMatchObject({ complete: false, checks: [],
-      unavailable: expect.arrayContaining([
-        expect.objectContaining({ name: 'lint', reason: expect.any(String) }),
-        expect.objectContaining({ name: 'unit', reason: expect.any(String) }),
-        expect.objectContaining({ name: 'missing-url', reason: expect.any(String) }),
-      ]) });
+      unavailable: [expect.objectContaining({ name: 'lint', reason: expect.any(String) })],
+      external: [{ name: 'unit', url: 'https://ci.example.test/1' }, { name: 'missing-url', url: null }] });
     expect(JSON.stringify(evidence)).not.toContain('FOREIGN_HEAD_LOG');
     expect(execFile.mock.calls.some(([, args]) => args.includes('--log') || args.includes('--log-failed'))).toBe(false);
   });
@@ -316,6 +313,138 @@ describe('PR status acquisition', () => {
       unavailable: expect.arrayContaining([expect.objectContaining({
         url: 'https://github.com/org/repo/actions/runs/10/job/20', reason: expect.any(String),
       })]) });
+  });
+
+  describe('開始前取消・外部ステータス・証拠欠落の分離', () => {
+    const run = 'https://github.com/org/repo/actions/runs/10';
+    const actionsCheck = (name: string, jobId: number, conclusion = 'FAILURE') => ({
+      ...check('COMPLETED', conclusion), name, detailsUrl: `${run}/job/${jobId}` });
+    const job = (databaseId: number, name: string, conclusion: string, steps?: unknown[]) => ({
+      databaseId, name, url: `${run}/job/${databaseId}`, status: 'completed', conclusion,
+      ...(steps === undefined ? {} : { steps }) });
+    const ranStep = [{ name: 'Run tests', status: 'completed', conclusion: 'failure', number: 1 }];
+    const externalStatus = { __typename: 'StatusContext', context: 'Check unresolved comments', state: 'FAILURE',
+      targetUrl: 'https://github.com/org/repo/actions/runs/99' };
+
+    function install(checks: unknown[], jobs: unknown[], logs: Record<number, string | Error> = {}) {
+      response.mockImplementation(() => {
+        const args = execFile.mock.calls.at(-1)?.[1] as string[];
+        if (args[0] === 'pr') return JSON.stringify(status(checks));
+        if (args.includes('--log-failed')) {
+          const log = logs[Number(args[args.indexOf('--job') + 1])] ?? '';
+          if (log instanceof Error) throw log;
+          return log;
+        }
+        return JSON.stringify({ databaseId: 10, url: run, headSha: 'a'.repeat(40), attempt: 1,
+          status: 'completed', conclusion: 'failure', jobs });
+      });
+    }
+    const logReads = () => execFile.mock.calls.filter(([, args]) => args.includes('--log-failed'))
+      .map(([, args]) => Number(args[args.indexOf('--job') + 1]));
+
+    it('開始前に取り消されたjobはログ本文なしでも証拠欠落にせず、未開始として残す', async () => {
+      install([actionsCheck('macos', 21, 'CANCELLED')], [job(21, 'macos', 'cancelled', [])]);
+
+      const evidence = await failureEvidence();
+      expect(evidence).toMatchObject({ complete: true, unavailable: [],
+        checks: [{ name: 'macos', jobs: [{ id: 21, notStarted: true }] }] });
+      expect(evidence).not.toHaveProperty('external');
+      expect((evidence as PrCiFailure).checks[0]!.jobs[0]).not.toHaveProperty('log');
+      expect(logReads()).toEqual([]);
+    });
+
+    it('外部ステータスだけの失敗は証拠欠落と区別して記録し、診断可能にはしない', async () => {
+      install([externalStatus,
+        { ...check('COMPLETED', 'FAILURE'), name: 'third-party', detailsUrl: 'https://ci.example.test/builds/1' },
+      ], []);
+
+      expect(await failureEvidence()).toEqual({ number: 123, headSha: 'a'.repeat(40), complete: false, checks: [],
+        external: [{ name: 'Check unresolved comments', url: 'https://github.com/org/repo/actions/runs/99' },
+          { name: 'third-party', url: 'https://ci.example.test/builds/1' }],
+        unavailable: [{ name: 'CI', reason: expect.any(String) }] });
+      expect(execFile.mock.calls.filter(([, args]) => args[0] === 'run')).toEqual([]);
+    });
+
+    it('診断できる失敗は、開始前取消や外部ステータスが混在しても自分の証拠だけで完全になる', async () => {
+      install([actionsCheck('unit', 20), actionsCheck('macos', 21, 'CANCELLED'), externalStatus],
+        [job(20, 'unit', 'failure', ranStep), job(21, 'macos', 'cancelled', []), job(22, 'lint', 'success', ranStep)],
+        { 20: 'math.test.ts > adds\nAssertionError: expected 2 to equal 3' });
+
+      expect(await failureEvidence()).toMatchObject({ complete: true, unavailable: [],
+        checks: [
+          { name: 'unit', jobs: [{ id: 20, log: expect.stringContaining('expected 2 to equal 3') }] },
+          { name: 'macos', jobs: [{ id: 21, notStarted: true }] },
+        ],
+        external: [{ name: 'Check unresolved comments' }] });
+      const evidence = await failureEvidence() as PrCiFailure;
+      expect(evidence.checks.map(({ jobs }) => jobs.map(({ id }) => id))).toEqual([[20], [21]]);
+      expect(new Set(logReads())).toEqual(new Set([20]));
+    });
+
+    it.each([
+      ['実行されたjobのログが空', job(22, 'e2e', 'failure', ranStep), ''],
+      ['実行されたjobのログ取得が拒否された', job(22, 'e2e', 'failure', ranStep), new Error('HTTP 403: Resource not accessible')],
+      ['実行途中で取り消されたjobのログが空', job(22, 'e2e', 'cancelled', ranStep), ''],
+      ['取消jobの開始有無が不明', job(22, 'e2e', 'cancelled'), ''],
+      ['開始していないのに失敗と報告されたjob', job(22, 'e2e', 'failure', []), ''],
+    ] as const)('必要な証跡が実際に不足する場合（%s）は、診断できる失敗が隣にあっても不完全にする', async (_label, missingJob, log) => {
+      install([actionsCheck('unit', 20), actionsCheck('e2e', 22)],
+        [job(20, 'unit', 'failure', ranStep), missingJob], { 20: 'expected 2 to equal 3', 22: log });
+
+      const evidence = await failureEvidence() as PrCiFailure;
+      expect(evidence).toMatchObject({ complete: false,
+        checks: [{ name: 'unit', jobs: [{ id: 20, log: 'expected 2 to equal 3' }] }, { name: 'e2e', jobs: [{ id: 22 }] }],
+        unavailable: [{ name: 'e2e', url: `${run}/job/22`, reason: expect.any(String) }] });
+      expect(evidence.checks[1]!.jobs[0]).not.toHaveProperty('notStarted');
+      expect(evidence.checks[1]!.jobs[0]).not.toHaveProperty('log');
+    });
+
+    it.each([
+      ['runのattemptに存在しないjobを指す', `${run}/job/23`],
+      ['成功したjobを指す', `${run}/job/22`],
+      ['databaseIdではない番号の/jobs/形式で指す', `${run}/jobs/7`],
+    ] as const)('失敗チェックが%s場合はrunの失敗jobを証拠にする', async (_label, detailsUrl) => {
+      install([{ ...check('COMPLETED', 'FAILURE'), name: 'deploy', detailsUrl }],
+        [job(20, 'unit', 'failure', ranStep), job(22, 'lint', 'success', ranStep)], { 20: 'expected 2 to equal 3' });
+
+      expect(await failureEvidence()).toMatchObject({ complete: true, unavailable: [],
+        checks: [{ name: 'deploy', jobs: [{ id: 20, log: 'expected 2 to equal 3' }] }] });
+    });
+
+    it('/jobs/形式の番号が別の失敗jobのdatabaseIdと偶然一致しても、そのjobだけの証拠にしない', async () => {
+      install([{ ...check('COMPLETED', 'FAILURE'), name: 'deploy', detailsUrl: `${run}/jobs/22` }],
+        [job(20, 'unit', 'failure', ranStep), job(22, 'e2e', 'failure', ranStep)], { 20: 'unit log', 22: 'e2e log' });
+
+      const evidence = await failureEvidence() as PrCiFailure;
+      expect(evidence.checks.map(({ jobs }) => jobs.map(({ id }) => id))).toEqual([[20, 22]]);
+    });
+
+    it('ActionsのrunのURLなのに読めない形のCheckRunは、外部チェックにせず証拠欠落として止める', async () => {
+      const detailsUrl = 'https://github.com/org/repo/actions/runs/10/unknown/1';
+      install([actionsCheck('unit', 20), { ...check('COMPLETED', 'FAILURE'), name: 'odd', detailsUrl }],
+        [job(20, 'unit', 'failure', ranStep)], { 20: 'expected 2 to equal 3' });
+
+      const evidence = await failureEvidence();
+      expect(evidence).toMatchObject({ complete: false,
+        unavailable: [{ name: 'odd', url: detailsUrl, reason: expect.any(String) }] });
+      expect(evidence).not.toHaveProperty('external');
+    });
+
+    it('クエリ文字列にActionsのrunのパスを含むだけの外部URLは、外部チェックのまま扱う', async () => {
+      const detailsUrl = 'https://ci.example.test/builds/1?from=/actions/runs/10';
+      install([actionsCheck('unit', 20), { ...check('COMPLETED', 'FAILURE'), name: 'third-party', detailsUrl }],
+        [job(20, 'unit', 'failure', ranStep)], { 20: 'expected 2 to equal 3' });
+
+      expect(await failureEvidence()).toMatchObject({ complete: true, unavailable: [],
+        external: [{ name: 'third-party', url: detailsUrl }] });
+    });
+
+    it('失敗チェックが成功したjobを指し、runに失敗jobが1つもなければ成功扱いにせず不完全にする', async () => {
+      install([actionsCheck('lint', 22)], [job(22, 'lint', 'success', ranStep)]);
+
+      expect(await failureEvidence()).toMatchObject({ complete: false, checks: [],
+        unavailable: [{ name: 'lint', url: `${run}/job/22`, reason: expect.any(String) }] });
+    });
   });
 
   it('新attempt成功で旧失敗チェックを更新し再実行対象以外の未完了・失敗は保持する', async () => {
