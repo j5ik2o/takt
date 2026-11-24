@@ -328,7 +328,7 @@ export async function checkGoalCompletion(
   if (goal.completion === undefined) throw new Error('Goal is not awaiting a human merge');
   assertCompletionAllowed(goal, goal);
   const approvedSha = goal.completion.goalSha;
-  const prStatus = await readGoalPullRequestStatus(cwd, goal, signal, { refreshOpen: true });
+  const prStatus = await readGoalPullRequestStatus(cwd, goal, signal, { refresh: true });
   const mergedPr = prStatus?.status === 'available' && prStatus.pullRequest.state === 'MERGED'
     ? prStatus.pullRequest : undefined;
   if (goal.status === 'created' && mergedPr === undefined) throw new Error('Goal is not awaiting a human merge');

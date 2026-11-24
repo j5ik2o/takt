@@ -154,6 +154,15 @@ describe('completion from the saved merged PR', () => {
     expect(doubles.merge).not.toHaveBeenCalled();
   });
 
+  it.each(['OPEN', 'CLOSED'])('re-reads a PR that was %s moments ago instead of reusing that state', async (state) => {
+    goal = { ...goal, status: 'created' };
+    github.command.mockResolvedValueOnce(prResponse({ state }));
+    await expect(checkGoalCompletion('/project', goal.id, undefined, policy)).rejects.toThrow('Goal is not awaiting a human merge');
+    expect(await checkGoalCompletion('/project', goal.id, undefined, policy))
+      .toMatchObject({ included: true, targetSha, goal: { status: 'completed' } });
+    expect(github.command).toHaveBeenCalledTimes(2);
+  });
+
   it('accepts a merged PR whose head SHA differs from the approved SHA', async () => {
     github.command.mockResolvedValue(prResponse({ headRefOid: 'c'.repeat(40) }));
     expect(await checkGoalCompletion('/project', goal.id, undefined, policy))

@@ -9,8 +9,8 @@ export type GoalPullRequestStatus =
 
 export interface ReadGoalPullRequestStatusOptions {
   cache?: PrMergeStatusCache;
-  /** Re-read an open PR instead of reusing a recent result. */
-  refreshOpen?: boolean;
+  /** Re-read an open or closed PR instead of reusing a recent result. */
+  refresh?: boolean;
 }
 
 const processCache = new PrMergeStatusCache((target, cwd, options) => fetchPrMergeStatus(target, cwd, options));
@@ -29,7 +29,7 @@ export async function readGoalPullRequestStatus(
   try {
     const target = parseGitHubPullRequestTarget(goal.pullRequest.url);
     if (target.number !== goal.pullRequest.number) return { status: 'mismatch' };
-    const pullRequest = await (options.cache ?? processCache).read(target, cwd, { signal, refreshOpen: options.refreshOpen });
+    const pullRequest = await (options.cache ?? processCache).read(target, cwd, { signal, refresh: options.refresh });
     signal?.throwIfAborted();
     if (pullRequest.headRefName !== goal.branch || pullRequest.baseRefName !== goal.integrationBranch) {
       return { status: 'mismatch' };
