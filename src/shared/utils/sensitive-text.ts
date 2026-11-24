@@ -76,7 +76,7 @@ const CURL_SHORT_USER_COMPACT_REGEX = new RegExp(
   String.raw`(^|\s)(-u)(?:\\")?(${CURL_USER_VALUE_PATTERN})(?:\\")?`,
   'gi',
 );
-const SENSITIVE_QUERY_VALUE_REGEX = /([?&](?:api[_-]?key|key|token|password|secret|sig|signature)=)([^&\s]+)/gi;
+const SENSITIVE_QUERY_VALUE_REGEX = /([?&](?:api[_-]?key|key|token|password|secret|sig|(?:x-amz-)?signature)=)([^&\s]+)/gi;
 // A bearer credential with no header name in front of it. The value needs a digit or 20
 // characters, so that prose such as "Bearer authentication" stays readable.
 const BEARER_VALUE_PATTERN = String.raw`[A-Za-z0-9._~+/=-]`;
@@ -90,9 +90,14 @@ const KNOWN_TOKEN_REGEX = new RegExp(
     String.raw`gh[pousr]_[A-Za-z0-9_]{8,}`,
     String.raw`github_pat_[A-Za-z0-9_]{20,}`,
     String.raw`xox[baprs]-[A-Za-z0-9-]{8,}`,
+    String.raw`xapp-[A-Za-z0-9-]{8,}`,
+    String.raw`glpat-[A-Za-z0-9_-]{16,}`,
+    String.raw`hf_[A-Za-z0-9]{20,}`,
     String.raw`AIza[A-Za-z0-9_-]{30,}`,
     String.raw`A[KS]IA[A-Z0-9]{16}`,
-    String.raw`eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`,
+    // A JSON web token starts only at the start of a run of its own characters. Without the
+    // lookbehind, every `eyJ` after a `-` restarts a scan of the rest of the run (quadratic).
+    String.raw`(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`,
   ].join('|')})\b`,
   'g',
 );
