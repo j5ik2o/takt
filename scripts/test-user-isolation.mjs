@@ -6,6 +6,13 @@
  * USERPROFILE, XDG_*, TMPDIR/TMP/TEMP, and TAKT_CONFIG_DIR from the real
  * process environment. Assigning HOME inside a `threads` worker does not move
  * os.homedir(); only the parent environment does.
+ *
+ * Side effects on tools that tests spawn: anything that reads the real home
+ * (~/.npmrc, asdf/pyenv shims, provider credential stores such as the default
+ * DeepSeek Harness store) no longer sees it. Set its own location variable
+ * explicitly (for example DSH_HOME, NPM_CONFIG_USERCONFIG) when a test needs it.
+ * The Playwright browser cache and mise are pointed at their real locations
+ * below because they are read-only for tests and their shims fail without them.
  */
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -15,6 +22,26 @@ import { join } from 'node:path';
 export const ISOLATION_ROOT_ENV = 'TEST_USER_ISOLATION_ROOT';
 /** The HOME the run started with, protected by the in-worker guard. */
 export const ORIGINAL_HOME_ENV = 'TEST_USER_ISOLATION_ORIGINAL_HOME';
+/** A TAKT_CONFIG_DIR the run started with, protected as well. */
+export const ORIGINAL_TAKT_CONFIG_DIR_ENV = 'TEST_USER_ISOLATION_ORIGINAL_TAKT_CONFIG_DIR';
+
+function playwrightBrowsersPath(home, env) {
+  if (process.platform === 'darwin') return join(home, 'Library', 'Caches', 'ms-playwright');
+  if (process.platform === 'win32') return env.LOCALAPPDATA ? join(env.LOCALAPPDATA, 'ms-playwright') : undefined;
+  return join(env.XDG_CACHE_HOME || join(home, '.cache'), 'ms-playwright');
+}
+
+/** Keep read-only tool locations that otherwise resolve under HOME. */
+function preserveToolLocations(home, env) {
+  const locations = {
+    PLAYWRIGHT_BROWSERS_PATH: playwrightBrowsersPath(home, env),
+    MISE_DATA_DIR: join(env.XDG_DATA_HOME || join(home, '.local', 'share'), 'mise'),
+    MISE_CONFIG_DIR: join(env.XDG_CONFIG_HOME || join(home, '.config'), 'mise'),
+  };
+  for (const [key, value] of Object.entries(locations)) {
+    if (env[key] === undefined && value !== undefined && existsSync(value)) env[key] = value;
+  }
+}
 
 export function isolateUserDirectoriesForTestRun(env = process.env) {
   const existing = env[ISOLATION_ROOT_ENV];
@@ -35,13 +62,21 @@ export function isolateUserDirectoriesForTestRun(env = process.env) {
     TAKT_CONFIG_DIR: join(home, '.takt'),
   };
   if (env[ORIGINAL_HOME_ENV] === undefined) env[ORIGINAL_HOME_ENV] = env.HOME ?? '';
+  if (env[ORIGINAL_TAKT_CONFIG_DIR_ENV] === undefined) env[ORIGINAL_TAKT_CONFIG_DIR_ENV] = env.TAKT_CONFIG_DIR ?? '';
+  if (env[ORIGINAL_HOME_ENV]) preserveToolLocations(env[ORIGINAL_HOME_ENV], env);
   for (const [key, value] of Object.entries(directories)) {
     mkdirSync(value, { recursive: true });
     env[key] = value;
   }
   env[ISOLATION_ROOT_ENV] = root;
   process.once('exit', () => {
-    rmSync(root, { recursive: true, force: true });
+    // A throw here would turn a passing run into exit 1. A descendant that is
+    // still writing, or a read-only leftover, only leaves the root in tmp.
+    try {
+      rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    } catch (error) {
+      process.stderr.write(`[test-user-isolation] left ${root}: ${error instanceof Error ? error.message : String(error)}\n`);
+    }
   });
   return root;
 }

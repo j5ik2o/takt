@@ -10,32 +10,45 @@
 import fs from 'node:fs';
 import { syncBuiltinESMExports } from 'node:module';
 import { homedir, tmpdir, userInfo } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const protectedDirectories = new Set<string>();
 let installed = false;
 
 const realpathNative = fs.realpathSync.native;
 
-/** Resolve symlinks of the longest existing prefix; a missing tail is kept as written. */
+/**
+ * Resolve a path the way the OS does: follow each existing component's symlink
+ * before applying the next `..`. A missing tail is kept as written.
+ */
 export function resolveThroughExistingPrefix(path: string): string {
-  const absolute = resolve(path);
-  const missing: string[] = [];
-  let current = absolute;
-  for (;;) {
+  const absolute = isAbsolute(path) ? path : `${process.cwd()}${sep}${path}`;
+  try {
+    // The OS resolves an existing path component by component already.
+    return realpathNative(absolute);
+  } catch {
+    // Walk the components ourselves for a path whose tail does not exist yet.
+  }
+  const { root } = parse(absolute);
+  let current = root;
+  for (const segment of absolute.slice(root.length).split(/[\\/]+/)) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') {
+      current = dirname(current);
+      continue;
+    }
+    const next = join(current, segment);
     try {
-      const real = realpathNative(current);
-      return missing.length === 0 ? real : join(real, ...missing.reverse());
+      current = realpathNative(next);
     } catch {
-      const parent = dirname(current);
-      if (parent === current) return absolute;
-      missing.push(current.slice(parent.length).replace(/^[\\/]+/, ''));
-      current = parent;
+      current = next;
     }
   }
+  return current;
 }
 
-function isWithinOrEqual(root: string, candidate: string): boolean {
+export function isWithinOrEqual(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !isAbsolute(rel));
 }
@@ -86,7 +99,7 @@ function refuse(operation: string, path: string): never {
  */
 function assertAllowed(operation: string, path: unknown, ancestorMatters: boolean): void {
   if (typeof path !== 'string' && !(path instanceof URL) && !Buffer.isBuffer(path)) return;
-  const text = path instanceof URL ? (path.protocol === 'file:' ? decodeURIComponent(path.pathname) : '') : String(path);
+  const text = path instanceof URL ? (path.protocol === 'file:' ? fileURLToPath(path) : '') : String(path);
   if (text === '') return;
   const candidates = [resolve(text), resolveThroughExistingPrefix(text)];
   for (const directory of protectedDirectories) {
@@ -117,7 +130,12 @@ const RULES: Record<string, Rule> = {
   copyFile: { destructive: [], write: [1] },
   cp: { destructive: [], write: [1] },
   symlink: { destructive: [], write: [1] },
-  link: { destructive: [], write: [1] },
+  // A hard link from a protected file is a writable alias of it.
+  link: { destructive: [], write: [0, 1] },
+  mkdtemp: { destructive: [], write: [0] },
+  chown: { destructive: [], write: [0] },
+  lchown: { destructive: [], write: [0] },
+  lutimes: { destructive: [], write: [0] },
   truncate: { destructive: [], write: [0] },
   chmod: { destructive: [], write: [0] },
   utimes: { destructive: [], write: [0] },

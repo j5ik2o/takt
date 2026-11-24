@@ -8,11 +8,13 @@
 import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import {
-  existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync,
+  chownSync, existsSync, linkSync, lutimesSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync,
+  symlinkSync, writeFileSync,
 } from 'node:fs';
 import { rm as rmPromise, writeFile as writeFilePromise } from 'node:fs/promises';
 import { homedir, tmpdir, userInfo } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import {
@@ -23,7 +25,7 @@ import {
   unprotectDirectory,
 } from './helpers/realUserHomeGuard.js';
 import {
-  ISOLATION_ROOT_ENV, ORIGINAL_HOME_ENV, isolateUserDirectoriesForTestRun,
+  ISOLATION_ROOT_ENV, ORIGINAL_HOME_ENV, ORIGINAL_TAKT_CONFIG_DIR_ENV, isolateUserDirectoriesForTestRun,
 } from '../../scripts/test-user-isolation.mjs';
 
 describe('real user home guard', () => {
@@ -103,6 +105,24 @@ describe('real user home guard', () => {
     expectFakeRealTaktIntact();
   });
 
+  it('follows a symlink before ".." and rejects aliases and less common calls that reach the real directory', () => {
+    const linkParent = join(workspace, 'w');
+    mkdirSync(linkParent);
+    symlinkSync(join(fakeRealTakt, 'claude-sdk'), join(linkParent, 'link'), 'dir');
+
+    expect(() => writeFileSync(`${linkParent}${sep}link${sep}..${sep}config.yaml`, 'x')).toThrow(RealUserHomeAccessError);
+    expect(() => rmSync(`${linkParent}${sep}link${sep}..${sep}claude-sdk`, { recursive: true })).toThrow(RealUserHomeAccessError);
+    expect(() => linkSync(join(fakeRealTakt, 'config.yaml'), join(workspace, 'alias'))).toThrow(RealUserHomeAccessError);
+    expect(() => mkdtempSync(join(fakeRealTakt, 'tmp-'))).toThrow(RealUserHomeAccessError);
+    expect(() => chownSync(join(fakeRealTakt, 'config.yaml'), process.getuid?.() ?? 0, process.getgid?.() ?? 0))
+      .toThrow(RealUserHomeAccessError);
+    expect(() => lutimesSync(join(fakeRealTakt, 'config.yaml'), new Date(), new Date())).toThrow(RealUserHomeAccessError);
+    expect(() => writeFileSync(pathToFileURL(join(fakeRealTakt, 'config.yaml')), 'x')).toThrow(RealUserHomeAccessError);
+
+    expect(existsSync(join(workspace, 'alias'))).toBe(false);
+    expectFakeRealTaktIntact();
+  });
+
   it('still allows the incident sentinel pattern against the isolated home and other temporary directories', () => {
     const sentinel = join(homedir(), '.takt');
     mkdirSync(join(sentinel, 'projects'), { recursive: true });
@@ -128,21 +148,28 @@ describe('real user home guard', () => {
 
     expect(root).toBeTruthy();
     for (const value of [childHome, childTmp, childXdg, childConfigDir]) {
-      expect(value!.startsWith(`${root}/`)).toBe(true);
+      expect(value!.startsWith(`${root}${sep}`)).toBe(true);
       expect(value!.startsWith(join(userInfo().homedir, '.takt'))).toBe(false);
     }
   });
 
   it('moves every user directory of a runner environment under one temporary root and reuses it when nested', () => {
-    const env: NodeJS.ProcessEnv = { HOME: fakeRealHome, PATH: process.env.PATH };
+    const playwrightCache = process.platform === 'darwin'
+      ? join(fakeRealHome, 'Library', 'Caches', 'ms-playwright')
+      : join(fakeRealHome, '.cache', 'ms-playwright');
+    mkdirSync(playwrightCache, { recursive: true });
+    const env: NodeJS.ProcessEnv = { HOME: fakeRealHome, PATH: process.env.PATH, TAKT_CONFIG_DIR: fakeRealTakt };
     const root = isolateUserDirectoriesForTestRun(env);
 
     try {
       expect(env[ORIGINAL_HOME_ENV]).toBe(fakeRealHome);
+      expect(env[ORIGINAL_TAKT_CONFIG_DIR_ENV]).toBe(fakeRealTakt);
+      if (process.platform !== 'win32') expect(env.PLAYWRIGHT_BROWSERS_PATH).toBe(playwrightCache);
+      expect(env.MISE_DATA_DIR).toBeUndefined();
       expect(env[ISOLATION_ROOT_ENV]).toBe(root);
       for (const key of ['HOME', 'USERPROFILE', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME',
         'TMPDIR', 'TMP', 'TEMP', 'TAKT_CONFIG_DIR']) {
-        expect(env[key]!.startsWith(`${root}/`)).toBe(true);
+        expect(env[key]!.startsWith(`${root}${sep}`)).toBe(true);
         expect(existsSync(env[key]!)).toBe(true);
       }
       expect(() => assertIsolatedUserDirectories(env)).not.toThrow();
