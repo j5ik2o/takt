@@ -35,10 +35,10 @@
 
 保全先は `--dest` で指定します。既定の場所はありません。次のどれかに当たると、何も書かずに失敗します。
 
-- 設定置き場の中にある、または設定置き場を含む。リンクをたどった先が設定置き場の中になる場合も同じです（`DEST_OVERLAPS_SOURCE`）
+- 設定置き場の中にある、または設定置き場を含む。リンクをたどった先が設定置き場の中になる場合も同じです（`DEST_OVERLAPS_SOURCE`）。`--source` で別の場所を写すときも、使用中の設定置き場（`TAKT_CONFIG_DIR`、なければ `~/.takt`）は同じように保全先にできません
 - 保全先そのものがシンボリックリンク（`DEST_IS_LINK`）
 - 所有者以外に権限がある（`DEST_NOT_PRIVATE`。`chmod 700` で直します）。`config.yaml` には認証情報が入ることがあるためです。保全先がなければ `0700` で作ります
-- 保全先の中の `generations` や `backup.log` が、この道具の作るものと違う（リンクになっているなど。`DEST_UNSAFE`）
+- 保全先の中の `generations` や `backup.log` が、この道具の作るものと違う（シンボリックリンクになっている、`backup.log` がほかのファイルへのハードリンクになっているなど。`DEST_UNSAFE`）
 
 保全先の中は次の形になります。
 
@@ -70,7 +70,7 @@ backup ok generation=20261124T180000Z files=18676 bytes=177454071 targets=config
 
 ### 失敗したとき
 
-新しい世代は、保全先の作業用ディレクトリに作ります。すべてのファイルが元と一致してから `generations/` へ名前を付け替え、`latest` を向け、ログに記録します。古い世代を消すのは、その後です。どこかで失敗した場合は、作りかけの世代を取り除いて終了コード 1 で終わります。それまでの世代と `latest` は変わりません。
+新しい世代は、保全先の作業用ディレクトリに作ります。すべてのファイルが元と一致し、作った世代が `verify` と同じ照合に通ってから、`generations/` へ名前を付け替え、`latest` を向け、ログに記録します。古い世代を消すのは、その後です。どこかで失敗した場合は、作りかけの世代を取り除いて終了コード 1 で終わります。それまでの世代と `latest` は変わりません。
 
 次の場合は失敗にします。
 
@@ -78,7 +78,8 @@ backup ok generation=20261124T180000Z files=18676 bytes=177454071 targets=config
 |---|---|
 | 設定置き場がない | `SOURCE_MISSING` |
 | 設定置き場に、写す対象のファイルが1つもない | `NOTHING_TO_COPY` |
-| 前の世代でファイルがあった対象が、今回はない、またはファイルが1つもない | `TARGET_DISAPPEARED` |
+| `latest` の世代でファイルがあった対象が、今回はない、またはファイルが1つもない | `TARGET_DISAPPEARED` |
+| `config.yaml` が0バイト、または `latest` の世代で中身のあったファイルが0バイトになっている | `FILE_EMPTIED` |
 | 対象の中に、ファイル・ディレクトリ・リンク以外のものがある | `UNSUPPORTED_FILE` |
 | managed provider の `sdk` リンクが、使える世代を指していない | `MANAGED_PROVIDER_BROKEN` |
 | 写している間に、ファイルや `sdk` リンクが変わった（`takt install` と重なった場合など） | `SOURCE_CHANGED` |
@@ -87,7 +88,7 @@ backup ok generation=20261124T180000Z files=18676 bytes=177454071 targets=config
 | 前の実行がロックを残したまま終わった | `LOCK_STALE` |
 | 読めないファイルがある、ディスクが足りないなど | OS のエラーコード（`EACCES`、`ENOSPC` など） |
 
-`TARGET_DISAPPEARED` は、設定置き場の一部が消えたまま、欠けた世代で古い世代を押し出すのを防ぐためのものです。対象を意図して消した場合（provider をアンインストールしたなど）は、1回だけ `--accept-removed` を付けて実行します。
+`TARGET_DISAPPEARED` と `FILE_EMPTIED` は、設定置き場の一部が消えた、または空になったまま、欠けた世代で古い世代を押し出すのを防ぐためのものです。意図した変更の場合（provider をアンインストールした、ファイルを空にしたなど）は、1回だけ `--accept-removed` を付けて実行します。
 
 `LOCK_STALE` のときは、メッセージにあるプロセスが動いていないことを確かめてから、保全先の `.lock` を消します。ロックを自動では引き継ぎません。2つの実行が同時に引き継ぐと、片方がもう片方の作りかけを消すことがあるためです。
 
@@ -157,7 +158,7 @@ tail -n 1 <保全先>/backup.log
    | `absent` | 世代に入っていない（もともと導入していない） |
    | `missing` | 世代に入っているが、整合性確認に通らない |
 
-   `restored` が `complete` でない、`config` が `unreadable`、`missing` が1つでもある、のどれかで `check failed` を出し、終了コード 1 で終わります。
+   `restored` が `complete` でない、`config` が `unreadable`、`missing` が1つでもある、のどれかで `check failed` を出し、終了コード 1 で終わります。`restored` が `complete` でないときは、そこで打ち切ります（`config: not checked`）。設定の読み込みと provider の確認は行いません。
 
    TAKT の整合性確認は、確認した場所を修復することがあります。そのため `check` も、設定置き場やその中を `--config-dir` に指定すると拒否します。
 
