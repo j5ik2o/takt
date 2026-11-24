@@ -12,6 +12,7 @@ import type { PullRequestWatchTarget } from './watchers/pullRequests.js';
 import type { DirectoryWatchTarget } from './watchers/directories.js';
 import type { WatchObservations } from './watchers/observations.js';
 import { listWatchEntries } from './watchers/files.js';
+import { InvalidInquiryFileReports } from '../../infra/daemon/inquiryFiles.js';
 import { readWatchGoal, readWatchGoals, readWatchInquiries, readWatchTasks, type WatchTask } from './watchers/state.js';
 import { DaemonConversations } from './conversationState.js';
 import { projectKey, routeAssignment } from './routing.js';
@@ -30,6 +31,8 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
   async close(): Promise<void> { await this.goalReader.close(); }
   private readonly inquiriesSeen = new Map<string, string>();
   private readonly epicFiles: DaemonEpicFiles;
+  // 監視と公開待ちの走査は同じファイルを読むため、知らせた記録を共有する。
+  private readonly invalidInquiries: InvalidInquiryFileReports;
   private inquiriesInitialized = false;
   constructor(private readonly conversations: DaemonConversations,
     private readonly publish: (notice: InquiryNotice) => Promise<void>, private readonly onError: (error: unknown) => void,
@@ -37,6 +40,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     private readonly publishAnswer?: (owner: DaemonInquiryOwner, question: GoalQuestion) => Promise<void>,
     private readonly goalReader: WatchGoalReader = new WatchGoalReader()) {
     this.epicFiles = new DaemonEpicFiles(conversations.routing.directory);
+    this.invalidInquiries = new InvalidInquiryFileReports(onError);
   }
 
   private async *projects() {
@@ -73,7 +77,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
       const owner: DaemonInquiryOwner = assignment.kind === 'workspace'
         ? { kind: 'workspace', workspaceId: assignment.workspaceId }
         : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory };
-      if ((await files.listPendingInquiryAnswerPublications(owner, this.onError)).length > 0) return true;
+      if ((await files.listPendingInquiryAnswerPublications(owner, this.invalidInquiries)).length > 0) return true;
     }
     return false;
   }
@@ -175,7 +179,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     const owners = (await this.conversations.routing.assignments()).flatMap((assignment): DaemonInquiryOwner[] => assignment.kind === 'daemon'
       ? [] : [assignment.kind === 'workspace' ? { kind: 'workspace', workspaceId: assignment.workspaceId }
         : { kind: 'repository', repositoryDirectory: assignment.repositoryDirectory }]);
-    await publishPendingInquiryAnswers(this.conversations.routing.directory, owners, this.publishAnswer, this.onError);
+    await publishPendingInquiryAnswers(this.conversations.routing.directory, owners, this.publishAnswer, this.onError, this.invalidInquiries);
   }
 
   private async *inquiryNotices(): AsyncGenerator<InquiryNotice> {
@@ -201,7 +205,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     for (const [id, { assignment, directory }] of assignments) {
       const pendingInquiries: string[] = [];
       try {
-        for await (const question of readWatchInquiries(directory, this.onError)) {
+        for await (const question of readWatchInquiries(directory, this.invalidInquiries)) {
           if (question.status === 'pending' && question.recipient === 'human') pendingInquiries.push(question.id);
           yield { conversationId: id, target: { goalId: null, owner: assignment }, question };
         }

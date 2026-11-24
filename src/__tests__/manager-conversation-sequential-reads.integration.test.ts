@@ -171,7 +171,11 @@ it.each(['repository', 'workspace'] as const)('projects the other %s inquiries a
   const invalid = [
     { path: join(inquiries, `${unanswered}.json`), saved: JSON.stringify({ id: unanswered, body: 'unpublished-inquiry-body', recipient: 'human', status: 'answered' }),
       reason: 'answer: Only answered questions require an answer' },
-    { path: join(inquiries, '00000000-0000-4000-8000-000000000002.json'), saved: '{"body": "unpublished-inquiry-body"', reason: 'invalid JSON' },
+    // zod の既定の文言は未知のキー名を、JSON.parse の文言は入力の先頭を含む。
+    { path: join(inquiries, '00000000-0000-4000-8000-000000000002.json'), saved: JSON.stringify({ id: '00000000-0000-4000-8000-000000000002',
+      body: 'Which format?', recipient: 'human', status: 'answered',
+      answer: { text: 'CSV', source: 'tui', answeredAt: '2026-11-01T00:00:00.000Z', 'unpublished-inquiry-body': true } }), reason: 'answer: unrecognized_keys' },
+    { path: join(inquiries, '00000000-0000-4000-8000-000000000003.json'), saved: 'unpublished-inquiry-body', reason: 'invalid JSON' },
   ];
   for (const { path, saved } of invalid) writeFileSync(path, saved);
 

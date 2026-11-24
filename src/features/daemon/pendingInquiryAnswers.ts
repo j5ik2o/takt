@@ -1,4 +1,5 @@
 import { DaemonPersistedFiles, type DaemonInquiryOwner } from '../../infra/daemon/persistedFiles.js';
+import { InvalidInquiryFileReports } from '../../infra/daemon/inquiryFiles.js';
 import type { GoalQuestion } from '../../infra/goals/schema.js';
 
 export interface PendingGoalAnswer {
@@ -8,11 +9,12 @@ export interface PendingGoalAnswer {
 }
 
 export async function publishPendingInquiryAnswers(configDirectory: string, owners: readonly DaemonInquiryOwner[],
-  publish: (owner: DaemonInquiryOwner, question: GoalQuestion) => Promise<void>, onError: (error: unknown) => void): Promise<void> {
+  publish: (owner: DaemonInquiryOwner, question: GoalQuestion) => Promise<void>, onError: (error: unknown) => void,
+  invalidInquiries = new InvalidInquiryFileReports(onError)): Promise<void> {
   const files = new DaemonPersistedFiles(configDirectory);
   for (const owner of owners) {
     let questions: GoalQuestion[];
-    try { questions = await files.listPendingInquiryAnswerPublications(owner, onError); }
+    try { questions = await files.listPendingInquiryAnswerPublications(owner, invalidInquiries); }
     catch (error) { onError(error); continue; }
     for (const question of questions) {
       try {

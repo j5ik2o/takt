@@ -1,5 +1,7 @@
+import { stat } from 'node:fs/promises';
 import { z } from 'zod/v4';
 import { getErrorMessage } from '../../shared/utils/error.js';
+import { hasCode } from './privateFile.js';
 import { GoalQuestionSchema, type GoalQuestion } from '../goals/schema.js';
 
 export function parseInquiryFile(fileName: string, value: unknown): GoalQuestion {
@@ -22,4 +24,36 @@ export class InvalidInquiryFileError extends Error {
     super(`Skipped invalid inquiry file ${path}: ${inquiryFileFailureReason(error)}`);
     this.name = 'InvalidInquiryFileError';
   }
+}
+
+const MAX_REPORTED_FILES = 256;
+
+/**
+ * 読めない問い合わせファイルを、内容が変わるまで 1 回だけ知らせる。
+ * 監視は数秒ごとに同じファイルを読み直し、知らせるたびに診断ログが 1 件増えるため、走査をまたいで記録を共有する。
+ */
+export class InvalidInquiryFileReports {
+  private readonly reported = new Map<string, string>();
+  constructor(private readonly onError: (error: unknown) => void) {}
+
+  async invalid(path: string, error: unknown): Promise<void> {
+    // 列挙のあとに削除された問い合わせは、無いものとして扱う。
+    if (hasCode(error, 'ENOENT')) { this.reported.delete(path); return; }
+    let stamp = '';
+    try {
+      const stats = await stat(path);
+      stamp = JSON.stringify([stats.ino, stats.size, stats.mtimeMs]);
+    } catch (failure) {
+      if (hasCode(failure, 'ENOENT')) { this.reported.delete(path); return; }
+    }
+    if (this.reported.get(path) === stamp) return;
+    this.reported.delete(path);
+    // 退避や削除で一覧から消えたファイルの記録が残り続けないよう、古いものから捨てる。
+    if (this.reported.size >= MAX_REPORTED_FILES) this.reported.delete(this.reported.keys().next().value!);
+    this.reported.set(path, stamp);
+    this.onError(new InvalidInquiryFileError(path, error));
+  }
+
+  /** 読めるようになったファイルは、次に壊れたときにまた知らせる。 */
+  valid(path: string): void { this.reported.delete(path); }
 }

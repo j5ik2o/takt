@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -368,18 +368,21 @@ it('republishes only goal answers left pending for publication and clears their 
   expect(await readFile(otherPath, 'utf8')).toBe(otherBefore);
 });
 
-// status が answered なのに answer が無い（#107 で実際に保存されていた形）。名前順で正常な問い合わせより先に読まれる。
-const invalidInquiryId = '00000000-0000-4000-8000-000000000001';
+// 名前順で正常な問い合わせより先に読まれる 3 件。どれも本文に同じ文字列を含む。
 const invalidInquiryBody = 'unpublished-inquiry-body';
-async function saveInvalidInquiry(inquiries: string): Promise<{ path: string; saved: string }> {
-  const path = join(inquiries, `${invalidInquiryId}.json`);
-  const saved = JSON.stringify({ id: invalidInquiryId, body: invalidInquiryBody, recipient: 'human', status: 'answered' });
-  await mkdir(inquiries, { recursive: true });
-  await writeFile(path, saved);
-  return { path, saved };
-}
+const invalidInquiries = [
+  // status が answered なのに answer が無い（#107 で実際に保存されていた形）。
+  { id: '00000000-0000-4000-8000-000000000001', reason: 'answer: Only answered questions require an answer',
+    saved: (id: string) => JSON.stringify({ id, body: invalidInquiryBody, recipient: 'human', status: 'answered' }) },
+  // zod の既定の文言は未知のキー名を含む。
+  { id: '00000000-0000-4000-8000-000000000002', reason: 'answer: unrecognized_keys',
+    saved: (id: string) => JSON.stringify({ id, body: 'Which format?', recipient: 'human', status: 'answered',
+      answer: { text: 'CSV', source: 'tui', answeredAt: '2026-11-01T00:00:00.000Z', [invalidInquiryBody]: true } }) },
+  // JSON.parse の文言は入力の先頭を含む。
+  { id: '00000000-0000-4000-8000-000000000003', reason: 'invalid JSON', saved: () => invalidInquiryBody },
+];
 
-it.each(['repository', 'workspace'] as const)('keeps watching the other %s inquiries when one saved inquiry is invalid', async (kind) => {
+it.each(['repository', 'workspace'] as const)('keeps watching the other %s inquiries and reports each invalid saved inquiry once', async (kind) => {
   const globalDirectory = join(directory, 'global');
   const errors = vi.fn();
   const published: string[] = [];
@@ -398,8 +401,12 @@ it.each(['repository', 'workspace'] as const)('keeps watching the other %s inqui
     async (_owner, question) => { answers.push(question.id); });
   const store = new StandaloneInquiryStore(globalDirectory, owner);
   const answered = await store.create({ body: 'Which output format?' });
-  const invalid = await saveInvalidInquiry(join(globalDirectory, owner.kind === 'workspace' ? join('workspaces', owner.workspaceId)
-    : join('projects', projectIdForCanonicalDirectory(directory)), 'inquiries'));
+  const inquiries = join(globalDirectory, owner.kind === 'workspace' ? join('workspaces', owner.workspaceId)
+    : join('projects', projectIdForCanonicalDirectory(directory)), 'inquiries');
+  const invalid = invalidInquiries.map(({ id, reason, saved }) => ({ path: join(inquiries, `${id}.json`), saved: saved(id),
+    message: `Skipped invalid inquiry file ${join(inquiries, `${id}.json`)}: ${reason}` }));
+  for (const { path, saved } of invalid) await writeFile(path, saved);
+  const messages = () => errors.mock.calls.map(([error]) => (error as Error).message);
 
   await source.inquiries();
   const asked = await store.create({ body: 'Which branch?' });
@@ -411,12 +418,15 @@ it.each(['repository', 'workspace'] as const)('keeps watching the other %s inqui
   expect(answers).toEqual([answered.id]);
   expect((await store.get(answered.id)).answerPublicationPending).toBeUndefined();
   expect(await source.hasWork(files)).toBe(false);
-  const messages = errors.mock.calls.map(([error]) => (error as Error).message);
-  expect(messages.length).toBeGreaterThan(0);
-  for (const message of messages) {
-    expect(message).toContain(invalid.path);
-    expect(message).toContain('answer: Only answered questions require an answer');
-    expect(message).not.toContain(invalidInquiryBody);
-  }
-  expect(await readFile(invalid.path, 'utf8')).toBe(invalid.saved);
+  // 監視と公開待ちの走査を何度繰り返しても、1 ファイルにつき 1 回だけ知らせる。
+  expect(messages()).toEqual(invalid.map(({ message }) => message));
+  expect(messages().join('\n')).not.toContain(invalidInquiryBody);
+  expect(await Promise.all(invalid.map(({ path }) => readFile(path, 'utf8')))).toEqual(invalid.map(({ saved }) => saved));
+
+  // 書き直されても読めないままなら、もう 1 回だけ知らせる。
+  await utimes(invalid[0]!.path, new Date('2026-11-02T00:00:00Z'), new Date('2026-11-02T00:00:00Z'));
+  await source.inquiries();
+  await source.hasWork(files);
+  await source.inquiries();
+  expect(messages()).toEqual([...invalid.map(({ message }) => message), invalid[0]!.message]);
 });

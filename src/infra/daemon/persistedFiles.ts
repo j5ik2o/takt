@@ -13,7 +13,7 @@ import { FileAsyncLock } from './lock.js';
 import { readDisplayFile } from './displayFiles.js';
 import { hasCode, readPrivateFile, writePrivateFile } from './privateFile.js';
 import { readInboxJson } from './inboxFiles.js';
-import { InvalidInquiryFileError, parseInquiryFile } from './inquiryFiles.js';
+import { parseInquiryFile, type InvalidInquiryFileReports } from './inquiryFiles.js';
 
 const MAX_PROJECTION_BYTES = 256 * 1024;
 // 業務 schema の値 import は run の同期読取まで到達するため、ここでは保存形式だけを検証する。
@@ -40,8 +40,8 @@ export class DaemonPersistedFiles {
     return this.readInquiry({ kind: 'workspace', workspaceId }, questionId);
   }
 
-  /** 読めない 1 件は onInvalid へ知らせて飛ばす。読めない記録は公開もできないため、公開待ちには数えない。 */
-  async listPendingInquiryAnswerPublications(owner: DaemonInquiryOwner, onInvalid: (error: unknown) => void) {
+  /** 読めない 1 件は reports へ知らせて飛ばす。読めない記録は公開もできないため、公開待ちには数えない。 */
+  async listPendingInquiryAnswerPublications(owner: DaemonInquiryOwner, reports: InvalidInquiryFileReports) {
     const directory = await this.inquiryDirectory(owner);
     let entries;
     try { entries = await readdir(directory, { withFileTypes: true }); }
@@ -52,13 +52,14 @@ export class DaemonPersistedFiles {
     const questions: GoalQuestion[] = [];
     for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
       if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+      const path = join(directory, entry.name);
       let question;
       try { question = await this.readInquiry(owner, entry.name.slice(0, -'.json'.length)); }
       catch (error) {
-        // 列挙のあとに削除された問い合わせは、無いものとして扱う。
-        if (!hasCode(error, 'ENOENT')) onInvalid(new InvalidInquiryFileError(join(directory, entry.name), error));
+        await reports.invalid(path, error);
         continue;
       }
+      reports.valid(path);
       if (question.answerPublicationPending === true) questions.push(question);
     }
     return questions;
