@@ -28,7 +28,7 @@
 
 - 実行時の状態: `logs/`、`analytics/`、`workspaces/`、`conversations/`、`manager-inbox/`、`daemon.json` など、上の一覧にないもの
 
-シンボリックリンクは、リンクのまま写します。ただし、リンクを実際にたどった先が、写す対象（`workflows/` や `pi/` など、上の一覧の1項目）の外になると、`backup` は失敗します（`EXTERNAL_LINK`）。絶対パスのリンク、たどれないリンク、対象そのものがリンクの場合（`workflows` が別の場所へのリンクなど）も同じです。`verify` も世代の中のリンクを同じ方法で確かめます。リンク先の中身は保全できず、世代をコピーして確かめるときに、コピーの外のファイルを読み書きすることになるためです。リンクを実ファイルに置き換えてから実行します。managed provider の中にあるリンク（`node_modules/.bin` など）は対象の中を指すので、そのまま写ります。
+シンボリックリンクは、リンクのまま写します。ただし、リンクを実際にたどった先が、写す対象（`workflows/` や `pi/` など、上の一覧の1項目）の外になると、`backup` は失敗します（`EXTERNAL_LINK`）。絶対パスのリンク、たどれないリンク、対象そのものがリンクの場合（`workflows` が別の場所へのリンクなど）も同じです。`verify` も世代の中のリンクを同じ方法で確かめます。managed provider の中から、写さないもの（使われなくなった古い世代など）を指すリンクは、対象の内側なので `EXTERNAL_LINK` にはなりません。この場合は、世代を公開する前の照合で `GENERATION_DAMAGED` になり、世代は公開されません。リンク先の中身は保全できず、世代をコピーして確かめるときに、コピーの外のファイルを読み書きすることになるためです。リンクを実ファイルに置き換えてから実行します。managed provider の中にあるリンク（`node_modules/.bin` など）は対象の中を指すので、そのまま写ります。
 
 `config.yaml` は必須です。ない、空、または通常のファイルでないと、`backup` は失敗します（`CONFIG_MISSING`）。ファイルが1つもない対象があると、`note:` の行で知らせます。
 
@@ -86,7 +86,7 @@ backup ok generation=20261124T180000Z files=18676 bytes=177454071 targets=config
 | 対象の中に、ファイル・ディレクトリ・リンク以外のものがある | `UNSUPPORTED_FILE` |
 | managed provider の `sdk` リンクが、使える世代を指していない | `MANAGED_PROVIDER_BROKEN` |
 | 写している間に、ファイルや `sdk` リンクが変わった（`takt install` と重なった場合など） | `SOURCE_CHANGED` |
-| 前の世代の記録が壊れている | `GENERATION_DAMAGED` |
+| 前の世代の記録が壊れている。または、作った世代が公開前の照合に通らない（managed provider の中のリンクが、写さない古い世代を指しているなど） | `GENERATION_DAMAGED` |
 | 別のバックアップが実行中 | `LOCKED` |
 | 前の実行がロックを残したまま終わった | `LOCK_STALE` |
 | 読めないファイルがある、ディスクが足りないなど | OS のエラーコード（`EACCES`、`ENOSPC` など） |
