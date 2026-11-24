@@ -1,3 +1,4 @@
+import { runTaskFinishHooks } from '../execute/taskFinishHook.js';
 import { execFileSync } from 'node:child_process';
 import { confirmWithCancel } from '../../../shared/prompt/index.js';
 import { error, info, success } from '../../../shared/ui/index.js';
@@ -177,7 +178,7 @@ export async function publishPrFailedTask(
     branchError: 'Branch publication failed',
   });
   if (outcome.kind === 'existing' || outcome.kind === 'created') {
-    const persisted = persistPublishedPr(projectDir, task.name, outcome.prUrl, outcome.publishedSha);
+    const persisted = await persistPublishedPr(projectDir, task.name, outcome.prUrl, outcome.publishedSha);
     if (!persisted.success) return persisted;
     return { success: true, prUrl: outcome.prUrl };
   }
@@ -260,9 +261,12 @@ function readPublicationSha(worktreePath: string, branch: string): string {
   return sha;
 }
 
-function persistPublishedPr(projectDir: string, taskName: string, prUrl: string, publishedSha: string): PublishTaskResult {
+async function persistPublishedPr(projectDir: string, taskName: string, prUrl: string, publishedSha: string): Promise<PublishTaskResult> {
   try {
-    new TaskRunner(projectDir).completePublishedTask(taskName, prUrl, publishedSha);
+    const runner = new TaskRunner(projectDir);
+    runner.completePublishedTask(taskName, prUrl, publishedSha);
+    // pr_failed became completed without an execution, so the finish hook is called here.
+    await runTaskFinishHooks(projectDir, runner, [taskName]);
     return { success: true, prUrl };
   } catch (err) {
     return {
@@ -380,7 +384,7 @@ export async function createPullRequestForTask(
     success(published.kind === 'existing'
       ? `既存の PR を使用します: ${published.prUrl}`
       : `PR を作成しました: ${published.prUrl}`);
-    const persisted = persistPublishedPr(projectDir, task.name, published.prUrl, published.publishedSha);
+    const persisted = await persistPublishedPr(projectDir, task.name, published.prUrl, published.publishedSha);
     if (!persisted.success) {
       error(`PR は公開済みですが、タスク ${sanitizeTerminalText(task.name)} を completed として保存できませんでした: ${sanitizeTerminalText(persisted.error)}\ntakt list で状態を確認し、pr_failed の場合は Create PR で再試行してください。既存の PR を再利用します。`);
       return false;

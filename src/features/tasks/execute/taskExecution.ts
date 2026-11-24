@@ -32,6 +32,7 @@ import {
 } from './taskResultHandler.js';
 import { runWorkflowExecution } from './workflowExecutionApi.js';
 import { resolveTaskSpecForExecution } from './taskSpecContext.js';
+import { withTaskFinishHook } from './taskFinishHook.js';
 import { withTaskRuntimeAssignment } from '../../../infra/config/runtime-provider/invocation.js';
 import {
   createLoopAnalysisPublicationCoordinator,
@@ -120,9 +121,12 @@ export async function executeTaskAndCompleteWithDetails(
   taskContext?: TaskExecutionContextOverride,
   gitProvider?: GitProvider,
 ): Promise<TaskCompletionResult> {
-  return withTaskRuntimeAssignment(task.data?.runtime_assignment, () => executeTaskAndCompleteWithDetailsInScope(
-    task, taskRunner, cwd, taskExecutor, taskExecutionOptions, parallelOptions, taskContext, gitProvider,
-  ));
+  // Every exit of a queued task — completed, failed, interrupted, errored, exceeded, pr_failed, and
+  // the saved PR merge task — returns through here, so the finish hook is attached at this one place.
+  return withTaskFinishHook(cwd, taskRunner, task.name, () => withTaskRuntimeAssignment(
+    task.data?.runtime_assignment, () => executeTaskAndCompleteWithDetailsInScope(
+      task, taskRunner, cwd, taskExecutor, taskExecutionOptions, parallelOptions, taskContext, gitProvider,
+    )), { emitStatusLog: parallelOptions?.outputMode !== 'silent' });
 }
 
 async function executeTaskAndCompleteWithDetailsInScope(

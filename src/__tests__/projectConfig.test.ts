@@ -10,7 +10,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { loadProjectConfig, saveProjectConfig } from '../infra/config/project/projectConfig.js';
-import { ProjectConfigSchema } from '../core/models/index.js';
+import { GlobalConfigSchema, ProjectConfigSchema } from '../core/models/index.js';
+import { resolveOpenCodeGuardPolicy } from '../infra/opencode/guards/policy.js';
 import type { ProjectLocalConfig } from '../infra/config/types.js';
 import type { QualityGate } from '../core/models/workflow-types.js';
 import type { FormalSpecSetting } from '../core/models/config-types.js';
@@ -2039,5 +2040,97 @@ describe('ProjectConfigSchema submodules and concurrency', () => {
 
   it('should reject non-all string in ProjectConfigSchema submodules', () => {
     expect(() => ProjectConfigSchema.parse({ submodules: 'libs' })).toThrow();
+  });
+});
+
+describe('task_finish_hook', () => {
+  let projectDir: string;
+  let envSnapshot: TaktEnvSnapshot;
+
+  beforeEach(() => {
+    envSnapshot = clearTaktEnv();
+    projectDir = mkdtempSync(join(tmpdir(), 'takt-test-finish-hook-config-'));
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(projectDir, { recursive: true, force: true });
+    restoreTaktEnv(envSnapshot);
+  });
+
+  function writeConfig(lines: string[]): void {
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), lines.join('\n'), 'utf-8');
+  }
+
+  it('loads the command as argv and defaults the timeout to 10 seconds', () => {
+    writeConfig(['task_finish_hook:', '  command: [notify-send, "task finished"]']);
+
+    expect(loadProjectConfig(projectDir).taskFinishHook)
+      .toEqual({ command: ['notify-send', 'task finished'], timeoutMs: 10_000 });
+  });
+
+  it('is absent when not configured', () => {
+    writeConfig(['language: en']);
+
+    expect(loadProjectConfig(projectDir).taskFinishHook).toBeUndefined();
+  });
+
+  it('round-trips through save', () => {
+    saveProjectConfig(projectDir, { taskFinishHook: { command: ['/bin/hook', 'a b'], timeoutMs: 2_500 } });
+
+    expect(loadProjectConfig(projectDir).taskFinishHook).toEqual({ command: ['/bin/hook', 'a b'], timeoutMs: 2_500 });
+    expect(readFileSync(join(projectDir, '.takt', 'config.yaml'), 'utf-8')).not.toContain('taskFinishHook');
+  });
+
+  it.each([
+    ['a timeout above 60 seconds', { command: ['hook'], timeout_ms: 60_001 }],
+    ['a timeout of zero', { command: ['hook'], timeout_ms: 0 }],
+    ['an empty command', { command: [] }],
+    ['a shell string instead of argv', { command: 'hook --flag' }],
+    ['an unknown key', { command: ['hook'], shell: true }],
+  ])('rejects %s', (_label, value) => {
+    expect(() => ProjectConfigSchema.parse({ task_finish_hook: value })).toThrow();
+  });
+
+  it('is a project-only key: the global config rejects it', () => {
+    expect(() => GlobalConfigSchema.parse({ task_finish_hook: { command: ['hook'] } })).toThrow();
+  });
+});
+
+describe('provider_options.opencode.guards.call_timeout_ms in project config', () => {
+  let projectDir: string;
+  let envSnapshot: TaktEnvSnapshot;
+
+  beforeEach(() => {
+    envSnapshot = clearTaktEnv();
+    projectDir = mkdtempSync(join(tmpdir(), 'takt-test-call-timeout-config-'));
+    mkdirSync(join(projectDir, '.takt'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(projectDir, { recursive: true, force: true });
+    restoreTaktEnv(envSnapshot);
+  });
+
+  function writeTimeout(value: number): void {
+    writeFileSync(join(projectDir, '.takt', 'config.yaml'), [
+      'provider_options:', '  opencode:', '    guards:', `      call_timeout_ms: ${value}`,
+    ].join('\n'), 'utf-8');
+  }
+
+  it('shortens the no-response limit from the 60-minute default down to one minute', () => {
+    expect(resolveOpenCodeGuardPolicy(undefined, 'standard').callTimeoutMs).toBe(3_600_000);
+
+    writeTimeout(60_000);
+    const guards = loadProjectConfig(projectDir).providerOptions?.opencode?.guards;
+
+    expect(guards).toEqual({ callTimeoutMs: 60_000 });
+    expect(resolveOpenCodeGuardPolicy(guards, 'standard').callTimeoutMs).toBe(60_000);
+  });
+
+  it('rejects a value below one minute instead of falling back to the default', () => {
+    writeTimeout(59_999);
+
+    expect(() => loadProjectConfig(projectDir)).toThrow(/call_timeout_ms/u);
   });
 });

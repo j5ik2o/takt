@@ -66,6 +66,7 @@ import { PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS } from '../providerOptionsCon
 import { getCachedProjectConfigTrace, setCachedProjectConfigTrace } from '../resolutionCache.js';
 import { assertValidProjectConfig } from './projectConfigValidation.js';
 import { getProjectConfigSnapshot } from '../configSnapshot.js';
+import { normalizeTaskFinishHook } from '../../../core/models/task-finish-hook.js';
 import {
   omitDeprecatedAssistantGherkin,
   warnDeprecatedAssistantGherkin,
@@ -133,6 +134,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     ignore_exceed,
     sync_conflict_resolver,
     observability,
+    task_finish_hook,
   } = parsedConfigResult;
   const projectProviderOptionsPolicy = {
     baseUrlTrust: 'local-loopback-only' as const,
@@ -241,6 +243,7 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
     workflowArpeggio: normalizeWorkflowArpeggioPolicy(parsedConfigResult.workflow_arpeggio),
     syncConflictResolver: normalizeSyncConflictResolver(sync_conflict_resolver),
     workflowMcpServers: normalizeWorkflowMcpServers(parsedConfigResult.workflow_mcp_servers),
+    taskFinishHook: normalizeTaskFinishHook(task_finish_hook),
   };
 }
 
@@ -379,7 +382,7 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
       delete savePayload.with_submodules;
     }
   }
-  for (const k of ['providerProfiles', 'providerOptions', 'autoRouting', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'autoRequeueMaxAttempts', 'ignoreExceed', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowSystemCommands', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers'] as const) {
+  for (const k of ['providerProfiles', 'providerOptions', 'autoRouting', 'rateLimitFallback', 'autoPr', 'draftPr', 'allowGitHooks', 'allowGitFilters', 'vcsProvider', 'baseBranch', 'withSubmodules', 'branchNameStrategy', 'minimalOutput', 'taskPollIntervalMs', 'interactivePreviewSteps', 'syncProjectLocalTaktOnRetry', 'autoRequeueMaxAttempts', 'ignoreExceed', 'personaProviders', 'providerRouting', 'taktProviders', 'workflowRuntimePrepare', 'workflowCommandGates', 'workflowSystemCommands', 'workflowArpeggio', 'syncConflictResolver', 'workflowMcpServers', 'taskFinishHook'] as const) {
     delete savePayload[k];
   }
 
@@ -397,6 +400,11 @@ export function saveProjectConfig(projectDir: string, config: ProjectConfig): vo
   }
   for (const [key, raw] of [['workflow_runtime_prepare', denormalizeWorkflowRuntimePreparePolicy(config.workflowRuntimePrepare)], ['workflow_command_gates', denormalizeWorkflowCommandGatesPolicy(config.workflowCommandGates)], ['workflow_system_commands', denormalizeWorkflowSystemCommandsPolicy(config.workflowSystemCommands)], ['workflow_arpeggio', denormalizeWorkflowArpeggioPolicy(config.workflowArpeggio)], ['sync_conflict_resolver', denormalizeSyncConflictResolver(config.syncConflictResolver)], ['workflow_mcp_servers', denormalizeWorkflowMcpServers(config.workflowMcpServers)]] as const) {
     if (raw) { savePayload[key] = raw; } else { delete savePayload[key]; }
+  }
+  if (config.taskFinishHook === undefined) {
+    delete savePayload.task_finish_hook;
+  } else {
+    savePayload.task_finish_hook = { command: [...config.taskFinishHook.command], timeout_ms: config.taskFinishHook.timeoutMs };
   }
 
   const content = stringify(savePayload, { indent: 2 });

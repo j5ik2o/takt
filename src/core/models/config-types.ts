@@ -12,6 +12,7 @@ import type { PermissionMode } from './types.js';
 import type { QualityGate, RateLimitFallbackConfig, StepProviderOptions, WorkflowRuntimeConfig } from './workflow-types.js';
 import type { ProviderPermissionProfiles } from './provider-profiles.js';
 import type { VcsProviderType } from './vcs-types.js';
+import type { TaskFinishHookConfig } from './task-finish-hook.js';
 
 export type RoutingTier = 'high' | 'medium' | 'low';
 export const MANAGER_NOTIFICATION_KINDS = ['question', 'awaiting_merge', 'completed', 'progress', 'blocked', 'custom'] as const;
@@ -441,6 +442,8 @@ export interface ProjectConfig {
   syncConflictResolver?: SyncConflictResolverConfig;
   /** Workflow-level MCP transport policy */
   workflowMcpServers?: WorkflowMcpServersConfig;
+  /** Project-only: command run once after a task's terminal state is saved. */
+  taskFinishHook?: TaskFinishHookConfig;
 }
 
 /**
@@ -450,7 +453,7 @@ export interface ProjectConfig {
  * For overlapping keys, ProjectConfig values take priority at runtime
  * — handled by the resolution layer.
  */
-export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant' | 'manager'> {
+export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant' | 'manager' | 'taskFinishHook'> {
   /** @globalOnly */
   director?: { slack?: { channelId: string; allowedUserIds: string[] } };
   manager?: { permission?: ManagerPermission; providerPermissions?: Record<string, ManagerPermission>; patrolInterval?: number; refreshIntervalMs?: number; autoRun?: boolean; preserveGoalWorktree?: boolean; verifyOnRegister?: boolean; workflows?: ManagerWorkflowsConfig; runtimeAssignments?: ManagerRuntimeAssignmentsConfig; notifications?: ManagerNotifications };
