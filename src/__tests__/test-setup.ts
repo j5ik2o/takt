@@ -4,6 +4,13 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, beforeEach } from 'vitest';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
+import {
+  assertIsolatedUserDirectories,
+  detectRealUserTaktDirectories,
+  installRealUserHomeFsGuard,
+  protectDirectory,
+} from './helpers/realUserHomeGuard.js';
+import { ORIGINAL_HOME_ENV } from '../../scripts/test-user-isolation.mjs';
 
 globalThis.console.Console = Console;
 
@@ -11,6 +18,13 @@ const shouldForceNoTty = process.env.TAKT_TEST_FLG_TOUCH_TTY !== '1';
 const TEST_TMPDIR = realpathSync(tmpdir());
 
 process.env.TMPDIR = TEST_TMPDIR;
+
+// vitest.config.shared.ts moved HOME, XDG_*, TMPDIR, and TAKT_CONFIG_DIR to a
+// temporary root before any worker started. Refuse to run if that did not
+// happen, and reject fs writes and deletions that still reach the real ~/.takt.
+for (const directory of detectRealUserTaktDirectories(process.env[ORIGINAL_HOME_ENV])) protectDirectory(directory);
+installRealUserHomeFsGuard();
+assertIsolatedUserDirectories();
 
 if (shouldForceNoTty) {
   process.env.TAKT_NO_TTY = '1';
@@ -59,6 +73,7 @@ beforeEach(async () => {
     process.env.TAKT_NO_TTY = '1';
   }
   mkdirSync(process.env.TAKT_CONFIG_DIR, { recursive: true });
+  assertIsolatedUserDirectories();
 });
 
 afterEach(() => {
