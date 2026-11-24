@@ -14,7 +14,7 @@ import { runWithPhaseSpan } from './observability/workflowSpans.js';
 import { writeReportFile } from './report-writer.js';
 import { reportPhaseEventTools } from './report-phase-tools.js';
 import { AGENT_FAILURE_CATEGORIES } from '../../shared/types/agent-failure.js';
-import { sanitizeSensitiveText } from '../../shared/utils/sensitive-text.js';
+import { REDACTED_VALUE, sanitizeSensitiveText } from '../../shared/utils/sensitive-text.js';
 
 const log = createLogger('phase-runner');
 const REPORT_PHASE_MAX_TURNS = 3;
@@ -818,14 +818,23 @@ function buildRetryableFailureEventError(
 }
 
 const MAX_PROVIDER_ERROR_SUMMARY_CHARS = 300;
+const HOME_DIRECTORY_USER_REGEX = /((?:\/Users\/|\/home\/|\\Users\\))[^/\\\s"'<>]+/g;
+// A long run of letters and digits is treated as a credential here. This is too broad for the
+// shared sanitizer (it would hide commit hashes in every log), but fits a short diagnostic.
+const LONG_TOKEN_LIKE_REGEX = /[A-Za-z0-9_+=-]{32,}/g;
 
 /**
  * Event and log message for a provider error: status, failure category, and the provider's
- * error text with credentials redacted, on one line, bounded. Never the response content.
+ * error text with credentials and home directory user names redacted, on one line, bounded.
+ * Never the response content.
  */
 function buildProviderErrorEventMessage(response: AgentResponse): string {
   const category = response.failureCategory === undefined ? '' : ` (${response.failureCategory})`;
-  const text = sanitizeSensitiveText(response.error ?? '').replace(/\s+/g, ' ').trim();
+  const text = sanitizeSensitiveText(response.error ?? '')
+    .replace(HOME_DIRECTORY_USER_REGEX, '$1<user>')
+    .replace(LONG_TOKEN_LIKE_REGEX, (run) => (/\d/.test(run) && /[A-Za-z]/.test(run) ? REDACTED_VALUE : run))
+    .replace(/\s+/g, ' ')
+    .trim();
   const summary = text.length > MAX_PROVIDER_ERROR_SUMMARY_CHARS
     ? `${text.slice(0, MAX_PROVIDER_ERROR_SUMMARY_CHARS)}…`
     : text;

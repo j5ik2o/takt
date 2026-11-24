@@ -1141,6 +1141,54 @@ describe('runReportPhase retry with new session', () => {
     }
   });
 
+  it.each([
+    ['an escaped JSON authorization header', String.raw`Request failed {\"Authorization\": \"Bearer ESC2SECRET\"}`, 'ESC2SECRET'],
+    ['a bearer credential without a header name', 'Bearer PLAINBEARERSECRET123 rejected', 'PLAINBEARERSECRET123'],
+    ['a bearer credential on the next line', 'Authorization: Bearer\nNEWLINE2SECRET', 'NEWLINE2SECRET'],
+    ['a key query parameter', 'POST https://example.test/v1:generateContent?key=QUERYKEYSECRET failed', 'QUERYKEYSECRET'],
+    ['an AWS access key ID', 'denied for AKIAIOSFODNN7EXAMPLE', 'AKIAIOSFODNN7EXAMPLE'],
+    ['a long token-like string', 'denied for wJalrXUtnFEMI0K7MDENGbPxRfiCYEXAMPLEKEY99 today', 'wJalrXUtnFEMI0K7MDENGbPxRfiCYEXAMPLEKEY99'],
+    ['a home directory user name', 'ENOENT: open /Users/alice/.takt/config.yaml', 'alice'],
+    ['a Linux home directory user name', 'ENOENT: open /home/bob/.takt/config.yaml', 'bob'],
+  ])('should keep %s out of the provider error summary', async (_name, error, secret) => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-provider-error-secret.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    const phaseComplete = vi.fn();
+    ctx.onPhaseComplete = phaseComplete;
+    queueRunAgentResponses([
+      { persona: 'coder', status: 'error', content: '', timestamp: new Date('2026-11-25T00:00:00Z'), error },
+      { persona: 'coder', status: 'done', content: '# Report\nRecovered on retry', timestamp: new Date('2026-11-25T00:00:01Z') },
+    ]);
+
+    await runReportPhase(step, 1, ctx);
+
+    const observed = JSON.stringify([phaseComplete.mock.calls, infoSpy.mock.calls]);
+    expect(observed).toContain('Report phase provider returned status');
+    expect(observed).not.toContain(secret);
+  });
+
+  it('should keep the path after a home directory user name in the provider error summary', async () => {
+    const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
+    const step = createStep('03-provider-error-path.md');
+    const ctx = createContext(reportDir, 'Implemented feature X', 'session-resume-1');
+    const phaseComplete = vi.fn();
+    ctx.onPhaseComplete = phaseComplete;
+    queueRunAgentResponses([
+      {
+        persona: 'coder', status: 'error', content: '', timestamp: new Date('2026-11-25T00:00:00Z'),
+        error: 'ENOENT: open /Users/alice/.takt/config.yaml at commit 7868714bb04d20e71c498fb5653a45e523880935',
+      },
+      { persona: 'coder', status: 'done', content: '# Report\nRecovered on retry', timestamp: new Date('2026-11-25T00:00:01Z') },
+    ]);
+
+    await runReportPhase(step, 1, ctx);
+
+    expect(phaseComplete.mock.calls[0]?.[5]).toBe(
+      'Report phase provider returned status "error": ENOENT: open /Users/<user>/.takt/config.yaml at commit [REDACTED]',
+    );
+  });
+
   it('should bound a long provider error on phase complete', async () => {
     const reportDir = join(tmpRoot, '.takt', 'runs', 'sample-run', 'reports');
     const step = createStep('03-provider-error-bounded.md');
