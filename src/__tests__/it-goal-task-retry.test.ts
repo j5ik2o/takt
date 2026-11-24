@@ -795,6 +795,50 @@ describe('goal task retry through manager MCP and persistent task execution', ()
     await runAndMerge(startStep === 'plan' ? 'planner' : 'reviewer', revisedOrder);
   });
 
+  it('refuses to resume from a step that only reports the failure, then restarts from the named step', async () => {
+    const yaml = [
+      `name: ${workflowName}`, 'max_steps: 10', 'initial_step: plan', 'steps:',
+      '  - name: plan', '    persona: ./personas/planner.md', '    instruction: "{task}"',
+      '    rules:', '      - condition: when(true)', '        next: review',
+      '  - name: review', '    persona: ./personas/reviewer.md', '    instruction: "{task}"',
+      '    rules:', '      - condition: when(true)', '        next: COMPLETE',
+      '      - condition: when(false)', '        next: report_failure',
+      '  - name: report_failure', '    persona: ./personas/reporter.md', '    instruction: Report the failure',
+      '    rules:', '      - condition: when(true)', '        next: ABORT',
+    ].join('\n');
+    for (const directory of [cwd, clone]) {
+      writeFileSync(join(directory, '.takt', 'workflows', `${workflowName}.yaml`), yaml);
+      writeFileSync(join(directory, '.takt', 'workflows', 'personas', 'reporter.md'), 'Report the failure.');
+    }
+    invalidateAllResolvedConfigCache();
+    const workflow = loadWorkflowByIdentifier(workflowName, cwd, { lookupCwd: clone })!;
+    const metaPath = join(clone, '.takt', 'runs', 'failed-run', 'meta.json');
+    const meta = JSON.parse(readFileSync(metaPath, 'utf8')) as { resume_point: WorkflowResumePoint };
+    writeFileSync(metaPath, JSON.stringify({ ...meta, currentStep: 'report_failure', resume_point: {
+      ...meta.resume_point, stack: [buildWorkflowResumePointEntry(workflow, 'report_failure', 'agent', 1)],
+    } }));
+    new TaskStore(cwd).update((current) => ({ tasks: current.tasks.map((task) => ({
+      ...task, failure: { ...task.failure!, step: 'report_failure' },
+    })) }));
+    const tasksFile = join(cwd, '.takt', 'tasks.yaml');
+    const before = readFileSync(tasksFile, 'utf8');
+
+    const refused = await call('requeue');
+
+    expect(refused.isError).toBe(true);
+    const reason = firstTextContent(refused.content);
+    expect(reason).toContain('can only abort the workflow');
+    expect(reason).toContain('reached from "review"');
+    expect(reason).toContain('Available startStep values');
+    expect(readFileSync(tasksFile, 'utf8')).toBe(before);
+    expect((await store.get(goalId)).workLog).toEqual([]);
+
+    const restarted = await call('requeue', { startStep: 'review' });
+
+    expect(restarted.isError, firstTextContent(restarted.content)).toBeUndefined();
+    await runAndMerge('reviewer', originalOrder, note);
+  });
+
   it('continues to skip automatic retries for failed goal-owned work', () => {
     const before = readFileSync(join(cwd, '.takt', 'tasks.yaml'), 'utf8');
     expect(runner.autoRequeueFailedTask(taskName, { maxAttempts: 3 })).toMatchObject({ requeued: false, reason: 'goal_owned' });
