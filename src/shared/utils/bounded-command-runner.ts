@@ -45,13 +45,15 @@ export function runBoundedCommand(options: {
       resolve(result);
       return;
     }
-    const child = spawn(options.command, options.args === undefined ? [] : [...options.args], {
+    const spawnOptions = {
       cwd: options.cwd,
-      shell: options.args === undefined,
       detached: process.platform !== 'win32',
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
       env: options.env,
-    });
+    };
+    const child = options.args === undefined
+      ? spawn(options.command, { ...spawnOptions, shell: true })
+      : spawn(options.command, [...options.args], { ...spawnOptions, shell: false });
     let outputBytes = 0;
     let settled = false;
     let terminating = false;
