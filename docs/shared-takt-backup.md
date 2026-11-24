@@ -28,9 +28,9 @@
 
 - 実行時の状態: `logs/`、`analytics/`、`workspaces/`、`conversations/`、`manager-inbox/`、`daemon.json` など、上の一覧にないもの
 
-シンボリックリンクは、リンクのまま写します。ただし、写す対象（`workflows/` や `pi/` など、上の一覧の1項目）の外を指すリンクがあると、`backup` は失敗します（`EXTERNAL_LINK`）。絶対パスのリンクと、対象そのものがリンクの場合（`workflows` が別の場所へのリンクなど）も同じです。リンク先の中身は保全できず、世代をコピーして確かめるときに、コピーの外のファイルを読み書きすることになるためです。リンクを実ファイルに置き換えてから実行します。managed provider の中にあるリンク（`node_modules/.bin` など）は対象の中を指すので、そのまま写ります。
+シンボリックリンクは、リンクのまま写します。ただし、リンクを実際にたどった先が、写す対象（`workflows/` や `pi/` など、上の一覧の1項目）の外になると、`backup` は失敗します（`EXTERNAL_LINK`）。絶対パスのリンク、たどれないリンク、対象そのものがリンクの場合（`workflows` が別の場所へのリンクなど）も同じです。`verify` も世代の中のリンクを同じ方法で確かめます。リンク先の中身は保全できず、世代をコピーして確かめるときに、コピーの外のファイルを読み書きすることになるためです。リンクを実ファイルに置き換えてから実行します。managed provider の中にあるリンク（`node_modules/.bin` など）は対象の中を指すので、そのまま写ります。
 
-`config.yaml` は必須です。ないと `backup` は失敗します（`CONFIG_MISSING`）。ファイルが1つもない対象があると、`note:` の行で知らせます。
+`config.yaml` は必須です。ない、空、または通常のファイルでないと、`backup` は失敗します（`CONFIG_MISSING`）。ファイルが1つもない対象があると、`note:` の行で知らせます。
 
 ## 保全先
 
@@ -79,10 +79,10 @@ backup ok generation=20261124T180000Z files=18676 bytes=177454071 targets=config
 |---|---|
 | 設定置き場がない | `SOURCE_MISSING` |
 | 設定置き場に、写す対象のファイルが1つもない | `NOTHING_TO_COPY` |
-| `config.yaml` がない | `CONFIG_MISSING` |
-| 写す対象の外を指すシンボリックリンクがある | `EXTERNAL_LINK` |
+| `config.yaml` がない、空、または通常のファイルでない | `CONFIG_MISSING` |
+| たどった先が写す対象の外になるシンボリックリンクがある | `EXTERNAL_LINK` |
 | `latest` の世代でファイルがあった対象が、今回はない、またはファイルが1つもない | `TARGET_DISAPPEARED` |
-| `config.yaml` が0バイト、または `latest` の世代で中身のあったファイルが0バイトになっている | `FILE_EMPTIED` |
+| `latest` の世代で中身のあったファイルが0バイトになっている | `FILE_EMPTIED` |
 | 対象の中に、ファイル・ディレクトリ・リンク以外のものがある | `UNSUPPORTED_FILE` |
 | managed provider の `sdk` リンクが、使える世代を指していない | `MANAGED_PROVIDER_BROKEN` |
 | 写している間に、ファイルや `sdk` リンクが変わった（`takt install` と重なった場合など） | `SOURCE_CHANGED` |
@@ -130,10 +130,14 @@ tail -n 1 <保全先>/backup.log
    cp -a <保全先>/generations/<世代の名前>/data "$RESTORE/takt"
    ```
 
-3. **コピーが世代と同じであることを確かめる。** 先に、コピーの外を指すリンクがないことを確かめます。`backup` はそういうリンクを写しませんが、ここでも確かめます。次のコマンドが何も出力しなければ、絶対パスのリンクはありません。
+3. **コピーが世代と同じであることを確かめる。** 先に、コピーの外へ出るリンクがないことを確かめます。`backup` と `verify` はそういうリンクを通しませんが、ここでも確かめます。次のコマンドは、リンクを実際にたどった先がコピーの外になるものと、たどれないものを表示します。何も出力されなければ合格です。
 
    ```sh
-   find "$RESTORE/takt" -type l -lname '/*'
+   COPY=$(realpath "$RESTORE/takt")
+   find "$COPY" -type l | while IFS= read -r link; do
+     [ -e "$link" ] || { echo "$link"; continue; }
+     case "$(realpath "$link" 2>/dev/null)" in "$COPY"/*) ;; *) echo "$link" ;; esac
+   done
    ```
 
    続けて中身を比べます。何も出力されなければ同じです。認証情報の入るファイルの権限も見ます（`config.yaml` が元と同じ、通常は `-rw-------`）。
