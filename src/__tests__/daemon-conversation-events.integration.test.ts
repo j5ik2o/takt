@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import * as slackPorts from '../features/daemon/slackPorts.js';
 import * as watcherModule from '../features/daemon/watchers/index.js';
+import * as patrolModule from '../features/daemon/patrols.js';
 import { WatchGoalReader, type WatchGoal } from '../features/daemon/watchers/goalReader.js';
 import * as workspaceRegistry from '../infra/config/global/workspaceRegistry.js';
 import { createDaemonDispatcher } from '../features/daemon/dispatcher.js';
@@ -444,6 +445,8 @@ const goalWithQuestion = (questionId: string, body: string, answerText: string):
 
 async function goalAnswerFixture(...goals: Goal[]) {
   vi.spyOn(watcherModule, 'startDaemonWatchers').mockImplementation(() => ({ changed() {}, async drain() {}, async close() {} }));
+  // 起動直後の見回りは保存済みのゴールを対象にターンを積む。回答のターンだけを数えるため止める。
+  vi.spyOn(patrolModule, 'startManagerPatrols').mockImplementation(() => ({ wake() {}, async drain() {}, async close() {} }));
   vi.spyOn(workspaceRegistry, 'findWorkspaceForRepository').mockResolvedValue(undefined);
   vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
   return fixture(async (_directory, repository) => {
