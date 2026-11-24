@@ -51,7 +51,7 @@ function existingRealTaktDirectories(env) {
   } catch {
     // No account database entry (some containers): the inherited HOME is all there is.
   }
-  return candidates.filter((directory) => directory && existsSync(directory)).map((directory) => realpathSync(directory));
+  return candidates.filter((directory) => directory && existsSync(directory)).map((directory) => realpathSync.native(directory));
 }
 
 /** Refuse before the first write when the inherited temporary directory lies inside a real TAKT directory. */
@@ -70,10 +70,11 @@ function assertTemporaryDirectoryOutsideRealTakt(temporaryDirectory, env) {
 export function isolateUserDirectoriesForTestRun(env = process.env) {
   const existing = env[ISOLATION_ROOT_ENV];
   if (existing && existsSync(existing)) return existing;
-  const temporaryDirectory = realpathSync(tmpdir());
+  // native: the OS spelling, so another case of the same name on a case-insensitive filesystem compares equal.
+  const temporaryDirectory = realpathSync.native(tmpdir());
   assertTemporaryDirectoryOutsideRealTakt(temporaryDirectory, env);
   // Keep the prefix short: macOS limits Unix socket paths under TMPDIR to 104 bytes.
-  const root = realpathSync(mkdtempSync(join(temporaryDirectory, 'tt-')));
+  const root = realpathSync.native(mkdtempSync(join(temporaryDirectory, 'tt-')));
   const home = join(root, 'h');
   const directories = {
     HOME: home,

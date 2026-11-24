@@ -8,7 +8,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import {
-  chownSync, existsSync, linkSync, lutimesSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync,
+  chownSync, existsSync, linkSync, lutimesSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync,
   symlinkSync, writeFileSync,
 } from 'node:fs';
 import { rm as rmPromise, writeFile as writeFilePromise } from 'node:fs/promises';
@@ -196,17 +196,29 @@ describe('real user home guard', () => {
       ], { encoding: 'utf-8', env });
     };
 
-    for (const [tmp, extra] of [
+    const linkedHome = join(workspace, 'linked-home');
+    mkdirSync(linkedHome);
+    symlinkSync(fakeRealTakt, join(linkedHome, '.takt'), 'dir');
+    const cases: Array<[string, NodeJS.ProcessEnv]> = [
       [tmpInsideRealTakt, { HOME: fakeRealHome }],
       [linkToRealTakt, { HOME: fakeRealHome }],
       [tmpInsideRealTakt, { TAKT_CONFIG_DIR: fakeRealTakt }],
-    ] as const) {
+      // The TAKT directory itself is a symlink.
+      [tmpInsideRealTakt, { HOME: linkedHome }],
+    ];
+    const misspelledTmp = join(fakeRealHome, '.TAKT', 'tmp');
+    if (existsSync(misspelledTmp)) {
+      // Case-insensitive filesystem: another spelling names the same directory.
+      cases.push([misspelledTmp, { HOME: fakeRealHome }]);
+      cases.push([tmpInsideRealTakt, { TAKT_CONFIG_DIR: join(fakeRealHome, '.TAKT') }]);
+    }
+
+    for (const [tmp, extra] of cases) {
       const result = run(tmp, extra);
-      expect(result.status).not.toBe(0);
+      expect(result.status, `${tmp} ${JSON.stringify(extra)}`).not.toBe(0);
       expect(String(result.stderr)).toContain('Refusing to isolate test user directories');
     }
 
-    expect(readdirSync(tmpInsideRealTakt)).toEqual([]);
     expectFakeRealTaktIntact();
   });
 
