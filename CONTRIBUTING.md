@@ -56,6 +56,8 @@ npm run test:e2e:smoke
 
 GitHub Actions pull requests run the full Heavy IT gate. To run Heavy IT locally, specify the test files. To intentionally run the full suite locally, use `TAKT_ALLOW_FULL_HEAVY_IT=1 npm run test:it:heavy`. The release check also runs dependency sync, build, a packed global install check with npm 10, 11, and 12, a `takt install` check of every managed provider against the real npm registry, lint, unit, integration, and E2E checks.
 
+On a loaded or slow machine, set `TEST_TIME_FACTOR` to stretch the time limits of a test run, for example `TEST_TIME_FACTOR=2 npm test`. It multiplies the test, hook, and teardown timeouts of the Vitest config and the deadline of every `vi.waitFor` in `src/__tests__/`; a timeout passed to one test or hook stays as written. The default is 1, which changes nothing. A value that is not a positive number stops the run with an error, and a `vi.waitFor` that expires at a factor other than 1 names the deadline it wrote and the factor in its error. In a test that owns a time limit, write it as `scaledMs(ms)` from `scripts/test-time-factor.mjs`. The factor does not fix a missing wait or a race; fix those in the test.
+
 See the [E2E testing overview](./docs/testing/e2e.md) for how to run the E2E suites and their prerequisites.
 
 ### 2. Run a TAKT review (recommended)

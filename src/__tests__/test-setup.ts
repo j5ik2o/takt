@@ -2,7 +2,7 @@ import { Console } from 'node:console';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, beforeEach } from 'vitest';
+import { afterEach, beforeEach, vi } from 'vitest';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 import {
   assertIsolatedUserDirectories,
@@ -11,8 +11,16 @@ import {
   protectDirectory,
 } from './helpers/realUserHomeGuard.js';
 import { ORIGINAL_HOME_ENV, ORIGINAL_TAKT_CONFIG_DIR_ENV } from '../../scripts/test-user-isolation.mjs';
+import { testTimeFactor, withScaledWaitFor } from '../../scripts/test-time-factor.mjs';
 
 globalThis.console.Console = Console;
+
+// TEST_TIME_FACTOR also stretches every vi.waitFor deadline, including the 1s
+// default. At the default factor of 1, vi.waitFor is left as Vitest made it.
+// The property is assigned rather than spied: many tests call
+// vi.restoreAllMocks(), which would restore a spy and silently drop the factor
+// for the rest of that file.
+if (testTimeFactor !== 1) vi.waitFor = withScaledWaitFor(vi.waitFor.bind(vi));
 
 const shouldForceNoTty = process.env.TAKT_TEST_FLG_TOUCH_TTY !== '1';
 const TEST_TMPDIR = realpathSync(tmpdir());

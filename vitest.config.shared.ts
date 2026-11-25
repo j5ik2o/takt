@@ -8,6 +8,7 @@ import {
   serialGitTestFiles,
   serialWorkflowTestFiles,
 } from './scripts/test-classification.mjs';
+import { scaledMs } from './scripts/test-time-factor.mjs';
 import { isolateUserDirectoriesForTestRun } from './scripts/test-user-isolation.mjs';
 
 // Runs in the parent Vitest process before any worker exists, so threads,
@@ -58,7 +59,8 @@ export const unitTestExcludes = [...itTestGlobs, ...itSerialTestGlobs];
 
 // Some workflow tests spawn processes and perform fsync-heavy persistence.
 // Keep one sufficiently large ceiling for every platform and runner.
-const testTimeout = 120_000;
+// TEST_TIME_FACTOR stretches every limit here on a loaded or slow machine.
+const testTimeout = scaledMs(120_000);
 
 const require = createRequire(import.meta.url);
 const { installNotificationSilence } = require('./scripts/test-notification-silence.cjs') as typeof import('./scripts/test-notification-silence.cjs');
@@ -85,7 +87,9 @@ export const commonSrcTestConfig = {
   reporters: ['dot'],
   setupFiles: ['scripts/test-notification-silence.cjs', 'src/__tests__/test-setup.ts'],
   testTimeout,
-  teardownTimeout: 5000,
+  // Vitest's default, spelled out so that TEST_TIME_FACTOR reaches it.
+  hookTimeout: scaledMs(10_000),
+  teardownTimeout: scaledMs(5000),
   coverage: {
     provider: 'v8',
     reporter: ['text', 'json', 'html'],
@@ -101,7 +105,7 @@ export const parallelSrcRunnerConfig = {
 } satisfies TestUserConfig;
 
 export const serialSrcRunnerConfig = {
-  testTimeout: 120_000,
+  testTimeout,
   passWithNoTests: true,
   pool: 'threads',
   maxWorkers: 1,

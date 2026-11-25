@@ -807,6 +807,7 @@
     "src/__tests__/tellEvalProvider.test.ts",
     "src/__tests__/test-notification-silence.test.ts",
     "src/__tests__/test-setup.ts",
+    "src/__tests__/test-time-factor.test.ts",
     "src/__tests__/tool-activity-display.test.ts",
     "src/__tests__/tool-activity-history.test.ts",
     "src/__tests__/tool-activity-presentation.test.ts",
