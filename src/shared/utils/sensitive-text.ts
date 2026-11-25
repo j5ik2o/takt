@@ -127,6 +127,7 @@ interface PrefixedValuePattern {
   readonly maskFullMatch?: boolean;
   readonly addCredentialParts?: boolean;
   readonly splitShellDelimiters?: boolean;
+  readonly requiresColon?: boolean;
 }
 
 const VALUE_PATTERNS: readonly PrefixedValuePattern[] = [
@@ -139,9 +140,9 @@ const VALUE_PATTERNS: readonly PrefixedValuePattern[] = [
 ];
 
 const CURL_USER_PATTERNS: readonly PrefixedValuePattern[] = [
-  { prefix: CURL_USER_EQUALS_PREFIX_REGEX, value: CURL_USER_VALUE_STICKY_REGEX, maskFullMatch: true, addCredentialParts: true },
-  { prefix: CURL_USER_SPACE_PREFIX_REGEX, value: CURL_USER_VALUE_STICKY_REGEX, maskFullMatch: true, addCredentialParts: true },
-  { prefix: CURL_SHORT_USER_COMPACT_PREFIX_REGEX, value: CURL_USER_VALUE_STICKY_REGEX, maskFullMatch: true, addCredentialParts: true },
+  { prefix: CURL_USER_EQUALS_PREFIX_REGEX, value: CURL_USER_VALUE_STICKY_REGEX, maskFullMatch: true, addCredentialParts: true, requiresColon: true },
+  { prefix: CURL_USER_SPACE_PREFIX_REGEX, value: CURL_USER_VALUE_STICKY_REGEX, maskFullMatch: true, addCredentialParts: true, requiresColon: true },
+  { prefix: CURL_SHORT_USER_COMPACT_PREFIX_REGEX, value: CURL_USER_VALUE_STICKY_REGEX, maskFullMatch: true, addCredentialParts: true, requiresColon: true },
 ];
 
 const URL_TRAILING_ASSIGNMENT_PATTERNS: readonly PrefixedValuePattern[] = [
@@ -150,7 +151,7 @@ const URL_TRAILING_ASSIGNMENT_PATTERNS: readonly PrefixedValuePattern[] = [
   { prefix: SENSITIVE_HEADER_ASSIGNMENT_COLON_PREFIX_REGEX, value: SENSITIVE_HEADER_ASSIGNMENT_VALUE_STICKY_REGEX },
   { prefix: SENSITIVE_OPTION_PREFIX_REGEX, value: SENSITIVE_OPTION_VALUE_STICKY_REGEX },
   { prefix: SENSITIVE_QUERY_PREFIX_REGEX, value: SENSITIVE_QUERY_VALUE_STICKY_REGEX },
-  { prefix: CURL_USER_EQUALS_PREFIX_REGEX, value: CURL_USER_VALUE_STICKY_REGEX, maskFullMatch: true },
+  { prefix: CURL_USER_EQUALS_PREFIX_REGEX, value: CURL_USER_VALUE_STICKY_REGEX, maskFullMatch: true, requiresColon: true },
 ];
 
 interface HttpHeaderValue {
@@ -185,10 +186,19 @@ interface PrefixedValueMatch {
 
 type ShellHeaderQuote = "'" | '"' | '\\"';
 
+function nextWhitespaceIndex(text: string, from: number): number {
+  for (let i = from; i < text.length; i += 1) {
+    if (/\s/.test(text[i]!)) return i;
+  }
+  return -1;
+}
+
 // Scans a prefix-and-value pattern outside `exclusions` in strictly forward linear time.
 // When a prefix starts inside an excluded range, the scanner skips directly to `exclusion.end`
 // without reading the value part, preventing quadratic rescanning on semicolon-separated lists
 // such as repeated `https://token:p@host;` while still finding trailing assignments.
+// For colon-requiring patterns (e.g. curl `--user=`), monotonically advancing `nextColon` and
+// `nextWhitespace` cursors prevent quadratic rescanning over repeated colon-less candidates.
 function* matchPrefixedOutside(
   text: string,
   pattern: PrefixedValuePattern,
@@ -197,6 +207,8 @@ function* matchPrefixedOutside(
   const prefix = new RegExp(pattern.prefix.source, pattern.prefix.flags);
   const value = new RegExp(pattern.value.source, pattern.value.flags);
   let exclusionIndex = 0;
+  let nextColon = -2;
+  let nextWhitespace = -2;
   for (let prefixMatch = prefix.exec(text); prefixMatch !== null; prefixMatch = prefix.exec(text)) {
     while (exclusionIndex < exclusions.length && exclusions[exclusionIndex]!.end <= prefixMatch.index) {
       exclusionIndex += 1;
@@ -207,6 +219,24 @@ function* matchPrefixedOutside(
       continue;
     }
     const valueStart = prefix.lastIndex;
+    if (pattern.requiresColon) {
+      if (nextColon !== -1 && nextColon < valueStart) {
+        nextColon = text.indexOf(':', valueStart);
+      }
+      if (nextColon === -1) break;
+      const firstChar = text[valueStart];
+      const isQuoted = firstChar === '"' || firstChar === "'"
+        || (firstChar === '\\' && text[valueStart + 1] === '"');
+      if (!isQuoted) {
+        if (nextWhitespace !== -1 && nextWhitespace < valueStart) {
+          nextWhitespace = nextWhitespaceIndex(text, valueStart);
+        }
+        if (nextWhitespace !== -1 && nextWhitespace < nextColon) {
+          if (prefix.lastIndex === prefixMatch.index) prefix.lastIndex += 1;
+          continue;
+        }
+      }
+    }
     value.lastIndex = valueStart;
     const valueMatch = value.exec(text);
     if (valueMatch === null) {

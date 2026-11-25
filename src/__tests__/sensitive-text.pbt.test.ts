@@ -1001,7 +1001,8 @@ describe('sensitiveText property-based tests (fast-check)', () => {
     );
 
     // Input-anchored preservation check: independently specified non-credential text
-    // surrounding credentials must remain intact in the output (catches over-redaction).
+    // surrounding credentials (including delimiter + next field right after a URL or
+    // quoted assignment) must remain intact in the output (catches over-redaction).
     const anchoredArb = fc.record({
       prefix: fc.constantFrom('status=ok ', 'region=ap-northeast-1, ', '["https://:443","ops@example.test"] '),
       credential: fc.oneof(urlCredentialPieceArb, assignmentCredentialPieceArb),
@@ -1014,6 +1015,33 @@ describe('sensitiveText property-based tests (fast-check)', () => {
         const output = sanitizeSensitiveText(input);
         expect(output.startsWith(prefix)).toBe(true);
         expect(output.endsWith(suffix)).toBe(true);
+        for (const secret of credential.secrets) {
+          expect(output).not.toContain(secret);
+        }
+      }),
+      { numRuns: PBT_NUM_RUNS },
+    );
+
+    const trailingFieldArb = fc.record({
+      credential: fc.oneof(
+        urlCredentialPieceArb,
+        fc.record({
+          key: sensitiveKeyArb,
+          quote: fc.constantFrom('"', "'"),
+          val: secretBodyArb,
+        }).map(({ key, quote, val }) => ({
+          fragment: `${key}=${quote}${val}${quote}`,
+          secrets: [val],
+        })),
+      ),
+      trailing: fc.constantFrom(';owner=ops', ',status=ok', '&mode=fast', '|cat'),
+    });
+
+    fc.assert(
+      fc.property(trailingFieldArb, ({ credential, trailing }) => {
+        const input = `${credential.fragment}${trailing}`;
+        const output = sanitizeSensitiveText(input);
+        expect(output.endsWith(trailing)).toBe(true);
         for (const secret of credential.secrets) {
           expect(output).not.toContain(secret);
         }

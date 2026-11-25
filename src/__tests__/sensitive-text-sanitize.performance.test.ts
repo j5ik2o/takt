@@ -1,5 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import { scaledMs } from '../../scripts/test-time-factor.mjs';
 import { Phase1ExecutionLog } from '../core/workflow/phase1-execution-log.js';
 import { collectEmbeddedSensitiveValues } from '../shared/utils/sensitive-text.js';
 import {
@@ -53,6 +54,7 @@ describe('sanitizeSensitiveText performance', () => {
     ['a GitLab token prefix', 'glpat- '],
     ['a Slack app token prefix', 'xapp- '],
     ['semicolon-delimited URLs whose username matches a sensitive key', 'https://token:p@host;'],
+    ['semicolon-delimited colon-less curl --user= options', ';--user=alice'],
   ])('stays linear on repeated %s', (_name, unit) => {
     const elapsed = (bytes: number): number => {
       const input = unit.repeat(Math.ceil(bytes / unit.length));
@@ -77,10 +79,15 @@ describe('sanitizeSensitiveText performance', () => {
     ['a leading-@ password of @-separated words', 'https://user:', '@a'],
     ['a leading-@ password of @ only', 'https://user:@', '@'],
     ['a scheme behind a run of digits and hyphens', '', '1-'],
+    ['repeated colon-less --user= options before a trailing @host', 'https://u:p@host', ';--user=alice'],
   ])('stays linear on a URL followed by %s', (_name, head, unit) => {
     const elapsed = (bytes: number): number => {
       const body = unit.repeat(Math.ceil(bytes / unit.length));
-      const input = head === '' ? `${body}x://user:pass@host` : head + body;
+      const input = head === ''
+        ? `${body}x://user:pass@host`
+        : unit === ';--user=alice'
+          ? `${head}${body}@host`
+          : head + body;
       const start = performance.now();
       sanitizeSensitiveText(input);
       return performance.now() - start;
@@ -188,6 +195,7 @@ describe('sanitizeSensitiveText scaling property-based test (fast-check)', () =>
     'TOKEN=bare_secret_123',
     '["https://:443","ops@example.test"]',
     'Authorization: Bearer tok12345678',
+    '--user=alice',
   );
 
   const perfUnitArb = fc.record({
@@ -243,7 +251,7 @@ describe('sanitizeSensitiveText scaling property-based test (fast-check)', () =>
         // Linear scaling gives ~4x. Allow a 2.5x headroom (10x max) for CI jitter while
         // still failing quadratic regressions (~16x).
         expect(tQuad / tBase).toBeLessThanOrEqual(10);
-        expect(tQuad / repeats).toBeLessThan(500);
+        expect(tQuad / repeats).toBeLessThan(scaledMs(500));
       }),
       { numRuns: perfNumRuns },
     );
