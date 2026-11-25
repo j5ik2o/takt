@@ -21,7 +21,13 @@ vi.mock('../agents/structured-caller/transport.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../agents/agent-usecases.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../agents/agent-usecases.js')>()),
+  executeAgent: vi.fn(),
+}));
+
 import { executeStructuredAgent, type StructuredAgentResponse } from '../agents/structured-caller/transport.js';
+import { executeAgent } from '../agents/agent-usecases.js';
 import * as contextBuilder from '../core/workflow/dynamic-facets/dynamicFacetContextBuilder.js';
 
 const mockedExecuteAgent = vi.mocked(executeStructuredAgent);
@@ -542,6 +548,53 @@ describe('DynamicFacetSelectorCoordinator', () => {
     await expect(
       coordinator.resolveDynamicFacets(step, makeState(), 'task', pool),
     ).rejects.toThrow(/invalid structured output/);
+  });
+
+  it.each([
+    {
+      transport: 'a native structured-output provider',
+      provider: 'mock',
+      payload: { content: '', structuredOutput: { selected_ids: ['coding'], rationale: 'x' } },
+    },
+    {
+      transport: 'a prompt-based JSON provider',
+      provider: 'cursor',
+      payload: { content: JSON.stringify({ selected_ids: ['coding'], rationale: 'x' }) },
+    },
+  ] as const)('names the returned and allowed ids when $transport selects an id outside the pool', async ({ provider, payload }) => {
+    const transport = await vi.importActual<typeof import('../agents/structured-caller/transport.js')>(
+      '../agents/structured-caller/transport.js',
+    );
+    mockedExecuteAgent.mockImplementationOnce(transport.executeStructuredAgent);
+    vi.mocked(executeAgent).mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      timestamp: new Date(),
+      ...payload,
+    });
+    const pool = makePool([
+      { id: 'frontend', description: 'Frontend' },
+      { id: 'backend', description: 'Backend' },
+    ]);
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps({
+      engineOptions: makeOptions({
+        selectorProvider: {
+          provider,
+          providerSource: 'step',
+          model: 'm',
+          modelSource: 'step',
+          providerOptions: {},
+        },
+      } as Partial<WorkflowEngineOptions>),
+    }));
+
+    await expect(
+      coordinator.resolveDynamicFacets(makeStep(), makeState(), 'task', pool),
+    ).rejects.toThrow(
+      'Dynamic facet selector for "fix" returned invalid structured output: '
+      + '$.selected_ids[0] must be equal to one of the allowed values; '
+      + 'returned selected_ids: ["coding"]; allowed candidate ids: ["frontend","backend"]',
+    );
   });
 
   it('propagates run-local selection commit failure and leaves active identity unset', async () => {

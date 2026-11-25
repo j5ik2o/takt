@@ -36,7 +36,13 @@ vi.mock('../core/workflow/instruction/report-reference.js', async (importOrigina
   };
 });
 
+vi.mock('../agents/agent-usecases.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../agents/agent-usecases.js')>()),
+  executeAgent: vi.fn(),
+}));
+
 import { executeStructuredAgent, type StructuredAgentResponse } from '../agents/structured-caller/transport.js';
+import { executeAgent } from '../agents/agent-usecases.js';
 
 const mockedExecuteAgent = vi.mocked(executeStructuredAgent);
 
@@ -309,6 +315,29 @@ describe('DynamicParallelSelectorCoordinator', () => {
       permissionMode: 'full',
       permissionModeSource: 'explicit',
     }));
+  });
+
+  it('names the returned and allowed ids when the selector selects an id outside the pool', async () => {
+    const transport = await vi.importActual<typeof import('../agents/structured-caller/transport.js')>(
+      '../agents/structured-caller/transport.js',
+    );
+    mockedExecuteAgent.mockImplementationOnce(transport.executeStructuredAgent);
+    vi.mocked(executeAgent).mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['security'], rationale: 'x' },
+    });
+    const coordinator = new DynamicParallelSelectorCoordinator(dependencies());
+
+    await expect(
+      coordinator.selectParticipants(dynamicParallelStep(), workflowState(), 'review changes'),
+    ).rejects.toThrow(
+      'Dynamic parallel selector for "reviewers" returned invalid structured output: '
+      + '$.selected_ids[0] must be equal to one of the allowed values; '
+      + 'returned selected_ids: ["security"]; allowed candidate ids: ["frontend","backend"]',
+    );
   });
 
   it('should run the selector when run-local state has no resume selection', async () => {

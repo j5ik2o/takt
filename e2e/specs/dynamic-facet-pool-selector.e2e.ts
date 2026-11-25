@@ -463,7 +463,11 @@ describe('E2E: dynamic facet pool selector (mock)', () => {
       injectProvider: false,
     });
 
-    expect(result.exitCode, `${result.stdout}\n${result.stderr}`).not.toBe(0);
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.exitCode, output).not.toBe(0);
+    expect(output).toContain('Dynamic facet selector for "fix" returned invalid structured output');
+    expect(output).toContain('returned selected_ids: ["unknown-id"]');
+    expect(output).toContain('allowed candidate ids: ["transaction","backward-compatibility"]');
     // The fix agent must never have started.
     const providerStarts = readJsonl(mockCallLogPath)
       .filter((record) => record.event === 'start');
