@@ -263,6 +263,7 @@
     "src/__tests__/failure-dir-chain.integration.test.ts",
     "src/__tests__/file-lock.test.ts",
     "src/__tests__/fix-replan-routing.integration.test.ts",
+    "src/__tests__/fixtures/abort-ignoring-turn-business.ts",
     "src/__tests__/fixtures/pi-live-smoke-deadline.ts",
     "src/__tests__/fixtures/pi-verify-isolation.ts",
     "src/__tests__/fixtures/project-execution-lock-child.ts",
