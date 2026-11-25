@@ -8,7 +8,7 @@ PR: https://github.com/j5ik2o/takt/pull/167 ／ 後追いで書いた設計（�
    - named の呼び出し: `searched` に project・user の候補パス、`excluded` に builtin の候補と外した理由（`enable_builtin_workflows is false` または `disabled_builtins lists "<name>"`、同名の builtin があるか）。
    - scope（`@…`）: 「installed repertoire packages」とだけ書く。path: 基点のディレクトリを書く。
    - 1行にまとめる（terminal 出力は改行を `\n` にエスケープするため）。
-   - 説明は `explainNamedWorkflowLookup`（`workflowLookupDirectories.ts`）が、実際の探索と同じ `getNamedWorkflowLookupDirs` から作る。
+   - 説明は `explainNamedWorkflowLookup`（`workflowLookupDirectories.ts`）が、実際の探索 `getNamedWorkflowLookupDirs` と共通の検索計画 `buildNamedWorkflowLookupPlan` から作る。
 2. **記録の順序**: `prepareWorkflowExecutionBundle` を `beginRun` の後、既存の bootstrap の `try` の中へ移した。失敗は `terminalizeBootstrapFailure` を通り、`meta.json`（`status: failed`、`reason`）と logs が残る。central 実行の資格情報チェック（`assertCentralWorkflowBundleCredentialSafety`）も同じ経路になる。
 3. **doctor の偽陰性**: `validateWorkflowCallContracts` に `onUnresolvedCall` を足した。`inspectWorkflowFile`（doctor と inspect が使う）だけが渡し、named・scope の呼び出しが解決できなければエラーにする。先に `resolveWorkflowCallTarget` を通し、不正な識別子（`a//b`）は既存のメッセージを優先する。
 4. docs（configuration の en/ja/zh-CN、testing/e2e.md）に、外した builtin を `workflow_call` で呼ぶと失敗し、doctor と実行時に理由が出ることを書いた。

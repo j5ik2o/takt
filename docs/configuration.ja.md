@@ -2056,7 +2056,7 @@ others_category_name: "Other Workflows"  # 未分類カテゴリの名前
 - **ネストされたカテゴリ** — カテゴリ名の下にさらにカテゴリを置けます。
 - **Workflow の説明** — `workflows:` に `- 名前: 説明` と書くと選択画面に説明を表示できます。同じワークフローを複数カテゴリに置く場合は説明を揃えてください。
 - **その他カテゴリ** — いずれのカテゴリにも列挙されていない workflow を自動収集（`show_others_category: false` で無効化可能）
-- **ビルトイン workflow フィルタリング** — `enable_builtin_workflows: false` ですべてのビルトインを無効化、または `disabled_builtins: [name1, name2]` で名前指定で無効化。`workflow_call` にも効くため、外したビルトインを呼ぶ（例: `call: development-core`）と失敗します。`takt workflow doctor` と実行時のエラーは、呼び出し名・探したパス・ビルトインを外した理由を示します。`.takt/workflows/` へ写すか、ビルトインを有効に戻してください。
+- **ビルトイン workflow フィルタリング** — `enable_builtin_workflows: false` ですべてのビルトインを無効化、または `disabled_builtins: [name1, name2]` で名前指定で無効化。`workflow_call` にも効くため、外したビルトインを呼ぶ（例: `call: development-core`）と失敗します。`takt workflow doctor` と実行時のエラーは、呼び出し名・探したパス・ビルトインを外した理由を示します。対象 workflow（`enable_builtin_workflows: false` の場合は、それが呼び出す依存ビルトイン workflow も依存関係に沿って再帰的に）を `.takt/workflows/` へコピーするか、ビルトインを有効に戻してください。
 
 ### カテゴリのリセット
 

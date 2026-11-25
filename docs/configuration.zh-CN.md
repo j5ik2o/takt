@@ -1553,7 +1553,7 @@ others_category_name: "Other Workflows"
 - **每类 workflow 列表**：`workflows:` 保存该分类显示的 workflow 名称。
 - **Workflow 描述**：把 `workflows:` 条目写成 `- 名称: 描述` 即可在选择项标签中追加简短说明（纯字符串条目仍然可用）。同一 workflow 列入多个分类时，每处都写相同的描述；同一文件内为同名 workflow 写不同描述会报 validation error。用户 overlay 按 workflow 名称覆盖 builtin，也可以添加仅用户存在的名称。
 - **Others 分类**：收集未列入任何分类的 workflow，可用 `show_others_category: false` 关闭。
-- **Builtin 过滤**：用 `enable_builtin_workflows: false` 关闭全部 builtin，或用 `disabled_builtins: [name1, name2]` 关闭指定名称。这也作用于 `workflow_call`：调用被排除的 builtin（例如 `call: development-core`）会失败。`takt workflow doctor` 和运行时错误会给出调用名、查找过的路径以及排除 builtin 的原因；请把该 workflow 复制到 `.takt/workflows/`，或重新启用 builtin。
+- **Builtin 过滤**：用 `enable_builtin_workflows: false` 关闭全部 builtin，或用 `disabled_builtins: [name1, name2]` 关闭指定名称。这也作用于 `workflow_call`：调用被排除的 builtin（例如 `call: development-core`）会失败。`takt workflow doctor` 和运行时错误会给出调用名、查找过的路径以及排除 builtin 的原因；请把该 workflow（当 `enable_builtin_workflows: false` 时，还包括它调用的依赖 builtin workflow，按依赖关系递归配置）复制到 `.takt/workflows/`，或重新启用 builtin。
 
 ### 重置分类
 

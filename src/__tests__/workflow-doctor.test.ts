@@ -2804,11 +2804,24 @@ describe('named workflow lookup explanation agrees with the lookup', () => {
     names.flatMap((name) => projectCopyValues.map((projectCopy) => ({ enable, listed, name, projectCopy })))));
 
   let projectDir: string;
+  const previousConfigDir = process.env.TAKT_CONFIG_DIR;
   beforeEach(() => {
     projectDir = mkdtempSync(join(tmpdir(), 'takt-lookup-explanation-'));
+    process.env.TAKT_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'takt-lookup-explanation-global-'));
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
   });
   afterEach(() => {
     rmSync(projectDir, { recursive: true, force: true });
+    if (process.env.TAKT_CONFIG_DIR) {
+      rmSync(process.env.TAKT_CONFIG_DIR, { recursive: true, force: true });
+    }
+    if (previousConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = previousConfigDir;
+    }
+    invalidateGlobalConfigCache();
     invalidateAllResolvedConfigCache();
   });
 

@@ -73,9 +73,21 @@ export function getWorkflowDirs(cwd: string): WorkflowLookupDir[] {
   return dirs;
 }
 
-export function getNamedWorkflowLookupDirs(projectCwd: string): WorkflowLookupDir[] {
+type BuiltinExclusionReason =
+  | { readonly kind: 'builtins_disabled' }
+  | { readonly kind: 'builtin_listed_in_disabled'; readonly name: string };
+
+interface NamedWorkflowLookupPlan {
+  readonly lookupDirs: WorkflowLookupDir[];
+  readonly builtinDir: string;
+  readonly builtinExclusion?: BuiltinExclusionReason;
+}
+
+function buildNamedWorkflowLookupPlan(projectCwd: string, name?: string): NamedWorkflowLookupPlan {
   const config = resolveWorkflowConfigValues(projectCwd, ['enableBuiltinWorkflows', 'language', 'disabledBuiltins']);
-  const dirs: WorkflowLookupDir[] = [
+  const builtinDir = getBuiltinWorkflowsDir(config.language);
+  const disabledBuiltins = config.disabledBuiltins ?? [];
+  const lookupDirs: WorkflowLookupDir[] = [
     {
       dir: resolve(getProjectWorkflowsDir(projectCwd)),
       source: 'project',
@@ -83,15 +95,32 @@ export function getNamedWorkflowLookupDirs(projectCwd: string): WorkflowLookupDi
     { dir: getGlobalWorkflowsDir(), source: 'user' },
   ];
 
-  if (config.enableBuiltinWorkflows !== false) {
-    dirs.push({
-      dir: getBuiltinWorkflowsDir(config.language),
-      disabled: config.disabledBuiltins ?? [],
-      source: 'builtin',
-    });
+  if (config.enableBuiltinWorkflows === false) {
+    return {
+      lookupDirs,
+      builtinDir,
+      builtinExclusion: { kind: 'builtins_disabled' },
+    };
   }
 
-  return dirs;
+  if (name !== undefined && disabledBuiltins.includes(name)) {
+    return {
+      lookupDirs,
+      builtinDir,
+      builtinExclusion: { kind: 'builtin_listed_in_disabled', name },
+    };
+  }
+
+  lookupDirs.push({
+    dir: builtinDir,
+    disabled: disabledBuiltins,
+    source: 'builtin',
+  });
+  return { lookupDirs, builtinDir };
+}
+
+export function getNamedWorkflowLookupDirs(projectCwd: string): WorkflowLookupDir[] {
+  return buildNamedWorkflowLookupPlan(projectCwd).lookupDirs;
 }
 
 export interface NamedWorkflowLookupExplanation {
@@ -101,18 +130,17 @@ export interface NamedWorkflowLookupExplanation {
 
 /** Explains where a named workflow lookup looked and which candidates the configuration excluded. */
 export function explainNamedWorkflowLookup(name: string, projectCwd: string): NamedWorkflowLookupExplanation {
-  const config = resolveWorkflowConfigValues(projectCwd, ['enableBuiltinWorkflows', 'language', 'disabledBuiltins']);
-  const searched = getNamedWorkflowLookupDirs(projectCwd)
-    .filter(({ source, disabled }) => !(source === 'builtin' && disabled?.includes(name)))
-    .map(({ dir, source }) => `${source}: ${resolve(dir, `${name}.yaml`)} (or .yml)`);
-  const builtinPath = resolve(getBuiltinWorkflowsDir(config.language), `${name}.yaml`);
-  const builtinExists = resolveWorkflowFile(getBuiltinWorkflowsDir(config.language), name) !== null;
-  const builtinNote = builtinExists ? 'a builtin workflow with this name exists' : 'no builtin workflow has this name';
+  const plan = buildNamedWorkflowLookupPlan(projectCwd, name);
+  const searched = plan.lookupDirs.map(({ dir, source }) => `${source}: ${resolve(dir, `${name}.yaml`)} (or .yml)`);
   const excluded: string[] = [];
-  if (config.enableBuiltinWorkflows === false) {
-    excluded.push(`builtin: ${builtinPath} (excluded because enable_builtin_workflows is false; ${builtinNote})`);
-  } else if ((config.disabledBuiltins ?? []).includes(name)) {
-    excluded.push(`builtin: ${builtinPath} (excluded because disabled_builtins lists "${name}"; ${builtinNote})`);
+  if (plan.builtinExclusion !== undefined) {
+    const builtinPath = resolve(plan.builtinDir, `${name}.yaml`);
+    const builtinExists = resolveWorkflowFile(plan.builtinDir, name) !== null;
+    const builtinNote = builtinExists ? 'a builtin workflow with this name exists' : 'no builtin workflow has this name';
+    const reason = plan.builtinExclusion.kind === 'builtins_disabled'
+      ? 'enable_builtin_workflows is false'
+      : `disabled_builtins lists "${plan.builtinExclusion.name}"`;
+    excluded.push(`builtin: ${builtinPath} (excluded because ${reason}; ${builtinNote})`);
   }
   return { searched, excluded };
 }
