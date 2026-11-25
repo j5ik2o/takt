@@ -322,7 +322,7 @@ function collectUrlUserinfoRanges(
 
 function* httpHeaderValues(
   text: string,
-  exclusions: readonly SensitiveRange[] = collectQuotedAssignmentRanges(text).exclusions,
+  exclusions: readonly SensitiveRange[],
 ): Generator<HttpHeaderValue> {
   const headers = new RegExp(HTTP_HEADER_PREFIX_REGEX.source, HTTP_HEADER_PREFIX_REGEX.flags);
   let exclusionIndex = 0;
@@ -483,7 +483,7 @@ export function collectEmbeddedSensitiveValues(text: string, values: Set<string>
 function collectHttpHeaderSensitiveValues(
   text: string,
   values: Set<string>,
-  exclusions?: readonly SensitiveRange[],
+  exclusions: readonly SensitiveRange[],
 ): void {
   for (const { start, end } of httpHeaderValues(text, exclusions)) {
     const value = text.slice(start, end);

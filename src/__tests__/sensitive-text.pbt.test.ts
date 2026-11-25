@@ -953,7 +953,8 @@ describe('sensitiveText property-based tests (fast-check)', () => {
     );
   });
 
-  // Property 4: Characters outside merged redaction ranges are untouched byte-for-byte
+  // Property 4: Characters outside merged redaction ranges are untouched byte-for-byte,
+  // and explicitly preserved non-credential segments around credentials survive intact.
   it(`Property 4 (outside ranges unchanged): preserves every character outside merged redaction spans (${PBT_NUM_RUNS} runs)`, () => {
     const knownSecretArb = fc.array(
       fc.stringMatching(/^[A-Za-z0-9_-]{4,12}$/),
@@ -988,6 +989,27 @@ describe('sensitiveText property-based tests (fast-check)', () => {
         }
         const trailingSlice = input.slice(cursor);
         expect(output.slice(outCursor)).toBe(trailingSlice);
+      }),
+      { numRuns: PBT_NUM_RUNS },
+    );
+
+    // Input-anchored preservation check: independently specified non-credential text
+    // surrounding credentials must remain intact in the output (catches over-redaction).
+    const anchoredArb = fc.record({
+      prefix: fc.constantFrom('status=ok ', 'region=ap-northeast-1, ', '["https://:443","ops@example.test"] '),
+      credential: fc.oneof(urlCredentialPieceArb, assignmentCredentialPieceArb),
+      suffix: fc.constantFrom(' done=true', ', note="plain value"', ' ["https://host:443","admin@example.test"]'),
+    });
+
+    fc.assert(
+      fc.property(anchoredArb, ({ prefix, credential, suffix }) => {
+        const input = `${prefix}${credential.fragment}${suffix}`;
+        const output = sanitizeSensitiveText(input);
+        expect(output.startsWith(prefix)).toBe(true);
+        expect(output.endsWith(suffix)).toBe(true);
+        for (const secret of credential.secrets) {
+          expect(output).not.toContain(secret);
+        }
       }),
       { numRuns: PBT_NUM_RUNS },
     );

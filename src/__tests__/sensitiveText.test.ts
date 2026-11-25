@@ -108,6 +108,8 @@ describe('sensitiveText', () => {
     ['uppercase assignment inside URL password', 'https://alice:LEFT_SECRET;TOKEN=RIGHT_SECRET@host', 'https://[REDACTED]@host', ['LEFT_SECRET', 'RIGHT_SECRET']],
     ['assignment inside URL password followed by second assignment', 'https://alice:LEFT;token=RIGHT@host;TOKEN2=a@SECRET', 'https://[REDACTED]@host;TOKEN2=[REDACTED]', ['LEFT', 'RIGHT', 'SECRET']],
     ['URL followed immediately by @token=@SECRET', 'https://u:p@token=@SECRET/path', 'https://[REDACTED]@token=[REDACTED]', ['SECRET']],
+    ['URL password containing @ followed immediately by token=SECRET', 'https://user:p1@token=p2@host', 'https://[REDACTED]@token=[REDACTED]', ['p1', 'p2']],
+    ['URL password with multiple @ before token=SECRET', 'https://user:p1@mid@token=p2@host', 'https://[REDACTED]@token=[REDACTED]', ['p1', 'mid', 'p2']],
     ['username matching a sensitive key name', 'https://token:SECRET@host', 'https://[REDACTED]@host', ['SECRET']],
     ['ambiguous leading-@ with trailing assignment merges union without leaking', 'https://alice:@LEFT;token=RIGHT@host', 'https://[REDACTED]', ['LEFT', 'RIGHT']],
     ['ambiguous empty-password URL with trailing assignment merges union without leaking', 'https://user:@host;TOKEN=left@RIGHT_SECRET', 'https://[REDACTED]', ['RIGHT_SECRET']],
