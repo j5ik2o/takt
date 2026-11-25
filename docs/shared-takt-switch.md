@@ -121,3 +121,53 @@ daemon を必要とするコマンドは、起動中の daemon を次のよう�
 
 - **フックだけを止める。** `.takt/config.yaml` から `task_finish_hook` を消します。次に終わるタスクから呼ばれなくなります。起動し直しは要りません。保存済みのタスクの状態は、フックの有無で変わらないので、直すものはありません。
 - **版ごと戻す。** 先に、`task_finish_hook` を書いたすべてのプロジェクトからこのキーを消します。残したまま古い版へ戻すと、古い版がそのプロジェクトの設定を読めません。その後、上の「戻し方」の手順でリンクを戻します。
+
+## プロジェクトで共有 TAKT を使うように固定する
+
+mise で npm の takt（例: 0.77.0）を入れていると、`PATH` の `takt` はそちらになります。上流の版は、フォークにしかない設定キー（`task_finish_hook` など）を知りません。そのキーを書いたプロジェクトでは、`takt` が次のエラーで止まります。
+
+```text
+Configuration error: invalid (root) in <project>/.takt/config.yaml: Unrecognized key: "task_finish_hook"
+```
+
+フォークの版は、このエラーの後ろに `takt <版> does not support key "task_finish_hook"` と、動いている版を付けて出します。上流の版の文言は変わりません。
+
+フォークのキーを使うプロジェクトでは、そのプロジェクトの中でだけ `takt` が共有 TAKT（`~/local/takt-custom`）を指すようにします。mise の npm の takt は消さず、ほかのプロジェクトではそのまま使います。
+
+### mise.toml の書き方
+
+プロジェクトの根に `mise.toml` を置き、`PATH` の先頭に共有 TAKT の `bin` を足します。
+
+```toml
+[env]
+_.path = ["{{env.HOME}}/local/takt-custom/bin"]
+```
+
+初めて置いたときは、そのディレクトリで `mise trust` を実行します。
+
+- **`mise activate` で `PATH` を作るシェルでだけ効きます。** `_.path` は mise が組み立てる `PATH` の先頭に入り、npm の takt より先に見つかります。`mise exec -- takt ...` でも同じです。
+- **shims だけを `PATH` に入れているシェルでは効きません。** `~/.local/share/mise/shims/takt` は npm の takt の shim で、`_.path` があっても npm の takt を起動します。エージェントや CI のシェルはこの形のことがあります。そのため、次の確認を run の前に行います。
+- **リンクを指します。** `_.path` には版ごとのディレクトリではなく `~/local/takt-custom/bin` を書きます。切替でリンクの向き先が変わると、プロジェクトの設定を変えずに新しい版になります。
+
+### run の前の確認
+
+`scripts/check-takt-runtime.sh` で、次の3つを確かめます。どれかが合わないと `NG:` の行を出し、終了コード 1 で終わります。
+
+1. `command -v takt` が、リンクを解決した後で `~/local/takt-custom/bin/takt` と同じファイルを指すこと。
+2. 共有 TAKT のビルドが、プロジェクトの使う設定キーを知っていること（`dist/core/models/config-schemas.js` にそのキーがあること）。キーは `--key` で指定し、繰り返して複数指定できます。省略すると `task_finish_hook` を調べます。
+3. `DEPLOYED_FROM_COMMIT` が、版のディレクトリ名（`takt-custom-<短縮SHA>`）と合うこと。`--repo <フォークのチェックアウト> --contains <コミット>` を付けると、配置した版がそのコミットを含むことも確かめます。
+
+```sh
+# プロジェクトのディレクトリで実行する
+/path/to/takt/scripts/check-takt-runtime.sh --key task_finish_hook
+# 終了フックのコミットを含むことも確かめる
+/path/to/takt/scripts/check-takt-runtime.sh --repo /path/to/takt --contains b1acb58ac
+```
+
+`takt --version` では見分けられません。フォークの版は、元にした上流の版番号（例: `0.76.1`）をそのまま名乗ります。
+
+共有 TAKT の場所が違うときは `--root <ディレクトリ>` で渡します。
+
+### 共有 TAKT を更新したとき
+
+新しい版への切替は、上の「手順」のとおり版のディレクトリを作ってリンクを張り替えます。プロジェクトの `mise.toml` は変えません。張り替えた後、キーを使う各プロジェクトで `check-takt-runtime.sh` を実行し、3つとも `ok:` になることを確かめます。新しい版が、プロジェクトの使うキーを持たないことがあります（そのキーを足す前のコミットから作った版など）。その場合は 2 番目の確認が `NG:` になるので、キーを持つ版へ戻します。
