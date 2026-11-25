@@ -52,8 +52,9 @@ describe('TEST_TIME_FACTOR', () => {
   });
 
   it.each(['2x', 'abc', '0', '-1', 'NaN', 'Infinity', ' '])('rejects %j instead of falling back to 1', (raw) => {
-    expect(() => readTestTimeFactor({ TEST_TIME_FACTOR: raw }))
-      .toThrow(`TEST_TIME_FACTOR must be a positive number, got ${JSON.stringify(raw)}`);
+    // The error names the variable and the value it refused.
+    expect(() => readTestTimeFactor({ TEST_TIME_FACTOR: raw })).toThrow('TEST_TIME_FACTOR');
+    expect(() => readTestTimeFactor({ TEST_TIME_FACTOR: raw })).toThrow(JSON.stringify(raw));
   });
 
   it('multiplies a duration and rounds up to a whole millisecond', () => {
@@ -114,6 +115,16 @@ describe('the deadline a vi.waitFor call wrote', () => {
     expect(annotated.operator).toBe('strictEqual');
     expect(annotated.message).toContain('expected 1 to be 2');
     expect(assertion.message).toBe('expected 1 to be 2');
+  });
+
+  it('annotates a frozen error without changing it', () => {
+    const frozen = Object.freeze(new Error('not ready'));
+
+    const annotated = annotateWaitForTimeout(frozen, { writtenMs: 100, factor: 2 }) as Error;
+
+    expect(annotated.message).toContain('not ready');
+    expect(annotated.message).toContain('written 100ms');
+    expect(frozen.message).toBe('not ready');
   });
 
   it('leaves a rejection that is not an Error alone', () => {

@@ -38,7 +38,7 @@ export function scaledMs(ms, factor = testTimeFactor) {
  * polling interval stays as written. A factor of 1 returns the argument itself,
  * so the call reaches Vitest exactly as the test wrote it.
  */
-export function scaleWaitForOptions(options, factor = testTimeFactor) {
+export function scaleWaitForOptions(options, factor) {
   if (factor === 1) return options;
   if (typeof options === 'number') return scaledMs(options, factor);
   return { ...options, timeout: scaledMs(options?.timeout ?? WAIT_FOR_DEFAULT_TIMEOUT_MS, factor) };
@@ -71,12 +71,14 @@ export function annotateWaitForTimeout(error, { writtenMs, factor }) {
   if (!(error instanceof Error)) return error;
   // Node keeps `stack` as an own accessor that reads the original error, so the
   // copy takes the frames as text instead of taking that accessor.
+  // The copy defines its own message and stack, so a frozen error still gets one.
+  const message = `${error.message}${waitForExpirySuffix({ writtenMs, factor })}`;
+  const ownText = (value) => ({ value, writable: true, enumerable: false, configurable: true });
   const descriptors = Object.getOwnPropertyDescriptors(error);
   delete descriptors.stack;
-  const annotated = Object.create(Object.getPrototypeOf(error), descriptors);
-  annotated.message = `${error.message}${waitForExpirySuffix({ writtenMs, factor })}`;
-  if (error.stack !== undefined) annotated.stack = error.stack.replace(error.message, annotated.message);
-  return annotated;
+  descriptors.message = ownText(message);
+  if (error.stack !== undefined) descriptors.stack = ownText(error.stack.replace(error.message, message));
+  return Object.create(Object.getPrototypeOf(error), descriptors);
 }
 
 /** Wrap a `vi.waitFor` implementation so every call's deadline is scaled. */

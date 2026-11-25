@@ -4,7 +4,7 @@ export type WaitFor = <T>(callback: () => T | Promise<T>, options?: WaitForOptio
 export function readTestTimeFactor(env?: Record<string, string | undefined>): number;
 export const testTimeFactor: number;
 export function scaledMs(ms: number, factor?: number): number;
-export function scaleWaitForOptions(options: WaitForOptions | undefined, factor?: number): WaitForOptions | undefined;
+export function scaleWaitForOptions(options: WaitForOptions | undefined, factor: number): WaitForOptions | undefined;
 export function writtenWaitForTimeoutMs(options: WaitForOptions | undefined): number;
 export function waitForExpirySuffix(details: { writtenMs: number; factor: number }): string;
 export function annotateWaitForTimeout(
