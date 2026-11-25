@@ -236,4 +236,23 @@ describe('Phase1ExecutionLog', () => {
     expect(entries.at(-1).kind).toBe('attempt_result');
   });
 
+  it.each([
+    ['a 257-character password containing @', `pa55@${'a'.repeat(244)}TAIL_257`, 'TAIL_257'],
+    ['a 257-character password starting with @', `@${'b'.repeat(248)}TAIL_AT1`, 'TAIL_AT1'],
+    ['a 64KiB @-containing password', `pa55@${'x@'.repeat(32 * 1024)}TAIL_64K`, 'TAIL_64K'],
+  ])('masks a split URL with %s and its later echo across text chunks', (_name, password, marker) => {
+    const url = `https://u:${password}@host/repo.git`;
+    const splitAt = Math.floor(url.length / 2);
+    const log = new Phase1ExecutionLog();
+    log.recordEvent({ type: 'text', data: { text: `clone ${url.slice(0, splitAt)}` } });
+    log.recordEvent({ type: 'text', data: { text: `${url.slice(splitAt)} failed\nechoed ${password}` } });
+
+    const reportInput = log.toReportInput();
+    expect(reportInput).not.toContain(marker);
+    expect(reportInput).not.toContain('aaaaaaa');
+    expect(reportInput).not.toContain('bbbbbbb');
+    expect(reportInput).not.toContain('x@x@x@');
+    expect(reportInput).toContain('[REDACTED]');
+  });
+
 });

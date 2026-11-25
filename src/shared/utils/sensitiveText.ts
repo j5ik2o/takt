@@ -6,6 +6,7 @@ export {
   BoundedSensitiveValues,
   createBoundedSensitiveValues,
   MAX_INSPECTED_BYTES_PER_SOURCE,
+  MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES,
   MAX_TRACKED_SENSITIVE_VALUE_BYTES,
   MAX_TRACKED_SENSITIVE_VALUES,
   sanitizeSensitiveTextWithKnownValues,

@@ -3,7 +3,13 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { StreamEvent } from '../../shared/types/provider.js';
 import { normalizeProviderEventValue } from '../../shared/utils/logMetadata.js';
-import { collectEmbeddedSensitiveValues, REDACTED_VALUE } from '../../shared/utils/sensitive-text.js';
+import {
+  collectEmbeddedSensitiveValues,
+  REDACTED_VALUE,
+  sensitiveTextRanges,
+  substringSensitiveRanges,
+} from '../../shared/utils/sensitive-text.js';
+import { MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES } from '../../shared/utils/sensitive-value.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
 import type { PhasePromptParts } from './types.js';
 
@@ -27,11 +33,24 @@ interface SensitiveMatchNode {
 
 function maskTextFragments(chunks: readonly string[]): string[] {
   const fullText = chunks.join('');
+  const patternRanges = sensitiveTextRanges(fullText, new Set());
   const sensitiveValues = new Set<string>();
   collectEmbeddedSensitiveValues(fullText, sensitiveValues);
-  if (sensitiveValues.size === 0) return [...chunks];
+  if (patternRanges.length === 0 && sensitiveValues.size === 0) return [...chunks];
+  const maskChanges = new Int32Array(fullText.length + 1);
+  const markMask = (start: number, end: number): void => {
+    if (end <= start) return;
+    maskChanges[start] = maskChanges[start]! + 1;
+    maskChanges[end] = maskChanges[end]! - 1;
+  };
+  for (const range of patternRanges) markMask(range.start, range.end);
   const nodes: SensitiveMatchNode[] = [{ next: new Map(), failure: 0, longest: 0, shortLengths: 0 }];
+  const longValues: string[] = [];
   for (const value of sensitiveValues) {
+    if (value.length > MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES) {
+      longValues.push(value);
+      continue;
+    }
     let state = 0;
     for (let index = 0; index < value.length; index++) {
       const character = value[index]!;
@@ -46,37 +65,35 @@ function maskTextFragments(chunks: readonly string[]): string[] {
     if (value.length >= 4) nodes[state]!.longest = Math.max(nodes[state]!.longest, value.length);
     else nodes[state]!.shortLengths |= 1 << value.length;
   }
-  const queue = [...nodes[0]!.next.values()];
-  for (let position = 0; position < queue.length; position++) {
-    const state = queue[position]!;
-    for (const [character, next] of nodes[state]!.next) {
-      let failure = nodes[state]!.failure;
-      while (failure !== 0 && !nodes[failure]!.next.has(character)) failure = nodes[failure]!.failure;
-      nodes[next]!.failure = nodes[failure]!.next.get(character) ?? 0;
-      nodes[next]!.longest = Math.max(nodes[next]!.longest, nodes[nodes[next]!.failure]!.longest);
-      nodes[next]!.shortLengths |= nodes[nodes[next]!.failure]!.shortLengths;
-      queue.push(next);
+  for (const range of substringSensitiveRanges(fullText, longValues)) markMask(range.start, range.end);
+  if (nodes.length > 1) {
+    const queue = [...nodes[0]!.next.values()];
+    for (let position = 0; position < queue.length; position++) {
+      const state = queue[position]!;
+      for (const [character, next] of nodes[state]!.next) {
+        let failure = nodes[state]!.failure;
+        while (failure !== 0 && !nodes[failure]!.next.has(character)) failure = nodes[failure]!.failure;
+        nodes[next]!.failure = nodes[failure]!.next.get(character) ?? 0;
+        nodes[next]!.longest = Math.max(nodes[next]!.longest, nodes[nodes[next]!.failure]!.longest);
+        nodes[next]!.shortLengths |= nodes[nodes[next]!.failure]!.shortLengths;
+        queue.push(next);
+      }
     }
-  }
-  const maskChanges = new Int32Array(fullText.length + 1);
-  const markMask = (start: number, end: number): void => {
-    maskChanges[start] = maskChanges[start]! + 1;
-    maskChanges[end] = maskChanges[end]! - 1;
-  };
-  let state = 0;
-  for (let index = 0; index < fullText.length; index++) {
-    const character = fullText[index]!;
-    while (state !== 0 && !nodes[state]!.next.has(character)) state = nodes[state]!.failure;
-    state = nodes[state]!.next.get(character) ?? 0;
-    const match = nodes[state]!;
-    if (match.longest > 0) markMask(index + 1 - match.longest, index + 1);
-    for (let length = 1; length <= 3; length++) {
-      if ((match.shortLengths & (1 << length)) === 0) continue;
-      const before = fullText[index - length];
-      const after = fullText[index + 1];
-      if ((before === undefined || !/[\p{L}\p{N}_]/u.test(before))
-        && (after === undefined || !/[\p{L}\p{N}_]/u.test(after))) {
-        markMask(index + 1 - length, index + 1);
+    let state = 0;
+    for (let index = 0; index < fullText.length; index++) {
+      const character = fullText[index]!;
+      while (state !== 0 && !nodes[state]!.next.has(character)) state = nodes[state]!.failure;
+      state = nodes[state]!.next.get(character) ?? 0;
+      const match = nodes[state]!;
+      if (match.longest > 0) markMask(index + 1 - match.longest, index + 1);
+      for (let length = 1; length <= 3; length++) {
+        if ((match.shortLengths & (1 << length)) === 0) continue;
+        const before = fullText[index - length];
+        const after = fullText[index + 1];
+        if ((before === undefined || !/[\p{L}\p{N}_]/u.test(before))
+          && (after === undefined || !/[\p{L}\p{N}_]/u.test(after))) {
+          markMask(index + 1 - length, index + 1);
+        }
       }
     }
   }
