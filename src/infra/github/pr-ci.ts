@@ -8,6 +8,15 @@ import { assertGitHubPullRequestTarget, type GitHubPullRequestTarget } from './p
 const FAILED_LOG_MAX_BUFFER = 64 * 1024 * 1024;
 const MAX_FAILED_LOG_CHARS = 200_000;
 
+const RunJobStepSchema = z.object({
+  name: z.string().optional(),
+  status: z.string().optional(),
+  conclusion: z.string().nullable().optional(),
+  number: z.number().int().optional(),
+  startedAt: z.string().nullable().optional(),
+  completedAt: z.string().nullable().optional(),
+});
+
 const RunSchema = z.object({
   databaseId: z.number().int().positive(),
   url: z.string().url(),
@@ -18,10 +27,64 @@ const RunSchema = z.object({
   jobs: z.array(z.object({
     databaseId: z.number().int().positive(), name: z.string(), url: z.string().url(),
     status: z.string(), conclusion: z.string().nullable(),
-    steps: z.array(z.unknown()).optional(),
+    startedAt: z.string().nullable().optional(),
+    completedAt: z.string().nullable().optional(),
+    steps: z.array(RunJobStepSchema).optional(),
   })),
 });
 type CiRun = z.infer<typeof RunSchema>;
+type CiRunJob = CiRun['jobs'][number];
+
+const CheckRunAnnotationSchema = z.object({
+  path: z.string().optional(),
+  annotation_level: z.string().optional(),
+  message: z.string(),
+});
+type CheckRunAnnotation = z.infer<typeof CheckRunAnnotationSchema>;
+// `gh api --paginate --slurp` returns one array per page.
+const CheckRunAnnotationPagesSchema = z.array(z.array(CheckRunAnnotationSchema)).transform((pages) => pages.flat());
+
+const NON_FAILING_CANCELLED_STEP_CONCLUSIONS = new Set(['success', 'cancelled', 'skipped', 'neutral']);
+const FAIL_FAST_ANNOTATION_PATTERN = /^The strategy configuration was canceled because "[^"]+" failed\.?$/;
+
+function hasFailFastCancellationAnnotation(annotations: readonly CheckRunAnnotation[]): boolean {
+  return annotations.some((annotation) =>
+    annotation.path === '.github'
+    && annotation.annotation_level === 'failure'
+    && FAIL_FAST_ANNOTATION_PATTERN.test(annotation.message.trim()),
+  );
+}
+
+function parseTimestamp(value: string | null | undefined): number | undefined {
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/**
+ * Returns sibling job IDs in the same failed run whose `failure` completion fell within
+ * this cancelled job's execution window (fail-fast cancellation candidate).
+ * Returns empty when chronology or step state cannot be established from the run JSON.
+ */
+function siblingFailuresDuringCancelledJob(run: CiRun, job: CiRunJob): number[] {
+  if (run.conclusion !== 'failure') return [];
+  if (job.status !== 'completed' || job.conclusion !== 'cancelled') return [];
+  if (!job.steps || job.steps.length === 0) return [];
+  if (!job.steps.every((step) => step.conclusion != null && NON_FAILING_CANCELLED_STEP_CONCLUSIONS.has(step.conclusion))) {
+    return [];
+  }
+  const jobStartedAt = parseTimestamp(job.startedAt);
+  const jobCompletedAt = parseTimestamp(job.completedAt);
+  if (jobStartedAt === undefined || jobCompletedAt === undefined || jobCompletedAt < jobStartedAt) return [];
+  return run.jobs
+    .filter((sibling) => {
+      if (sibling.databaseId === job.databaseId) return false;
+      if (sibling.status !== 'completed' || sibling.conclusion !== 'failure') return false;
+      const siblingCompletedAt = parseTimestamp(sibling.completedAt);
+      return siblingCompletedAt !== undefined && jobStartedAt <= siblingCompletedAt && siblingCompletedAt <= jobCompletedAt;
+    })
+    .map((sibling) => sibling.databaseId);
+}
 
 const PrHeadSchema = z.object({
   number: z.number().int().positive(),
@@ -33,8 +96,24 @@ export function actionsReference(value: string) {
   const match = /^\/([^/]+)\/([^/]+)\/actions\/runs\/(\d+)(?:\/attempts\/\d+)?(?:\/(jobs?)\/(\d+))?\/?$/.exec(url.pathname);
   if (url.protocol !== 'https:' || !match) throw new Error('Unsupported Actions check URL');
   return { id: Number(match[3]), repository: `${url.hostname}/${match[1]}/${match[2]}`,
+    hostname: url.hostname, owner: match[1]!, repo: match[2]!,
     // Only `/job/<id>` carries the job's database ID; the number in `/jobs/<number>` is a different identifier.
     jobId: match[4] === 'job' ? Number(match[5]) : undefined };
+}
+
+async function readJobAnnotations(
+  hostname: string,
+  owner: string,
+  repo: string,
+  jobId: number,
+  cwd: string,
+  options?: PrStatusFetchOptions,
+): Promise<CheckRunAnnotation[]> {
+  return CheckRunAnnotationPagesSchema.parse(JSON.parse(await runPrCommand([
+    'api', '--paginate', '--slurp',
+    `repos/${owner}/${repo}/check-runs/${jobId}/annotations?per_page=100`,
+    '--hostname', hostname,
+  ], cwd, options)));
 }
 
 async function readRun(id: number, cwd: string, options?: PrStatusFetchOptions, url?: string, target?: GitHubPullRequestTarget): Promise<CiRun> {
@@ -73,7 +152,15 @@ export async function collectPrCiFailure(
     return result;
   }
   const runs = new Map<string, Promise<CiRun>>();
-  const logs = new Map<string, Promise<string>>();
+  const logs = new Map<string, Promise<string | null>>();
+  const annotations = new Map<string, Promise<CheckRunAnnotation[]>>();
+  const loggedJobsByRun = new Map<string, Set<number>>();
+  const pendingSiblingCancellations: Array<{
+    check: PrCiFailure['checks'][number];
+    jobIndex: number;
+    runKey: string;
+    siblingIds: number[];
+  }> = [];
   const external: NonNullable<PrCiFailure['external']> = [];
   for (const check of status.ci.checks ?? []) {
     if (!check.finished || check.passed) continue;
@@ -105,6 +192,8 @@ export async function collectPrCiFailure(
       const failedJobs = ownFailedJobs.length > 0 ? ownFailedJobs : runFailedJobs;
       if (failedJobs.length === 0) throw new Error('No failed job evidence is available');
       const jobs: PrCiFailure['checks'][number]['jobs'] = [];
+      const checkLoggedJobIds: number[] = [];
+      const checkSiblingCancellations: Array<{ jobIndex: number; siblingIds: number[] }> = [];
       for (const job of failedJobs) {
         const jobReference = actionsReference(job.url);
         if (jobReference.id !== run.databaseId || jobReference.repository !== reference.repository) {
@@ -124,7 +213,7 @@ export async function collectPrCiFailure(
               '--attempt', String(run.attempt), '--job', String(job.databaseId), '--log-failed',
               ...(target === undefined ? [] : ['--repo', `${target.hostname}/${target.owner}/${target.repo}`]),
             ], cwd, options, FAILED_LOG_MAX_BUFFER).then((text) => {
-              if (text.trim().length === 0) throw new Error(`Failed job ${job.databaseId} has no log content`);
+              if (text.trim().length === 0) return null;
               return text.length > MAX_FAILED_LOG_CHARS
                 ? `[truncated: last ${MAX_FAILED_LOG_CHARS} characters]\n${text.slice(-MAX_FAILED_LOG_CHARS)}`
                 : text;
@@ -132,20 +221,74 @@ export async function collectPrCiFailure(
             logs.set(logKey, pendingLog);
           }
           const log = await pendingLog;
-          jobs.push({ ...details, log });
+          if (log === null) {
+            const siblingIds = siblingFailuresDuringCancelledJob(run, job);
+            if (siblingIds.length === 0) throw new Error(`Failed job ${job.databaseId} has no log content`);
+            let pendingAnnotations = annotations.get(logKey);
+            if (!pendingAnnotations) {
+              pendingAnnotations = readJobAnnotations(
+                target?.hostname ?? reference.hostname,
+                target?.owner ?? reference.owner,
+                target?.repo ?? reference.repo,
+                job.databaseId,
+                cwd,
+                options,
+              );
+              annotations.set(logKey, pendingAnnotations);
+            }
+            const jobAnnotations = await pendingAnnotations;
+            if (!hasFailFastCancellationAnnotation(jobAnnotations)) {
+              throw new Error(`Failed job ${job.databaseId} has no log content`);
+            }
+            checkSiblingCancellations.push({ jobIndex: jobs.length, siblingIds });
+            jobs.push({ ...details, cancelledBySibling: true });
+          } else {
+            jobs.push({ ...details, log });
+            checkLoggedJobIds.push(job.databaseId);
+          }
         } catch (error) {
           options?.signal?.throwIfAborted();
           jobs.push(details);
           result.unavailable.push({ name: check.name, url: job.url, reason: errorText(error) });
         }
       }
-      result.checks.push({ name: check.name, run: {
-        id: run.databaseId, attempt: run.attempt, headSha: run.headSha, url: run.url,
-      }, jobs });
+      const checkEntry = {
+        name: check.name,
+        run: { id: run.databaseId, attempt: run.attempt, headSha: run.headSha, url: run.url },
+        jobs,
+      };
+      result.checks.push(checkEntry);
+      if (checkLoggedJobIds.length > 0) {
+        let logged = loggedJobsByRun.get(key);
+        if (!logged) {
+          logged = new Set<number>();
+          loggedJobsByRun.set(key, logged);
+        }
+        for (const id of checkLoggedJobIds) logged.add(id);
+      }
+      for (const pendingCancellation of checkSiblingCancellations) {
+        pendingSiblingCancellations.push({
+          check: checkEntry,
+          jobIndex: pendingCancellation.jobIndex,
+          runKey: key,
+          siblingIds: pendingCancellation.siblingIds,
+        });
+      }
     } catch (error) {
       options?.signal?.throwIfAborted();
       result.unavailable.push({ name: check.name, url: check.url, reason: errorText(error) });
     }
+  }
+  for (const entry of pendingSiblingCancellations) {
+    const logged = loggedJobsByRun.get(entry.runKey);
+    if (entry.siblingIds.some((id) => logged?.has(id))) continue;
+    const job = entry.check.jobs[entry.jobIndex]!;
+    entry.check.jobs[entry.jobIndex] = { id: job.id, name: job.name, url: job.url };
+    result.unavailable.push({
+      name: entry.check.name,
+      url: job.url,
+      reason: `Failed job ${job.id} has no log content`,
+    });
   }
   if (external.length > 0) result.external = external;
   if (result.checks.length === 0 && result.unavailable.length === 0) {

@@ -1,5 +1,5 @@
 import type { WorkflowState, WorkflowSystemInput } from '../../../core/models/types.js';
-import { PrCiFailureSchema, PrCiRerunSchema, type PrCiFailure } from '../../../core/workflow/system/pr-ci.js';
+import { ciFailureRunKey, ciFailureRunsWithLogs, PrCiFailureSchema, PrCiRerunSchema, type PrCiFailure } from '../../../core/workflow/system/pr-ci.js';
 import type { PrStatusFetchOptions } from '../../../core/workflow/system/pr-execution-context.js';
 import type { SystemStepServicesOptions } from '../../../core/workflow/system/system-step-services.js';
 import { resolveWorkflowStateReference } from '../../../core/workflow/state/workflow-state-access.js';
@@ -108,8 +108,11 @@ export async function resolvePrCiFailure(
   return { ...failure, logCount, fixRounds, rerunCount, recoveryError, promptEvidence,
     details: JSON.stringify({
       checks: failure.checks.map(({ name, run, jobs }) => ({
-        name, run, jobs: jobs.map(({ id, name: jobName, url, notStarted }) => ({
-          id, name: jobName, url, ...(notStarted === true ? { notStarted } : {}) })),
+        name, run, jobs: jobs.map(({ id, name: jobName, url, notStarted, cancelledBySibling }) => ({
+          id, name: jobName, url,
+          ...(notStarted === true ? { notStarted } : {}),
+          ...(cancelledBySibling === true ? { cancelledBySibling } : {}),
+        })),
       })),
       ...(failure.external === undefined ? {} : { external: failure.external }),
       unavailable: failure.unavailable,
@@ -137,9 +140,14 @@ export async function rerunCiEffect(
     if (typeof status !== 'object' || status === null || !('headSha' in status) || status.headSha !== failure.headSha) {
       throw new Error('CI rerun evidence is stale');
     }
+    const runsWithLogs = ciFailureRunsWithLogs(failure);
     if (!failure.complete || failure.unavailable.length > 0 || failure.checks.length === 0
       || failure.checks.some(({ run, jobs }) => run.headSha !== failure.headSha
-        || jobs.length === 0 || jobs.some((job) => job.notStarted !== true && (job.log === undefined || job.log.trim().length === 0)))) {
+        || jobs.length === 0 || jobs.some((job) => {
+          if (job.notStarted === true) return false;
+          if (job.cancelledBySibling === true) return !runsWithLogs.has(ciFailureRunKey(run));
+          return job.log === undefined || job.log.trim().length === 0;
+        }))) {
       throw new Error('CI rerun requires complete failure evidence');
     }
     const provider = options.gitProvider ?? getGitProvider();

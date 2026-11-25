@@ -337,12 +337,15 @@ describe('CI failure system input and rerun effect', () => {
     expect(index.checks[0]!.jobs[0]!.logPath).toBeNull();
   });
 
-  describe('開始前取消と外部ステータスを含む証拠', () => {
+  describe('開始前取消・兄弟失敗取消と外部ステータスを含む証拠', () => {
     const run = failure().checks[0]!.run;
     const notStartedJob = { id: 21, name: 'macos', url: `${run.url}/job/21`, notStarted: true };
+    const cancelledBySiblingJob = { id: 22, name: 'e2e', url: `${run.url}/job/22`, cancelledBySibling: true };
     const external = [{ name: 'Check unresolved comments', url: 'https://github.com/org/repo/actions/runs/99' }];
     const mixed = (): PrCiFailure => ({ ...failure(), external,
       checks: [...failure().checks, { name: 'macos', run, jobs: [notStartedJob] }] });
+    const mixedWithFailFast = (): PrCiFailure => ({ ...failure(),
+      checks: [...failure().checks, { name: 'e2e', run, jobs: [cancelledBySiblingJob] }] });
 
     it('診断できるjobのログだけを保存し、未開始jobと外部チェックを不足証拠にせず索引と調査promptへ区別して渡す', async () => {
       const h = fixture();
@@ -385,8 +388,10 @@ describe('CI failure system input and rerun effect', () => {
       const h = fixture();
       const result = await h.service.resolveSystemInput(input, h.state) as { promptEvidence: string };
       expect(result.promptEvidence).toContain('not started jobs=0');
+      expect(result.promptEvidence).toContain('cancelled by sibling jobs=0');
       expect(result.promptEvidence).toContain('external checks=0');
       expect(result.promptEvidence).not.toContain('notStarted');
+      expect(result.promptEvidence).not.toContain('cancelledBySibling');
     });
 
     it.each([
@@ -420,6 +425,59 @@ describe('CI failure system input and rerun effect', () => {
       h.state.currentStep = 'rerun_ci';
 
       for (const evidence of [collected, { ...collected, complete: true, unavailable: [] }]) {
+        expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: evidence }, h.state))
+          .toMatchObject({ success: false });
+      }
+      expect(h.rerunPrCi).not.toHaveBeenCalled();
+    });
+
+    it('兄弟jobの失敗で取り消されたjobを不足証拠にせず索引と調査promptへ区別して渡し再実行も許可する', async () => {
+      const h = fixture();
+      h.fetchPrCiFailure.mockResolvedValue(mixedWithFailFast());
+
+      const result = await h.service.resolveSystemInput(input, h.state) as PrCiFailure & {
+        promptEvidence: string; details: string; logCount: number;
+      };
+      expect(result).toMatchObject({ complete: true, unavailable: [], logCount: 1 });
+      const [summary, ...notes] = result.promptEvidence.split('\n').slice(0, -1);
+      for (const count of ['complete=true', 'unique job logs=1', 'cancelled by sibling jobs=1', 'unavailable=0']) {
+        expect(summary).toContain(count);
+      }
+      expect(notes.some((note) => note.includes('cancelledBySibling'))).toBe(true);
+      const index = JSON.parse(readFileSync(/^Evidence index: (.+)$/m.exec(result.promptEvidence)![1]!, 'utf8')) as {
+        complete: boolean; unavailable: unknown[];
+        checks: Array<{ jobs: Array<{ id: number; logPath: string | null; cancelledBySibling?: boolean }> }>;
+      };
+      expect(index).toMatchObject({ complete: true, unavailable: [] });
+      expect(index.checks.map(({ jobs }) => jobs)).toEqual([
+        [{ id: 20, name: 'unit', url: `${run.url}/job/20`, logPath: expect.any(String) }],
+        [{ id: 22, name: 'e2e', url: `${run.url}/job/22`, logPath: null, cancelledBySibling: true }],
+      ]);
+      expect(JSON.parse(result.details)).toMatchObject({ unavailable: [],
+        checks: [{ jobs: [{ id: 20 }] }, { jobs: [{ id: 22, cancelledBySibling: true }] }] });
+
+      h.state.systemContexts.set('wait_ci', { status: { headSha } });
+      h.state.systemContexts.set('collect_ci_failure', { failure: result });
+      h.state.structuredOutputs.set('investigate_ci', { verdict: 'external', summary: 'Transient runner failure' });
+      h.state.currentStep = 'rerun_ci';
+      expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: result }, h.state))
+        .toMatchObject({ success: true });
+      expect(h.rerunPrCi).toHaveBeenCalledOnce();
+    });
+
+    it('同じrunに兄弟失敗ログがないcancelledBySiblingだけの証拠は不完全のまま再実行しない', async () => {
+      const h = fixture();
+      const orphanCancelled: PrCiFailure = { ...failure(), checks: [{ name: 'e2e', run, jobs: [cancelledBySiblingJob] }] };
+      h.fetchPrCiFailure.mockResolvedValue(orphanCancelled);
+
+      const collected = await h.service.resolveSystemInput(input, h.state) as PrCiFailure;
+      expect(collected).toMatchObject({ complete: false,
+        unavailable: [{ name: 'e2e', url: `${run.url}/job/22`, reason: expect.any(String) }] });
+      h.state.systemContexts.set('wait_ci', { status: { headSha } });
+      h.state.structuredOutputs.set('investigate_ci', { verdict: 'external', summary: 'Runner outage' });
+      h.state.currentStep = 'rerun_ci';
+
+      for (const evidence of [collected, orphanCancelled]) {
         expect(await h.service.executeEffect(effect, { type: 'rerun_ci', pr: 123, failure: evidence }, h.state))
           .toMatchObject({ success: false });
       }

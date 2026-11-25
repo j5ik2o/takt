@@ -111,6 +111,8 @@ interface Scenario {
   largeCiLogs?: boolean;
   /** Adds a job cancelled before start and an external status beside the diagnosable check. */
   mixedCiEvidence?: boolean;
+  /** Adds a job cancelled mid-execution by a sibling failure (fail-fast) beside the diagnosable check. */
+  failFastCiEvidence?: boolean;
   /** Every failed job was cancelled before start: complete evidence with no log at all. */
   notStartedOnlyCiEvidence?: boolean;
 }
@@ -384,6 +386,11 @@ describe('Builtin PR merge workflow execution', () => {
       if (scenario.notStartedOnlyCiEvidence) {
         return { number, headSha, complete: true, unavailable: [], checks: [{ ...check, jobs: [{ id: 90, name: 'macos',
           url: `${check.run.url}/job/90`, notStarted: true }] }] };
+      }
+      if (scenario.failFastCiEvidence) {
+        return { number, headSha, complete, unavailable: [],
+          checks: [check, { name: 'e2e', run: check.run, jobs: [{ id: 91, name: 'e2e',
+            url: `${check.run.url}/job/91`, cancelledBySibling: true }] }] };
       }
       if (scenario.mixedCiEvidence) {
         return { number, headSha, complete, unavailable: [],
@@ -1180,7 +1187,7 @@ describe('Builtin PR merge workflow execution', () => {
       expect(path).toBeDefined();
       return JSON.parse(readFileSync(path!, 'utf8')) as {
         checks: Array<{ name: string; run: { id: number; attempt: number; headSha: string };
-          jobs: Array<{ id: number; logPath: string | null; notStarted?: boolean }> }>;
+          jobs: Array<{ id: number; logPath: string | null; notStarted?: boolean; cancelledBySibling?: boolean }> }>;
         external?: Array<{ name: string }>;
         unavailable: Array<{ reason: string }>;
       };
@@ -1269,6 +1276,23 @@ describe('Builtin PR merge workflow execution', () => {
       expect(h.state.status).toBe('completed');
       expect(h.rerunPrCi).toHaveBeenCalledOnce();
       expect(h.calls).not.toContain('agent:fix_ci');
+    });
+
+    it('fail-fastによる実行途中取消が混在しても、診断できた欠陥はci_stoppedへ落ちず修正へ進む', async () => {
+      const h = await runRecovery({ ciFailures: [defect()], failFastCiEvidence: true });
+      expect(h.state.status).toBe('completed');
+      expect(h.calls.filter((call) => call.startsWith('agent:'))).toEqual([
+        'agent:investigate_ci', 'agent:fix_ci', 'agent:review_ci_fix',
+      ]);
+      expect(h.rerunPrCi).not.toHaveBeenCalled();
+      const investigation = h.recoveryPrompts[0]!.prompt;
+      for (const count of ['complete=true', 'unique job logs=1', 'cancelled by sibling jobs=1', 'unavailable=0']) {
+        expect(investigation).toContain(count);
+      }
+      const index = evidenceIndex(investigation);
+      expect(index.unavailable).toEqual([]);
+      expect(index.checks.map(({ jobs }) => jobs.map(({ logPath, cancelledBySibling }) => [logPath !== null, cancelledBySibling === true])))
+        .toEqual([[[true, false]], [[false, true]]]);
     });
 
     it('同じrunの複数checkと6件の長いjobログを一度だけ保存し3段階のpromptから参照できる', async () => {
