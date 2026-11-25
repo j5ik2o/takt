@@ -245,6 +245,8 @@ call: called
 
   it.each([
     ['delay_before_ms', 'delay_before_ms: 1'],
+    ['max_visits', 'max_visits: 1'],
+    ['stop_on_repeated_verdict', 'stop_on_repeated_verdict: true'],
     ['structured_output', 'structured_output: {}'],
     ['system_inputs', 'system_inputs: []'],
     ['effects', 'effects: []'],
@@ -269,6 +271,8 @@ call: called
   it.each([
     ['session', 'session: compact'],
     ['delay_before_ms', 'delay_before_ms: 1'],
+    ['max_visits', 'max_visits: 1'],
+    ['stop_on_repeated_verdict', 'stop_on_repeated_verdict: true'],
     ['structured_output', 'structured_output: {}'],
     ['system_inputs', 'system_inputs: []'],
     ['effects', 'effects: []'],

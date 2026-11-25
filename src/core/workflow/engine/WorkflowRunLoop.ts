@@ -44,6 +44,7 @@ import type { PreparedNormalStepExecution } from './StepExecutor.js';
 import type { WorkflowCallExecutionToken } from './WorkflowCallRunner.js';
 import { requireWorkflowResumeStackSnapshot } from '../run/resume-point.js';
 import { createRunFailure } from '../run/run-failure.js';
+import { stepVisitLimitReason } from './step-visit-guard.js';
 import {
   reviewerOperationOrigin,
   sameFallbackOperationOrigin,
@@ -106,6 +107,8 @@ interface WorkflowRunLoopDeps {
   applyRuntimeEnvironment: (stage: 'step') => void;
   loopDetectorCheck: (stepName: string) => { shouldWarn?: boolean; shouldAbort?: boolean; count: number; isLoop: boolean };
   cycleDetectorRecordAndCheck: (stepName: string, nextStep: string) => { triggered: boolean; monitor?: LoopMonitorConfig; cycleCount: number };
+  /** Returns the stop reason when the step repeats its previous verdict (`stop_on_repeated_verdict`). */
+  stepVerdictRecordAndCheck: (step: WorkflowStep, matchedRuleIndex: number | undefined) => string | undefined;
   resolveDoneTransition: (step: WorkflowStep, response: AgentResponse) => WorkflowRuleTransition;
   runLoopMonitorJudge: (
     monitor: LoopMonitorConfig,
@@ -903,6 +906,11 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
       abort = abortWorkflow(deps, 'loop_detected', ERROR_MESSAGES.LOOP_DETECTED(step.name, loopCheck.count));
       break;
     }
+    const visitLimitReason = stepVisitLimitReason(step, deps.state.stepIterations.get(step.name) ?? 0);
+    if (visitLimitReason !== undefined) {
+      abort = abortWorkflow(deps, 'loop_detected', visitLimitReason);
+      break;
+    }
 
     if (consumesIterationBudget) {
       deps.state.iteration++;
@@ -1193,6 +1201,12 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
         break;
       }
 
+      const repeatedVerdictReason = deps.stepVerdictRecordAndCheck(step, response.matchedRuleIndex);
+      if (repeatedVerdictReason !== undefined) {
+        abort = abortWorkflow(deps, 'loop_detected', repeatedVerdictReason);
+        break;
+      }
+
       const cycleCheck = deps.cycleDetectorRecordAndCheck(step.name, nextStep);
       if (cycleCheck.triggered && cycleCheck.monitor) {
         log.info('Loop monitor cycle threshold reached', {
@@ -1302,8 +1316,13 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     });
   }
 
-  if (loopCheck.shouldAbort) {
-    const abort = abortWorkflow(deps, 'loop_detected', ERROR_MESSAGES.LOOP_DETECTED(step.name, loopCheck.count));
+  const visitLimitReason = stepVisitLimitReason(step, deps.state.stepIterations.get(step.name) ?? 0);
+  if (loopCheck.shouldAbort || visitLimitReason !== undefined) {
+    const abort = abortWorkflow(
+      deps,
+      'loop_detected',
+      visitLimitReason ?? ERROR_MESSAGES.LOOP_DETECTED(step.name, loopCheck.count),
+    );
     return {
       response: {
         persona: step.persona ?? step.name,
