@@ -154,15 +154,15 @@ _.path = ["{{env.HOME}}/local/takt-custom/bin"]
 `scripts/check-takt-runtime.sh` で、次の3つを確かめます。どれかが合わないと `NG:` の行を出し、終了コード 1 で終わります。
 
 1. `command -v takt` が、リンクを解決した後で `~/local/takt-custom/bin/takt` と同じファイルを指すこと。
-2. 共有 TAKT のビルドが、プロジェクトの使う設定キーを知っていること（`dist/core/models/config-schemas.js` にそのキーがあること）。キーは `--key` で指定し、繰り返して複数指定できます。省略すると `task_finish_hook` を調べます。
+2. 共有 TAKT のビルドが、そのキーをプロジェクトの `.takt/config.yaml` のキーとして受け付けること。`dist/core/models/config-schemas.js` の `ProjectConfigSchema` を `node` で読んで調べます。`claude_cli_path` のように global の設定でしか使えないキーは `NG:` になります。キーは `--key` で指定し、繰り返して複数指定できます。省略すると `task_finish_hook` を調べます。
 3. `DEPLOYED_FROM_COMMIT` が、版のディレクトリ名（`takt-custom-<短縮SHA>`）と合うこと。`--repo <フォークのチェックアウト> --contains <コミット>` を付けると、配置した版がそのコミットを含むことも確かめます。
 
 ```sh
 # プロジェクトのディレクトリで実行する
-/path/to/takt/scripts/check-takt-runtime.sh --key task_finish_hook
-# 終了フックのコミットを含むことも確かめる
-/path/to/takt/scripts/check-takt-runtime.sh --repo /path/to/takt --contains b1acb58ac
+/path/to/takt/scripts/check-takt-runtime.sh --key task_finish_hook --repo /path/to/takt --contains b1acb58ac
 ```
+
+終了フックを使うときは、`--contains b1acb58ac` を必ず付けます。キーがあるだけでは足りません。`task_finish_hook` のキーは、フックを呼ぶ処理（`b1acb58ac`）より前のコミットで入っています。その間の版はキーを受け付けますが、タスクが終わってもフックを呼びません。
 
 `takt --version` では見分けられません。フォークの版は、元にした上流の版番号（例: `0.76.1`）をそのまま名乗ります。
 

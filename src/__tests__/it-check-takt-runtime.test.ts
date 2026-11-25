@@ -6,7 +6,7 @@
 import { spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { delimiter, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -15,6 +15,11 @@ const COMMIT = 'abc1234def5678abc1234def5678abc1234def56';
 
 let base: string;
 let link: string;
+
+function schemaModule(projectKeys: string[], globalKeys: string[] = []): string {
+  const shape = (keys: string[]) => `{ shape: { ${keys.map((key) => `${key}: {}`).join(', ')} } }`;
+  return `export const ProjectConfigSchema = ${shape(projectKeys)};\nexport const GlobalConfigSchema = ${shape(globalKeys)};\n`;
+}
 
 function install(name: string, schema: string, deployed: string): string {
   const dir = join(base, name);
@@ -30,7 +35,7 @@ function install(name: string, schema: string, deployed: string): string {
 function run(pathDirs: string[], ...args: string[]): { status: number | null; output: string } {
   const result = spawnSync('/bin/sh', [script, '--root', link, ...args], {
     encoding: 'utf8',
-    env: { HOME: base, PATH: [...pathDirs, '/usr/bin', '/bin'].join(delimiter) },
+    env: { HOME: base, PATH: [...pathDirs, dirname(process.execPath), '/usr/bin', '/bin'].join(delimiter) },
   });
   return { status: result.status, output: `${result.stdout}${result.stderr}` };
 }
@@ -39,7 +44,7 @@ describe.skipIf(process.platform === 'win32')('check-takt-runtime.sh', () => {
   beforeEach(() => {
     base = mkdtempSync(join(tmpdir(), 'takt-check-runtime-'));
     link = join(base, 'takt-custom');
-    install('takt-custom-abc1234', '  task_finish_hook: TaskFinishHookConfigSchema.optional(),\n', COMMIT);
+    install('takt-custom-abc1234', schemaModule(['task_finish_hook'], ['claude_cli_path']), COMMIT);
     symlinkSync('takt-custom-abc1234', link);
   });
 
@@ -55,7 +60,7 @@ describe.skipIf(process.platform === 'win32')('check-takt-runtime.sh', () => {
   });
 
   it('fails and names both paths when PATH resolves takt to another install', () => {
-    const other = install('mise-takt', '', COMMIT);
+    const other = install('mise-takt', schemaModule([]), COMMIT);
 
     const result = run([join(other, 'bin'), join(link, 'bin')]);
 
@@ -67,7 +72,14 @@ describe.skipIf(process.platform === 'win32')('check-takt-runtime.sh', () => {
     const result = run([join(link, 'bin')], '--key', 'finish_hook');
 
     expect(result.status).toBe(1);
-    expect(result.output).toContain('does not know finish_hook');
+    expect(result.output).toContain('does not accept project key finish_hook');
+  });
+
+  it('fails for a key the build knows only in the global config', () => {
+    const result = run([join(link, 'bin')], '--key', 'claude_cli_path');
+
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('does not accept project key claude_cli_path');
   });
 
   it('fails when DEPLOYED_FROM_COMMIT does not match the versioned directory name', () => {

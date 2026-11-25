@@ -4,7 +4,7 @@
 #
 # Usage: check-takt-runtime.sh [--root DIR] [--key KEY]... [--repo DIR --contains SHA]
 #   --root      install that `takt` must resolve to (default: $HOME/local/takt-custom)
-#   --key       config key the build must know (repeatable; default: task_finish_hook)
+#   --key       project config key the build must accept (repeatable; default: task_finish_hook)
 #   --repo      git checkout of the fork, used with --contains
 #   --contains  commit that DEPLOYED_FROM_COMMIT must include
 # Exit 0 when every check passes, 1 when one fails, 2 on a usage error.
@@ -66,13 +66,20 @@ else
   ng "takt on PATH is $resolved ($(real_file "$resolved")), expected $root/bin/takt ($root_real/bin/takt)"
 fi
 
-# 2. The build knows the config keys the project uses.
+# 2. The build accepts the keys in a project's .takt/config.yaml (ProjectConfigSchema, not global-only keys).
 schema="$root_real/dist/core/models/config-schemas.js"
+project_keys=$(node --input-type=module -e '
+  const { ProjectConfigSchema } = await import(process.argv[1]);
+  console.log(Object.keys(ProjectConfigSchema.shape).join("\n"));
+' "$schema" 2>/dev/null) || project_keys=""
+if [ -z "$project_keys" ]; then
+  ng "cannot read the project config keys from $schema"
+fi
 for key in $keys; do
-  if grep -Eq "(^|[^A-Za-z0-9_])$key:" "$schema" 2>/dev/null; then
-    ok "$schema knows $key"
-  else
-    ng "$schema does not know $key"
+  if printf '%s\n' "$project_keys" | grep -qx "$key"; then
+    ok "$schema accepts project key $key"
+  elif [ -n "$project_keys" ]; then
+    ng "$schema does not accept project key $key"
   fi
 done
 
