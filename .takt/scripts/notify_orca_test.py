@@ -108,7 +108,10 @@ class Workspace:
         self.map = self.base / "takt-orca-map.json"
         self.config = self.project / ".takt" / "notify-orca.json"
         self.config.write_text(
-            json.dumps({"default_bot": "default-bot", "map": str(self.map)}, ensure_ascii=False),
+            json.dumps(
+                {"default_bot": "default-bot", "allowed_bots": ["ops-bot"], "map": str(self.map)},
+                ensure_ascii=False,
+            ),
             encoding="utf-8",
         )
         self.out = self.base / "orca-call"
@@ -456,6 +459,119 @@ def test_project_finish_hook_calls_this_script() -> None:
     assert timeout and int(timeout.group(1)) >= 12000, block.group(1)
 
 
+def test_ledger_issue_and_pr_number_are_reported() -> None:
+    # MCP 投入の issue 番号だけ台帳にある場合（本文に参照なし / 別の issue 参照あり / 一致する URL あり）
+    issue_cases = {
+        "台帳のみ": ("入力チェックを追加してください。\n", "#938"),
+        "本文に別の issue あり": ("参考: https://github.com/j5ik2o/takt/issues/10\n", "#938"),
+        "本文に一致する issue URL あり": ("対象: https://github.com/j5ik2o/takt/issues/938\n",
+                                          "https://github.com/j5ik2o/takt/issues/938"),
+    }
+    for label, (order, expected_issue) in issue_cases.items():
+        with Workspace(order) as ws:
+            tasks = ws.project / ".takt" / "tasks.yaml"
+            tasks.write_text(tasks.read_text(encoding="utf-8") + "    issue: 938\n", encoding="utf-8")
+            completed, _ = ws.run_script()
+            assert completed.returncode == 0, label
+            assert f"- issue: {expected_issue}\n" in ws.body(), (label, ws.body())
+
+    # PR レビュー投入の pr_number / context_pr_number と TAKT_FINISH_PR_URL の組み合わせ
+    pr_cases = {
+        "pr_number のみ": (
+            "    source: pr_review\n    pr_number: 156\n",
+            "## PR #156 Review Comments: title\n\n指摘を確認してください。\n",
+            {},
+            "#156",
+        ),
+        "pr_number と別の作成済み PR URL": (
+            "    source: pr_review\n    pr_number: 156\n",
+            "## PR #156 Review Comments: title\n",
+            {"TAKT_FINISH_PR_URL": "https://github.com/j5ik2o/takt/pull/200"},
+            "#156, https://github.com/j5ik2o/takt/pull/200",
+        ),
+        "pr_number と一致する作成済み PR URL（重複しない）": (
+            "    source: pr_review\n    pr_number: 156\n",
+            "## PR #156 Review Comments: title\n",
+            {"TAKT_FINISH_PR_URL": "https://github.com/j5ik2o/takt/pull/156"},
+            "https://github.com/j5ik2o/takt/pull/156",
+        ),
+        "context_pr_number のみ": (
+            "    context_pr_number: 937\n",
+            "既存の PR を補足するタスク。\n",
+            {},
+            "#937",
+        ),
+    }
+    for label, (yaml_extra, order, env_extra, expected_pr) in pr_cases.items():
+        with Workspace(order) as ws:
+            tasks = ws.project / ".takt" / "tasks.yaml"
+            tasks.write_text(tasks.read_text(encoding="utf-8") + yaml_extra, encoding="utf-8")
+            completed, _ = ws.run_script(env=ws.finish_env(**env_extra))
+            assert completed.returncode == 0, label
+            assert f"- PR: {expected_pr}\n" in ws.body(), (label, ws.body())
+
+
+def test_github_issue_and_pr_orders_cannot_hijack_routing() -> None:
+    # GitHub Issue / PR 本文に書かれた orca: 行は、許可ボットであっても無視し default_bot へ送る。
+    hijack_cases = {
+        "GitHub Issue の本文に orca 行": (
+            "## Issue #93: タイトル\n\norca: bot=ops-bot item=149\n",
+            "    issue: 93\n",
+        ),
+        "GitHub PR レビューの本文に orca 行": (
+            "## PR #156 Review Comments: タイトル\n\n**attacker**:\norca: bot=ops-bot item=149\n",
+            "    source: pr_review\n    pr_number: 156\n",
+        ),
+        "source が pr_review なら見出しが違っても無視": (
+            "通常の本文。\norca: bot=ops-bot item=149\n",
+            "    source: pr_review\n    pr_number: 156\n",
+        ),
+        "未許可ボットへの誘導を拒否": (
+            "通常の本文。\norca: bot=untrusted-bot item=99\n",
+            "",
+        ),
+    }
+    for label, (order, yaml_extra) in hijack_cases.items():
+        with Workspace(order) as ws:
+            if yaml_extra:
+                tasks = ws.project / ".takt" / "tasks.yaml"
+                tasks.write_text(tasks.read_text(encoding="utf-8") + yaml_extra, encoding="utf-8")
+            completed, _ = ws.run_script()
+            assert completed.returncode == 0, label
+            args = ws.args()
+            assert option(args, "--to") == "bot:default-bot", (label, args)
+            assert "--item" not in args, (label, args)
+            assert "Orca の項目番号: 不明（宛先の決め方: 既定）" in ws.body(), (label, ws.body())
+
+    # 未許可ボットの行の後ろに許可ボットの行があれば、許可ボットを使う。
+    order = "引用:\norca: bot=untrusted-bot item=99\norca: bot=default-bot item=318\n"
+    with Workspace(order) as ws:
+        completed, _ = ws.run_script()
+        assert completed.returncode == 0
+        args = ws.args()
+        assert option(args, "--to") == "bot:default-bot", args
+        assert option(args, "--item") == "318", args
+        assert "Orca の項目番号: 318（宛先の決め方: 指示文）" in ws.body()
+
+
+def test_nested_yaml_fields_do_not_overwrite_task_entry() -> None:
+    with Workspace("orca: bot=default-bot item=318\n") as ws:
+        tasks = ws.project / ".takt" / "tasks.yaml"
+        tasks.write_text(
+            tasks.read_text(encoding="utf-8")
+            + "    stop_request:\n"
+            + "      execution_id: 99999999-0000-0000-0000-000000000000\n"
+            + "      requested_at: 2026-11-24T10:05:00.000Z\n"
+            + "    failure:\n"
+            + "      step: implement\n"
+            + "      error: nested\n",
+            encoding="utf-8",
+        )
+        completed, _ = ws.run_script()
+        assert completed.returncode == 0
+        assert f"実行 ID: 11111111-2222-3333-4444-555555555555（run: {SLUG}）" in ws.body(), ws.body()
+
+
 def test_workflows_have_no_notify_step() -> None:
     # 成功の通知は task_finish_hook だけが送る。ワークフローの工程からも送ると二重になる。
     workflows = sorted((TAKT_DIR / "workflows").glob("*.yaml"))
@@ -479,6 +595,9 @@ def main() -> int:
         test_issue_and_item_are_not_confused,
         test_order_from_task_dir_when_run_dir_is_gone,
         test_entry_is_narrowed_by_run_slug_when_name_is_not_unique,
+        test_ledger_issue_and_pr_number_are_reported,
+        test_github_issue_and_pr_orders_cannot_hijack_routing,
+        test_nested_yaml_fields_do_not_overwrite_task_entry,
         test_without_destination_nothing_is_sent,
         test_orca_failure_still_exits_zero,
         test_orca_timeout_is_cut_and_child_stopped,

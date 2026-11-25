@@ -11,9 +11,9 @@ TAKT はキューのタスクの最終状態を .takt/tasks.yaml に保存した
 
 終わり方（件名と本文の「結果」）:
   completed                        完了
-  failed（中断の記録あり、            中断（停止、ゴールの中止・一時停止、ワークフローの ABORT）
-    ワークフローが ABORT へ進んだ、
-    ゴールの中止・一時停止）
+  failed（中断の記録あり、            中断（停止、ゴールの中止・一時停止、ワークフローの ABORT。
+    ワークフローが ABORT へ進んだ、         ただし Caccia の失敗理由で ABORT 文言が置き換わった
+    ゴールの中止・一時停止）                場合や SIGINT で中断の記録が無い場合は「失敗」）
   failed（それ以外）               失敗
   pr_failed                        PR 失敗
   exceeded                         工程の上限
@@ -21,14 +21,16 @@ TAKT はキューのタスクの最終状態を .takt/tasks.yaml に保存した
 
 宛先の決め方（先に見つかったものを使う）。宛先はその TAKT の仕事を管理しているボットにする:
   1. タスクの指示文（order.md）の 1 行 `orca: bot=<ボット名> item=<番号>`。投入したボットが
-     自分の名前と項目番号を書く。
+     自分の名前と項目番号を書く。ただし GitHub Issue / PR 本文から作られた指示文では無視し、
+     ボット名も設定で許可されたもの（default_bot と allowed_bots）に限る。
   2. 設定の map が指す対応表の `<ゴール ID>:<タスク名>` または `<ゴール ID>:<workKey>` のエントリ
   3. 設定の default_bot（そのプロジェクトを担当するボット）、項目番号「不明」
   どれも無ければ送らずに記録だけ残す。
 
 設定（プロジェクトごとに 1 か所）:
-  .takt/notify-orca.json に {"default_bot": "<担当ボット>", "map": "<対応表のパス>"} を置く。
-  map は省略でき、~ はホームに展開する。ほかのプロジェクトへ写すときはこの設定だけを変える。
+  .takt/notify-orca.json に {"default_bot": "<担当ボット>", "allowed_bots": ["<許可ボット>"], "map": "<対応表のパス>"}
+  を置く。allowed_bots と map は省略でき、~ はホームに展開する。ほかのプロジェクトへ写すときは
+  この設定だけを変える。
 
 壊さない:
   どんな失敗でも終了コード 0 で終わる（TAKT は終了コードで状態も再開位置も変えないが、
@@ -63,7 +65,8 @@ STDERR_LIMIT = 4096
 REASON_LIMIT = 300
 # 中断として扱う失敗の理由。TAKT は中断の種類（abortKind）を出口に渡さないため、保存する
 # 文言で見分ける: ワークフローの工程が ABORT へ進んだとき、ゴールの中止・一時停止で
-# 失敗にしたとき（待ちのタスクは中断の記録なしで保存される）。
+# 失敗にしたとき（待ちのタスクは中断の記録なしで保存される）。なお、Caccia の失敗理由で
+# ABORT 文言が置き換わった場合はここには一致せず「失敗」として届く。
 ABORT_REASON = re.compile(r"Workflow aborted by step transition|Goal \S+ was (?:aborted|paused)")
 # 失敗の理由を本文へ入れる前に伏せる、認証情報らしい値。
 SECRET = re.compile(
@@ -72,6 +75,8 @@ SECRET = re.compile(
     r"|\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|xox[abpr]-[A-Za-z0-9-]{10,})"
 )
 ORCA_LINE = re.compile(r"^\s*orca:\s*bot=(\S+)\s+item=([1-9][0-9]*)\s*$", re.MULTILINE)
+GITHUB_ORDER_HEADER = re.compile(r"^\s*##\s+(?:Issue\s+#\d+:|PR\s+#\d+\s+Review\s+Comments:)")
+POSITIVE_INT = re.compile(r"[1-9][0-9]*")
 BOT_NAME = re.compile(r"^[^\s\"'`$\\]{1,64}$")
 PR_URL = re.compile(r"https://github\.com/[^/\s]+/[^/\s]+/pull/\d+")
 MESSAGE_ID = re.compile(r"\bmsg_[0-9A-Za-z]+\b")
@@ -92,18 +97,28 @@ def finish_label(environ) -> str | None:
 
 
 def read_config(explicit, project: Path) -> dict:
-    """notify-orca.json を読み、default_bot と map（Path か None）を返す。読めなければ空。"""
+    """notify-orca.json を読み、default_bot・allowed_bots・map（Path か None）を返す。読めなければ空。"""
     path = Path(explicit) if explicit else project / ".takt" / CONFIG_NAME
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = None
     if not isinstance(data, dict):
-        return {"default_bot": None, "map": None}
+        return {"default_bot": None, "allowed_bots": frozenset(), "map": None}
     bot = data.get("default_bot")
+    default_bot = bot if isinstance(bot, str) and BOT_NAME.fullmatch(bot) else None
+    allowed = set()
+    if default_bot is not None:
+        allowed.add(default_bot)
+    raw_allowed = data.get("allowed_bots")
+    if isinstance(raw_allowed, list):
+        for candidate in raw_allowed:
+            if isinstance(candidate, str) and BOT_NAME.fullmatch(candidate):
+                allowed.add(candidate)
     table = data.get("map")
     return {
-        "default_bot": bot if isinstance(bot, str) and BOT_NAME.fullmatch(bot) else None,
+        "default_bot": default_bot,
+        "allowed_bots": frozenset(allowed),
         # TAKT は HOME を渡さないが、expanduser はパスワードデータベースへ倒れる。
         "map": Path(os.path.expanduser(table)) if isinstance(table, str) and table else None,
     }
@@ -142,12 +157,13 @@ def parse_tasks_yaml(path: Path) -> list:
     """tasks.yaml の tasks 配列を、キーと値の辞書のリストとして読む。
 
     PyYAML に依存しない最小の読み取り。各エントリは `- key: value` で始まり、続く行は
-    同じエントリの別キーとして読む。`retry_note: >-` などのブロックスカラーの本文は
-    読み飛ばす。読めなければ例外を投げる（呼び出し側が空として扱う）。
+    同じエントリの直下のキーだけを読む（ネストしたマップや `retry_note: >-` などの
+    ブロックスカラーの本文は読み飛ばす）。読めなければ例外を投げる（呼び出し側が空として扱う）。
     """
     entries: list = []
     current = None
     entry_indent = None
+    field_indent = None
     block_indent = None
     for line in path.read_text(encoding="utf-8").splitlines():
         if block_indent is not None:
@@ -164,8 +180,10 @@ def parse_tasks_yaml(path: Path) -> list:
             if entry_indent is None:
                 entry_indent = indent
             current = {}
-            body = stripped[2:]
-        elif current is not None and entry_indent is not None and indent > entry_indent:
+            after_dash = stripped[2:]
+            field_indent = indent + 2 + (len(after_dash) - len(after_dash.lstrip(" ")))
+            body = after_dash.lstrip(" ")
+        elif current is not None and field_indent is not None and indent == field_indent:
             body = stripped
         else:
             continue
@@ -254,11 +272,21 @@ def read_order(run_dir: Path | None, project: Path, entry: dict) -> tuple[str, P
     return "", None
 
 
-def route_from_order(order: str):
-    match = ORCA_LINE.search(order)
-    if match is None or not BOT_NAME.fullmatch(match.group(1)):
+def is_github_sourced_order(entry: dict, order: str) -> bool:
+    """GitHub の Issue / PR 本文やコメントがそのまま入る指示文かどうか。"""
+    if entry.get("source") in ("issue", "pr_review"):
+        return True
+    return GITHUB_ORDER_HEADER.match(order) is not None
+
+
+def route_from_order(order: str, allowed_bots: frozenset[str]):
+    if not allowed_bots:
         return None
-    return match.group(1), match.group(2), "指示文"
+    for match in ORCA_LINE.finditer(order):
+        bot, item = match.group(1), match.group(2)
+        if BOT_NAME.fullmatch(bot) and bot in allowed_bots:
+            return bot, item, "指示文"
+    return None
 
 
 def route_from_map(map_path: Path, goal_id: str, refs):
@@ -296,15 +324,39 @@ def build_message(args, environ, label: str) -> dict:
     goal_id = environ.get("TAKT_FINISH_GOAL_ID") or entry.get("goal_id", "")
     work_key = entry.get("goal_work_key", "")
     config = read_config(args.config, project)
-    issue = None
-    if order:
+
+    # 台帳に保存された issue / pr_number を優先し、無い場合だけ指示文から補完する。
+    entry_issue = entry.get("issue") or ""
+    if POSITIVE_INT.fullmatch(entry_issue):
+        issue_suffix = f"/issues/{entry_issue}"
+        matched_issue_url = next(
+            (url for url in ISSUE_URL.findall(order) if url.lower().endswith(issue_suffix)),
+            None,
+        )
+        issue = matched_issue_url or f"#{entry_issue}"
+    elif order:
         # 宛先の行（item=<番号>）を issue と取り違えないよう、その行を除いて読む。
         issue = extract_issue_reference(ORCA_LINE.sub("", order))
-    prs = set(PR_URL.findall(order))
-    if PR_URL.fullmatch(environ.get("TAKT_FINISH_PR_URL") or ""):
-        prs.add(environ["TAKT_FINISH_PR_URL"])
+    else:
+        issue = None
 
-    route = route_from_order(order)
+    prs: set[str] = set()
+    finish_pr_url = environ.get("TAKT_FINISH_PR_URL") or ""
+    if PR_URL.fullmatch(finish_pr_url):
+        prs.add(finish_pr_url)
+    entry_pr = entry.get("pr_number") or entry.get("context_pr_number") or ""
+    if POSITIVE_INT.fullmatch(entry_pr):
+        pr_suffix = f"/pull/{entry_pr}"
+        if not any(url.lower().endswith(pr_suffix) for url in prs):
+            matched_pr_url = next(
+                (url for url in PR_URL.findall(order) if url.lower().endswith(pr_suffix)),
+                None,
+            )
+            prs.add(matched_pr_url or f"#{entry_pr}")
+    else:
+        prs.update(PR_URL.findall(order))
+
+    route = None if is_github_sourced_order(entry, order) else route_from_order(order, config["allowed_bots"])
     map_route = None
     if route is None and config["map"] is not None:
         found = route_from_map(config["map"], goal_id, (task_name, work_key))
@@ -317,6 +369,8 @@ def build_message(args, environ, label: str) -> dict:
         if not issue and map_route.get("issues"):
             issue = ", ".join(f"#{number}" for number in map_route["issues"])
         if isinstance(map_route.get("pr"), str) and PR_URL.fullmatch(map_route["pr"]):
+            if POSITIVE_INT.fullmatch(entry_pr) and map_route["pr"].lower().endswith(f"/pull/{entry_pr}"):
+                prs.discard(f"#{entry_pr}")
             prs.add(map_route["pr"])
 
     status = environ.get("TAKT_FINISH_STATUS")
