@@ -16,6 +16,7 @@ import type { ProjectLocalConfig } from '../infra/config/types.js';
 import type { QualityGate } from '../core/models/workflow-types.js';
 import type { FormalSpecSetting } from '../core/models/config-types.js';
 import { MAX_ASSISTANT_INIT_FILES } from '../core/models/assistant-config.js';
+import { packageVersion } from '../shared/package-info.js';
 import { clearTaktEnv, restoreTaktEnv, type TaktEnvSnapshot } from './helpers/taktEnv.js';
 
 type ObservabilityConfigForTest = {
@@ -1235,6 +1236,22 @@ unexpected_overrides:
       );
 
       expect(() => loadProjectConfig(testDir)).toThrow(/unrecognized/i);
+    });
+
+    it('should say the running takt version does not support an unknown top-level key', () => {
+      writeFileSync(join(testDir, '.takt', 'config.yaml'), 'future_only_key: true\n', 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(
+        `takt ${packageVersion} does not support key "future_only_key"`,
+      );
+    });
+
+    it('should name the full path of an unknown nested key with the running takt version', () => {
+      writeFileSync(join(testDir, '.takt', 'config.yaml'), 'pipeline:\n  future_only_key: x\n', 'utf-8');
+
+      expect(() => loadProjectConfig(testDir)).toThrow(
+        `takt ${packageVersion} does not support key "pipeline.future_only_key"`,
+      );
     });
 
     it('should name a misspelled claude permissions key instead of dropping it', () => {
