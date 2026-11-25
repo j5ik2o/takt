@@ -2507,6 +2507,30 @@ steps:
     expect(mockError).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['enable_builtin_workflows: false\n', 'excluded because enable_builtin_workflows is false'],
+    ['disabled_builtins:\n  - development-core\n', 'excluded because disabled_builtins lists "development-core"'],
+  ])('reports a workflow_call to an excluded builtin as an error (config %j)', async (config, reason) => {
+    writeFileSync(join(process.env.TAKT_CONFIG_DIR!, 'config.yaml'), config, 'utf-8');
+    invalidateAllResolvedConfigCache();
+    writeWorkflow(projectDir, '.takt/workflows/builtin-caller.yaml', `name: builtin-caller
+initial_step: develop
+steps:
+  - name: develop
+    kind: workflow_call
+    call: development-core
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand(['builtin-caller'], projectDir)).rejects.toThrow('Workflow validation failed');
+
+    expect(mockSuccess).not.toHaveBeenCalled();
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('call: development-core'));
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining(reason));
+  });
+
   it('rejects named builtin workflow targets when the builtin is individually disabled', async () => {
     writeFileSync(
       join(process.env.TAKT_CONFIG_DIR!, 'config.yaml'),
@@ -2649,7 +2673,7 @@ steps:
           expect.objectContaining({ name: 'parent' }),
           projectDir,
           worktreeDir,
-          { allowPathBasedCalls: false },
+          expect.objectContaining({ allowPathBasedCalls: false }),
         );
       } finally {
         validateContractsSpy.mockRestore();
@@ -2735,7 +2759,7 @@ steps:
         expect.objectContaining({ name: 'parent' }),
         projectDir,
         worktreeDir,
-        { allowPathBasedCalls: false },
+        expect.objectContaining({ allowPathBasedCalls: false }),
       );
     } finally {
       validateContractsSpy.mockRestore();

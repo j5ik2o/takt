@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { isScopeRef, parseScopeRef } from '#faceted-prompting';
-import type { WorkflowCallArgValue, WorkflowConfig } from '../../../core/models/index.js';
+import type { WorkflowCallArgValue, WorkflowCallStep, WorkflowConfig } from '../../../core/models/index.js';
 import type { WorkflowSystemCommandsConfig } from '../../../core/models/config-types.js';
 import { validateWorkflowCallContracts as validateWorkflowCallContractsImpl } from './workflowCallContractValidator.js';
 import { buildWorkflowDiscoveryConfig, loadValidatedWorkflowDiscoveryEntry } from './workflowDiscoveryLoader.js';
@@ -295,11 +295,13 @@ export function validateWorkflowCallContracts(
     allowPathBasedCalls?: boolean;
     resourceRoot?: string;
     workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
+    onUnresolvedCall?: (workflow: WorkflowConfig, step: WorkflowCallStep) => void;
   },
 ): void {
   validateWorkflowCallContractsImpl(workflow, projectCwd, {
     isWorkflowPath,
     loadWorkflowByIdentifierForWorkflowCall,
+    onUnresolvedCall: options?.onUnresolvedCall,
   }, {
     lookupCwd,
     allowPathBasedCalls: options?.allowPathBasedCalls,

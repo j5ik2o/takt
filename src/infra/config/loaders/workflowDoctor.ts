@@ -22,6 +22,7 @@ import {
   getNamedWorkflowLookupDirs,
 } from './workflowLookupDirectories.js';
 import { isWorkflowPath, validateWorkflowCallContracts } from './workflowResolver.js';
+import { describeUnresolvedWorkflowCall, resolveWorkflowCallTarget } from './workflowCallResolver.js';
 import { loadWorkflowFileWithResolutionOptions } from './workflowResolvedLoader.js';
 import { resolveWorkflowTrustInfo, type WorkflowTrustSource } from './workflowTrustSource.js';
 import {
@@ -275,7 +276,19 @@ export function inspectWorkflowFile(
     let workflow: WorkflowConfig | undefined;
     try {
       workflow = loadWorkflowForDoctorValidation(filePath, projectDir, raw, options);
-      validateWorkflowCallContracts(workflow, projectDir, lookupCwd, { allowPathBasedCalls: false });
+      validateWorkflowCallContracts(workflow, projectDir, lookupCwd, {
+        allowPathBasedCalls: false,
+        // Execution fails on an unresolved call, so doctor must not report it as OK.
+        onUnresolvedCall: (parentWorkflow, step) => {
+          if (typeof step.call !== 'string') return;
+          // Surfaces identifier errors (e.g. "a//b") with their own message before reporting "not found".
+          if (resolveWorkflowCallTarget(parentWorkflow, step, projectDir, lookupCwd) !== null) return;
+          const reason = describeUnresolvedWorkflowCall({ parentWorkflow, call: step.call, projectCwd: projectDir, lookupCwd });
+          throw new Error(
+            `workflow_call step "${step.name}" in workflow "${parentWorkflow.name}": workflow_call target was not found (${reason})`,
+          );
+        },
+      });
     } catch (error) {
       return {
         diagnostics: [{
