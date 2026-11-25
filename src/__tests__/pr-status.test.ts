@@ -319,14 +319,32 @@ describe('PR status acquisition', () => {
     const run = 'https://github.com/org/repo/actions/runs/10';
     const actionsCheck = (name: string, jobId: number, conclusion = 'FAILURE') => ({
       ...check('COMPLETED', conclusion), name, detailsUrl: `${run}/job/${jobId}` });
-    const job = (databaseId: number, name: string, conclusion: string, steps?: unknown[]) => ({
+    const job = (
+      databaseId: number,
+      name: string,
+      conclusion: string,
+      steps?: unknown[],
+      timestamps: { startedAt?: string | null; completedAt?: string | null } = {},
+    ) => ({
       databaseId, name, url: `${run}/job/${databaseId}`, status: 'completed', conclusion,
+      ...timestamps,
       ...(steps === undefined ? {} : { steps }) });
     const ranStep = [{ name: 'Run tests', status: 'completed', conclusion: 'failure', number: 1 }];
+    const cancelledMidSteps = [
+      { name: 'Set up job', status: 'completed', conclusion: 'success', number: 1 },
+      { name: 'Run tests', status: 'completed', conclusion: 'cancelled', number: 2 },
+      { name: 'Post checkout', status: 'completed', conclusion: 'skipped', number: 3 },
+      { name: 'Complete job', status: 'completed', conclusion: 'success', number: 4 },
+    ];
     const externalStatus = { __typename: 'StatusContext', context: 'Check unresolved comments', state: 'FAILURE',
       targetUrl: 'https://github.com/org/repo/actions/runs/99' };
 
-    function install(checks: unknown[], jobs: unknown[], logs: Record<number, string | Error> = {}) {
+    function install(
+      checks: readonly unknown[],
+      jobs: readonly unknown[],
+      logs: Record<number, string | Error> = {},
+      runOverrides: Record<string, unknown> = {},
+    ) {
       response.mockImplementation(() => {
         const args = execFile.mock.calls.at(-1)?.[1] as string[];
         if (args[0] === 'pr') return JSON.stringify(status(checks));
@@ -336,7 +354,7 @@ describe('PR status acquisition', () => {
           return log;
         }
         return JSON.stringify({ databaseId: 10, url: run, headSha: 'a'.repeat(40), attempt: 1,
-          status: 'completed', conclusion: 'failure', jobs });
+          status: 'completed', conclusion: 'failure', ...runOverrides, jobs });
       });
     }
     const logReads = () => execFile.mock.calls.filter(([, args]) => args.includes('--log-failed'))
@@ -396,7 +414,176 @@ describe('PR status acquisition', () => {
         checks: [{ name: 'unit', jobs: [{ id: 20, log: 'expected 2 to equal 3' }] }, { name: 'e2e', jobs: [{ id: 22 }] }],
         unavailable: [{ name: 'e2e', url: `${run}/job/22`, reason: expect.any(String) }] });
       expect(evidence.checks[1]!.jobs[0]).not.toHaveProperty('notStarted');
+      expect(evidence.checks[1]!.jobs[0]).not.toHaveProperty('cancelledBySibling');
       expect(evidence.checks[1]!.jobs[0]).not.toHaveProperty('log');
+    });
+
+    it.each([
+      ['失敗チェックが先', [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')]],
+      ['取消チェックが先', [actionsCheck('e2e', 22, 'CANCELLED'), actionsCheck('unit', 20)]],
+    ] as const)('fail-fastで実行途中に取り消されたjobのログが空でも、同じrunの失敗jobと時系列が一致すれば証拠欠落にしない（%s）', async (_label, checks) => {
+      install(checks, [
+        job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
+        job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
+      ], { 20: 'expected 2 to equal 3', 22: '' });
+
+      const evidence = await failureEvidence() as PrCiFailure;
+      expect(evidence).toMatchObject({ complete: true, unavailable: [] });
+      const unitCheck = evidence.checks.find(({ name }) => name === 'unit');
+      const e2eCheck = evidence.checks.find(({ name }) => name === 'e2e');
+      expect(unitCheck?.jobs).toEqual([
+        { id: 20, name: 'unit', url: `${run}/job/20`, log: 'expected 2 to equal 3' },
+      ]);
+      expect(e2eCheck?.jobs).toEqual([
+        { id: 22, name: 'e2e', url: `${run}/job/22`, cancelledBySibling: true },
+      ]);
+      expect(e2eCheck?.jobs[0]).not.toHaveProperty('notStarted');
+      expect(e2eCheck?.jobs[0]).not.toHaveProperty('log');
+    });
+
+    it('run単位の失敗チェックにfail-fast取消jobが混在しても、兄弟失敗のログがあれば完全になる', async () => {
+      install([{ ...check('COMPLETED', 'FAILURE'), name: 'CI', detailsUrl: run }], [
+        job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
+        job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
+      ], { 20: 'expected 2 to equal 3', 22: '' });
+
+      expect(await failureEvidence()).toMatchObject({ complete: true, unavailable: [],
+        checks: [{ name: 'CI', jobs: [
+          { id: 20, log: 'expected 2 to equal 3' },
+          { id: 22, cancelledBySibling: true },
+        ] }] });
+    });
+
+    it('fail-fast条件を満たす取消jobでも--log-failedに本文があればログを保持する', async () => {
+      install([actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')], [
+        job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
+        job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
+      ], { 20: 'expected 2 to equal 3', 22: 'The operation was canceled.' });
+
+      const evidence = await failureEvidence() as PrCiFailure;
+      expect(evidence).toMatchObject({ complete: true, unavailable: [],
+        checks: [
+          { name: 'unit', jobs: [{ id: 20, log: 'expected 2 to equal 3' }] },
+          { name: 'e2e', jobs: [{ id: 22, log: 'The operation was canceled.' }] },
+        ] });
+      expect(evidence.checks[1]!.jobs[0]).not.toHaveProperty('cancelledBySibling');
+    });
+
+    it.each([
+      ['run自体がcancelled（concurrency取消後に集計jobが失敗した形）',
+        [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')],
+        [
+          job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:01:10Z', completedAt: '2026-10-05T12:01:13Z' }),
+          job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
+        ],
+        { 20: 'aggregate failed', 22: '' },
+        { conclusion: 'cancelled' }],
+      ['run自体がcancelled（時刻が重なっていても外部取消）',
+        [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')],
+        [
+          job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
+          job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
+        ],
+        { 20: 'expected 2 to equal 3', 22: '' },
+        { conclusion: 'cancelled' }],
+      ['同じrunにfailureの兄弟jobがない',
+        [actionsCheck('e2e', 22, 'CANCELLED')],
+        [
+          job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
+        ],
+        { 22: '' },
+        { conclusion: 'failure' }],
+      ['兄弟jobの失敗より前に取消jobが終了している',
+        [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')],
+        [
+          job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:02:00Z' }),
+          job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
+        ],
+        { 20: 'expected 2 to equal 3', 22: '' },
+        { conclusion: 'failure' }],
+      ['兄弟jobの失敗より後に取消jobが開始している',
+        [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')],
+        [
+          job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
+          job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:01:30Z', completedAt: '2026-10-05T12:02:00Z' }),
+        ],
+        { 20: 'expected 2 to equal 3', 22: '' },
+        { conclusion: 'failure' }],
+      ['取消job自身のstepにfailureがある',
+        [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')],
+        [
+          job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
+          job(22, 'e2e', 'cancelled', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
+        ],
+        { 20: 'expected 2 to equal 3', 22: '' },
+        { conclusion: 'failure' }],
+      ['取消jobの時刻が欠落している',
+        [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')],
+        [
+          job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
+          job(22, 'e2e', 'cancelled', cancelledMidSteps),
+        ],
+        { 20: 'expected 2 to equal 3', 22: '' },
+        { conclusion: 'failure' }],
+      ['兄弟失敗jobのログを取得していない（取消チェックのみ）',
+        [actionsCheck('e2e', 22, 'CANCELLED')],
+        [
+          job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
+          job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
+        ],
+        { 22: '' },
+        { conclusion: 'failure' }],
+      ['取消jobの--log-failedが権限エラーで失敗した',
+        [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')],
+        [
+          job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
+          job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
+        ],
+        { 20: 'expected 2 to equal 3', 22: new Error('HTTP 403: Resource not accessible') },
+        { conclusion: 'failure' }],
+    ] as const)('原因不明・条件不一致の実行途中取消（%s）は証拠欠落として止める', async (_label, checks, jobs, logs, runOverrides) => {
+      install([...checks], [...jobs], logs as Record<number, string | Error>, runOverrides);
+
+      const evidence = await failureEvidence() as PrCiFailure;
+      expect(evidence).toMatchObject({ complete: false,
+        unavailable: expect.arrayContaining([
+          expect.objectContaining({ name: 'e2e', url: `${run}/job/22`, reason: expect.any(String) }),
+        ]) });
+      const e2eJob = evidence.checks.find(({ name }) => name === 'e2e')?.jobs[0];
+      expect(e2eJob).not.toHaveProperty('cancelledBySibling');
+      expect(e2eJob).not.toHaveProperty('notStarted');
+    });
+
+    it('別runの失敗jobは取消jobのfail-fast根拠にしない', async () => {
+      const otherRun = 'https://github.com/org/repo/actions/runs/11';
+      response.mockImplementation(() => {
+        const args = execFile.mock.calls.at(-1)?.[1] as string[];
+        if (args[0] === 'pr') {
+          return JSON.stringify(status([
+            actionsCheck('unit', 20),
+            { ...check('COMPLETED', 'CANCELLED'), name: 'e2e', detailsUrl: `${otherRun}/job/30` },
+          ]));
+        }
+        if (args.includes('--log-failed')) {
+          return args[args.indexOf('--job') + 1] === '20' ? 'expected 2 to equal 3' : '';
+        }
+        if (args[2] === '10') {
+          return JSON.stringify({ databaseId: 10, url: run, headSha: 'a'.repeat(40), attempt: 1,
+            status: 'completed', conclusion: 'failure', jobs: [
+              job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
+            ] });
+        }
+        return JSON.stringify({ databaseId: 11, url: otherRun, headSha: 'a'.repeat(40), attempt: 1,
+          status: 'completed', conclusion: 'failure', jobs: [{
+            databaseId: 30, name: 'e2e', url: `${otherRun}/job/30`, status: 'completed', conclusion: 'cancelled',
+            startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z', steps: cancelledMidSteps,
+          }] });
+      });
+
+      const evidence = await failureEvidence() as PrCiFailure;
+      expect(evidence).toMatchObject({ complete: false,
+        unavailable: [{ name: 'e2e', url: `${otherRun}/job/30`, reason: expect.any(String) }] });
+      expect(evidence.checks.find(({ name }) => name === 'e2e')?.jobs[0]).not.toHaveProperty('cancelledBySibling');
     });
 
     it.each([

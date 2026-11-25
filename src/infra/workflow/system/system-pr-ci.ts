@@ -108,8 +108,11 @@ export async function resolvePrCiFailure(
   return { ...failure, logCount, fixRounds, rerunCount, recoveryError, promptEvidence,
     details: JSON.stringify({
       checks: failure.checks.map(({ name, run, jobs }) => ({
-        name, run, jobs: jobs.map(({ id, name: jobName, url, notStarted }) => ({
-          id, name: jobName, url, ...(notStarted === true ? { notStarted } : {}) })),
+        name, run, jobs: jobs.map(({ id, name: jobName, url, notStarted, cancelledBySibling }) => ({
+          id, name: jobName, url,
+          ...(notStarted === true ? { notStarted } : {}),
+          ...(cancelledBySibling === true ? { cancelledBySibling } : {}),
+        })),
       })),
       ...(failure.external === undefined ? {} : { external: failure.external }),
       unavailable: failure.unavailable,
@@ -137,9 +140,22 @@ export async function rerunCiEffect(
     if (typeof status !== 'object' || status === null || !('headSha' in status) || status.headSha !== failure.headSha) {
       throw new Error('CI rerun evidence is stale');
     }
+    const runKey = (run: PrCiFailure['checks'][number]['run']) => {
+      const url = new URL(run.url);
+      return JSON.stringify([url.origin, url.pathname.split('/').slice(0, 3), run.id, run.attempt]);
+    };
+    const runsWithLogs = new Set(
+      failure.checks
+        .filter(({ jobs }) => jobs.some((job) => job.log !== undefined && job.log.trim().length > 0))
+        .map(({ run }) => runKey(run)),
+    );
     if (!failure.complete || failure.unavailable.length > 0 || failure.checks.length === 0
       || failure.checks.some(({ run, jobs }) => run.headSha !== failure.headSha
-        || jobs.length === 0 || jobs.some((job) => job.notStarted !== true && (job.log === undefined || job.log.trim().length === 0)))) {
+        || jobs.length === 0 || jobs.some((job) => {
+          if (job.notStarted === true) return false;
+          if (job.cancelledBySibling === true) return !runsWithLogs.has(runKey(run));
+          return job.log === undefined || job.log.trim().length === 0;
+        }))) {
       throw new Error('CI rerun requires complete failure evidence');
     }
     const provider = options.gitProvider ?? getGitProvider();

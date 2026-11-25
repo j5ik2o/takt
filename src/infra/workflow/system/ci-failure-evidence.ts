@@ -26,6 +26,11 @@ async function writeOnce(path: string, content: string): Promise<void> {
   }
 }
 
+function runLogKey(run: PrCiFailure['checks'][number]['run']): string {
+  const url = new URL(run.url);
+  return JSON.stringify([url.origin, url.pathname.split('/').slice(0, 3), run.id, run.attempt]);
+}
+
 async function saveIndex(
   failure: PrCiFailure,
   directory: string,
@@ -36,6 +41,11 @@ async function saveIndex(
 ): Promise<{ failure: PrCiFailure; manifestPath: string; logCount: number }> {
   const saved = new Map<string, string>();
   const unavailable = [...failure.unavailable];
+  const runsWithLogs = new Set(
+    failure.checks
+      .filter(({ jobs }) => jobs.some((job) => Boolean(job.log?.trim())))
+      .map(({ run }) => runLogKey(run)),
+  );
   const addUnavailable = (item: PrCiFailure['unavailable'][number]) => {
     if (unavailable.some((existing) => existing.name === item.name && existing.url === item.url
       && existing.reason === item.reason)) return;
@@ -44,6 +54,7 @@ async function saveIndex(
   const checks = [];
   for (const check of failure.checks) {
     const jobs = [];
+    const checkRunKey = runLogKey(check.run);
     if (check.jobs.length === 0) {
       addUnavailable({ name: check.name, url: check.run.url, reason: 'Failed check has no job evidence' });
     }
@@ -51,6 +62,10 @@ async function saveIndex(
       signal?.throwIfAborted();
       if (job.notStarted === true) {
         jobs.push({ id: job.id, name: job.name, url: job.url, logPath: null, notStarted: true });
+        continue;
+      }
+      if (job.cancelledBySibling === true && !job.log?.trim() && runsWithLogs.has(checkRunKey)) {
+        jobs.push({ id: job.id, name: job.name, url: job.url, logPath: null, cancelledBySibling: true });
         continue;
       }
       if (!job.log?.trim()) {
@@ -118,14 +133,16 @@ export async function saveCiFailureEvidence(
     ? canonical
     : await saveIndex(canonical.failure, viewDirectory, fixRounds, rerunCount, recoveryError, signal);
   const notStarted = view.failure.checks.flatMap(({ jobs }) => jobs).filter((job) => job.notStarted === true).length;
+  const cancelledBySibling = view.failure.checks.flatMap(({ jobs }) => jobs).filter((job) => job.cancelledBySibling === true).length;
   const external = view.failure.external?.length ?? 0;
   const notes = [
     ...(notStarted === 0 ? [] : [`${notStarted} failed job(s) are marked notStarted: cancelled before any step ran, so no log exists. They never ran the code; judge why they did not start, and do not treat them as passed.`]),
+    ...(cancelledBySibling === 0 ? [] : [`${cancelledBySibling} failed job(s) are marked cancelledBySibling: cancelled mid-execution after a sibling job in the same run failed (such as fail-fast), so no failure log exists. Judge the sibling failure log, and do not treat them as passed.`]),
     ...(external === 0 ? [] : [`${external} failed check(s) are listed under external: they have no Actions log and cannot be diagnosed or rerun here. They remain failed; judge the other checks on their own evidence.`]),
   ];
   return { failure: view.failure, logCount: view.logCount,
     promptEvidence: [
-      `PR #${failure.number}; HEAD ${failure.headSha}; complete=${view.failure.complete}; checks=${view.failure.checks.length}; unique job logs=${view.logCount}; not started jobs=${notStarted}; external checks=${external}; unavailable=${view.failure.unavailable.length}; fixRounds=${fixRounds}; rerunCount=${rerunCount}.`,
+      `PR #${failure.number}; HEAD ${failure.headSha}; complete=${view.failure.complete}; checks=${view.failure.checks.length}; unique job logs=${view.logCount}; not started jobs=${notStarted}; cancelled by sibling jobs=${cancelledBySibling}; external checks=${external}; unavailable=${view.failure.unavailable.length}; fixRounds=${fixRounds}; rerunCount=${rerunCount}.`,
       ...notes,
       `Evidence index: ${view.manifestPath}`,
     ].join('\n'),

@@ -14,6 +14,8 @@ export const PrCiFailureSchema = z.object({
       id: z.number().int().positive(), name: z.string(), url: z.string().url(), log: z.string().optional(),
       // Cancelled before any step ran: no log exists, and none is missing.
       notStarted: z.boolean().optional(),
+      // Cancelled mid-execution after a sibling job in the same run failed (e.g. fail-fast): --log-failed has no log.
+      cancelledBySibling: z.boolean().optional(),
     })),
   })),
   // Failed checks with no Actions log reference (commit statuses, third-party checks).
