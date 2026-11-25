@@ -34,18 +34,22 @@ export class BoundedSensitiveValues {
   skippedValueCount = 0;
   skippedValueBytes = 0;
   truncatedSourceCount = 0;
+  private inheritedUntrackedValues = false;
 
   get hasUntrackedValues(): boolean {
-    return this.exhausted || this.skippedValueCount > 0 || this.truncatedSourceCount > 0;
+    return (
+      this.exhausted
+      || this.skippedValueCount > 0
+      || this.truncatedSourceCount > 0
+      || this.inheritedUntrackedValues
+    );
   }
 
   collect(source: unknown): void {
-    if (this.exhausted) return;
+    if (source === this || this.exhausted) return;
     const isBoundedSource = source instanceof BoundedSensitiveValues;
-    if (isBoundedSource) {
-      this.skippedValueCount += source.skippedValueCount;
-      this.skippedValueBytes += source.skippedValueBytes;
-      this.truncatedSourceCount += source.truncatedSourceCount;
+    if (isBoundedSource && source.hasUntrackedValues) {
+      this.inheritedUntrackedValues = true;
     }
     const collected = collectSensitiveStringValues(source, MAX_INSPECTED_BYTES_PER_SOURCE);
     if (!isBoundedSource && collected.truncated) {
@@ -81,6 +85,7 @@ export class BoundedSensitiveValues {
     this.skippedValueCount = 0;
     this.skippedValueBytes = 0;
     this.truncatedSourceCount = 0;
+    this.inheritedUntrackedValues = false;
   }
 }
 

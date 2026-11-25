@@ -255,4 +255,15 @@ describe('Phase1ExecutionLog', () => {
     expect(reportInput).toContain('[REDACTED]');
   });
 
+  it('masks consecutive overlapping echoes of a repetitive 64KiB URL password', () => {
+    const password = 'x@'.repeat(32 * 1024);
+    const log = new Phase1ExecutionLog();
+    log.recordEvent({ type: 'text', data: { text: `https://u:${password}@host\n` } });
+    log.recordEvent({ type: 'text', data: { text: password.repeat(3) } });
+
+    const reportInput = log.toReportInput();
+    expect(reportInput).not.toContain('x@x@x@');
+    expect(reportInput).toContain('[REDACTED]');
+  });
+
 });

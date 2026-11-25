@@ -665,6 +665,27 @@ describe('sensitiveText', () => {
     expect(bounded.values.has('later-secret-value')).toBe(true);
   });
 
+  it('does not inflate skipped counters when two BoundedSensitiveValues sync repeatedly', () => {
+    const primary = createBoundedSensitiveValues();
+    const mirror = createBoundedSensitiveValues();
+    const oversized = 'x'.repeat(MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES + 1);
+    primary.collect({ token: oversized });
+    primary.collect({ token: 'normal-secret' });
+
+    for (let i = 0; i < 5; i += 1) {
+      mirror.collect(primary);
+      primary.collect(mirror);
+    }
+
+    expect(primary.skippedValueCount).toBe(1);
+    expect(primary.skippedValueBytes).toBe(MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES + 1);
+    expect(primary.hasUntrackedValues).toBe(true);
+    expect(mirror.skippedValueCount).toBe(0);
+    expect(mirror.skippedValueBytes).toBe(0);
+    expect(mirror.hasUntrackedValues).toBe(true);
+    expect(mirror.values.has('normal-secret')).toBe(true);
+  });
+
   it('accepts exactly 1MiB of retained sensitive candidate bytes across bounded values', () => {
     const bounded = createBoundedSensitiveValues();
     const count = MAX_TRACKED_SENSITIVE_VALUE_BYTES / MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES;

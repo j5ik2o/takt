@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { Phase1ExecutionLog } from '../core/workflow/phase1-execution-log.js';
 import {
   createSensitiveTextStreamRedactor,
   MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES,
@@ -126,13 +127,34 @@ describe('sensitive text stream redactor performance', () => {
     expect(elapsed(256 * 1024)).toBeLessThan(2000);
   });
 
-  it('keeps sanitizeSensitiveTextWithKnownValues linear on long @-containing URL passwords', () => {
+  it('keeps sanitizeSensitiveTextWithKnownValues linear on overlapping copies of a repetitive long URL password', () => {
     const elapsed = (bytes: number): number => {
-      const url = 'https://u:' + 'p@'.repeat(bytes / 2) + 'host';
-      const text = 'echoed ' + 'p@'.repeat(bytes / 2);
+      const password = 'x@'.repeat(bytes / 2);
+      const url = `https://u:${password}@host`;
+      const text = `echoed ${password.repeat(2)}`;
       const start = performance.now();
-      sanitizeSensitiveTextWithKnownValues(text, { command: url });
-      return performance.now() - start;
+      const masked = sanitizeSensitiveTextWithKnownValues(text, { command: url });
+      const duration = performance.now() - start;
+      expect(masked).toBe('echoed [REDACTED]');
+      return duration;
+    };
+    elapsed(1024); // warm up regexes and JIT
+
+    expect(elapsed(64 * 1024)).toBeLessThan(500);
+    expect(elapsed(256 * 1024)).toBeLessThan(2000);
+  });
+
+  it('keeps Phase1ExecutionLog linear on consecutive echoes of a repetitive long URL password', () => {
+    const elapsed = (bytes: number): number => {
+      const password = 'x@'.repeat(bytes / 2);
+      const log = new Phase1ExecutionLog();
+      log.recordEvent({ type: 'text', data: { text: `https://u:${password}@host\n` } });
+      log.recordEvent({ type: 'text', data: { text: password.repeat(3) } });
+      const start = performance.now();
+      const output = log.toReportInput();
+      const duration = performance.now() - start;
+      expect(output).not.toContain('x@x@x@');
+      return duration;
     };
     elapsed(1024); // warm up regexes and JIT
 

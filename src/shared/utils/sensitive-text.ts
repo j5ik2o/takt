@@ -422,8 +422,44 @@ function knownValueRanges(text: string, values: ReadonlySet<string>): SensitiveR
 export function substringSensitiveRanges(text: string, values: Iterable<string>): SensitiveRange[] {
   const ranges: SensitiveRange[] = [];
   for (const value of values) {
-    if (value === '') continue;
-    for (let start = text.indexOf(value); start >= 0; start = text.indexOf(value, start + 1)) ranges.push({ start, end: start + value.length });
+    const length = value.length;
+    if (length === 0 || length > text.length) continue;
+    const first = text.indexOf(value);
+    if (first < 0) continue;
+    let spanStart = first;
+    let spanEnd = first + length;
+    if (spanEnd === text.length) {
+      ranges.push({ start: spanStart, end: spanEnd });
+      continue;
+    }
+    // KMP with on-the-fly span merging keeps overlapping copies of a long repetitive value
+    // linear in O(|text| + |value|) instead of quadratic repeated indexOf(value, start + 1).
+    const failure = new Int32Array(length);
+    for (let i = 1, k = 0; i < length; i++) {
+      while (k > 0 && value[i] !== value[k]) k = failure[k - 1]!;
+      if (value[i] === value[k]) k++;
+      failure[i] = k;
+    }
+    let matched = failure[length - 1]!;
+    for (let i = spanEnd; i < text.length; i++) {
+      while (matched > 0 && text[i] !== value[matched]) matched = failure[matched - 1]!;
+      if (text[i] === value[matched]) {
+        matched++;
+        if (matched === length) {
+          const matchStart = i + 1 - length;
+          const matchEnd = i + 1;
+          if (matchStart <= spanEnd) {
+            spanEnd = matchEnd;
+          } else {
+            ranges.push({ start: spanStart, end: spanEnd });
+            spanStart = matchStart;
+            spanEnd = matchEnd;
+          }
+          matched = failure[matched - 1]!;
+        }
+      }
+    }
+    ranges.push({ start: spanStart, end: spanEnd });
   }
   return ranges;
 }
