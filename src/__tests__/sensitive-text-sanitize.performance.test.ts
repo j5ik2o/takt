@@ -195,42 +195,55 @@ describe('sanitizeSensitiveText scaling property-based test (fast-check)', () =>
     sep: fc.constantFrom(';', ',', '&', '|', ' ', '\n'),
   }).map(({ pieces, sep }) => `${pieces.join(sep)}${sep}`);
 
-  function medianElapsedMs(input: string, iterations = 3): number {
-    const samples: number[] = [];
-    for (let i = 0; i < iterations; i += 1) {
+  function runOnce(input: string): void {
+    sanitizeSensitiveText(input);
+    const collected = new Set<string>();
+    collectEmbeddedSensitiveValues(input, collected);
+  }
+
+  function medianBatchMs(input: string, repeats: number, samples = 3): number {
+    const timings: number[] = [];
+    for (let s = 0; s < samples; s += 1) {
       const start = performance.now();
-      sanitizeSensitiveText(input);
-      const collected = new Set<string>();
-      collectEmbeddedSensitiveValues(input, collected);
-      samples.push(performance.now() - start);
+      for (let r = 0; r < repeats; r += 1) {
+        runOnce(input);
+      }
+      timings.push(performance.now() - start);
     }
-    samples.sort((a, b) => a - b);
-    return samples[Math.floor(samples.length / 2)]!;
+    timings.sort((a, b) => a - b);
+    return timings[Math.floor(timings.length / 2)]!;
   }
 
   // Property 5: 4x input length stays within a constant multiple of 4x runtime (no quadratic blowup)
   it(`Property 5 (linear scaling): 4x input length scales linearly without quadratic blowup (${perfNumRuns} runs)`, () => {
     const baseBytes = 32 * 1024;
     const quadBytes = baseBytes * 4;
+    const minBaseBatchMs = 8;
+    const maxBatchRepeats = 32;
 
     // Warm up JIT and regexes once before timing.
     const warmup = 'https://token:p@host;TOKEN=left@RIGHT_SECRET;'.repeat(64);
-    sanitizeSensitiveText(warmup);
-    collectEmbeddedSensitiveValues(warmup, new Set());
+    runOnce(warmup);
 
     fc.assert(
       fc.property(perfUnitArb, (unit) => {
         const baseInput = unit.repeat(Math.ceil(baseBytes / unit.length)).slice(0, baseBytes);
         const quadInput = unit.repeat(Math.ceil(quadBytes / unit.length)).slice(0, quadBytes);
 
-        const tBase = medianElapsedMs(baseInput);
-        const tQuad = medianElapsedMs(quadInput);
+        // Calibrate batch repeat count so the base measurement stays well above timer noise
+        // without masking quadratic blowups (e.g. 0.5ms -> 8ms = 16x) behind an artificial floor.
+        let repeats = 1;
+        let tBase = medianBatchMs(baseInput, repeats);
+        while (tBase < minBaseBatchMs && repeats < maxBatchRepeats) {
+          repeats *= 2;
+          tBase = medianBatchMs(baseInput, repeats);
+        }
+        const tQuad = medianBatchMs(quadInput, repeats);
 
-        // Linear scaling gives ~4x. Allow a 2.5x constant headroom (10x max over a 2ms noise floor)
-        // so slow CI runners do not flake while O(n^2) blowups (~16x+) fail reliably.
-        const maxAllowedMs = Math.max(tBase, 2.0) * 10;
-        expect(tQuad).toBeLessThanOrEqual(maxAllowedMs);
-        expect(tQuad).toBeLessThan(500);
+        // Linear scaling gives ~4x. Allow a 2.5x headroom (10x max) for CI jitter while
+        // still failing quadratic regressions (~16x).
+        expect(tQuad / tBase).toBeLessThanOrEqual(10);
+        expect(tQuad / repeats).toBeLessThan(500);
       }),
       { numRuns: perfNumRuns },
     );

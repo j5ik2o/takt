@@ -965,10 +965,17 @@ describe('sensitiveText property-based tests (fast-check)', () => {
       fc.property(mixedOrAdversarialArb, knownSecretArb, (input, extraKnown) => {
         const known = new Set(extraKnown);
         const rawRanges = sensitiveTextRanges(input, known);
+        // Validate every raw range before merging so inverted endpoints (end < start)
+        // or out-of-bounds indices are caught even if merging drops zero-width spans.
+        for (const range of rawRanges) {
+          expect(range.start).toBeGreaterThanOrEqual(0);
+          expect(range.end).toBeLessThanOrEqual(input.length);
+          expect(range.end).toBeGreaterThanOrEqual(range.start);
+        }
         const merged = oracleMergeRanges(rawRanges);
         const output = sanitizeTextWithValues(input, known);
 
-        // Every range must lie strictly within input bounds.
+        // Every merged range must be strictly non-empty and within input bounds.
         for (const range of merged) {
           expect(range.start).toBeGreaterThanOrEqual(0);
           expect(range.end).toBeLessThanOrEqual(input.length);
