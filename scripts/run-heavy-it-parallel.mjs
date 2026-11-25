@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolveHeavyItTargets } from './heavy-it-guard.mjs';
+import { terminateLeftoverTurnProcesses } from './leftover-turn-processes.mjs';
 import { resolveNpmInvocation } from './npm-invocation.mjs';
 
 const vitestPath = fileURLToPath(new URL('../node_modules/vitest/vitest.mjs', import.meta.url));
@@ -29,3 +30,10 @@ if (ignoreScripts !== 'true') {
 }
 
 process.exitCode = run(process.execPath, [vitestPath, ...vitestArgs]);
+
+const leftovers = await terminateLeftoverTurnProcesses(fileURLToPath(new URL('..', import.meta.url)));
+if (leftovers.length > 0) {
+  console.error(`[takt] Heavy IT left ${leftovers.length} daemon turn process(es) running; they were terminated:`);
+  for (const { pid, cwd } of leftovers) console.error(`  pid ${pid} (cwd ${cwd})`);
+  process.exitCode = 1;
+}
