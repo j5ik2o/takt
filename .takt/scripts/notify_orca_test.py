@@ -371,6 +371,33 @@ def test_order_from_task_dir_when_run_dir_is_gone() -> None:
         assert "送信した" in ws.log(ws.project / ".takt")
 
 
+def test_order_from_content_file_when_run_dir_is_gone() -> None:
+    for label, make_path in {
+        "相対パス": lambda ws: (".takt/tasks/custom-order.md", ws.project / ".takt" / "tasks" / "custom-order.md"),
+        "絶対パス": lambda ws: (str(ws.base / "abs-order.md"), ws.base / "abs-order.md"),
+    }.items():
+        with Workspace("placeholder\n") as ws:
+            shutil.rmtree(ws.clone)
+            shutil.rmtree(ws.task_dir)
+            configured, file_path = make_path(ws)
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            file_path.write_text("file-backed task\norca: bot=ops-bot item=149\n", encoding="utf-8")
+            tasks = ws.project / ".takt" / "tasks.yaml"
+            tasks.write_text(
+                tasks.read_text(encoding="utf-8").replace(
+                    f"    task_dir: .takt/tasks/{SLUG}\n",
+                    f"    content_file: {configured}\n",
+                ),
+                encoding="utf-8",
+            )
+            completed, _ = ws.run_script(env=ws.finish_env("failed", TAKT_FINISH_RUN_DIR=None))
+            assert completed.returncode == 0, label
+            args = ws.args()
+            assert option(args, "--to") == "bot:ops-bot", (label, args)
+            assert option(args, "--item") == "149", (label, args)
+            assert f"指示文: {file_path}" in ws.body(), (label, ws.body())
+
+
 def test_entry_is_narrowed_by_run_slug_when_name_is_not_unique() -> None:
     stale = (
         "  - name: sample-task\n"
@@ -594,6 +621,7 @@ def main() -> int:
         test_unknown_status_is_not_sent,
         test_issue_and_item_are_not_confused,
         test_order_from_task_dir_when_run_dir_is_gone,
+        test_order_from_content_file_when_run_dir_is_gone,
         test_entry_is_narrowed_by_run_slug_when_name_is_not_unique,
         test_ledger_issue_and_pr_number_are_reported,
         test_github_issue_and_pr_orders_cannot_hijack_routing,

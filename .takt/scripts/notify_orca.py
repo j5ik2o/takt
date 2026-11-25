@@ -264,6 +264,9 @@ def read_order(run_dir: Path | None, project: Path, entry: dict) -> tuple[str, P
         candidates.append(run_dir / "context" / "task" / "order.md")
     if entry.get("task_dir"):
         candidates.append(project / entry["task_dir"] / "order.md")
+    if entry.get("content_file"):
+        content_path = Path(entry["content_file"])
+        candidates.append(content_path if content_path.is_absolute() else project / content_path)
     for path in candidates:
         try:
             return path.read_text(encoding="utf-8", errors="replace"), path
