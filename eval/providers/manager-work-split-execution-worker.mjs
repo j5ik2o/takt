@@ -18,6 +18,7 @@ import { TAKT_MANAGER_MCP_SERVER_NAME } from '../../dist/features/manager/manage
 import { GoalStore } from '../../dist/infra/goals/store.js';
 import { withdrawGoalQuestion } from '../../dist/infra/goals/questions.js';
 import { getTaktGoal } from '../../dist/features/mcp/operations.js';
+import { clearGoalPullRequestStatusCache } from '../../dist/infra/goals/pull-request-status.js';
 import { askTaktGoalQuestion } from '../../dist/features/mcp/goalQuestionOperations.js';
 import { recordTaktGoalWorkLog } from '../../dist/features/mcp/goalWorkLogOperations.js';
 import { getTaskGoalIntegrations } from '../../dist/features/mcp/goalTaskIntegration.js';
@@ -25,7 +26,7 @@ import { appendGoalWorkLog } from '../../dist/infra/goals/workLog.js';
 import { invalidateGlobalConfigCache } from '../../dist/infra/config/global/globalConfig.js';
 import * as schemas from '../../dist/features/mcp/schemas.js';
 import { managerWriteSchemas, loadManagerCase } from '../manager-work-split-prompt.mjs';
-import { prepareNoWaitFixture, noWaitExecutionCases } from '../fixtures/manager-no-wait.mjs';
+import { prepareNoWaitFixture, noWaitExecutionCases, PRODUCT_CALL_ENV } from '../fixtures/manager-no-wait.mjs';
 import { listTaktWorkflows } from '../../dist/features/mcp/goalOperations.js';
 import { getTaktWorkflow } from '../../dist/features/mcp/workflowOperations.js';
 import { executionConfig } from './manager-work-split-execution.mjs';
@@ -110,13 +111,25 @@ async function toolDescriptions(state) {
   return descriptions;
 }
 
+let productCalls = 0;
+
+// TAKT's own gh calls inside a tool handler inherit this marker, so the fake gh does not count them as manager observations.
+async function asProductCall(run) {
+  productCalls += 1;
+  process.env[PRODUCT_CALL_ENV] = '1';
+  try { return await run(); } finally {
+    productCalls -= 1;
+    if (productCalls === 0) delete process.env[PRODUCT_CALL_ENV];
+  }
+}
+
 function localServer(state, saveEvent) {
   const descriptions = state.descriptions;
   const server = new McpServer({ name: 'manager-eval', version: '1.0.0' });
   const registerMcpResult = (name, schema, handler) => server.registerTool(name, { inputSchema: schema.shape, description: descriptions.get(name) }, async (args) => {
     if (args.cwd !== state.cwd || (args.goalId !== undefined && !(state.goals ?? [state.goal]).some(({ id }) => id === args.goalId))) throw new Error('Wrong fixture repository or goal');
     saveEvent({ type: 'mcp_call', data: { tool: name, input: args } });
-    const result = await handler(args);
+    const result = await asProductCall(() => handler(args));
     if (name === 'takt_get_workflow') saveEvent({ type: 'workflow_read', data: { input: args, success: result.isError !== true } });
     return result;
   });
@@ -139,7 +152,7 @@ function localServer(state, saveEvent) {
   });
   server.registerTool('takt_get_goal', { inputSchema: schemas.getGoalInputSchema.shape }, async (args) => {
     saveEvent({ type: 'mcp_call', data: { tool: 'takt_get_goal', input: args } });
-    return getTaktGoal(args, { allowedProjectRoot: state.cwd });
+    return asProductCall(() => getTaktGoal(args, { allowedProjectRoot: state.cwd }));
   });
   register('takt_list_goals', schemas.listGoalsInputSchema, async () => ({ goals: await Promise.all((state.goals ?? [state.goal]).map(({ id }) => state.store.get(id))) }));
   register('takt_list_tasks', schemas.listTasksInputSchema, async () => ({ tasks: state.tasks ?? [{ ...state.task, ...(await getTaskGoalIntegrations(state.cwd, [state.task], undefined))[0] }] }));
@@ -242,6 +255,8 @@ export async function runManagerExecution(config, artifactDir, signal, suppliedP
     const task = { ...seed.tasks[0], goalId: goal.id, filePath: join(cwd, '.takt/tasks.yaml'), completion: { ...seed.tasks[0].completion, branch: 'task/import', sha: resultSha } };
     state = { cwd, goal, store, goalSha, resultSha, task, workLog: trial.workLog, turn: 0 };
     if (noWaitExecutionCases.has(config.case)) {
+      // Each trial starts like a fresh TAKT process, without PR reads cached by an earlier in-process trial.
+      clearGoalPullRequestStatusCache();
       const fixture = await prepareNoWaitFixture(state, root, checksPath, config);
       process.env.PATH = `${fixture.bin}:${previousPath}`;
       writeFileSync(join(projectConfig, 'config.yaml'), stringify({ manager: { main_merge: 'approve', auto_run: false } }));

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { appendGoalWorkLog } from '../../dist/infra/goals/workLog.js';
 import { loadManagerCase } from '../manager-work-split-prompt.mjs';
 
+export const PRODUCT_CALL_ENV = 'TAKT_EVAL_PRODUCT_CALL';
 export const noWaitExecutionCases = new Set(['two-goal-pr-execution', 'finite-check-external-execution']);
 
 export async function prepareNoWaitFixture(state, root, checksPath, config) {
@@ -11,7 +12,7 @@ export async function prepareNoWaitFixture(state, root, checksPath, config) {
   const observer = `import {appendFileSync} from 'node:fs';
 const args = process.argv.slice(2);
 const watch = args.includes('watch') || args.includes('--watch');
-appendFileSync(${JSON.stringify(checksPath)}, JSON.stringify({kind:'external', at:Date.now(), args, watch})+'\\n');
+appendFileSync(${JSON.stringify(checksPath)}, JSON.stringify({kind:process.env.${PRODUCT_CALL_ENV} ? 'product' : 'external', at:Date.now(), args, watch})+'\\n');
 console.log(JSON.stringify({status:'in_progress', conclusion:null, state:'OPEN', ready:false, statusCheckRollup:[{status:'IN_PROGRESS',conclusion:null}]}));
 `;
   const observerPath = join(root, 'external-status.mjs');

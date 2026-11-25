@@ -519,6 +519,7 @@ for (const caseId of ['two-goal-pr-execution', 'finite-check-external-execution'
       assert.equal(output.workflowDetailsRead, caseId === 'two-goal-pr-execution');
       assert.ok(output.commands.length > 0);
       assert.equal(output.externalObservations.length, 1);
+      if (caseId === 'two-goal-pr-execution') assert.ok(evidence.checks.some(({ kind }) => kind === 'product'));
       assert.equal(trial.turns.length, 2);
       assert.equal(process.env.PATH, priorPath);
       assert.equal(assertExecution(JSON.stringify(output), { vars: { case: caseId, lang: 'ja' } }).pass, true);
@@ -527,6 +528,29 @@ for (const caseId of ['two-goal-pr-execution', 'finite-check-external-execution'
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 }
+
+test('two-goal-pr-execution separates TAKT PR reads from manager reads and still rejects a repeated manager read', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'manager-product-read-'));
+  try {
+    // The fake manager reads the goal through takt_get_goal, which makes TAKT read PR #1950 itself.
+    const provider = fakeProvider(async ({ options, calls }) => {
+      if (calls !== 1) return;
+      for (const id of ['first', 'second']) {
+        options.onStream({ type: 'tool_use', data: { tool: 'Bash', id, input: { command: 'gh pr view 1951 --json statusCheckRollup' } } });
+        execFileSync('gh', ['pr', 'view', '1951', '--json', 'statusCheckRollup'], { cwd: options.cwd });
+      }
+    });
+    const trial = await runManagerExecution(config('two-goal-pr-execution'), root, new AbortController().signal, provider);
+    assert.equal(trial.error, undefined);
+    const evidence = readExecutionEvidence(root);
+    assert.ok(evidence.checks.some(({ kind, args }) => kind === 'product' && args.includes('https://github.com/example/project/pull/1950')));
+    assert.deepEqual(buildExecutionOutput(root, evidence).externalObservations.map(({ args }) => args),
+      [['pr', 'view', '1951', '--json', 'statusCheckRollup'], ['pr', 'view', '1951', '--json', 'statusCheckRollup']]);
+    const verdict = gradeExecution(trial, evidence.events, evidence.checks);
+    assert.equal(verdict.pass, false);
+    assert.match(verdict.reason, /Repeated an external state query/u);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test('two-goal fixture withdraws the specified goal question without changing the other goal', async () => {
   const root = mkdtempSync(join(tmpdir(), 'manager-question-target-'));
