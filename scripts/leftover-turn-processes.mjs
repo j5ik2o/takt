@@ -50,7 +50,7 @@ async function waitUntilGone(pids, timeoutMs) {
 export function findLeftoverTurnProcesses(repositoryRoot) {
   if (process.platform === 'win32') return [];
   const entries = [join(repositoryRoot, 'dist/app/daemon-turn/index.js'), join(repositoryRoot, 'src/app/daemon-turn/index.ts')];
-  return execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\n').flatMap((row) => {
+  return execFileSync('ps', ['-axww', '-o', 'pid=,command='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }).split('\n').flatMap((row) => {
     const match = /^\s*(\d+)\s+(.*)$/.exec(row);
     if (match === null || !entries.some((entry) => match[2].includes(entry))) return [];
     const pid = Number(match[1]);
