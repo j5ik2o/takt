@@ -39,6 +39,12 @@ async function resolve(source: string, ref?: string): Promise<DeepSeekHarnessPlu
   return result;
 }
 
+/**
+ * execFile rejects on abort before the killed child handles SIGTERM, so a stopped marker can appear after the
+ * rejection. Children delay that marker so a test that reads it without waitForFile fails every time, not intermittently.
+ */
+const STOPPED_MARKER_DELAY_MS = 200;
+
 /** Wait a bounded interval for a child process to publish its lifecycle marker. */
 async function waitForFile(filePath: string): Promise<void> {
   const deadline = Date.now() + 5_000;
@@ -54,16 +60,18 @@ async function waitForFile(filePath: string): Promise<void> {
   throw new Error('Timed out waiting for the child-process marker');
 }
 
-/** Create an observable child that remains active until cancellation sends SIGTERM. */
+/** Create an observable child that remains active until cancellation sends SIGTERM; it handles SIGTERM before reporting start. */
 async function createHangingExecutable(directory: string, command: string): Promise<void> {
   await writeFile(path.join(directory, command), [
     '#!/usr/bin/env node',
     "import { writeFileSync } from 'node:fs';",
-    "writeFileSync(process.env.TAKT_GIT_PLUGIN_CHILD_STARTED, 'started');",
     'process.on(\'SIGTERM\', () => {',
-    "  writeFileSync(process.env.TAKT_GIT_PLUGIN_CHILD_STOPPED, 'stopped');",
-    '  process.exit(0);',
+    '  setTimeout(() => {',
+    "    writeFileSync(process.env.TAKT_GIT_PLUGIN_CHILD_STOPPED, 'stopped');",
+    '    process.exit(0);',
+    `  }, ${STOPPED_MARKER_DELAY_MS});`,
     '});',
+    "writeFileSync(process.env.TAKT_GIT_PLUGIN_CHILD_STARTED, 'started');",
     'setInterval(() => {}, 1_000);',
   ].join('\n'), { mode: 0o755 });
 }
@@ -76,11 +84,13 @@ async function createCheckoutBlockingGit(directory: string, realGit: string): Pr
     "import { spawnSync } from 'node:child_process';",
     'const args = process.argv.slice(2);',
     "if (args.includes('checkout')) {",
-    "  writeFileSync(process.env.TAKT_GIT_PLUGIN_CHILD_STARTED, 'started');",
     '  process.on(\'SIGTERM\', () => {',
-    "    writeFileSync(process.env.TAKT_GIT_PLUGIN_CHILD_STOPPED, 'stopped');",
-    '    process.exit(0);',
+    '    setTimeout(() => {',
+    "      writeFileSync(process.env.TAKT_GIT_PLUGIN_CHILD_STOPPED, 'stopped');",
+    '      process.exit(0);',
+    `    }, ${STOPPED_MARKER_DELAY_MS});`,
     '  });',
+    "  writeFileSync(process.env.TAKT_GIT_PLUGIN_CHILD_STARTED, 'started');",
     '  setInterval(() => {}, 1_000);',
     '} else {',
     `  const result = spawnSync(${JSON.stringify(realGit)}, args, { stdio: 'inherit' });`,
@@ -630,6 +640,7 @@ describe('DeepSeek Harness Git plugin resolution', () => {
       await waitForFile(startedMarker);
       controller.abort(new Error('cancelled during checkout'));
       await expect(resolving).rejects.toThrow('cancelled during checkout');
+      await waitForFile(stoppedMarker);
       expect(await readFile(stoppedMarker, 'utf8')).toBe('stopped');
       expect((await readdir(tmpdir())).filter((entry) => entry.startsWith('takt-deepseek-plugin-')))
         .toEqual(directoriesBefore);
@@ -668,6 +679,7 @@ describe('DeepSeek Harness Git plugin resolution', () => {
       await waitForFile(startedMarker);
       controller.abort(new Error('cancelled during dependency install'));
       await expect(resolving).rejects.toThrow('cancelled during dependency install');
+      await waitForFile(stoppedMarker);
       expect(await readFile(stoppedMarker, 'utf8')).toBe('stopped');
       expect((await readdir(tmpdir())).filter((entry) => entry.startsWith('takt-deepseek-plugin-')))
         .toEqual(directoriesBefore);
