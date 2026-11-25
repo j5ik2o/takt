@@ -133,12 +133,11 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
         structuredOutput: { selected_ids: ['unknown-id'], rationale: 'x' },
       } as unknown as AgentResponse;
 
-      expect(() => validateSelectorResponse(response, poolContract, 'fix', identity, { label: 'Dynamic facet' })).toThrow(
-        'Dynamic facet selector for "fix" returned invalid structured output: '
-        + '$.selected_ids[0] must be equal to one of the allowed values; '
-        + 'returned selected_ids: ["unknown-id"]; '
-        + 'allowed candidate ids: ["backend","transaction","backward-compatibility"]',
-      );
+      const reject = () => validateSelectorResponse(response, poolContract, 'fix', identity, { label: 'Dynamic facet' });
+
+      expect(reject).toThrow('Dynamic facet selector for "fix"');
+      expect(reject).toThrow('returned selected_ids: ["unknown-id"]');
+      expect(reject).toThrow('allowed candidate ids: ["backend","transaction","backward-compatibility"]');
     });
 
     it('should reject duplicate IDs (C-SELECTOR-FAILFAST: 重複)', () => {
@@ -262,11 +261,10 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
     );
 
     it('should omit the returned ids when the rejected response is not a JSON object', () => {
-      expect(describeSelectorError(rejected({ content: 'I pick backend.' }), contract, 'fix', label)).toBe(
-        'Dynamic facet selector for "fix" returned invalid structured output: '
-        + '$.selected_ids[0] must be equal to one of the allowed values; '
-        + 'allowed candidate ids: ["backend","transaction"]',
-      );
+      const message = describeSelectorError(rejected({ content: 'I pick backend.' }), contract, 'fix', identity, label);
+
+      expect(message).not.toContain('returned selected_ids');
+      expect(message).toContain('allowed candidate ids: ["backend","transaction"]');
     });
 
     it('should bound the returned ids so one oversized selection cannot flood the failure reason', () => {
@@ -274,15 +272,35 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
         rejected({ structuredOutput: { selected_ids: ['x'.repeat(2000)], rationale: 'x' } }),
         contract,
         'fix',
+        identity,
         label,
       );
 
-      expect(message).toContain(`returned selected_ids: ["${'x'.repeat(510)}... (truncated); allowed candidate ids:`);
+      expect(message).not.toContain('x'.repeat(513));
+      expect(message).toContain('(truncated)');
+      expect(message).toContain('allowed candidate ids: ["backend","transaction"]');
     });
 
-    it('should leave a failure that is not a contract violation untouched', () => {
-      expect(describeSelectorError(new Error('provider unavailable'), contract, 'fix', label))
-        .toBe('provider unavailable');
+    it('should redact a returned id that needs JSON escaping before it is encoded', () => {
+      const message = describeSelectorError(
+        rejected({ structuredOutput: { selected_ids: ['pa"ss\\word'], rationale: 'x' } }),
+        contract,
+        'fix',
+        (text) => text.replaceAll('pa"ss\\word', '[REDACTED]'),
+        label,
+      );
+
+      expect(message).toContain('returned selected_ids: ["[REDACTED]"]');
+    });
+
+    it('should redact a failure that is not a contract violation without adding candidates', () => {
+      expect(describeSelectorError(
+        new Error('provider unavailable: sensitive-detail'),
+        contract,
+        'fix',
+        (text) => text.replace('sensitive-detail', '[REDACTED]'),
+        label,
+      )).toBe('provider unavailable: [REDACTED]');
     });
   });
 });

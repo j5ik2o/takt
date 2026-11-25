@@ -57,8 +57,15 @@ export function createSelectorContract(
   };
 }
 
-function renderReturnedIds(returned: unknown): string {
-  const rendered = JSON.stringify(returned);
+type Redact = (text: string) => string;
+
+/** Redacts each string before encoding: an escaped or shortened secret no longer matches its known value. */
+function renderIds(ids: unknown, redact: Redact): string {
+  return JSON.stringify(ids, (_key, value: unknown) => (typeof value === 'string' ? redact(value) : value));
+}
+
+function renderReturnedIds(returned: unknown, redact: Redact): string {
+  const rendered = renderIds(returned, redact);
   const truncated = truncateUtf8(rendered, RETURNED_IDS_MAX_BYTES).value;
   return truncated === rendered ? rendered : `${truncated}... (truncated)`;
 }
@@ -68,14 +75,15 @@ function invalidSelectorOutputMessage(
   structuredOutput: Record<string, unknown> | undefined,
   contract: SelectorContract,
   stepName: string,
+  redact: Redact,
   label: SelectorResponseLabel,
 ): string {
   const returned = structuredOutput?.selected_ids;
-  return [
+  return redact([
     `${label.label} selector for "${stepName}" returned invalid structured output: ${detail}`,
-    ...(returned === undefined ? [] : [`returned selected_ids: ${renderReturnedIds(returned)}`]),
-    `allowed candidate ids: ${JSON.stringify(contract.candidateIds)}`,
-  ].join('; ');
+    ...(returned === undefined ? [] : [`returned selected_ids: ${renderReturnedIds(returned, redact)}`]),
+    `allowed candidate ids: ${renderIds(contract.candidateIds, redact)}`,
+  ].join('; '));
 }
 
 function rejectedStructuredOutput(response: AgentResponse): Record<string, unknown> | undefined {
@@ -95,6 +103,7 @@ export function describeSelectorError(
   error: unknown,
   contract: SelectorContract,
   stepName: string,
+  redact: Redact,
   label: SelectorResponseLabel,
 ): string {
   return error instanceof StructuredAgentContractError
@@ -103,16 +112,17 @@ export function describeSelectorError(
       rejectedStructuredOutput(error.response),
       contract,
       stepName,
+      redact,
       label,
     )
-    : getErrorMessage(error);
+    : redact(getErrorMessage(error));
 }
 
 export function validateSelectorResponse(
   response: AgentResponse,
   contract: SelectorContract,
   stepName: string,
-  redact: (text: string) => string,
+  redact: Redact,
   label: SelectorResponseLabel,
 ): { readonly selectedIds: readonly string[]; readonly rationale: string } {
   if (response.status !== 'done') {
@@ -128,8 +138,13 @@ export function validateSelectorResponse(
   try {
     validateStructuredOutputAgainstSchema(response.structuredOutput, contract.validationSchema);
   } catch (error) {
-    throw new Error(redact(
-      invalidSelectorOutputMessage(getErrorMessage(error), response.structuredOutput, contract, stepName, label),
+    throw new Error(invalidSelectorOutputMessage(
+      getErrorMessage(error),
+      response.structuredOutput,
+      contract,
+      stepName,
+      redact,
+      label,
     ));
   }
   const selection = response.structuredOutput as {

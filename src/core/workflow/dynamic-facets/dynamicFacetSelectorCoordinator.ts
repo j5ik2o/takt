@@ -243,7 +243,7 @@ export class DynamicFacetSelectorCoordinator {
         response?.providerUsage,
       );
       signal?.throwIfAborted();
-      throw new Error(redact(describeSelectorError(error, selectorContract, step.name, SELECTOR_LABEL)));
+      throw new Error(describeSelectorError(error, selectorContract, step.name, redact, SELECTOR_LABEL));
     }
     recordAgentUsageEvent(
       this.deps.engineOptions,
