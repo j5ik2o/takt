@@ -106,10 +106,13 @@ interface WorkflowRunLoopDeps {
   applyRuntimeEnvironment: (stage: 'step') => void;
   loopDetectorCheck: (stepName: string) => { shouldWarn?: boolean; shouldAbort?: boolean; count: number; isLoop: boolean };
   cycleDetectorRecordAndCheck: (stepName: string, nextStep: string) => { triggered: boolean; monitor?: LoopMonitorConfig; cycleCount: number };
-  /** Counts an entry into the step; returns the stop reason when `max_visits` is already reached. */
-  stepVisitEnter: (step: WorkflowStep) => string | undefined;
-  /** Returns the stop reason when the step repeats its previous verdict (`stop_on_repeated_verdict`). */
-  stepVerdictRecordAndCheck: (step: WorkflowStep, matchedRuleIndex: number | undefined) => string | undefined;
+  /** Returns the stop reason when the step already completed `max_visits` visits. */
+  stepVisitCheckEntry: (step: WorkflowStep) => string | undefined;
+  /**
+   * Counts a completed visit (retries of the same visit never get here). Returns the stop reason when a
+   * non-terminal verdict repeats the previous one (`stop_on_repeated_verdict`); pass undefined for terminal ones.
+   */
+  stepVisitRecordCompletion: (step: WorkflowStep, matchedRuleIndex: number | undefined) => string | undefined;
   resolveDoneTransition: (step: WorkflowStep, response: AgentResponse) => WorkflowRuleTransition;
   runLoopMonitorJudge: (
     monitor: LoopMonitorConfig,
@@ -907,7 +910,7 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
       abort = abortWorkflow(deps, 'loop_detected', ERROR_MESSAGES.LOOP_DETECTED(step.name, loopCheck.count));
       break;
     }
-    const visitLimitReason = deps.stepVisitEnter(step);
+    const visitLimitReason = deps.stepVisitCheckEntry(step);
     if (visitLimitReason !== undefined) {
       abort = abortWorkflow(deps, 'loop_detected', visitLimitReason);
       break;
@@ -1202,7 +1205,7 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
         break;
       }
 
-      const repeatedVerdictReason = deps.stepVerdictRecordAndCheck(step, response.matchedRuleIndex);
+      const repeatedVerdictReason = deps.stepVisitRecordCompletion(step, response.matchedRuleIndex);
       if (repeatedVerdictReason !== undefined) {
         abort = abortWorkflow(deps, 'loop_detected', repeatedVerdictReason);
         break;
@@ -1317,7 +1320,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     });
   }
 
-  const visitLimitReason = loopCheck.shouldAbort ? undefined : deps.stepVisitEnter(step);
+  const visitLimitReason = loopCheck.shouldAbort ? undefined : deps.stepVisitCheckEntry(step);
   if (loopCheck.shouldAbort || visitLimitReason !== undefined) {
     const abort = abortWorkflow(
       deps,
@@ -1556,7 +1559,7 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   const nextStep = requireNextStep(step, transition);
   const isComplete = nextStep === COMPLETE_STEP || nextStep === ABORT_STEP;
 
-  const repeatedVerdictReason = isComplete ? undefined : deps.stepVerdictRecordAndCheck(step, response.matchedRuleIndex);
+  const repeatedVerdictReason = deps.stepVisitRecordCompletion(step, isComplete ? undefined : response.matchedRuleIndex);
   if (repeatedVerdictReason !== undefined) {
     const abort = abortWorkflow(deps, 'loop_detected', repeatedVerdictReason);
     return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };

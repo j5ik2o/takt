@@ -205,10 +205,15 @@ loop_monitors:
           next: ABORT
         - condition: 要件を満たす実現可能な打開手段がない
           next: ABORT
+  # replan → implement → peer-review → replan の往復は implement を挟むので、ignore_steps で外して数える。
+  # 2 周目（独立レビューが 2 回続けて再計画を求めた時点）で judge が直近 2 回のレビュー結果を比べ、
+  # 同じ指摘が新しい差分なしに繰り返されていれば止める。
   - cycle:
       - replan
       - peer-review
-    threshold: 3
+    ignore_steps:
+      - implement
+    threshold: 2
     judge:
       input_reports:
         - from_step: replan
@@ -359,7 +364,6 @@ steps:
         next: replan
 
   - name: peer-review
-    stop_on_repeated_verdict: true
     description: 専門レビューの指摘を裁定して修正・検証し、要件充足を確認して完了か再計画かを判断する
     kind: workflow_call
     call:

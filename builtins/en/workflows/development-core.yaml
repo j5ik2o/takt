@@ -194,10 +194,15 @@ loop_monitors:
           next: ABORT
         - condition: No feasible remedy exists that satisfies the requirements
           next: ABORT
+  # The replan → implement → peer-review → replan lap passes through implement, so ignore it when counting.
+  # On the 2nd lap (the independent review asked for a replan twice in a row) the judge compares the last
+  # two review results and stops when the same findings repeat without a new diff.
   - cycle:
       - replan
       - peer-review
-    threshold: 3
+    ignore_steps:
+      - implement
+    threshold: 2
     judge:
       input_reports:
         - from_step: replan
@@ -364,7 +369,6 @@ steps:
         next: replan
 
   - name: peer-review
-    stop_on_repeated_verdict: true
     description: Adjudicate specialist review findings, fix and verify them, then assess requirement fulfillment to decide whether to complete or replan.
     kind: workflow_call
     call:

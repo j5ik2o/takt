@@ -529,8 +529,8 @@ export class WorkflowEngine extends EventEmitter {
             };
           },
           cycleDetectorRecordAndCheck: (stepName, nextStep) => this.cycleDetector.recordAndCheck(stepName, nextStep),
-          stepVisitEnter: (step) => this.stepLoopGuard.enter(step),
-          stepVerdictRecordAndCheck: (step, matchedRuleIndex) => this.stepLoopGuard.recordVerdict(step, matchedRuleIndex),
+          stepVisitCheckEntry: (step) => this.stepLoopGuard.checkEntry(step),
+          stepVisitRecordCompletion: (step, matchedRuleIndex) => this.stepLoopGuard.recordCompletion(step, matchedRuleIndex),
           resolveDoneTransition: this.stepCoordinator.resolveTransitionFromDone.bind(this.stepCoordinator),
           runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
           runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
@@ -1119,8 +1119,8 @@ export class WorkflowEngine extends EventEmitter {
             };
           },
           cycleDetectorRecordAndCheck: (stepName, nextStep) => this.cycleDetector.recordAndCheck(stepName, nextStep),
-          stepVisitEnter: (step) => this.stepLoopGuard.enter(step),
-          stepVerdictRecordAndCheck: (step, matchedRuleIndex) => this.stepLoopGuard.recordVerdict(step, matchedRuleIndex),
+          stepVisitCheckEntry: (step) => this.stepLoopGuard.checkEntry(step),
+          stepVisitRecordCompletion: (step, matchedRuleIndex) => this.stepLoopGuard.recordCompletion(step, matchedRuleIndex),
           resolveDoneTransition: this.stepCoordinator.resolveTransitionFromDone.bind(this.stepCoordinator),
           runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
           runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
