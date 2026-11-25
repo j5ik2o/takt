@@ -71,6 +71,17 @@ describe('sensitiveText', () => {
     expect(sanitizeSensitiveTextWithKnownValues('echoed p@55-word', { command: text })).toBe('echoed [REDACTED]');
   });
 
+  // Known limits of reading the password up to the last `@` of the authority. Both err on the
+  // side of hiding the host; the second leaves a value readable that follows that `@`.
+  it.each([
+    ['hides the host when `;` separates a later address',
+      'url=https://u:p@db.internal;owner=ops@example.test', 'url=https://[REDACTED]@example.test'],
+    ['reads an assignment between two @ as the password and what follows as the host',
+      'https://u:p@token=@SECRET/path', 'https://[REDACTED]@SECRET/path'],
+  ])('%s', (_name, text, expected) => {
+    expect(sanitizeSensitiveText(text)).toBe(expected);
+  });
+
   // Known limit: a scheme is ASCII letters, digits, `+`, `-` and `.` with at least one letter.
   it.each(['aé://user:name@host', 'é://user:name@host'])('does not treat %s as a URL with credentials', (text) => {
     expect(sanitizeSensitiveText(text)).toBe(text);
