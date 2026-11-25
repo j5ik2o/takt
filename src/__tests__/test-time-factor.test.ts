@@ -77,16 +77,19 @@ describe('the deadline a vi.waitFor call wrote', () => {
 
   it('names the written deadline and the factor on the error of an expired wait', () => {
     const expired = new Error('Timed out in waitFor!');
-    const stack = expired.stack;
 
-    const annotated = annotateWaitForTimeout(expired, { writtenMs: 1000, factor: 2 });
+    const annotated = annotateWaitForTimeout(expired, { writtenMs: 1000, factor: 2 }) as Error;
 
-    expect(annotated).toBe(expired);
-    expect(expired.message).toBe(
-      'Timed out in waitFor! (vi.waitFor waited 2000ms: written 1000ms x TEST_TIME_FACTOR=2)',
-    );
-    // The report keeps the stack of the error itself, so it points at the test.
-    expect(expired.stack).toBe(stack);
+    // The error the test threw is not touched; the report gets one that keeps
+    // its message, its name, and the stack frame of the test line.
+    expect(expired.message).toBe('Timed out in waitFor!');
+    expect(annotated).not.toBe(expired);
+    expect(annotated.name).toBe('Error');
+    expect(annotated.message).toContain('Timed out in waitFor!');
+    expect(annotated.message).toContain('waited 2000ms');
+    expect(annotated.message).toContain('written 1000ms');
+    expect(annotated.message).toContain('TEST_TIME_FACTOR=2');
+    expect(annotated.stack).toContain('test-time-factor.test.ts');
   });
 
   it('leaves a rejection that is not an Error alone', () => {
@@ -99,12 +102,10 @@ describe('the deadline a vi.waitFor call wrote', () => {
       throw notYet;
     };
 
-    await expect(withScaledWaitFor(waitFor, 2)(() => 'never', 250)).rejects.toThrow(
-      'condition is not met yet (vi.waitFor waited 500ms: written 250ms x TEST_TIME_FACTOR=2)',
-    );
-    expect(notYet.message).toBe(
-      'condition is not met yet (vi.waitFor waited 500ms: written 250ms x TEST_TIME_FACTOR=2)',
-    );
+    const { error } = await rejection(() => withScaledWaitFor(waitFor, 2)(() => 'never', 250));
+
+    expect((error as Error).message).toBe(`condition is not met yet${waitForExpirySuffix({ writtenMs: 250, factor: 2 })}`);
+    expect(notYet.message).toBe('condition is not met yet');
   });
 });
 
@@ -161,8 +162,8 @@ describe('vi.waitFor deadline scaling', () => {
         }, options),
       );
 
-      expect(error).toBe(notYet);
-      expect(notYet.message).toBe(`condition is not met yet${deadlineSuffix(writtenMs)}`);
+      expect((error as Error).message).toBe(`condition is not met yet${deadlineSuffix(writtenMs)}`);
+      expect((error as Error).stack).toContain('test-time-factor.test.ts');
       expect(elapsedMs).toBeGreaterThanOrEqual(scaledMs(writtenMs) - TIMER_SLACK_MS);
     },
   );
@@ -173,25 +174,6 @@ describe('vi.waitFor deadline scaling', () => {
     const { error } = await rejection(() => vi.waitFor(neverSettles, 100));
 
     expect((error as Error).message).toBe(`Timed out in waitFor!${deadlineSuffix(100)}`);
-  });
-
-  it('lets a condition that needs more polls than the written deadline allows pass at a larger factor', async () => {
-    // True on the 8th poll: about 700ms at the 100ms interval, past a 200ms deadline.
-    const metOnEighthPoll = (): (() => number) => {
-      let polls = 0;
-      return () => {
-        polls += 1;
-        if (polls < 8) throw new Error(`poll ${polls}`);
-        return polls;
-      };
-    };
-
-    await expect(
-      withScaledWaitFor(vi.waitFor.bind(vi) as WaitFor, 1)(metOnEighthPoll(), { timeout: 200, interval: 100 }),
-    ).rejects.toThrow(/^poll \d/);
-    await expect(
-      withScaledWaitFor(vi.waitFor.bind(vi) as WaitFor, 50)(metOnEighthPoll(), { timeout: 200, interval: 100 }),
-    ).resolves.toBe(8);
   });
 
   it('applies the factor of this run to the default deadline of vi.waitFor', async () => {

@@ -7,6 +7,9 @@
  * a missing wait or a race: those fail at any factor.
  */
 
+/** The variable that carries the factor. */
+const ENV_NAME = 'TEST_TIME_FACTOR';
+
 /** `vi.waitFor` waits this long when a call gives no timeout (Vitest's default). */
 const WAIT_FOR_DEFAULT_TIMEOUT_MS = 1000;
 
@@ -15,11 +18,11 @@ const WAIT_FOR_DEFAULT_TIMEOUT_MS = 1000;
  * error: a mistyped `TEST_TIME_FACTOR=2x` must not silently run unscaled.
  */
 export function readTestTimeFactor(env = process.env) {
-  const raw = env.TEST_TIME_FACTOR;
+  const raw = env[ENV_NAME];
   if (raw === undefined || raw === '') return 1;
   const factor = Number(raw);
   if (!Number.isFinite(factor) || factor <= 0) {
-    throw new Error(`TEST_TIME_FACTOR must be a positive number, got ${JSON.stringify(raw)}`);
+    throw new Error(`${ENV_NAME} must be a positive number, got ${JSON.stringify(raw)}`);
   }
   return factor;
 }
@@ -53,20 +56,22 @@ export function writtenWaitForTimeoutMs(options) {
  */
 export function waitForExpirySuffix({ writtenMs, factor }) {
   if (factor === 1) return '';
-  return ` (vi.waitFor waited ${scaledMs(writtenMs, factor)}ms: written ${writtenMs}ms x TEST_TIME_FACTOR=${factor})`;
+  return ` (vi.waitFor waited ${scaledMs(writtenMs, factor)}ms: written ${writtenMs}ms x ${ENV_NAME}=${factor})`;
 }
 
 /**
  * Name the written deadline and the factor on a wait that ran out of time.
  * Vitest rejects a `waitFor` only when its deadline passes, so every rejection
- * of a scaled wait is an expiry. The error is the rejection value itself and its
- * message is appended in place: the report keeps the error's own stack, which
- * points at the test rather than at this wrapper.
+ * of a scaled wait is an expiry. The error the test threw is left as it was: the
+ * report gets a new error with the same name and the same stack frames, so it
+ * still points at the test line rather than at this wrapper.
  */
 export function annotateWaitForTimeout(error, { writtenMs, factor }) {
   if (!(error instanceof Error)) return error;
-  error.message = `${error.message}${waitForExpirySuffix({ writtenMs, factor })}`;
-  return error;
+  const annotated = new Error(`${error.message}${waitForExpirySuffix({ writtenMs, factor })}`);
+  annotated.name = error.name;
+  if (error.stack !== undefined) annotated.stack = error.stack.replace(error.message, annotated.message);
+  return annotated;
 }
 
 /** Wrap a `vi.waitFor` implementation so every call's deadline is scaled. */
