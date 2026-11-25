@@ -36,21 +36,28 @@ export function resolveWorkflowFile(workflowsDir: string, name: string): string 
   return null;
 }
 
+function isLookupDirExcludedForName(
+  lookupDir: Pick<NamedWorkflowLookupDir, 'source' | 'disabled'>,
+  name: string,
+): boolean {
+  return lookupDir.source === 'builtin' && (lookupDir.disabled?.includes(name) ?? false);
+}
+
 export function findWorkflowInLookupDirs<Source extends WorkflowTrustSource>(
   name: string,
   lookupDirs: NamedWorkflowLookupDir<Source>[],
 ): { filePath: string; source: Source } | null {
-  for (const { dir, source, disabled } of lookupDirs) {
-    if (source === 'builtin' && disabled?.includes(name)) {
+  for (const lookupDir of lookupDirs) {
+    if (isLookupDirExcludedForName(lookupDir, name)) {
       continue;
     }
 
-    const filePath = resolveWorkflowFile(dir, name);
+    const filePath = resolveWorkflowFile(lookupDir.dir, name);
     if (!filePath) {
       continue;
     }
 
-    return { filePath, source };
+    return { filePath, source: lookupDir.source };
   }
 
   return null;
@@ -86,7 +93,6 @@ interface NamedWorkflowLookupPlan {
 function buildNamedWorkflowLookupPlan(projectCwd: string, name?: string): NamedWorkflowLookupPlan {
   const config = resolveWorkflowConfigValues(projectCwd, ['enableBuiltinWorkflows', 'language', 'disabledBuiltins']);
   const builtinDir = getBuiltinWorkflowsDir(config.language);
-  const disabledBuiltins = config.disabledBuiltins ?? [];
   const lookupDirs: WorkflowLookupDir[] = [
     {
       dir: resolve(getProjectWorkflowsDir(projectCwd)),
@@ -103,7 +109,12 @@ function buildNamedWorkflowLookupPlan(projectCwd: string, name?: string): NamedW
     };
   }
 
-  if (name !== undefined && disabledBuiltins.includes(name)) {
+  const builtinEntry: WorkflowLookupDir = {
+    dir: builtinDir,
+    disabled: config.disabledBuiltins ?? [],
+    source: 'builtin',
+  };
+  if (name !== undefined && isLookupDirExcludedForName(builtinEntry, name)) {
     return {
       lookupDirs,
       builtinDir,
@@ -111,11 +122,7 @@ function buildNamedWorkflowLookupPlan(projectCwd: string, name?: string): NamedW
     };
   }
 
-  lookupDirs.push({
-    dir: builtinDir,
-    disabled: disabledBuiltins,
-    source: 'builtin',
-  });
+  lookupDirs.push(builtinEntry);
   return { lookupDirs, builtinDir };
 }
 
@@ -146,11 +153,11 @@ export function explainNamedWorkflowLookup(name: string, projectCwd: string): Na
 }
 
 export function getBuiltinWorkflowPath(name: string, projectCwd: string): string | null {
-  const config = resolveWorkflowConfigValues(projectCwd, ['enableBuiltinWorkflows', 'language', 'disabledBuiltins']);
-  if (config.enableBuiltinWorkflows === false || (config.disabledBuiltins ?? []).includes(name)) {
+  const plan = buildNamedWorkflowLookupPlan(projectCwd, name);
+  if (plan.builtinExclusion !== undefined) {
     return null;
   }
-  return resolveWorkflowFile(getBuiltinWorkflowsDir(config.language), name);
+  return resolveWorkflowFile(plan.builtinDir, name);
 }
 
 export function listBuiltinWorkflowNames(
