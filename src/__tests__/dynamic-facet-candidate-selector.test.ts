@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   createSelectorContract,
+  describeSelectorError,
   validateSelectorResponse,
 } from '../core/workflow/selector-contract.js';
+import { StructuredAgentContractError } from '../agents/structured-caller/transport.js';
 import type { AgentResponse } from '../core/models/types.js';
 import { assertStrictStructuredOutputSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 
@@ -58,7 +60,7 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
 
   describe('validateSelectorResponse', () => {
     const poolIds = ['backend', 'transaction', 'backward-compatibility'];
-    const { validationSchema } = createSelectorContract(candidates(poolIds));
+    const poolContract = createSelectorContract(candidates(poolIds));
 
     it('should accept a valid selection with unique IDs within the pool enum (C-SELECTOR-OUTPUT)', () => {
       const response: AgentResponse = {
@@ -70,7 +72,7 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
         },
       } as unknown as AgentResponse;
 
-      const result = validateSelectorResponse(response, validationSchema, 'fix', identity, { label: 'Dynamic facet' });
+      const result = validateSelectorResponse(response, poolContract, 'fix', identity, { label: 'Dynamic facet' });
       expect(result.selectedIds).toEqual(['backend', 'transaction']);
       expect(result.rationale).toBe('task needs backend and transaction expertise');
     });
@@ -82,7 +84,7 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
         structuredOutput: { selected_ids: [], rationale: 'no extra facets needed' },
       } as unknown as AgentResponse;
 
-      const result = validateSelectorResponse(response, validationSchema, 'fix', identity, { label: 'Dynamic facet' });
+      const result = validateSelectorResponse(response, poolContract, 'fix', identity, { label: 'Dynamic facet' });
       expect(result.selectedIds).toEqual([]);
     });
 
@@ -99,7 +101,7 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
 
       const result = validateSelectorResponse(
         response,
-        contract.validationSchema,
+        contract,
         'fix',
         identity,
         { label: 'Dynamic facet' },
@@ -116,7 +118,7 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
 
       const result = validateSelectorResponse(
         response,
-        validationSchema,
+        poolContract,
         'fix',
         (text) => text.replace('sensitive-value', '[REDACTED]'),
         { label: 'Dynamic facet' },
@@ -131,7 +133,12 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
         structuredOutput: { selected_ids: ['unknown-id'], rationale: 'x' },
       } as unknown as AgentResponse;
 
-      expect(() => validateSelectorResponse(response, validationSchema, 'fix', identity, { label: 'Dynamic facet' })).toThrow();
+      expect(() => validateSelectorResponse(response, poolContract, 'fix', identity, { label: 'Dynamic facet' })).toThrow(
+        'Dynamic facet selector for "fix" returned invalid structured output: '
+        + '$.selected_ids[0] must be equal to one of the allowed values; '
+        + 'returned selected_ids: ["unknown-id"]; '
+        + 'allowed candidate ids: ["backend","transaction","backward-compatibility"]',
+      );
     });
 
     it('should reject duplicate IDs (C-SELECTOR-FAILFAST: 重複)', () => {
@@ -141,7 +148,7 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
         structuredOutput: { selected_ids: ['backend', 'backend'], rationale: 'x' },
       } as unknown as AgentResponse;
 
-      expect(() => validateSelectorResponse(response, validationSchema, 'fix', identity, { label: 'Dynamic facet' })).toThrow();
+      expect(() => validateSelectorResponse(response, poolContract, 'fix', identity, { label: 'Dynamic facet' })).toThrow();
     });
 
     it('should reject a non-array selected_ids (C-SELECTOR-FAILFAST: 非配列)', () => {
@@ -151,7 +158,7 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
         structuredOutput: { selected_ids: 'backend', rationale: 'x' },
       } as unknown as AgentResponse;
 
-      expect(() => validateSelectorResponse(response, validationSchema, 'fix', identity, { label: 'Dynamic facet' })).toThrow();
+      expect(() => validateSelectorResponse(response, poolContract, 'fix', identity, { label: 'Dynamic facet' })).toThrow();
     });
 
     it('should reject a non-string element in selected_ids (C-SELECTOR-FAILFAST: 非文字列)', () => {
@@ -161,7 +168,7 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
         structuredOutput: { selected_ids: ['backend', 123], rationale: 'x' },
       } as unknown as AgentResponse;
 
-      expect(() => validateSelectorResponse(response, validationSchema, 'fix', identity, { label: 'Dynamic facet' })).toThrow();
+      expect(() => validateSelectorResponse(response, poolContract, 'fix', identity, { label: 'Dynamic facet' })).toThrow();
     });
 
     it('should reject a missing rationale (C-SELECTOR-OUTPUT: rationale 必須)', () => {
@@ -171,7 +178,7 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
         structuredOutput: { selected_ids: ['backend'] },
       } as unknown as AgentResponse;
 
-      expect(() => validateSelectorResponse(response, validationSchema, 'fix', identity, { label: 'Dynamic facet' })).toThrow();
+      expect(() => validateSelectorResponse(response, poolContract, 'fix', identity, { label: 'Dynamic facet' })).toThrow();
     });
 
     it('should reject when structured output is absent (C-SELECTOR-FAILFAST: structured output 不成立)', () => {
@@ -181,7 +188,7 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
         structuredOutput: undefined,
       } as unknown as AgentResponse;
 
-      expect(() => validateSelectorResponse(response, validationSchema, 'fix', identity, { label: 'Dynamic facet' })).toThrow();
+      expect(() => validateSelectorResponse(response, poolContract, 'fix', identity, { label: 'Dynamic facet' })).toThrow();
     });
 
     it('should reject a failed selector response status (C-SELECTOR-FAIL)', () => {
@@ -194,7 +201,7 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
 
       expect(() => validateSelectorResponse(
         response,
-        validationSchema,
+        poolContract,
         'fix',
         (text) => text.replace('sensitive-provider-detail', '[REDACTED]'),
         { label: 'Dynamic facet' },
@@ -212,7 +219,7 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
         },
       } as unknown as AgentResponse;
 
-      expect(() => validateSelectorResponse(response, validationSchema, 'fix', identity, { label: 'Dynamic facet' })).toThrow();
+      expect(() => validateSelectorResponse(response, poolContract, 'fix', identity, { label: 'Dynamic facet' })).toThrow();
     });
 
     it('should reject duplicate IDs even when the count exceeds max_selected (C-SELECTOR-FAILFAST: 重複かつ超過)', () => {
@@ -222,7 +229,7 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
         structuredOutput: { selected_ids: ['backend', 'transaction', 'backward-compatibility', 'backend'], rationale: 'x' },
       } as unknown as AgentResponse;
 
-      expect(() => validateSelectorResponse(response, validationSchema, 'fix', identity, { label: 'Dynamic facet' })).toThrow();
+      expect(() => validateSelectorResponse(response, poolContract, 'fix', identity, { label: 'Dynamic facet' })).toThrow();
     });
 
     it('should reject a selection above maxSelected in the shared validator (C-SELECTOR-FAILFAST: max_selected)', () => {
@@ -238,11 +245,44 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
 
       expect(() => validateSelectorResponse(
         response,
-        contract.validationSchema,
+        contract,
         'fix',
         identity,
         { label: 'Dynamic facet' },
       )).toThrow();
+    });
+  });
+
+  describe('describeSelectorError', () => {
+    const contract = createSelectorContract(candidates(['backend', 'transaction']));
+    const label = { label: 'Dynamic facet' };
+    const rejected = (response: Partial<AgentResponse>) => new StructuredAgentContractError(
+      '$.selected_ids[0] must be equal to one of the allowed values',
+      { persona: 'selector', status: 'done', content: '', timestamp: new Date(), ...response },
+    );
+
+    it('should omit the returned ids when the rejected response is not a JSON object', () => {
+      expect(describeSelectorError(rejected({ content: 'I pick backend.' }), contract, 'fix', label)).toBe(
+        'Dynamic facet selector for "fix" returned invalid structured output: '
+        + '$.selected_ids[0] must be equal to one of the allowed values; '
+        + 'allowed candidate ids: ["backend","transaction"]',
+      );
+    });
+
+    it('should bound the returned ids so one oversized selection cannot flood the failure reason', () => {
+      const message = describeSelectorError(
+        rejected({ structuredOutput: { selected_ids: ['x'.repeat(2000)], rationale: 'x' } }),
+        contract,
+        'fix',
+        label,
+      );
+
+      expect(message).toContain(`returned selected_ids: ["${'x'.repeat(510)}... (truncated); allowed candidate ids:`);
+    });
+
+    it('should leave a failure that is not a contract violation untouched', () => {
+      expect(describeSelectorError(new Error('provider unavailable'), contract, 'fix', label))
+        .toBe('provider unavailable');
     });
   });
 });

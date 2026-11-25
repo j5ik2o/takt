@@ -214,6 +214,7 @@
     "src/__tests__/director-turn-executor.test.ts",
     "src/__tests__/director-unreadable-projects.integration.test.ts",
     "src/__tests__/director-view.test.tsx",
+    "src/__tests__/dynamic-facet-candidate-selector.test.ts",
     "src/__tests__/dynamic-facet-selector-coordinator.test.ts",
     "src/__tests__/dynamic-parallel-selector-coordinator.test.ts",
     "src/__tests__/e2e-helpers.test.ts",

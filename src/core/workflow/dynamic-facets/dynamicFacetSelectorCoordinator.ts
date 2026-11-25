@@ -11,11 +11,12 @@ import type {
   WorkflowState,
 } from '../../models/types.js';
 import type { WorkflowEngineOptions } from '../types.js';
-import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { createLogger } from '../../../shared/utils/index.js';
 import { recordAgentUsageEvent } from '../engine/agent-usage-event.js';
 import { buildDynamicParallelSelectionIdentityFromPath } from '../dynamic-parallel/identity.js';
 import {
   createSelectorContract,
+  describeSelectorError,
   SELECTOR_READ_ONLY_TOOLS,
   validateSelectorResponse,
 } from '../selector-contract.js';
@@ -43,6 +44,7 @@ import { renderPhaseContext } from '../../../shared/prompts/phase-context.js';
 
 const log = createLogger('dynamic-facet-selector');
 const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
+const SELECTOR_LABEL = { label: 'Dynamic facet' } as const;
 
 export interface DynamicFacetSelectorCoordinatorDeps {
   readonly engineOptions: WorkflowEngineOptions;
@@ -204,10 +206,10 @@ export class DynamicFacetSelectorCoordinator {
       signal?.throwIfAborted();
       selectorResult = validateSelectorResponse(
         response,
-        selectorContract.validationSchema,
+        selectorContract,
         step.name,
         redact,
-        { label: 'Dynamic facet' },
+        SELECTOR_LABEL,
       );
       signal?.throwIfAborted();
       selectedIds = selectorResult.selectedIds;
@@ -241,7 +243,7 @@ export class DynamicFacetSelectorCoordinator {
         response?.providerUsage,
       );
       signal?.throwIfAborted();
-      throw new Error(redact(getErrorMessage(error)));
+      throw new Error(redact(describeSelectorError(error, selectorContract, step.name, SELECTOR_LABEL)));
     }
     recordAgentUsageEvent(
       this.deps.engineOptions,
