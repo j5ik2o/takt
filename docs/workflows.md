@@ -1123,18 +1123,18 @@ Two step-level guards stop laps that make no progress, without asking a judge:
 ```yaml
 steps:
   - name: replan
-    max_visits: 4                  # do not enter this step a 5th time
-  - name: peer-review
-    kind: workflow_call
+    max_visits: 4                  # stop instead of starting a 5th visit
+  - name: verify
     stop_on_repeated_verdict: true # stop when it returns the same verdict twice in a row
 ```
 
-- `max_visits` counts entries of the step within one workflow engine run (each subworkflow call has its own count, and a resumed run counts from zero, so the visit being retried can still run). Entering it once more aborts the run with `Visit limit reached: step "replan" already ran 4 times (max_visits: 4); ...`.
-- `stop_on_repeated_verdict` aborts when the step matches the same rule as on its previous visit and that rule is not terminal (a transition back to the same step counts too). Terminal results (`COMPLETE`, `ABORT`, `return`) are never counted.
+- `max_visits` is a positive integer (`0`, negatives, and fractions are rejected). It counts visits of the step that ended in a transition, within one workflow engine run. Retrying the same visit (user input after `blocked`, a failed quality gate, a rate-limit fallback) does not count. Each subworkflow call has its own count, and a resumed run counts from zero. Starting a visit after the limit aborts the run with `Visit limit reached: step "replan" already completed 4 times (max_visits: 4); ...`.
+- `stop_on_repeated_verdict` compares only which rule matched, not the reason in the output. It aborts when the step matches the same rule as on its previous visit and that rule is not terminal (a transition back to the same step counts too). Terminal results (`COMPLETE`, `ABORT`, `return`) are never compared. When the reason matters, use a `loop_monitors` judge instead.
 - The stop reason is a single line in the run's abort reason (`meta.json` `reason` and the `workflow_abort` log entry).
-- `max_visits` can be changed without editing the workflow: `workflow_overrides.steps.<step>.max_visits` in `.takt/config.yaml` (project) or `~/.takt/config.yaml` (global) replaces the YAML value; project wins over global.
+- `max_visits` can be changed without editing the workflow: `workflow_overrides.steps.<step>.max_visits` in `.takt/config.yaml` (project) or `~/.takt/config.yaml` (global) replaces the YAML value; project wins over global. An override cannot remove the limit; set a larger number instead. Parallel sub-steps do not take `max_visits`.
+- TAKT versions that predate these keys ignore them, and saving the config with such a version drops `max_visits`.
 
-The builtin development workflows set `max_visits: 4` on `replan`, `fix-replan`, and `verification-replan`, and `stop_on_repeated_verdict: true` on `development-core`'s `peer-review`. In a week of measured runs, successful runs entered a replan step at most 2 times in one engine and failed runs at most 4 times; every long failed run ended with the independent review returning BLOCKED twice in a row.
+The builtin development workflows set `max_visits: 4` on `replan`, `fix-replan`, and `verification-replan`. In `development-core`, the `[replan, peer-review]` loop monitor ignores `implement` and has `threshold: 2`: when the independent review asks for a replan twice in a row, the judge compares the last two review results and stops only when the same findings repeat without a new diff. In a week of measured runs, successful runs entered a replan step at most 2 times per run and failed runs at most 4 times; every long failed run ended with the independent review returning BLOCKED twice in a row.
 
 ### `subworkflow`
 

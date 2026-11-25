@@ -894,6 +894,26 @@ loop_monitors:
 
 `loop_monitors.judge` 不接受 provider、model 或 provider-options；使用 `provider.targets.internal_agents.loop-judge` 的 runtime target 或触发 step 的 fallback。judge 始终使用新 session，因此不接受 `session_key`。限流 fallback 也必须在 runtime 或旧版 config 中配置。
 
+### step 的 `max_visits` 与 `stop_on_repeated_verdict`
+
+两个 step 级设置，不调用 judge 即可停止没有进展的往返：
+
+```yaml
+steps:
+  - name: replan
+    max_visits: 4                  # 不开始第 5 次 visit，直接停止
+  - name: verify
+    stop_on_repeated_verdict: true # 连续两次返回相同判定时停止
+```
+
+- `max_visits` 为正整数（拒绝 `0`、负数和小数）。在一个 workflow engine 的运行中，统计以迁移结束的 visit 次数。同一 visit 的重试（`blocked` 后的用户输入、quality gate 失败、rate-limit fallback）不计数。每次子工作流调用单独计数，恢复（resume）的 run 从 0 开始计数。达到上限后再开始 visit 时，以 `Visit limit reached: step "replan" already completed 4 times (max_visits: 4); ...` 为理由中止 run。
+- `stop_on_repeated_verdict` 只比较匹配了哪条 rule，不比较输出中的理由。当 step 与上一次 visit 匹配同一条 rule 且该 rule 不是终止（包括回到同一 step 的迁移）时中止 run。终止结果（`COMPLETE`、`ABORT`、`return`）不参与比较。需要按理由判断时，请使用 `loop_monitors` 的 judge。
+- 中止理由以一行记录在 run 的中止原因中（`meta.json` 的 `reason` 与 `workflow_abort` 日志）。
+- 无需修改 workflow 即可更改 `max_visits`：`.takt/config.yaml`（项目）或 `~/.takt/config.yaml`（全局）中的 `workflow_overrides.steps.<step>.max_visits` 会替换 YAML 中的值，项目优先于全局。无法通过覆盖取消上限，请改为指定更大的数值。parallel 的 sub-step 不接受 `max_visits`。
+- 早于这些 key 的 TAKT 版本会忽略它们，用该版本重新保存 config 会丢失 `max_visits`。
+
+内置开发 workflow 在 `replan`、`fix-replan`、`verification-replan` 上设置了 `max_visits: 4`。`development-core` 的 `[replan, peer-review]` loop monitor 忽略 `implement` 并使用 `threshold: 2`：独立评审连续两次要求重新规划时，judge 比较最近两次评审结果，仅当相同的指摘在没有新差异的情况下重复出现时才停止。
+
 ### `subworkflow`
 
 可调用 workflow 可以这样声明参数：

@@ -1107,18 +1107,18 @@ rate-limit fallback も `runtime.yaml`（または既存の global/project `conf
 ```yaml
 steps:
   - name: replan
-    max_visits: 4                  # 5 回目にはこの step へ入らない
-  - name: peer-review
-    kind: workflow_call
+    max_visits: 4                  # 5 回目の visit を始めずに止める
+  - name: verify
     stop_on_repeated_verdict: true # 同じ判定を 2 回続けて返したら止める
 ```
 
-- `max_visits` は 1 つの workflow engine の実行の中でその step に入った回数を数えます（サブワークフロー呼び出しは呼び出しごとに、再開した run は 0 から数え直すので、やり直す回はそのまま実行できます）。上限を超えて入ろうとすると、`Visit limit reached: step "replan" already ran 4 times (max_visits: 4); ...` を理由に run を止めます。
-- `stop_on_repeated_verdict` は、その step が前回と同じ rule に一致し、その rule が終端でない場合（同じ step へ戻る遷移も含む）に run を止めます。終端（`COMPLETE`・`ABORT`・`return`）は数えません。
+- `max_visits` は正の整数です（`0`・負の数・小数は拒否します）。1 つの workflow engine の実行の中で、遷移まで終わった visit を数えます。同じ visit のやり直し（`blocked` のあとのユーザー入力、quality gate の失敗、rate-limit の fallback）は数えません。サブワークフローは呼び出しごとに、再開した run は 0 から数え直します。上限に達したあとで visit を始めようとすると、`Visit limit reached: step "replan" already completed 4 times (max_visits: 4); ...` を理由に run を止めます。
+- `stop_on_repeated_verdict` が比べるのは、どの rule に一致したかだけで、出力に書かれた理由は比べません。その step が前回と同じ rule に一致し、その rule が終端でない場合（同じ step へ戻る遷移も含む）に run を止めます。終端（`COMPLETE`・`ABORT`・`return`）は比べません。理由の中身で判断したいときは `loop_monitors` の judge を使ってください。
 - 止めた理由は 1 行で run の中断理由（`meta.json` の `reason` と `workflow_abort` ログ）に残ります。
-- `max_visits` は workflow を書き換えずに変えられます。`.takt/config.yaml`（プロジェクト）または `~/.takt/config.yaml`（グローバル）の `workflow_overrides.steps.<step>.max_visits` が YAML の値を置き換えます。プロジェクトがグローバルより優先です。
+- `max_visits` は workflow を書き換えずに変えられます。`.takt/config.yaml`（プロジェクト）または `~/.takt/config.yaml`（グローバル）の `workflow_overrides.steps.<step>.max_visits` が YAML の値を置き換えます。プロジェクトがグローバルより優先です。上限を外すことはできないので、大きな数を指定してください。parallel の sub-step には `max_visits` を付けられません。
+- これらのキーより前の TAKT はキーを無視します。その版で config を保存し直すと `max_visits` が消えます。
 
-builtin の開発 workflow は `replan`・`fix-replan`・`verification-replan` に `max_visits: 4`、`development-core` の `peer-review` に `stop_on_repeated_verdict: true` を設定しています。1 週間ぶんの実測では、成功した run が 1 つの engine で replan 系 step に入ったのは最大 2 回、失敗した run は最大 4 回で、長引いた失敗 run はどれも独立レビューが BLOCKED を 2 回続けて返して終わっていました。
+builtin の開発 workflow は `replan`・`fix-replan`・`verification-replan` に `max_visits: 4` を設定しています。`development-core` の `[replan, peer-review]` の loop monitor は `implement` を数えずに `threshold: 2` で動きます。独立レビューが 2 回続けて再計画を求めると、judge が直近 2 回のレビュー結果を比べ、同じ指摘が新しい差分なしに繰り返されているときだけ止めます。1 週間ぶんの実測では、成功した run が replan 系 step に入ったのは 1 run あたり最大 2 回、失敗した run は最大 4 回で、長引いた失敗 run はどれも独立レビューが BLOCKED を 2 回続けて返して終わっていました。
 
 ### `subworkflow`
 
