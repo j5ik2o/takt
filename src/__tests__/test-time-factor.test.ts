@@ -92,6 +92,27 @@ describe('the deadline a vi.waitFor call wrote', () => {
     expect(annotated.stack).toContain('test-time-factor.test.ts');
   });
 
+  it('keeps the fields of an assertion error on the annotated copy', () => {
+    class AssertionError extends Error {
+      name = 'AssertionError';
+    }
+    const assertion = Object.assign(new AssertionError('expected 1 to be 2'), {
+      actual: 1,
+      expected: 2,
+      operator: 'strictEqual',
+    });
+
+    const annotated = annotateWaitForTimeout(assertion, { writtenMs: 100, factor: 3 }) as AssertionError;
+
+    expect(annotated).toBeInstanceOf(AssertionError);
+    expect(annotated.name).toBe('AssertionError');
+    expect(annotated.actual).toBe(1);
+    expect(annotated.expected).toBe(2);
+    expect(annotated.operator).toBe('strictEqual');
+    expect(annotated.message).toContain('expected 1 to be 2');
+    expect(assertion.message).toBe('expected 1 to be 2');
+  });
+
   it('leaves a rejection that is not an Error alone', () => {
     expect(annotateWaitForTimeout('not an error', { writtenMs: 100, factor: 3 })).toBe('not an error');
   });

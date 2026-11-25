@@ -62,14 +62,19 @@ export function waitForExpirySuffix({ writtenMs, factor }) {
 /**
  * Name the written deadline and the factor on a wait that ran out of time.
  * Vitest rejects a `waitFor` only when its deadline passes, so every rejection
- * of a scaled wait is an expiry. The error the test threw is left as it was: the
- * report gets a new error with the same name and the same stack frames, so it
- * still points at the test line rather than at this wrapper.
+ * of a scaled wait is an expiry. The error the test threw is left as it was. The
+ * report gets a copy that keeps its prototype and its own fields — an assertion
+ * error keeps `expected`, `actual`, and the diff — with the deadline appended to
+ * the message and the stack frames left pointing at the test line.
  */
 export function annotateWaitForTimeout(error, { writtenMs, factor }) {
   if (!(error instanceof Error)) return error;
-  const annotated = new Error(`${error.message}${waitForExpirySuffix({ writtenMs, factor })}`);
-  annotated.name = error.name;
+  // Node keeps `stack` as an own accessor that reads the original error, so the
+  // copy takes the frames as text instead of taking that accessor.
+  const descriptors = Object.getOwnPropertyDescriptors(error);
+  delete descriptors.stack;
+  const annotated = Object.create(Object.getPrototypeOf(error), descriptors);
+  annotated.message = `${error.message}${waitForExpirySuffix({ writtenMs, factor })}`;
   if (error.stack !== undefined) annotated.stack = error.stack.replace(error.message, annotated.message);
   return annotated;
 }
