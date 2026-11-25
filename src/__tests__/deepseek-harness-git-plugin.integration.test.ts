@@ -41,17 +41,17 @@ async function resolve(source: string, ref?: string): Promise<DeepSeekHarnessPlu
 
 /**
  * execFile rejects on abort before the killed child handles SIGTERM, so a stopped marker can appear after the
- * rejection. Children delay that marker so a test that reads it without waitForFile fails every time, not intermittently.
+ * rejection. Children delay that marker so a test that reads it without waitForFile fails in ordinary runs instead of
+ * only on a slow CI runner (this was observed, not guaranteed: a parent stalled past the delay would still pass).
  */
 const STOPPED_MARKER_DELAY_MS = 200;
 
-/** Wait a bounded interval for a child process to publish its lifecycle marker. */
+/** Wait a bounded interval for a child process to publish its lifecycle marker; an empty file is still being written. */
 async function waitForFile(filePath: string): Promise<void> {
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
     try {
-      await readFile(filePath);
-      return;
+      if ((await readFile(filePath)).length > 0) return;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
