@@ -1,10 +1,17 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { join } from 'node:path';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
+import { inspectProviderInstallation } from '../managed-providers/loader.js';
 
-function resolveBundledCli(): string {
-  const sdkRequire = createRequire(createRequire(import.meta.url).resolve('@anthropic-ai/claude-agent-sdk'));
+// Look where the query loads the SDK from: the installation made by `takt install claude-sdk`.
+async function resolveBundledCli(): Promise<string> {
+  const installation = await inspectProviderInstallation('claude-sdk');
+  if (installation.state === 'missing' || installation.directory === undefined) {
+    throw new Error('Claude SDK is not installed. Run `takt install claude-sdk`, or configure claude_cli_path.', { cause: installation.cause });
+  }
+  const sdkRequire = createRequire(join(installation.directory, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'package.json'));
   const base = `@anthropic-ai/claude-agent-sdk-${process.platform === 'android' ? 'linux' : process.platform}-${process.arch}`;
   const report = (process.platform === 'linux' ? process.report?.getReport() : undefined) as
     { header: { glibcVersionRuntime?: string } } | undefined;
@@ -23,12 +30,12 @@ function resolveBundledCli(): string {
     }
     if (existsSync(path)) return path;
   }
-  throw new Error('Claude SDK native CLI is missing. Reinstall with optional dependencies or configure claude_cli_path.');
+  throw new Error('Claude SDK native CLI is missing. Run `takt install claude-sdk --force`, or configure claude_cli_path.');
 }
 
 export async function assertClaudeSdkRuntime(options: Options, abortSignal?: AbortSignal): Promise<void> {
   abortSignal?.throwIfAborted();
-  const path = options.pathToClaudeCodeExecutable || resolveBundledCli();
+  const path = options.pathToClaudeCodeExecutable || await resolveBundledCli();
   const isScript = ['.js', '.mjs', '.tsx', '.ts', '.jsx'].some((extension) => path.endsWith(extension));
   const help = await new Promise<string>((resolve, reject) => {
     execFile(isScript ? process.execPath : path, [...(isScript ? [path] : []), '--help'], {
