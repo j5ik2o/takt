@@ -68,6 +68,29 @@ describe('sensitiveText', () => {
     expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(expected);
   });
 
+  it.each([
+    ['JSON array with empty-user port URL and later email', '["https://:443","ops@example.test"]'],
+    ['JSON array with host:port URL and later email', '["https://host:443","ops@example.test"]'],
+    ['comma-separated empty-user port URL and later email', 'https://:443,ops@example.test'],
+    ['space-separated empty-user port URL and later email', 'https://:443 ops@example.test'],
+    ['JSON array with plain URL and later colon-at pair', '["https://a","b:c@d"]'],
+  ])('stops URL authority at quotes, commas, and spaces for %s', (_name, text) => {
+    expect(sanitizeSensitiveText(text)).toBe(text);
+    expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(text);
+  });
+
+  it('tracks a leading-@ URL password even when another @ appears later in the authority', () => {
+    const command = 'http://a:@AaaaAa@host;ops@example.test';
+    expect(sanitizeSensitiveText(command)).toBe('http://[REDACTED]@example.test');
+    expect(sanitizeSensitiveTextWithKnownValues('echoed @AaaaAa', { command })).toBe('echoed [REDACTED]');
+  });
+
+  it('redacts a leading-@ password with a long run of @ without exceeding regexp stack', () => {
+    const longRun = 'a@'.repeat(256 * 1024);
+    const text = `https://user:@${longRun}host`;
+    expect(sanitizeSensitiveText(text)).toBe('https://[REDACTED]@host');
+  });
+
   it('redacts a password with an @ where it is echoed later and when streaming', () => {
     const text = 'clone https://user:p@55-word@host/repo.git failed';
 

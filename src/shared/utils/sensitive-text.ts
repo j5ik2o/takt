@@ -65,10 +65,12 @@ const HTTP_HEADER_PREFIX_REGEX = /\b(Authorization|(?:Set-)?Cookie)\s*:\s*/gi;
 // The user ends at the first colon and may be empty (`redis://:password@host`): trying each
 // colon as the separator rescans the rest of a colon-separated run every time.
 // The password is non-empty, may start with `@`, and runs to the last `@` of the authority so
-// unencoded `@` characters in it stay hidden. Past the first `@` a single character class (not
-// a repeated group) keeps long `@` runs in bounded regexp stack and stops at quotes, commas and
-// brackets, keeping the host and a later address readable in `"https://user:pass@host","admin@example.test"`.
-const URL_USERINFO_CREDENTIALS_REGEX = /(:\/\/)(?<=[A-Za-z][0-9+.-]*:\/\/)([^/?#\s@:]*:(?:[^/?#\s@]+(?:@[^/?#\s"'`,<>()[\]{}]*)?|@[^/?#\s"'`,<>()[\]{}]*))@/g;
+// unencoded `@` characters in it stay hidden. Every component stops at URL authority delimiters
+// (quotes, commas, whitespace, and brackets) so `["https://:443","ops@example.test"]` and
+// `"https://user:pass@host","admin@example.test"` keep non-credential text untouched.
+// Past the first `@` a single character class (not a repeated group) keeps long `@` runs in
+// bounded regexp stack.
+const URL_USERINFO_CREDENTIALS_REGEX = /(:\/\/)(?<=[A-Za-z][0-9+.-]*:\/\/)([^/?#\s"'`,<>()[\]{}@:]*:(?:[^/?#\s"'`,<>()[\]{}@]+(?:@[^/?#\s"'`,<>()[\]{}]*)?|@[^/?#\s"'`,<>()[\]{}]*))@/g;
 const CURL_USER_VALUE_PATTERN = [
   String.raw`(?<=\\")(?!\+)[^":]*:[^"]*?(?=\\")`,
   String.raw`"(?!\+)[^":]*:[^"]*"`,
@@ -247,21 +249,20 @@ export function collectEmbeddedSensitiveValues(text: string, values: Set<string>
   collectHttpHeaderSensitiveValues(text, values);
   for (const match of text.matchAll(URL_USERINFO_CREDENTIALS_REGEX)) {
     const userinfo = match[2]!;
-    const firstAt = userinfo.indexOf('@');
-    if (firstAt < 0) {
+    const separator = userinfo.indexOf(':');
+    // Skip an `@` immediately after `:` (a password starting with `@`), and look for the first
+    // `@` that can close a non-empty password, as in `https://u:secret@db;owner=ops@example.test`
+    // or `https://a:@pa55@host;ops@example.test`.
+    const firstValidAt = separator >= 0 ? userinfo.indexOf('@', separator + 2) : -1;
+    if (firstValidAt < 0) {
       addSensitiveValue(values, userinfo);
       addCredentialComponents(values, userinfo);
       continue;
     }
-    const separator = userinfo.indexOf(':');
-    // The userinfo may run past an `@` that ends the password, as in
-    // `https://u:secret@db;owner=ops@example.test`. The part up to the first `@` goes first when
-    // the password does not start with `@`, and only that part is split like a cookie: past the
-    // first `@`, `owner=ops` is not a credential.
-    if (firstAt > separator + 1) {
-      addSensitiveValue(values, userinfo.slice(0, firstAt));
-      addCredentialComponents(values, userinfo.slice(0, firstAt));
-    }
+    // Only the part up to the first closing `@` is split like a cookie: past that `@`,
+    // `owner=ops` is not a credential.
+    addSensitiveValue(values, userinfo.slice(0, firstValidAt));
+    addCredentialComponents(values, userinfo.slice(0, firstValidAt));
     // The whole password and whole userinfo also cover a password with an unencoded `@`.
     // Adding the password before the full userinfo lets bounded trackers keep a shorter password
     // even when a long username pushes the full userinfo over the per-value byte limit.
