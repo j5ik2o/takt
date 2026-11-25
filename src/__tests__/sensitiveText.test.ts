@@ -12,6 +12,7 @@ import {
 } from '../shared/utils/sensitiveText.js';
 import { sanitizeOpenCodeToolInput } from '../infra/opencode/tool-input-sanitizer.js';
 import { collectSensitiveStringValues } from '../shared/utils/sensitive-value.js';
+import { Phase1ExecutionLog } from '../core/workflow/phase1-execution-log.js';
 import { maskSensitiveRanges, sensitiveTextRanges, substringSensitiveRanges } from '../shared/utils/sensitive-text.js';
 
 describe('sensitiveText', () => {
@@ -68,6 +69,29 @@ describe('sensitiveText', () => {
     expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(expected);
   });
 
+  it.each([
+    ['JSON array with empty-user port URL and later email', '["https://:443","ops@example.test"]'],
+    ['JSON array with host:port URL and later email', '["https://host:443","ops@example.test"]'],
+    ['comma-separated empty-user port URL and later email', 'https://:443,ops@example.test'],
+    ['space-separated empty-user port URL and later email', 'https://:443 ops@example.test'],
+    ['JSON array with plain URL and later colon-at pair', '["https://a","b:c@d"]'],
+  ])('stops URL authority at quotes, commas, and spaces for %s', (_name, text) => {
+    expect(sanitizeSensitiveText(text)).toBe(text);
+    expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(text);
+  });
+
+  it('tracks a leading-@ URL password even when another @ appears later in the authority', () => {
+    const command = 'http://a:@AaaaAa@host;ops@example.test';
+    expect(sanitizeSensitiveText(command)).toBe('http://[REDACTED]@example.test');
+    expect(sanitizeSensitiveTextWithKnownValues('echoed @AaaaAa', { command })).toBe('echoed [REDACTED]');
+  });
+
+  it('redacts a leading-@ password with a long run of @ without exceeding regexp stack', () => {
+    const longRun = 'a@'.repeat(256 * 1024);
+    const text = `https://user:@${longRun}host`;
+    expect(sanitizeSensitiveText(text)).toBe('https://[REDACTED]@host');
+  });
+
   it('redacts a password with an @ where it is echoed later and when streaming', () => {
     const text = 'clone https://user:p@55-word@host/repo.git failed';
 
@@ -75,15 +99,112 @@ describe('sensitiveText', () => {
     expect(sanitizeSensitiveTextWithKnownValues('echoed p@55-word', { command: text })).toBe('echoed [REDACTED]');
   });
 
-  // Known limits of reading the password up to the last `@` of the authority. Both err on the
-  // side of hiding the host; the second leaves a value readable that follows that `@`.
+  // Known limit of reading the password up to the last `@` of the authority when a
+  // non-sensitive assignment follows after `;`: errs on the side of hiding the host.
+  it('hides the host when `;` separates a later non-sensitive address', () => {
+    expect(sanitizeSensitiveText('url=https://u:p@db.internal;owner=ops@example.test'))
+      .toBe('url=https://[REDACTED]@example.test');
+  });
+
   it.each([
-    ['hides the host when `;` separates a later address',
-      'url=https://u:p@db.internal;owner=ops@example.test', 'url=https://[REDACTED]@example.test'],
-    ['reads an assignment between two @ as the password and what follows as the host',
-      'https://u:p@token=@SECRET/path', 'https://[REDACTED]@SECRET/path'],
-  ])('%s', (_name, text, expected) => {
+    ['semicolon before TOKEN', 'curl https://u:p@host;TOKEN=left@RIGHT_SECRET', 'curl https://[REDACTED]@host;TOKEN=[REDACTED]'],
+    ['comma before TOKEN', 'curl https://u:p@host,TOKEN=left@RIGHT_SECRET', 'curl https://[REDACTED]@host,TOKEN=[REDACTED]'],
+    ['ampersand before TOKEN', 'curl https://u:p@host&TOKEN=left@RIGHT_SECRET', 'curl https://[REDACTED]@host&TOKEN=[REDACTED]'],
+    ['pipe before TOKEN', 'curl https://u:p@host|TOKEN=left@RIGHT_SECRET', 'curl https://[REDACTED]@host|TOKEN=[REDACTED]'],
+    ['single-quoted TOKEN after semicolon', "curl https://u:p@host;TOKEN='left@RIGHT_SECRET'", "curl https://[REDACTED]@host;TOKEN='[REDACTED]'"],
+    ['double-quoted URL and TOKEN', 'curl "https://u:p@host;TOKEN=left@RIGHT_SECRET"', 'curl "https://[REDACTED]@host;TOKEN=[REDACTED]"'],
+    ['no delimiter before TOKEN', 'curl https://u:p@hostTOKEN=left@RIGHT_SECRET', 'curl https://[REDACTED]@hostTOKEN=[REDACTED]'],
+    ['second URL after semicolon before TOKEN', 'curl https://u:p@host;curl https://v:q@host2;TOKEN=left@RIGHT_SECRET', 'curl https://[REDACTED]@host;curl https://[REDACTED]@host2;TOKEN=[REDACTED]'],
+    ['leading-@ password alone', 'curl https://u:@pa55@host', 'curl https://[REDACTED]@host'],
+    ['leading-@ password followed by semicolon TOKEN', 'curl https://u:@pa55@host;TOKEN=left@RIGHT_SECRET', 'curl https://[REDACTED]@host;TOKEN=[REDACTED]'],
+    ['double-quoted leading-@ password and TOKEN', 'curl "https://u:@pa55@host;TOKEN=left@RIGHT_SECRET"', 'curl "https://[REDACTED]@host;TOKEN=[REDACTED]"'],
+    ['leading-@ password followed by comma TOKEN', 'curl https://u:@pa55@host,TOKEN=left@RIGHT_SECRET', 'curl https://[REDACTED]@host,TOKEN=[REDACTED]'],
+  ])('redacts adversarial URL+assignment input (%s) without leaking credentials or hiding host/keys', (_name, text, expected) => {
     expect(sanitizeSensitiveText(text)).toBe(expected);
+    expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(expected);
+    expect(sanitizeSensitiveText(text)).not.toContain('RIGHT_SECRET');
+    expect(sanitizeSensitiveText(text)).not.toContain('pa55');
+  });
+
+  it.each([
+    ['assignment inside URL password', 'https://alice:LEFT;token=RIGHT@host', 'https://[REDACTED]@host', ['LEFT', 'RIGHT']],
+    ['uppercase assignment inside URL password', 'https://alice:LEFT_SECRET;TOKEN=RIGHT_SECRET@host', 'https://[REDACTED]@host', ['LEFT_SECRET', 'RIGHT_SECRET']],
+    ['assignment inside URL password followed by second assignment', 'https://alice:LEFT;token=RIGHT@host;TOKEN2=a@SECRET', 'https://[REDACTED]@host;TOKEN2=[REDACTED]', ['LEFT', 'RIGHT', 'SECRET']],
+    ['URL followed immediately by @token=@SECRET', 'https://u:p@token=@SECRET/path', 'https://[REDACTED]@token=[REDACTED]', ['SECRET']],
+    ['URL password containing @ followed immediately by token=SECRET', 'https://user:p1@token=p2@host', 'https://[REDACTED]@token=[REDACTED]', ['p1', 'p2']],
+    ['URL password with multiple @ before token=SECRET', 'https://user:p1@mid@token=p2@host', 'https://[REDACTED]@token=[REDACTED]', ['p1', 'mid', 'p2']],
+    ['username matching a sensitive key name', 'https://token:SECRET@host', 'https://[REDACTED]@host', ['SECRET']],
+    ['ambiguous leading-@ with trailing assignment merges union without leaking', 'https://alice:@LEFT;token=RIGHT@host', 'https://[REDACTED]', ['LEFT', 'RIGHT']],
+    ['ambiguous empty-password URL with trailing assignment merges union without leaking', 'https://user:@host;TOKEN=left@RIGHT_SECRET', 'https://[REDACTED]', ['RIGHT_SECRET']],
+  ])('handles overlapping URL and assignment ranges (%s)', (_name, text, expected, secrets) => {
+    const sanitized = sanitizeSensitiveText(text);
+    expect(sanitized).toBe(expected);
+    expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(expected);
+    for (const secret of secrets) {
+      expect(sanitized).not.toContain(secret);
+    }
+  });
+
+  describe('fixed regression inputs for range-merge redaction', () => {
+    it('tracks URL password inside a quoted CREDENTIALS assignment across known-value and Phase1ExecutionLog paths', () => {
+      const command = 'CREDENTIALS="https://alice:pa55-word@host"';
+
+      expect(sanitizeSensitiveText(command)).toBe('CREDENTIALS="[REDACTED]"');
+      expect(sanitizeSensitiveTextWithKnownValues('echoed pa55-word', { command })).toBe('echoed [REDACTED]');
+      expect(sanitizeSensitiveTextWithKnownValues('echoed pa55-word', JSON.stringify({ command }))).toBe('echoed [REDACTED]');
+
+      const log = new Phase1ExecutionLog();
+      log.recordEvent({ type: 'text', data: { text: `${command}\n` } });
+      log.recordEvent({ type: 'text', data: { text: 'echoed pa55-word\n' } });
+      const reportInput = log.toReportInput();
+      expect(reportInput).not.toContain('pa55-word');
+      expect(reportInput).toContain('[REDACTED]');
+    });
+
+    it('tracks URL password consistently inside both quoted and unquoted TOKEN assignments', () => {
+      const quoted = 'TOKEN="https://user:pa55-secret@host"';
+      const singleQuoted = "TOKEN='https://user:pa55-secret@host'";
+      const unquoted = 'TOKEN=https://user:pa55-secret@host';
+
+      expect(sanitizeSensitiveTextWithKnownValues('echoed pa55-secret', { command: unquoted })).toBe('echoed [REDACTED]');
+      expect(sanitizeSensitiveTextWithKnownValues('echoed pa55-secret', { command: quoted })).toBe('echoed [REDACTED]');
+      expect(sanitizeSensitiveTextWithKnownValues('echoed pa55-secret', { command: singleQuoted })).toBe('echoed [REDACTED]');
+      expect(sanitizeSensitiveTextWithKnownValues('echoed pa55-secret', JSON.stringify({ command: quoted }))).toBe('echoed [REDACTED]');
+    });
+
+    it.each([
+      [
+        'semicolon-delimited URL and TOKEN followed by another URL and TOKEN',
+        'https://u:p@host;TOKEN=left@RIGHT_SECRET;https://token:q@host2;TOKEN2=sec2',
+        'https://[REDACTED]@host;TOKEN=[REDACTED]',
+        ['RIGHT_SECRET', 'sec2'],
+        ['p', 'q', 'left@RIGHT_SECRET', 'sec2'],
+      ],
+      [
+        'semicolon-delimited sensitive-username URL followed by TOKEN',
+        'https://token:p@host;TOKEN=left@RIGHT_SECRET',
+        'https://[REDACTED]@host;TOKEN=[REDACTED]',
+        ['RIGHT_SECRET'],
+        ['p', 'left@RIGHT_SECRET'],
+      ],
+      [
+        'semicolon-delimited sequence of sensitive-username URLs ending in TOKEN',
+        'https://token:p@host;https://token:q@host2;TOKEN=left@RIGHT_SECRET',
+        'https://[REDACTED]@host;https://[REDACTED]@host2;TOKEN=[REDACTED]',
+        ['RIGHT_SECRET'],
+        ['p', 'q', 'left@RIGHT_SECRET'],
+      ],
+    ])('excludes URL userinfo at key start without swallowing trailing %s', (_name, text, expected, secrets, trackedValues) => {
+      const sanitized = sanitizeSensitiveText(text);
+      expect(sanitized).toBe(expected);
+      expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(expected);
+      for (const secret of secrets) {
+        expect(sanitized).not.toContain(secret);
+      }
+      for (const tracked of trackedValues) {
+        expect(sanitizeSensitiveTextWithKnownValues(`echoed ${tracked}`, { command: text })).toBe('echoed [REDACTED]');
+      }
+    });
   });
 
   it.each([
