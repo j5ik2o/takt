@@ -1,0 +1,143 @@
+{
+  "description": "Inputs that redaction once got wrong. Markers Zq<n>Zq are secrets unless listed in readable. Cases named fast-check/* were found by the property tests in src/__tests__/sensitive-text.pbt.test.ts.",
+  "cases": [
+    {
+      "name": "#151-1 URL in a quoted assignment, echoed later",
+      "input": "CREDENTIALS=\"https://alice:Zq1Zq@host\"",
+      "later": "echoed Zq1Zq"
+    },
+    {
+      "name": "#151-3 empty user and a port in a quoted list",
+      "input": "[\"https://:443\",\"ops@example.test\"]",
+      "expected": "[\"https://:443\",\"ops@example.test\"]"
+    },
+    {
+      "name": "#151-4 URL password inside TOKEN=\"…\", echoed later",
+      "input": "TOKEN=\"https://user:Zq2Zq@host\"",
+      "later": "echoed Zq2Zq"
+    },
+    {
+      "name": "#151-5 assignment after a URL on the same run",
+      "input": "https://u:p@host;TOKEN=left@Zq3Zq",
+      "expected": "https://[REDACTED]"
+    },
+    {
+      "name": "#160 regression: comma in the password",
+      "input": "https://user:pa,Zq4Zq@host",
+      "expected": "https://[REDACTED]@host"
+    },
+    {
+      "name": "#160 regression: quote in the password",
+      "input": "https://u:Zq5Zq\"@",
+      "expected": "https://[REDACTED]@"
+    },
+    {
+      "name": "#160 regression: cookie value then a key on the next line",
+      "input": "Cookie: a=b; token:\npassword: Zq6Zq"
+    },
+    {
+      "name": "#160 regression: curl -u value runs into --password",
+      "input": "curl -u a:b--password --password Zq7Zq"
+    },
+    {
+      "name": "review: port URL and an address in a JSON array",
+      "input": "[\"https://localhost:443\",\"ops@example.test\"]",
+      "expected": "[\"https://localhost:443\",\"ops@example.test\"]"
+    },
+    {
+      "name": "review: URL user named token keeps the host",
+      "input": "clone https://token:Zq8Zq@host/repo.git failed",
+      "expected": "clone https://[REDACTED]@host/repo.git failed"
+    },
+    {
+      "name": "review: URL user named cookie keeps the host",
+      "input": "clone https://cookie:Zq9Zq@host/repo.git failed",
+      "expected": "clone https://[REDACTED]@host/repo.git failed"
+    },
+    {
+      "name": "review: shell statement after an unquoted value",
+      "input": "TOKEN=Zq10Zq;echo done",
+      "later": "echoed Zq10Zq"
+    },
+    {
+      "name": "review: leading-@ password with a later address",
+      "input": "http://a:@Zq11Zq@host;ops@example.test",
+      "later": "echoed @Zq11Zq"
+    },
+    {
+      "name": "review: token assignment inside a quoted value",
+      "input": "credentials=\"note token=Zq12Zq end\"",
+      "later": "echoed Zq12Zq"
+    },
+    {
+      "name": "review: known value that is a prefix of a bearer token",
+      "input": "Bearer Zq13Zqabcdefgh12345"
+    },
+    {
+      "name": "review: assignment between two @ of a URL",
+      "input": "https://u:p@token=@Zq14Zq/path",
+      "expected": "https://[REDACTED]"
+    },
+    {
+      "name": "review: URL with a password as an unquoted value",
+      "input": "token=https://user:Zq15Zq@example.test/path?x=1",
+      "expected": "token=[REDACTED]"
+    },
+    {
+      "name": "review: colon-less --user= run",
+      "input": "https://u:Zq16Zq@host;--user=alice;--user=alice;--user=alice"
+    },
+    {
+      "name": "review: assignment after a URL",
+      "input": "https://u:p@host;TOKEN=left@Zq17Zq"
+    },
+    {
+      "name": "#151 long @ password echoed later",
+      "input": "https://u:Zq18Zqab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@Zq19Zq@host",
+      "later": "echoed Zq18Zqab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@ab@Zq19Zq"
+    },
+    {
+      "name": "mutation M10: a key inside another value is tracked on its own",
+      "input": "token=a;password=Zq20Zq",
+      "later": "echoed Zq20Zq"
+    },
+    {
+      "name": "fast-check/old order: a replacement joins the short -u value with a later secret",
+      "input": "https://user:pa,Zq900Zq@hostcurl -ux://--user=\" :\\\"Zq0Zq\"curl -u :Zq0Zq",
+      "expected": "https://[REDACTED]@hostcurl -u[REDACTED] -u [REDACTED]"
+    },
+    {
+      "name": "fast-check/leading-@ password with a comma",
+      "input": "https://u:@Zq0Zq,@host",
+      "expected": "https://[REDACTED]@host",
+      "later": "echoed @Zq0Zq,"
+    },
+    {
+      "name": "fast-check/reference: leading-@ password head of one comma",
+      "input": "https://:@,@.token=",
+      "expected": "https://[REDACTED]@.token="
+    },
+    {
+      "name": "fast-check/URL users named token, then a curl -u lookalike after ;",
+      "input": "https://token:p@host;https://token:p@host;https://token:p@host;-u,:Zq0Zq@-u a:b--password --password Zq0Zq,",
+      "expected": "https://[REDACTED]@host;https://[REDACTED]@host;https://[REDACTED]@host;-u,:Zq0Zq@-u [REDACTED] [REDACTED] [REDACTED]",
+      "readable": [
+        "Zq0Zq"
+      ]
+    },
+    {
+      "name": "fast-check/a key on the next line after a cookie value; a URL broken by a line break stays readable",
+      "input": "Cookie: a=b; token:\npassword: Zq911Zqhttps://example.test/p?token=Zq0Zq&x=1\"https://:Zq1Zq\r\n@host",
+      "expected": "Cookie: [REDACTED]\n[REDACTED] [REDACTED]\"https://:Zq1Zq\r\n@host",
+      "readable": [
+        "Zq1Zq"
+      ]
+    },
+    {
+      "name": "fast-check/known values never show what the patterns hide",
+      "input": "echoed --token=\"\\ Zq0Zq\"-u a:b--password --password Zq0Zqa",
+      "expected": "echoed --token=[REDACTED]-u [REDACTED] [REDACTED] [REDACTED]",
+      "later": "echoed --token=\"\\ Zq0Zq\"-u a:b--password --password Zq0Zqa"
+    }
+  ]
+}
