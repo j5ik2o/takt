@@ -22,5 +22,7 @@ process.on('message', (message: unknown) => {
     if (typeof message === 'object' && message !== null && 'kind' in message && message.kind === 'shutdown' && process.connected) process.disconnect();
   }).catch(fatal);
 });
-process.on('disconnect', () => { void runtime.transportClosed().catch(fatal); });
-process.on('SIGTERM', () => { void runtime.disconnect().finally(() => { if (process.connected) process.disconnect(); }).catch(fatal); });
+// 後片付けが済んだら、閉じ忘れたハンドルが残っていても終了する。イベントループが空になるのを待つと、SIGTERM でも終わらないプロセスが残る。
+const exitAfter = (cleanup: Promise<void>): void => { void cleanup.catch(fatal).finally(() => { process.exit(); }); };
+process.on('disconnect', () => { exitAfter(runtime.transportClosed()); });
+process.on('SIGTERM', () => { exitAfter(runtime.disconnect().finally(() => { if (process.connected) process.disconnect(); })); });
