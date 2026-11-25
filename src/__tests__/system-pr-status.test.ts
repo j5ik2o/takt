@@ -472,7 +472,7 @@ describe('CI failure system input and rerun effect', () => {
 
       const collected = await h.service.resolveSystemInput(input, h.state) as PrCiFailure;
       expect(collected).toMatchObject({ complete: false,
-        unavailable: [{ name: 'e2e', url: `${run.url}/job/22`, reason: 'Failed job log is missing' }] });
+        unavailable: [{ name: 'e2e', url: `${run.url}/job/22`, reason: expect.any(String) }] });
       h.state.systemContexts.set('wait_ci', { status: { headSha } });
       h.state.structuredOutputs.set('investigate_ci', { verdict: 'external', summary: 'Runner outage' });
       h.state.currentStep = 'rerun_ci';

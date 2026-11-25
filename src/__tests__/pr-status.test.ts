@@ -338,16 +338,35 @@ describe('PR status acquisition', () => {
     ];
     const externalStatus = { __typename: 'StatusContext', context: 'Check unresolved comments', state: 'FAILURE',
       targetUrl: 'https://github.com/org/repo/actions/runs/99' };
+    const failFastAnnotations = [
+      { path: '.github', annotation_level: 'failure', message: 'The strategy configuration was canceled because "test.unit" failed' },
+      { path: '.github', annotation_level: 'failure', message: 'The operation was canceled.' },
+    ];
+    const concurrencyAnnotations = [
+      { path: '.github', annotation_level: 'failure', message: 'Canceling since a higher priority waiting request for ci-branch exists' },
+      { path: '.github', annotation_level: 'failure', message: 'The operation was canceled.' },
+    ];
+    const timeoutAnnotations = [
+      { path: '.github', annotation_level: 'failure', message: 'The job running on runner GitHub Actions 1 has exceeded the maximum execution time of 60 minutes.' },
+      { path: '.github', annotation_level: 'failure', message: 'The operation was canceled.' },
+    ];
 
     function install(
       checks: readonly unknown[],
       jobs: readonly unknown[],
       logs: Record<number, string | Error> = {},
       runOverrides: Record<string, unknown> = {},
+      annotationsByJob: Record<number, unknown[] | Error> = {},
     ) {
       response.mockImplementation(() => {
         const args = execFile.mock.calls.at(-1)?.[1] as string[];
         if (args[0] === 'pr') return JSON.stringify(status(checks));
+        if (args[0] === 'api') {
+          const match = /\/check-runs\/(\d+)\/annotations/.exec(args[1] ?? '');
+          const jobAnnotations = match ? annotationsByJob[Number(match[1])] ?? [] : [];
+          if (jobAnnotations instanceof Error) throw jobAnnotations;
+          return JSON.stringify(jobAnnotations);
+        }
         if (args.includes('--log-failed')) {
           const log = logs[Number(args[args.indexOf('--job') + 1])] ?? '';
           if (log instanceof Error) throw log;
@@ -421,11 +440,11 @@ describe('PR status acquisition', () => {
     it.each([
       ['失敗チェックが先', [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')]],
       ['取消チェックが先', [actionsCheck('e2e', 22, 'CANCELLED'), actionsCheck('unit', 20)]],
-    ] as const)('fail-fastで実行途中に取り消されたjobのログが空でも、同じrunの失敗jobと時系列が一致すれば証拠欠落にしない（%s）', async (_label, checks) => {
+    ] as const)('fail-fastで実行途中に取り消されたjobのログが空でも、同じrunの失敗jobと時系列・fail-fast注釈が一致すれば証拠欠落にしない（%s）', async (_label, checks) => {
       install(checks, [
         job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
         job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
-      ], { 20: 'expected 2 to equal 3', 22: '' });
+      ], { 20: 'expected 2 to equal 3', 22: '' }, {}, { 22: failFastAnnotations });
 
       const evidence = await failureEvidence() as PrCiFailure;
       expect(evidence).toMatchObject({ complete: true, unavailable: [] });
@@ -441,11 +460,11 @@ describe('PR status acquisition', () => {
       expect(e2eCheck?.jobs[0]).not.toHaveProperty('log');
     });
 
-    it('run単位の失敗チェックにfail-fast取消jobが混在しても、兄弟失敗のログがあれば完全になる', async () => {
+    it('run単位の失敗チェックにfail-fast取消jobが混在しても、兄弟失敗のログとfail-fast注釈があれば完全になる', async () => {
       install([{ ...check('COMPLETED', 'FAILURE'), name: 'CI', detailsUrl: run }], [
         job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
         job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
-      ], { 20: 'expected 2 to equal 3', 22: '' });
+      ], { 20: 'expected 2 to equal 3', 22: '' }, {}, { 22: failFastAnnotations });
 
       expect(await failureEvidence()).toMatchObject({ complete: true, unavailable: [],
         checks: [{ name: 'CI', jobs: [
@@ -458,7 +477,7 @@ describe('PR status acquisition', () => {
       install([actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')], [
         job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
         job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
-      ], { 20: 'expected 2 to equal 3', 22: 'The operation was canceled.' });
+      ], { 20: 'expected 2 to equal 3', 22: 'The operation was canceled.' }, {}, { 22: failFastAnnotations });
 
       const evidence = await failureEvidence() as PrCiFailure;
       expect(evidence).toMatchObject({ complete: true, unavailable: [],
@@ -477,7 +496,8 @@ describe('PR status acquisition', () => {
           job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
         ],
         { 20: 'aggregate failed', 22: '' },
-        { conclusion: 'cancelled' }],
+        { conclusion: 'cancelled' },
+        { 22: concurrencyAnnotations }],
       ['run自体がcancelled（時刻が重なっていても外部取消）',
         [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')],
         [
@@ -485,14 +505,52 @@ describe('PR status acquisition', () => {
           job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
         ],
         { 20: 'expected 2 to equal 3', 22: '' },
-        { conclusion: 'cancelled' }],
+        { conclusion: 'cancelled' },
+        { 22: failFastAnnotations }],
+      ['runはfailureだがjob単位concurrencyで取り消された',
+        [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')],
+        [
+          job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
+          job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:02:00Z' }),
+        ],
+        { 20: 'expected 2 to equal 3', 22: '' },
+        { conclusion: 'failure' },
+        { 22: concurrencyAnnotations }],
+      ['runはfailureだが取消jobがtimeoutで終了した',
+        [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')],
+        [
+          job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
+          job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T13:00:00Z' }),
+        ],
+        { 20: 'expected 2 to equal 3', 22: '' },
+        { conclusion: 'failure' },
+        { 22: timeoutAnnotations }],
+      ['fail-fastを示す注釈がなく時刻の重なりだけ',
+        [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')],
+        [
+          job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
+          job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
+        ],
+        { 20: 'expected 2 to equal 3', 22: '' },
+        { conclusion: 'failure' },
+        { 22: [{ path: '.github', annotation_level: 'failure', message: 'The operation was canceled.' }] }],
+      ['注釈取得APIが権限エラーで失敗した',
+        [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')],
+        [
+          job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
+          job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
+        ],
+        { 20: 'expected 2 to equal 3', 22: '' },
+        { conclusion: 'failure' },
+        { 22: new Error('HTTP 403: Resource not accessible') }],
       ['同じrunにfailureの兄弟jobがない',
         [actionsCheck('e2e', 22, 'CANCELLED')],
         [
           job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
         ],
         { 22: '' },
-        { conclusion: 'failure' }],
+        { conclusion: 'failure' },
+        { 22: failFastAnnotations }],
       ['兄弟jobの失敗より前に取消jobが終了している',
         [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')],
         [
@@ -500,7 +558,8 @@ describe('PR status acquisition', () => {
           job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
         ],
         { 20: 'expected 2 to equal 3', 22: '' },
-        { conclusion: 'failure' }],
+        { conclusion: 'failure' },
+        { 22: failFastAnnotations }],
       ['兄弟jobの失敗より後に取消jobが開始している',
         [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')],
         [
@@ -508,7 +567,8 @@ describe('PR status acquisition', () => {
           job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:01:30Z', completedAt: '2026-10-05T12:02:00Z' }),
         ],
         { 20: 'expected 2 to equal 3', 22: '' },
-        { conclusion: 'failure' }],
+        { conclusion: 'failure' },
+        { 22: failFastAnnotations }],
       ['取消job自身のstepにfailureがある',
         [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')],
         [
@@ -516,7 +576,8 @@ describe('PR status acquisition', () => {
           job(22, 'e2e', 'cancelled', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
         ],
         { 20: 'expected 2 to equal 3', 22: '' },
-        { conclusion: 'failure' }],
+        { conclusion: 'failure' },
+        { 22: failFastAnnotations }],
       ['取消jobの時刻が欠落している',
         [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')],
         [
@@ -524,7 +585,8 @@ describe('PR status acquisition', () => {
           job(22, 'e2e', 'cancelled', cancelledMidSteps),
         ],
         { 20: 'expected 2 to equal 3', 22: '' },
-        { conclusion: 'failure' }],
+        { conclusion: 'failure' },
+        { 22: failFastAnnotations }],
       ['兄弟失敗jobのログを取得していない（取消チェックのみ）',
         [actionsCheck('e2e', 22, 'CANCELLED')],
         [
@@ -532,7 +594,8 @@ describe('PR status acquisition', () => {
           job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
         ],
         { 22: '' },
-        { conclusion: 'failure' }],
+        { conclusion: 'failure' },
+        { 22: failFastAnnotations }],
       ['取消jobの--log-failedが権限エラーで失敗した',
         [actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')],
         [
@@ -540,9 +603,10 @@ describe('PR status acquisition', () => {
           job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
         ],
         { 20: 'expected 2 to equal 3', 22: new Error('HTTP 403: Resource not accessible') },
-        { conclusion: 'failure' }],
-    ] as const)('原因不明・条件不一致の実行途中取消（%s）は証拠欠落として止める', async (_label, checks, jobs, logs, runOverrides) => {
-      install([...checks], [...jobs], logs as Record<number, string | Error>, runOverrides);
+        { conclusion: 'failure' },
+        { 22: failFastAnnotations }],
+    ] as const)('原因不明・条件不一致の実行途中取消（%s）は証拠欠落として止める', async (_label, checks, jobs, logs, runOverrides, annotationsByJob) => {
+      install([...checks], [...jobs], logs as Record<number, string | Error>, runOverrides, annotationsByJob as Record<number, unknown[] | Error>);
 
       const evidence = await failureEvidence() as PrCiFailure;
       expect(evidence).toMatchObject({ complete: false,

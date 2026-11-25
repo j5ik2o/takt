@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { link, lstat, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import type { PrCiFailure } from '../../../core/workflow/system/pr-ci.js';
+import { ciFailureRunKey, ciFailureRunsWithLogs, type PrCiFailure } from '../../../core/workflow/system/pr-ci.js';
 import type { RunPaths } from '../../../core/workflow/run/run-paths.js';
 import { isRealPathInside } from '../../../shared/utils/pathBoundary.js';
 import { ensureDirectoryIgnoredByGit, ensureWorktreeTaktRunsIgnored } from '../../task/projectLocalTaktSync.js';
@@ -26,11 +26,6 @@ async function writeOnce(path: string, content: string): Promise<void> {
   }
 }
 
-function runLogKey(run: PrCiFailure['checks'][number]['run']): string {
-  const url = new URL(run.url);
-  return JSON.stringify([url.origin, url.pathname.split('/').slice(0, 3), run.id, run.attempt]);
-}
-
 async function saveIndex(
   failure: PrCiFailure,
   directory: string,
@@ -41,11 +36,7 @@ async function saveIndex(
 ): Promise<{ failure: PrCiFailure; manifestPath: string; logCount: number }> {
   const saved = new Map<string, string>();
   const unavailable = [...failure.unavailable];
-  const runsWithLogs = new Set(
-    failure.checks
-      .filter(({ jobs }) => jobs.some((job) => Boolean(job.log?.trim())))
-      .map(({ run }) => runLogKey(run)),
-  );
+  const runsWithLogs = ciFailureRunsWithLogs(failure);
   const addUnavailable = (item: PrCiFailure['unavailable'][number]) => {
     if (unavailable.some((existing) => existing.name === item.name && existing.url === item.url
       && existing.reason === item.reason)) return;
@@ -54,7 +45,7 @@ async function saveIndex(
   const checks = [];
   for (const check of failure.checks) {
     const jobs = [];
-    const checkRunKey = runLogKey(check.run);
+    const checkRunKey = ciFailureRunKey(check.run);
     if (check.jobs.length === 0) {
       addUnavailable({ name: check.name, url: check.run.url, reason: 'Failed check has no job evidence' });
     }

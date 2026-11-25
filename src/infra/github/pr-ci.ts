@@ -35,7 +35,23 @@ const RunSchema = z.object({
 type CiRun = z.infer<typeof RunSchema>;
 type CiRunJob = CiRun['jobs'][number];
 
+const CheckRunAnnotationsSchema = z.array(z.object({
+  path: z.string().optional(),
+  annotation_level: z.string().optional(),
+  message: z.string(),
+}));
+type CheckRunAnnotation = z.infer<typeof CheckRunAnnotationsSchema>[number];
+
 const NON_FAILING_CANCELLED_STEP_CONCLUSIONS = new Set(['success', 'cancelled', 'skipped', 'neutral']);
+const FAIL_FAST_ANNOTATION_PATTERN = /^The strategy configuration was canceled because "[^"]+" failed\.?$/;
+
+function hasFailFastCancellationAnnotation(annotations: readonly CheckRunAnnotation[]): boolean {
+  return annotations.some((annotation) =>
+    annotation.path === '.github'
+    && annotation.annotation_level === 'failure'
+    && FAIL_FAST_ANNOTATION_PATTERN.test(annotation.message.trim()),
+  );
+}
 
 function parseTimestamp(value: string | null | undefined): number | undefined {
   if (typeof value !== 'string' || value.length === 0) return undefined;
@@ -45,8 +61,8 @@ function parseTimestamp(value: string | null | undefined): number | undefined {
 
 /**
  * Returns sibling job IDs in the same failed run whose `failure` completion fell within
- * this cancelled job's execution window (fail-fast cancellation).
- * Returns empty when causality cannot be established from the run JSON.
+ * this cancelled job's execution window (fail-fast cancellation candidate).
+ * Returns empty when chronology or step state cannot be established from the run JSON.
  */
 function siblingFailuresDuringCancelledJob(run: CiRun, job: CiRunJob): number[] {
   if (run.conclusion !== 'failure') return [];
@@ -78,8 +94,24 @@ export function actionsReference(value: string) {
   const match = /^\/([^/]+)\/([^/]+)\/actions\/runs\/(\d+)(?:\/attempts\/\d+)?(?:\/(jobs?)\/(\d+))?\/?$/.exec(url.pathname);
   if (url.protocol !== 'https:' || !match) throw new Error('Unsupported Actions check URL');
   return { id: Number(match[3]), repository: `${url.hostname}/${match[1]}/${match[2]}`,
+    hostname: url.hostname, owner: match[1]!, repo: match[2]!,
     // Only `/job/<id>` carries the job's database ID; the number in `/jobs/<number>` is a different identifier.
     jobId: match[4] === 'job' ? Number(match[5]) : undefined };
+}
+
+async function readJobAnnotations(
+  hostname: string,
+  owner: string,
+  repo: string,
+  jobId: number,
+  cwd: string,
+  options?: PrStatusFetchOptions,
+): Promise<CheckRunAnnotation[]> {
+  return CheckRunAnnotationsSchema.parse(JSON.parse(await runPrCommand([
+    'api',
+    `repos/${owner}/${repo}/check-runs/${jobId}/annotations?per_page=100`,
+    '--hostname', hostname,
+  ], cwd, options)));
 }
 
 async function readRun(id: number, cwd: string, options?: PrStatusFetchOptions, url?: string, target?: GitHubPullRequestTarget): Promise<CiRun> {
@@ -119,6 +151,7 @@ export async function collectPrCiFailure(
   }
   const runs = new Map<string, Promise<CiRun>>();
   const logs = new Map<string, Promise<string | null>>();
+  const annotations = new Map<string, Promise<CheckRunAnnotation[]>>();
   const loggedJobsByRun = new Map<string, Set<number>>();
   const pendingSiblingCancellations: Array<{
     check: PrCiFailure['checks'][number];
@@ -189,6 +222,22 @@ export async function collectPrCiFailure(
           if (log === null) {
             const siblingIds = siblingFailuresDuringCancelledJob(run, job);
             if (siblingIds.length === 0) throw new Error(`Failed job ${job.databaseId} has no log content`);
+            let pendingAnnotations = annotations.get(logKey);
+            if (!pendingAnnotations) {
+              pendingAnnotations = readJobAnnotations(
+                target?.hostname ?? reference.hostname,
+                target?.owner ?? reference.owner,
+                target?.repo ?? reference.repo,
+                job.databaseId,
+                cwd,
+                options,
+              );
+              annotations.set(logKey, pendingAnnotations);
+            }
+            const jobAnnotations = await pendingAnnotations;
+            if (!hasFailFastCancellationAnnotation(jobAnnotations)) {
+              throw new Error(`Failed job ${job.databaseId} has no log content`);
+            }
             checkSiblingCancellations.push({ jobIndex: jobs.length, siblingIds });
             jobs.push({ ...details, cancelledBySibling: true });
           } else {

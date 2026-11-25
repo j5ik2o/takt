@@ -35,6 +35,19 @@ export const PrCiRerunSchema = z.object({
 export type PrCiFailure = z.infer<typeof PrCiFailureSchema>;
 export type PrCiRerun = z.infer<typeof PrCiRerunSchema>;
 
+export function ciFailureRunKey(run: PrCiFailure['checks'][number]['run']): string {
+  const url = new URL(run.url);
+  return JSON.stringify([url.origin, url.pathname.split('/').slice(0, 3), run.id, run.attempt]);
+}
+
+export function ciFailureRunsWithLogs(failure: Pick<PrCiFailure, 'checks'>): Set<string> {
+  return new Set(
+    failure.checks
+      .filter(({ jobs }) => jobs.some((job) => job.log !== undefined && job.log.trim().length > 0))
+      .map(({ run }) => ciFailureRunKey(run)),
+  );
+}
+
 export interface PrCiCheck {
   kind: 'CheckRun' | 'StatusContext';
   name: string;
