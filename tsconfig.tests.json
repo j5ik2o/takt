@@ -88,6 +88,7 @@
     "src/__tests__/claude-read-deny-sdk-options.test.ts",
     "src/__tests__/claude-read-deny-wiring.test.ts",
     "src/__tests__/claude-read-deny.test.ts",
+    "src/__tests__/claude-sdk-runtime-managed.integration.test.ts",
     "src/__tests__/claude-sdk-runtime.test.ts",
     "src/__tests__/claude-terminal-command.test.ts",
     "src/__tests__/claude-terminal-response-normalizer.test.ts",

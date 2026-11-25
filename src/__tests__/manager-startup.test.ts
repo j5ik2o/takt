@@ -38,7 +38,11 @@ vi.mock('../infra/codex/cli-runtime.js', () => ({ resolveCodexSdkCli: () => ({ e
 vi.mock('@openai/codex-sdk', () => ({ Codex: doubles.codex }));
 vi.mock('../infra/config/index.js', async (original) => ({
   ...await original<typeof import('../infra/config/index.js')>(), resolveOpenaiApiKey: () => undefined,
-  resolveCodexCliPath: () => '/test/codex', resolveClaudeCliPath: () => '/test/claude',
+  resolveCodexCliPath: () => '/test/codex',
+}));
+// The config/index.js mock does not reach the resolveClaudeCliPath that claude.ts calls, so mock its source module.
+vi.mock('../infra/config/global/globalConfigResolvers.js', async (original) => ({
+  ...await original<typeof import('../infra/config/global/globalConfigResolvers.js')>(), resolveClaudeCliPath: () => '/test/claude',
 }));
 
 const assignment = { kind: 'repository' as const, repositoryDirectory: '/canonical/repository', repositoryDirectories: ['/canonical/repository'] };

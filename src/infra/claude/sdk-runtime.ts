@@ -1,10 +1,19 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import { join } from 'node:path';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
+import { inspectManagedProvider } from '../managed-providers/package.js';
 
-function resolveBundledCli(): string {
-  const sdkRequire = createRequire(createRequire(import.meta.url).resolve('@anthropic-ai/claude-agent-sdk'));
+// Look where the query loads the SDK from: the installation made by `takt install claude-sdk`.
+// The preflight runs that CLI, so require the integrity check the query applies before launching it:
+// a modified installation must not run even once.
+async function resolveBundledCli(): Promise<string> {
+  const missing = 'Claude SDK is not installed or failed an integrity check. Run `takt install claude-sdk`.';
+  // A stale installation passed its integrity check, and the query accepts it too.
+  const { state, directory, cause } = await inspectManagedProvider('claude-sdk');
+  if (state === 'missing' || directory === undefined) throw new Error(missing, { cause });
+  const sdkRequire = createRequire(join(directory, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'package.json'));
   const base = `@anthropic-ai/claude-agent-sdk-${process.platform === 'android' ? 'linux' : process.platform}-${process.arch}`;
   const report = (process.platform === 'linux' ? process.report?.getReport() : undefined) as
     { header: { glibcVersionRuntime?: string } } | undefined;
@@ -23,12 +32,12 @@ function resolveBundledCli(): string {
     }
     if (existsSync(path)) return path;
   }
-  throw new Error('Claude SDK native CLI is missing. Reinstall with optional dependencies or configure claude_cli_path.');
+  throw new Error('Claude SDK native CLI is missing. Run `takt install claude-sdk --force`, or configure claude_cli_path.');
 }
 
 export async function assertClaudeSdkRuntime(options: Options, abortSignal?: AbortSignal): Promise<void> {
   abortSignal?.throwIfAborted();
-  const path = options.pathToClaudeCodeExecutable || resolveBundledCli();
+  const path = options.pathToClaudeCodeExecutable || await resolveBundledCli();
   const isScript = ['.js', '.mjs', '.tsx', '.ts', '.jsx'].some((extension) => path.endsWith(extension));
   const help = await new Promise<string>((resolve, reject) => {
     execFile(isScript ? process.execPath : path, [...(isScript ? [path] : []), '--help'], {

@@ -132,7 +132,8 @@ vi.mock('../core/logging/contracts.js', () => ({
   USAGE_MISSING_REASONS: { NOT_SUPPORTED_BY_PROVIDER: 'not-supported' },
 }));
 
-vi.mock('../shared/types/provider.js', () => ({
+vi.mock('../shared/types/provider.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../shared/types/provider.js')>(),
   createStrictInternalAgentIsolationError: (provider: string) =>
     new Error(`Provider "${provider}" does not support strict internal-agent isolation`),
 }));
