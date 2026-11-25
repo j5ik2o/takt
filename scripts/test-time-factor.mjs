@@ -72,12 +72,15 @@ export function annotateWaitForTimeout(error, { writtenMs, factor }) {
   // Node keeps `stack` as an own accessor that reads the original error, so the
   // copy takes the frames as text instead of taking that accessor.
   // The copy defines its own message and stack, so a frozen error still gets one.
-  const message = `${error.message}${waitForExpirySuffix({ writtenMs, factor })}`;
+  const suffix = waitForExpirySuffix({ writtenMs, factor });
+  const message = `${error.message}${suffix}`;
   const ownText = (value) => ({ value, writable: true, enumerable: false, configurable: true });
   const descriptors = Object.getOwnPropertyDescriptors(error);
   delete descriptors.stack;
   descriptors.message = ownText(message);
-  if (error.stack !== undefined) descriptors.stack = ownText(error.stack.replace(error.message, message));
+  if (error.stack !== undefined) {
+    descriptors.stack = ownText(error.stack.replace(/^([^\n]*)/, (line) => `${line}${suffix}`));
+  }
   return Object.create(Object.getPrototypeOf(error), descriptors);
 }
 

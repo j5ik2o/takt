@@ -72,7 +72,7 @@ describe('the deadline a vi.waitFor call wrote', () => {
     ['only an interval', { interval: 10 }, 1000],
     ['a timeout in options', { timeout: 250, interval: 10 }, 250],
     ['a timeout in milliseconds', 250, 250],
-  ] as Array<[string, WaitForOptions | undefined, number]>)('reads %s as %d', (_form, options, expected) => {
+  ] as Array<[string, WaitForOptions | undefined, number]>)('reads %s (%j) as %d', (_form, options, expected) => {
     expect(writtenWaitForTimeoutMs(options)).toBe(expected);
   });
 
@@ -125,6 +125,35 @@ describe('the deadline a vi.waitFor call wrote', () => {
     expect(annotated.message).toContain('not ready');
     expect(annotated.message).toContain('written 100ms');
     expect(frozen.message).toBe('not ready');
+  });
+
+  it('keeps the error header intact when annotating an error with an empty message', () => {
+    const empty = new Error('');
+    const originalHeader = empty.stack?.split('\n')[0] ?? '';
+
+    const annotated = annotateWaitForTimeout(empty, { writtenMs: 1000, factor: 2 }) as Error;
+    const expectedSuffix = waitForExpirySuffix({ writtenMs: 1000, factor: 2 });
+
+    expect(empty.message).toBe('');
+    expect(annotated).not.toBe(empty);
+    expect(annotated.message).toBe(expectedSuffix);
+    expect(annotated.stack?.split('\n')[0]).toBe(`${originalHeader}${expectedSuffix}`);
+    expect(annotated.stack?.startsWith('Error')).toBe(true);
+    expect(annotated.stack).toContain('test-time-factor.test.ts');
+  });
+
+  it('does not interpret replacement patterns like $& or $$ in the error message', () => {
+    const originalMessage = 'expected $& to equal $$';
+    const special = new Error(originalMessage);
+
+    const annotated = annotateWaitForTimeout(special, { writtenMs: 1000, factor: 2 }) as Error;
+    const expectedSuffix = waitForExpirySuffix({ writtenMs: 1000, factor: 2 });
+
+    expect(special.message).toBe(originalMessage);
+    expect(annotated).not.toBe(special);
+    expect(annotated.message).toBe(`${originalMessage}${expectedSuffix}`);
+    expect(annotated.stack?.split('\n')[0]).toBe(`Error: ${originalMessage}${expectedSuffix}`);
+    expect(annotated.stack).toContain('test-time-factor.test.ts');
   });
 
   it('leaves a rejection that is not an Error alone', () => {
