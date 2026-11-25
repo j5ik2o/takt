@@ -33,11 +33,11 @@ let marker: string;
 
 beforeEach(async () => {
   directory = await realpath(await mkdtemp(join(tmpdir(), 'takt-sdk-precheck-')));
-  isolation.managedRoot = `${join(directory, 'config')}${sep}`;
+  // test-setup.ts gives each test its own config root; the managed SDK goes under it.
+  isolation.managedRoot = `${process.env.TAKT_CONFIG_DIR!}${sep}`;
   npm = join(directory, 'npm.cjs');
   marker = join(directory, 'cli-was-run');
   const binary = join(directory, 'claude');
-  vi.stubEnv('TAKT_CONFIG_DIR', join(directory, 'config'));
   vi.stubEnv('TAKT_TEST_FAKE_CLAUDE', binary);
   await writeFile(binary, `#!/bin/sh\n: > ${JSON.stringify(marker)}\necho "--tools --strict-mcp-config --json-schema"\n`, { mode: 0o755 });
   await writeFile(npm, `#!/usr/bin/env node
@@ -71,11 +71,8 @@ describe.skipIf(process.platform === 'win32')('Claude SDK preflight with a takt-
     expect(existsSync(marker)).toBe(true);
   });
 
-  it('tells the user how to fix a missing SDK when neither takt install nor claude_cli_path provides a CLI', async () => {
-    const failure = assertClaudeSdkRuntime({});
-
-    await expect(failure).rejects.toThrow('takt install claude-sdk');
-    await expect(failure).rejects.toThrow('claude_cli_path');
+  it('asks for takt install claude-sdk when the SDK is not installed and claude_cli_path is not set', async () => {
+    await expect(assertClaudeSdkRuntime({})).rejects.toThrow('Run `takt install claude-sdk`.');
     expect(existsSync(marker)).toBe(false);
   });
 });

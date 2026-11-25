@@ -3,15 +3,21 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
-import { inspectProviderInstallation } from '../managed-providers/loader.js';
+import { resolveManagedGeneration } from '../managed-providers/generation.js';
+import { managedPackageRoot } from '../managed-providers/package.js';
 
 // Look where the query loads the SDK from: the installation made by `takt install claude-sdk`.
+// The query verifies that installation's integrity when it loads it, so this only locates it.
 async function resolveBundledCli(): Promise<string> {
-  const installation = await inspectProviderInstallation('claude-sdk');
-  if (installation.state === 'missing' || installation.directory === undefined) {
-    throw new Error('Claude SDK is not installed. Run `takt install claude-sdk`, or configure claude_cli_path.', { cause: installation.cause });
+  const missing = 'Claude SDK is not installed. Run `takt install claude-sdk`.';
+  let directory: string | undefined;
+  try {
+    directory = await resolveManagedGeneration(managedPackageRoot('claude-sdk'), { platform: process.platform });
+  } catch (cause) {
+    throw new Error(missing, { cause });
   }
-  const sdkRequire = createRequire(join(installation.directory, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'package.json'));
+  if (directory === undefined) throw new Error(missing);
+  const sdkRequire = createRequire(join(directory, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'package.json'));
   const base = `@anthropic-ai/claude-agent-sdk-${process.platform === 'android' ? 'linux' : process.platform}-${process.arch}`;
   const report = (process.platform === 'linux' ? process.report?.getReport() : undefined) as
     { header: { glibcVersionRuntime?: string } } | undefined;

@@ -1,13 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { join } from 'node:path';
 
-const doubles = vi.hoisted(() => ({ execFile: vi.fn(), resolve: vi.fn(), exists: vi.fn(), inspect: vi.fn(), origins: [] as string[] }));
-vi.mock('../infra/managed-providers/loader.js', () => ({ inspectProviderInstallation: doubles.inspect }));
+const doubles = vi.hoisted(() => ({ execFile: vi.fn(), resolve: vi.fn(), exists: vi.fn(), resolveGeneration: vi.fn(), origins: [] as string[] }));
+vi.mock('../infra/managed-providers/generation.js', () => ({ resolveManagedGeneration: doubles.resolveGeneration }));
 vi.mock('node:child_process', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:child_process')>(), execFile: doubles.execFile,
 }));
-vi.mock('node:module', async (importOriginal) => ({
-  ...await importOriginal<typeof import('node:module')>(), createRequire: (origin: string) => { doubles.origins.push(origin); return { resolve: doubles.resolve }; },
-}));
+vi.mock('node:module', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:module')>();
+  const createRequire = (origin: string) => {
+    if (!origin.startsWith(join('/managed', 'sdk'))) return actual.createRequire(origin);
+    doubles.origins.push(origin);
+    return { resolve: doubles.resolve };
+  };
+  return { ...actual, createRequire, default: { ...actual, createRequire } };
+});
 vi.mock('node:fs', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:fs')>(), existsSync: doubles.exists,
 }));
@@ -18,7 +25,7 @@ describe('Claude SDK runtime preflight', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     doubles.origins.length = 0;
-    doubles.inspect.mockReset().mockResolvedValue({ state: 'ready', directory: '/managed/sdk' });
+    doubles.resolveGeneration.mockReset().mockResolvedValue('/managed/sdk');
     doubles.resolve.mockReset().mockReturnValue('/sdk/claude');
     doubles.exists.mockReset().mockReturnValue(true);
     doubles.execFile.mockReset().mockImplementation((_command, _args, _options, callback) => {
@@ -28,7 +35,7 @@ describe('Claude SDK runtime preflight', () => {
 
   it('inspects the native executable bundled with the takt-managed SDK when no CLI override is configured', async () => {
     await assertClaudeSdkRuntime({ cwd: '/repo', tools: ['Read'], strictMcpConfig: true });
-    expect(doubles.origins).toEqual(['/managed/sdk/node_modules/@anthropic-ai/claude-agent-sdk/package.json']);
+    expect(doubles.origins).toEqual([join('/managed/sdk', 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'package.json')]);
     expect(doubles.resolve).toHaveBeenCalledWith(expect.stringContaining('@anthropic-ai/claude-agent-sdk-'));
     expect(doubles.execFile).toHaveBeenCalledWith('/sdk/claude', ['--help'], expect.objectContaining({ cwd: '/repo' }), expect.any(Function));
   });
@@ -41,18 +48,22 @@ describe('Claude SDK runtime preflight', () => {
     expect(doubles.execFile).not.toHaveBeenCalled();
   });
 
-  it('asks for takt install claude-sdk or claude_cli_path when the managed SDK is missing', async () => {
-    const cause = new Error('no generation');
-    doubles.inspect.mockResolvedValue({ state: 'missing', cause });
-    const failure = assertClaudeSdkRuntime({});
-    await expect(failure).rejects.toThrow(/takt install claude-sdk.*claude_cli_path/u);
-    await expect(failure).rejects.toMatchObject({ cause });
+  it('asks for takt install claude-sdk when the managed SDK is missing', async () => {
+    doubles.resolveGeneration.mockResolvedValue(undefined);
+    await expect(assertClaudeSdkRuntime({})).rejects.toThrow('Run `takt install claude-sdk`.');
+    expect(doubles.execFile).not.toHaveBeenCalled();
+  });
+
+  it('keeps the cause when the managed SDK link is broken', async () => {
+    const cause = new Error('Managed current generation is not a link.');
+    doubles.resolveGeneration.mockRejectedValue(cause);
+    await expect(assertClaudeSdkRuntime({})).rejects.toMatchObject({ message: expect.stringContaining('takt install claude-sdk'), cause });
     expect(doubles.execFile).not.toHaveBeenCalled();
   });
 
   it('runs a configured JavaScript CLI with Node and the resolved environment', async () => {
     await assertClaudeSdkRuntime({ pathToClaudeCodeExecutable: '/custom/cli.mjs', cwd: '/repo', env: { PATH: '/custom/bin' } });
-    expect(doubles.inspect).not.toHaveBeenCalled();
+    expect(doubles.resolveGeneration).not.toHaveBeenCalled();
     expect(doubles.resolve).not.toHaveBeenCalled();
     expect(doubles.execFile).toHaveBeenCalledWith(process.execPath, ['/custom/cli.mjs', '--help'], expect.objectContaining({ cwd: '/repo', env: { PATH: '/custom/bin' } }), expect.any(Function));
   });
