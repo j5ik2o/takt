@@ -331,13 +331,15 @@ describe('DynamicParallelSelectorCoordinator', () => {
     });
     const coordinator = new DynamicParallelSelectorCoordinator(dependencies());
 
-    await expect(
-      coordinator.selectParticipants(dynamicParallelStep(), workflowState(), 'review changes'),
-    ).rejects.toThrow(
-      'Dynamic parallel selector for "reviewers" returned invalid structured output: '
-      + '$.selected_ids[0] must be equal to one of the allowed values; '
-      + 'returned selected_ids: ["security"]; allowed candidate ids: ["frontend","backend"]',
-    );
+    const failure = await coordinator
+      .selectParticipants(dynamicParallelStep(), workflowState(), 'review changes')
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    const reason = (failure as Error).message;
+    expect(reason).toContain('Dynamic parallel selector for "reviewers"');
+    expect(reason).toContain('returned selected_ids: ["security"]');
+    expect(reason).toContain('allowed candidate ids: ["frontend","backend"]');
   });
 
   it('should run the selector when run-local state has no resume selection', async () => {

@@ -588,13 +588,51 @@ describe('DynamicFacetSelectorCoordinator', () => {
       } as Partial<WorkflowEngineOptions>),
     }));
 
-    await expect(
-      coordinator.resolveDynamicFacets(makeStep(), makeState(), 'task', pool),
-    ).rejects.toThrow(
-      'Dynamic facet selector for "fix" returned invalid structured output: '
-      + '$.selected_ids[0] must be equal to one of the allowed values; '
-      + 'returned selected_ids: ["coding"]; allowed candidate ids: ["frontend","backend"]',
+    const failure = await coordinator
+      .resolveDynamicFacets(makeStep(), makeState(), 'task', pool)
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    const reason = (failure as Error).message;
+    expect(reason).toContain('Dynamic facet selector for "fix"');
+    expect(reason).toContain('returned selected_ids: ["coding"]');
+    expect(reason).toContain('allowed candidate ids: ["frontend","backend"]');
+  });
+
+  it('redacts a credential the selector returns as an id before the failure reason is shortened', async () => {
+    const secret = 'k'.repeat(600);
+    const transport = await vi.importActual<typeof import('../agents/structured-caller/transport.js')>(
+      '../agents/structured-caller/transport.js',
     );
+    mockedExecuteAgent.mockImplementationOnce(transport.executeStructuredAgent);
+    vi.mocked(executeAgent).mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: [secret], rationale: 'x' },
+    });
+    const pool = makePool([{ id: 'frontend', description: 'Frontend' }]);
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps({
+      engineOptions: makeOptions({
+        selectorProvider: {
+          provider: 'mock',
+          providerSource: 'step',
+          model: 'm',
+          modelSource: 'step',
+          providerOptions: {},
+        },
+      } as Partial<WorkflowEngineOptions>),
+    }));
+
+    const failure = await coordinator
+      .resolveDynamicFacets(makeStep(), makeState(), `Deploy with token=${secret}`, pool)
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    const reason = (failure as Error).message;
+    expect(reason).toContain('returned selected_ids: ["[REDACTED]"]');
+    expect(reason).not.toContain('kkkk');
   });
 
   it('propagates run-local selection commit failure and leaves active identity unset', async () => {
