@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { collectSkippedInquiryFiles } from '../infra/goals/inquiry-files.js';
 import { StandaloneInquiryStore } from '../infra/goals/standalone-inquiries.js';
 import { GoalQuestionSchema } from '../infra/goals/schema.js';
-import { askTaktStandaloneQuestion } from '../features/mcp/standaloneInquiryOperations.js';
+import { askTaktStandaloneQuestion, listTaktStandaloneInquiries } from '../features/mcp/standaloneInquiryOperations.js';
 import { askStandaloneQuestionInputSchema } from '../features/mcp/schemas.js';
 import { sendSavedStandaloneQuestionNotification } from '../features/manager/notifications.js';
 import { firstTextContent } from './helpers/mcp-content.js';
@@ -119,6 +119,18 @@ it('does not save or notify a cancelled standalone MCP question', async () => {
   await expect(askTaktStandaloneQuestion(input, config, workspace, AbortSignal.abort())).rejects.toThrow();
   expect(files.size).toBe(0);
   expect(sendSavedStandaloneQuestionNotification).not.toHaveBeenCalled();
+});
+
+it('returns the files skipped by the MCP listing in path order even when they are enumerated in reverse', async () => {
+  // 列挙順（置いた順）がパス順の逆になる点まで固定する。並べ直しを外すと、この 2 件が逆順で返る。
+  files.set(workspaceFile(secondId), '{');
+  files.set(workspaceFile(firstId), '{"status":');
+  const response = await listTaktStandaloneInquiries({ cwd: '/repos/a/app' }, config, workspace);
+  expect(response.isError).toBe(true);
+  expect(JSON.parse(firstTextContent(response.content)).skippedInquiryFiles).toEqual([
+    { path: workspaceFile(firstId), reason: 'invalid JSON' },
+    { path: workspaceFile(secondId), reason: 'invalid JSON' },
+  ]);
 });
 
 describe('standalone inquiry ownership and persistence', () => {
