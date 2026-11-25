@@ -400,7 +400,7 @@ describe('Builtin PR merge workflow execution', () => {
           checks: scenario.notStartedCiJob === 'mixed' ? [check, notStarted] : [notStarted] };
       }
       return { number, headSha, complete, checks: scenario.largeCiLogs ? [check, { ...check, name: 'second-check' }] : [check],
-        ...(scenario.externalCiCheck ? { external: [{ name: 'Check unresolved comments', url: 'https://github.com/org/repo/actions/runs/99' }] } : {}),
+        ...(scenario.externalCiCheck ? { external: [{ name: 'third-party', url: 'https://ci.example.test/builds/1' }] } : {}),
         unavailable: complete ? [] : [{ name: scenario.ciName?.field === 'unavailable' ? scenario.ciName.value : `unit-round-${pushes}`, reason: 'HTTP 403: cannot read logs' }] };
     });
     const githubProvider = new GitHubProvider();
@@ -1225,7 +1225,7 @@ describe('Builtin PR merge workflow execution', () => {
       }
       const index = evidenceIndex(investigation);
       expect(index.unavailable).toEqual([]);
-      expect(index.external).toEqual([expect.objectContaining({ name: 'Check unresolved comments' })]);
+      expect(index.external).toEqual([expect.objectContaining({ name: 'third-party' })]);
     });
 
     it('開始前に取り消されたjobが混ざっても診断できた欠陥はci_stoppedへ落ちず修正へ進む', async () => {
