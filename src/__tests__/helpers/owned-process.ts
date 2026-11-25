@@ -1,5 +1,5 @@
 import { z } from 'zod/v4';
-import type { ChildProcess } from 'node:child_process';
+import { execFileSync, type ChildProcess } from 'node:child_process';
 import { getProcessIdentity, hasProcessIdentityMismatch, isProcessAlive, sameProcessIdentity, type ProcessIdentity } from '../../infra/task/process.js';
 
 export interface OwnedProcess {
@@ -78,4 +78,21 @@ export async function terminateOwnedProcess(owned: OwnedProcess, hasExited: () =
     }
   }
   if (ownedProcessState(owned, hasExited) !== 'exited') throw new Error(`Process exit was not confirmed: ${owned.pid}`);
+}
+
+function captureChildProcesses(parentPid: number): OwnedProcess[] {
+  if (process.platform === 'win32') return [];
+  return execFileSync('ps', ['-axo', 'pid=,ppid='], { encoding: 'utf8' }).split('\n').flatMap((row) => {
+    const [pid, ppid] = row.trim().split(/\s+/u).map(Number);
+    if (pid === undefined || ppid !== parentPid) return [];
+    const child = captureOwnedProcess(pid);
+    return child.identity === undefined ? [] : [child];
+  });
+}
+
+/** daemon は子を別のプロセスグループで起動するので、daemon を落としても子は残る。子の終了も確認する。 */
+export async function terminateOwnedProcessTree(owned: OwnedProcess, hasExited: () => boolean): Promise<void> {
+  const children = ownedProcessState(owned, hasExited) === 'running' ? captureChildProcesses(owned.pid) : [];
+  try { await terminateOwnedProcess(owned, hasExited); }
+  finally { for (const child of children) await terminateOwnedProcess(child, () => false); }
 }

@@ -7,7 +7,7 @@ import { expect, vi } from 'vitest';
 import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { readDaemonOwner } from '../../infra/daemon/owner.js';
 import type { ConversationClientSnapshot } from '../../features/manager/conversationIpcClient.js';
-import { captureOwnedChild, terminateOwnedProcess, type OwnedProcess } from './owned-process.js';
+import { captureOwnedChild, terminateOwnedProcess, terminateOwnedProcessTree, type OwnedProcess } from './owned-process.js';
 
 const built = (path: string): string => pathToFileURL(join(process.cwd(), 'dist', path)).href;
 const require = createRequire(import.meta.url);
@@ -328,7 +328,7 @@ finally { process.disconnect(); }
         pid = owner.pid;
         state = 'terminate-daemon';
         log('cleanup-daemon-terminate:before', owner.pid);
-        await terminateOwnedProcess({ pid: owner.pid, identity: owner.identity }, () => false);
+        await terminateOwnedProcessTree({ pid: owner.pid, identity: owner.identity }, () => false);
         log('cleanup-daemon-terminate:after', owner.pid);
       }
     } catch (error) {

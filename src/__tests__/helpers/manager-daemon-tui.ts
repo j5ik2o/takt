@@ -9,7 +9,7 @@ import { getGlobalConfigDir } from '../../infra/config/paths.js';
 import { readDaemonOwner } from '../../infra/daemon/owner.js';
 import { ConversationStateStore } from '../../infra/daemon/conversationStateStore.js';
 import { conversationId } from '../../infra/conversations/identity.js';
-import { captureOwnedChild, terminateOwnedProcess } from './owned-process.js';
+import { captureOwnedChild, terminateOwnedProcess, terminateOwnedProcessTree } from './owned-process.js';
 import type { ManagerGoalSummary } from '../../infra/goals/schema.js';
 
 const built = (path: string): string => pathToFileURL(join(process.cwd(), 'dist', path)).href;
@@ -359,7 +359,7 @@ finally { process.disconnect(); }
       if (owned !== undefined) await terminateOwnedProcess(owned, () => child.exitCode !== null || child.signalCode !== null);
     }
     const owner = await readDaemonOwner(directory);
-    if (owner !== undefined) await terminateOwnedProcess({ pid: owner.pid, identity: owner.identity }, () => false);
+    if (owner !== undefined) await terminateOwnedProcessTree({ pid: owner.pid, identity: owner.identity }, () => false);
   };
   return { directory, repository, summary, start, release, useTool, state, readObservations, cleanup, createRepository, setResponses };
 }
