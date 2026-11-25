@@ -95,6 +95,14 @@ const lockSource = new URL('../../managed/deepseek-harness/package-lock.json', i
 const cliSource = fileURLToPath(new URL('../app/cli/index.ts', import.meta.url));
 const installerSource = new URL('../infra/deepseek-harness/managed-package.ts', import.meta.url);
 
+// The fake npm copies real dependency trees (claude-sdk about 8,000 files, pi
+// about 23,000), so installing and deleting them scales with IO contention.
+// 2026-11: in the 4-worker heavy run one cleanup took 8.2s against Vitest's 10s
+// hook default and a non-pi install 6.7s against a 15s kill, and both limits
+// were exceeded in a full run. These deadlines only stop a hung process.
+const MANAGED_CLI_TIMEOUT_MS = 60_000;
+const FIXTURE_CLEANUP_TIMEOUT_MS = 60_000;
+
 let temporaryRoot: string;
 let fakeNpmPath: string;
 const nodeExecutable = process.execPath;
@@ -248,7 +256,7 @@ afterEach(async () => {
   }
   vi.unstubAllEnvs();
   await rm(temporaryRoot, { recursive: true, force: true });
-});
+}, FIXTURE_CLEANUP_TIMEOUT_MS);
 
 async function waitForFile(path: string, child?: ReturnType<typeof spawn>, getError?: () => string): Promise<string> {
   for (let attempt = 0; attempt < 250; attempt += 1) {
@@ -300,7 +308,7 @@ async function makeOldDeepSeekInstallation(): Promise<string> {
   return directory;
 }
 
-async function runManagedCli(args: string[], platform?: 'win32', timeoutMs = 15_000): Promise<{ code: number | null; output: string }> {
+async function runManagedCli(args: string[], platform?: 'win32', timeoutMs = MANAGED_CLI_TIMEOUT_MS): Promise<{ code: number | null; output: string }> {
   if (args[0] === 'update') {
     const help = await runManagedCli(['--help'], platform);
     if (!/^\s+update(?:\s|\[)/mu.test(help.output)) throw new Error('takt update is not registered');
@@ -423,7 +431,7 @@ function registerManagedTargetTestCases(
 }
 
 function managedInstallCliTimeoutMs(provider: (typeof managedTargets)[number]['provider']): number {
-  return provider === 'pi' ? PI_TEST_INSTALL_TIMEOUT_MS : 15_000;
+  return provider === 'pi' ? PI_TEST_INSTALL_TIMEOUT_MS : MANAGED_CLI_TIMEOUT_MS;
 }
 
 async function runSuccessfulManagedInstall(provider: (typeof managedTargets)[number]['provider'], platform?: 'win32') {
@@ -1534,7 +1542,8 @@ steps:
     expect(mockConfirm).toHaveBeenCalledOnce();
   });
 
-  it('installs every selected pool candidate and target before the first terminal step', async () => {
+  // Installs codex, claude-sdk, and pi in one test, so it needs the pi install budget.
+  it('installs every selected pool candidate and target before the first terminal step', { timeout: PI_TEST_ONE_INSTALL_TIMEOUT_MS }, async () => {
     const originalEmit = WorkflowEngine.prototype.emit;
     const { workflowPath } = await prepareTerminalManagedTask();
     await writeFile(join(temporaryRoot, '.takt', 'runtime.yaml'), `version: 1
