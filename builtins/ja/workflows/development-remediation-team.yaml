@@ -125,6 +125,7 @@ steps:
       - condition: 必要な作業をプロジェクト内で進める手段がなく、その根拠と必要な外部操作または両立不能な条件が確認されている
         next: ABORT
   - name: fix-replan
+    max_visits: 4
     uses: peer-review-fix-plan
     with:
       plan_policy:
@@ -143,6 +144,7 @@ steps:
       - condition: 必要な作業をプロジェクト内で進める手段がなく、その根拠と必要な外部操作または両立不能な条件が確認されている
         next: ABORT
   - name: verification-replan
+    max_visits: 4
     uses: peer-review-fix-plan
     with:
       plan_policy:

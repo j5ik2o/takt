@@ -455,6 +455,26 @@ workflow_overrides:
       expect(reloaded.workflowOverrides?.steps?.implement?.qualityGates).toEqual([]);
     });
 
+    it('should keep a step max_visits override when the config is saved again', () => {
+      const configPath = join(testDir, '.takt', 'config.yaml');
+      writeFileSync(configPath, 'workflow_overrides:\n  steps:\n    replan:\n      max_visits: 7\n', 'utf-8');
+
+      const loaded = loadProjectConfig(testDir);
+      expect(loaded.workflowOverrides?.steps?.replan?.maxVisits).toBe(7);
+
+      saveProjectConfig(testDir, loaded);
+
+      expect(readFileSync(configPath, 'utf-8')).toContain('max_visits: 7');
+      expect(loadProjectConfig(testDir).workflowOverrides?.steps?.replan?.maxVisits).toBe(7);
+    });
+
+    it.each([0, -1, 1.5])('should reject a step max_visits override of %s', (maxVisits) => {
+      const result = ProjectConfigSchema.safeParse({
+        workflow_overrides: { steps: { replan: { max_visits: maxVisits } } },
+      });
+      expect(result.success).toBe(false);
+    });
+
     it('should distinguish undefined from empty array', () => {
       // Test with undefined (not specified)
       const configPath1 = join(testDir, '.takt', 'config.yaml');

@@ -253,7 +253,7 @@ assistant:
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | Runtime prepare 策略 |
 | `workflow_command_gates` | object | `{ custom_scripts: false }` | Workflow YAML command quality gate 策略 |
 | `workflow_system_commands` | object | `{ custom_scripts: false }` | Workflow system command input 策略 |
-| `workflow_overrides` | object | - | workflow 级 `quality_gates` 与 `quality_gates_edit_only` 覆盖 |
+| `workflow_overrides` | object | - | workflow 级 `quality_gates` 与 `quality_gates_edit_only` 覆盖；step 级 `max_visits`（`workflow_overrides.steps.<step>.max_visits`，正整数）替换 step YAML 中的 `max_visits` |
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | sync conflict resolver 策略 |
 | `observability` | object | disabled | opt-in OpenTelemetry 基础设施 |
 
