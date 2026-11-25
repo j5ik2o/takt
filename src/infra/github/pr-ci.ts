@@ -35,12 +35,14 @@ const RunSchema = z.object({
 type CiRun = z.infer<typeof RunSchema>;
 type CiRunJob = CiRun['jobs'][number];
 
-const CheckRunAnnotationsSchema = z.array(z.object({
+const CheckRunAnnotationSchema = z.object({
   path: z.string().optional(),
   annotation_level: z.string().optional(),
   message: z.string(),
-}));
-type CheckRunAnnotation = z.infer<typeof CheckRunAnnotationsSchema>[number];
+});
+type CheckRunAnnotation = z.infer<typeof CheckRunAnnotationSchema>;
+// `gh api --paginate --slurp` returns one array per page.
+const CheckRunAnnotationPagesSchema = z.array(z.array(CheckRunAnnotationSchema)).transform((pages) => pages.flat());
 
 const NON_FAILING_CANCELLED_STEP_CONCLUSIONS = new Set(['success', 'cancelled', 'skipped', 'neutral']);
 const FAIL_FAST_ANNOTATION_PATTERN = /^The strategy configuration was canceled because "[^"]+" failed\.?$/;
@@ -107,8 +109,8 @@ async function readJobAnnotations(
   cwd: string,
   options?: PrStatusFetchOptions,
 ): Promise<CheckRunAnnotation[]> {
-  return CheckRunAnnotationsSchema.parse(JSON.parse(await runPrCommand([
-    'api',
+  return CheckRunAnnotationPagesSchema.parse(JSON.parse(await runPrCommand([
+    'api', '--paginate', '--slurp',
     `repos/${owner}/${repo}/check-runs/${jobId}/annotations?per_page=100`,
     '--hostname', hostname,
   ], cwd, options)));

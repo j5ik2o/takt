@@ -362,10 +362,13 @@ describe('PR status acquisition', () => {
         const args = execFile.mock.calls.at(-1)?.[1] as string[];
         if (args[0] === 'pr') return JSON.stringify(status(checks));
         if (args[0] === 'api') {
-          const match = /\/check-runs\/(\d+)\/annotations/.exec(args[1] ?? '');
+          const match = /\/check-runs\/(\d+)\/annotations/.exec(args.find((arg) => arg.includes('/annotations')) ?? '');
           const jobAnnotations = match ? annotationsByJob[Number(match[1])] ?? [] : [];
           if (jobAnnotations instanceof Error) throw jobAnnotations;
-          return JSON.stringify(jobAnnotations);
+          // `gh api --paginate --slurp` returns one array per 100-item page.
+          const pages: unknown[][] = [];
+          for (let index = 0; index < jobAnnotations.length; index += 100) pages.push(jobAnnotations.slice(index, index + 100));
+          return JSON.stringify(args.includes('--paginate') && args.includes('--slurp') ? pages : jobAnnotations);
         }
         if (args.includes('--log-failed')) {
           const log = logs[Number(args[args.indexOf('--job') + 1])] ?? '';
@@ -458,6 +461,21 @@ describe('PR status acquisition', () => {
       ]);
       expect(e2eCheck?.jobs[0]).not.toHaveProperty('notStarted');
       expect(e2eCheck?.jobs[0]).not.toHaveProperty('log');
+    });
+
+    it('取消jobの注釈が100件を超えても、後続ページのfail-fast注釈まで辿って証拠欠落にしない', async () => {
+      const noise = Array.from({ length: 100 }, (_, index) => ({
+        path: '.github', annotation_level: 'warning', message: `Node.js 20 deprecation notice ${index}` }));
+      install([actionsCheck('unit', 20), actionsCheck('e2e', 22, 'CANCELLED')], [
+        job(20, 'unit', 'failure', ranStep, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:00Z' }),
+        job(22, 'e2e', 'cancelled', cancelledMidSteps, { startedAt: '2026-10-05T12:00:00Z', completedAt: '2026-10-05T12:01:05Z' }),
+      ], { 20: 'expected 2 to equal 3', 22: '' }, {}, { 22: [...noise, failFastAnnotations[0]!] });
+
+      const evidence = await failureEvidence() as PrCiFailure;
+      expect(evidence).toMatchObject({ complete: true, unavailable: [] });
+      expect(evidence.checks.find(({ name }) => name === 'e2e')?.jobs[0]).toMatchObject({ id: 22, cancelledBySibling: true });
+      const annotationCall = execFile.mock.calls.find(([, args]) => args.some((arg: string) => arg.includes('/annotations')));
+      expect(annotationCall?.[1]).toEqual(expect.arrayContaining(['--paginate', '--slurp']));
     });
 
     it('run単位の失敗チェックにfail-fast取消jobが混在しても、兄弟失敗のログとfail-fast注釈があれば完全になる', async () => {
