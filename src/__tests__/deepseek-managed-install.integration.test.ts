@@ -1542,7 +1542,8 @@ steps:
     expect(mockConfirm).toHaveBeenCalledOnce();
   });
 
-  it('installs every selected pool candidate and target before the first terminal step', async () => {
+  // Installs codex, claude-sdk, and pi in one test, so it needs the pi install budget.
+  it('installs every selected pool candidate and target before the first terminal step', { timeout: PI_TEST_ONE_INSTALL_TIMEOUT_MS }, async () => {
     const originalEmit = WorkflowEngine.prototype.emit;
     const { workflowPath } = await prepareTerminalManagedTask();
     await writeFile(join(temporaryRoot, '.takt', 'runtime.yaml'), `version: 1
