@@ -36,25 +36,31 @@ const SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX = new RegExp(
   String.raw`(${SENSITIVE_ASSIGNMENT_KEY_PATTERN}\s*[:=]\s*)(${JSON_ESCAPED_QUOTED_VALUE_PATTERN}|${SENSITIVE_QUOTED_VALUE_PATTERN})`,
   'gi',
 );
-const SENSITIVE_ASSIGNMENT_BARE_VALUE_REGEX = new RegExp(
-  String.raw`(${SENSITIVE_ASSIGNMENT_KEY_PATTERN}\s*[:=]\s*["']?)(?!\\")([^"'[{,\s}\]]+)(["']?)`,
+const SENSITIVE_ASSIGNMENT_BARE_PREFIX_REGEX = new RegExp(
+  String.raw`(${SENSITIVE_ASSIGNMENT_KEY_PATTERN}\s*[:=]\s*["']?)(?!\\")`,
   'gi',
 );
-const SENSITIVE_HEADER_ASSIGNMENT_BARE_VALUE_REGEX = new RegExp(
-  String.raw`((?:${SENSITIVE_HEADER_KEY_PATTERN})\s*=\s*["']?)([^"';,\s}\]]+)(["']?)`,
+const SENSITIVE_ASSIGNMENT_BARE_VALUE_STICKY_REGEX = /([^"'[{,\s}\]]+)(["']?)/y;
+const SENSITIVE_HEADER_ASSIGNMENT_BARE_PREFIX_REGEX = new RegExp(
+  String.raw`((?:${SENSITIVE_HEADER_KEY_PATTERN})\s*=\s*["']?)`,
   'gi',
 );
-const SENSITIVE_HEADER_ASSIGNMENT_COLON_VALUE_REGEX = new RegExp(
-  String.raw`((?:session[_-]?id)\s*:\s*["']?)([^"';,\s}\]]+)(["']?)`,
+const SENSITIVE_HEADER_ASSIGNMENT_COLON_PREFIX_REGEX = new RegExp(
+  String.raw`((?:session[_-]?id)\s*:\s*["']?)`,
   'gi',
 );
+const SENSITIVE_HEADER_ASSIGNMENT_VALUE_STICKY_REGEX = /([^"';,\s}\]]+)(["']?)/y;
 // `(?<!-)` skips `--` start positions preceded by another `-`: such a match
 // could only exist if the attempt one character earlier (also `--`) had
 // already failed, and that failure implies this one fails too. This keeps
 // long `-` runs (separator lines) linear instead of quadratic.
-const SENSITIVE_OPTION_VALUE_REGEX = new RegExp(
-  String.raw`((?<!-)--(?:${SENSITIVE_KEY_PATTERN})(?:=|\s+))(${SENSITIVE_QUOTED_VALUE_PATTERN}|[^\s]+)`,
+const SENSITIVE_OPTION_PREFIX_REGEX = new RegExp(
+  String.raw`((?<!-)--(?:${SENSITIVE_KEY_PATTERN})(?:=|\s+))`,
   'gi',
+);
+const SENSITIVE_OPTION_VALUE_STICKY_REGEX = new RegExp(
+  String.raw`(${SENSITIVE_QUOTED_VALUE_PATTERN}|[^\s]+)`,
+  'y',
 );
 const HTTP_HEADER_PREFIX_REGEX = /\b(Authorization|(?:Set-)?Cookie)\s*:\s*/gi;
 // `user:password@` after a URL scheme. The match starts at `://` and the lookbehind then
@@ -68,8 +74,6 @@ const HTTP_HEADER_PREFIX_REGEX = /\b(Authorization|(?:Set-)?Cookie)\s*:\s*/gi;
 // unencoded `@` characters in it stay hidden. Every component stops at URL authority delimiters
 // (quotes, commas, whitespace, and brackets) so `["https://:443","ops@example.test"]` and
 // `"https://user:pass@host","admin@example.test"` keep non-credential text untouched.
-// Past the first `@` a single character class (not a repeated group) keeps long `@` runs in
-// bounded regexp stack.
 const URL_USERINFO_CREDENTIALS_REGEX = /(:\/\/)(?<=[A-Za-z][0-9+.-]*:\/\/)([^/?#\s"'`,<>()[\]{}@:]*:(?:[^/?#\s"'`,<>()[\]{}@]+(?:@[^/?#\s"'`,<>()[\]{}]*)?|@[^/?#\s"'`,<>()[\]{}]*))@/g;
 const CURL_USER_VALUE_PATTERN = [
   String.raw`(?<=\\")(?!\+)[^":]*:[^"]*?(?=\\")`,
@@ -77,25 +81,22 @@ const CURL_USER_VALUE_PATTERN = [
   String.raw`'(?!\+)[^':]*:[^']*'`,
   String.raw`(?<!\\")(?![+"']|\\")[^\s:]*:[^\s]*`,
 ].join('|');
-const CURL_USER_EQUALS_REGEX = new RegExp(
-  String.raw`(\B--(?:proxy-)?user=)(?:\\")?(${CURL_USER_VALUE_PATTERN})(?:\\")?`,
-  'gi',
+const CURL_USER_EQUALS_PREFIX_REGEX = /(\B--(?:proxy-)?user=)/gi;
+const CURL_USER_SPACE_PREFIX_REGEX = /(\B(?:-u|--(?:proxy-)?user)\s+)/gi;
+const CURL_SHORT_USER_COMPACT_PREFIX_REGEX = /(^|\s)(-u)/gi;
+const CURL_USER_VALUE_STICKY_REGEX = new RegExp(
+  String.raw`(?:\\")?(${CURL_USER_VALUE_PATTERN})(?:\\")?`,
+  'yi',
 );
-const CURL_USER_SPACE_REGEX = new RegExp(
-  String.raw`(\B(?:-u|--(?:proxy-)?user)\s+)(?:\\")?(${CURL_USER_VALUE_PATTERN})(?:\\")?`,
-  'gi',
-);
-const CURL_SHORT_USER_COMPACT_REGEX = new RegExp(
-  String.raw`(^|\s)(-u)(?:\\")?(${CURL_USER_VALUE_PATTERN})(?:\\")?`,
-  'gi',
-);
-const SENSITIVE_QUERY_VALUE_REGEX = /([?&](?:api[_-]?key|key|token|password|secret|sig|(?:x-amz-)?signature)=)([^&\s]+)/gi;
+const SENSITIVE_QUERY_PREFIX_REGEX = /([?&](?:api[_-]?key|key|token|password|secret|sig|(?:x-amz-)?signature)=)/gi;
+const SENSITIVE_QUERY_VALUE_STICKY_REGEX = /([^&\s]+)/y;
 // A bearer credential with no header name in front of it. The value needs a digit or 20
 // characters, so that prose such as "Bearer authentication" stays readable.
 const BEARER_VALUE_PATTERN = String.raw`[A-Za-z0-9._~+/=-]`;
-const BARE_BEARER_VALUE_REGEX = new RegExp(
-  String.raw`(\b[Bb]earer\s+)((?=${BEARER_VALUE_PATTERN}*\d|${BEARER_VALUE_PATTERN}{20})${BEARER_VALUE_PATTERN}{8,})`,
-  'g',
+const BARE_BEARER_PREFIX_REGEX = /(\b[Bb]earer\s+)/g;
+const BARE_BEARER_VALUE_STICKY_REGEX = new RegExp(
+  String.raw`((?=${BEARER_VALUE_PATTERN}*\d|${BEARER_VALUE_PATTERN}{20})${BEARER_VALUE_PATTERN}{8,})`,
+  'y',
 );
 const KNOWN_TOKEN_REGEX = new RegExp(
   String.raw`\b(?:${[
@@ -116,6 +117,42 @@ const KNOWN_TOKEN_REGEX = new RegExp(
 );
 const PEM_PRIVATE_KEY_REGEX = /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?(?:-----END \1-----|$)/g;
 
+const URL_AUTHORITY_TRAILING_DELIMITER_REGEX = /[/?#\s"'`,<>()[\]{}]/;
+const MAX_QUOTED_COLLECTION_DEPTH = 4;
+const EMPTY_SENSITIVE_VALUES: ReadonlySet<string> = new Set();
+
+interface PrefixedValuePattern {
+  readonly prefix: RegExp;
+  readonly value: RegExp;
+  readonly maskFullMatch?: boolean;
+  readonly addCredentialParts?: boolean;
+  readonly splitShellDelimiters?: boolean;
+}
+
+const VALUE_PATTERNS: readonly PrefixedValuePattern[] = [
+  { prefix: SENSITIVE_ASSIGNMENT_BARE_PREFIX_REGEX, value: SENSITIVE_ASSIGNMENT_BARE_VALUE_STICKY_REGEX, splitShellDelimiters: true },
+  { prefix: SENSITIVE_HEADER_ASSIGNMENT_BARE_PREFIX_REGEX, value: SENSITIVE_HEADER_ASSIGNMENT_VALUE_STICKY_REGEX },
+  { prefix: SENSITIVE_HEADER_ASSIGNMENT_COLON_PREFIX_REGEX, value: SENSITIVE_HEADER_ASSIGNMENT_VALUE_STICKY_REGEX },
+  { prefix: SENSITIVE_OPTION_PREFIX_REGEX, value: SENSITIVE_OPTION_VALUE_STICKY_REGEX },
+  { prefix: SENSITIVE_QUERY_PREFIX_REGEX, value: SENSITIVE_QUERY_VALUE_STICKY_REGEX },
+  { prefix: BARE_BEARER_PREFIX_REGEX, value: BARE_BEARER_VALUE_STICKY_REGEX },
+];
+
+const CURL_USER_PATTERNS: readonly PrefixedValuePattern[] = [
+  { prefix: CURL_USER_EQUALS_PREFIX_REGEX, value: CURL_USER_VALUE_STICKY_REGEX, maskFullMatch: true, addCredentialParts: true },
+  { prefix: CURL_USER_SPACE_PREFIX_REGEX, value: CURL_USER_VALUE_STICKY_REGEX, maskFullMatch: true, addCredentialParts: true },
+  { prefix: CURL_SHORT_USER_COMPACT_PREFIX_REGEX, value: CURL_USER_VALUE_STICKY_REGEX, maskFullMatch: true, addCredentialParts: true },
+];
+
+const URL_TRAILING_ASSIGNMENT_PATTERNS: readonly PrefixedValuePattern[] = [
+  { prefix: SENSITIVE_ASSIGNMENT_BARE_PREFIX_REGEX, value: SENSITIVE_ASSIGNMENT_BARE_VALUE_STICKY_REGEX },
+  { prefix: SENSITIVE_HEADER_ASSIGNMENT_BARE_PREFIX_REGEX, value: SENSITIVE_HEADER_ASSIGNMENT_VALUE_STICKY_REGEX },
+  { prefix: SENSITIVE_HEADER_ASSIGNMENT_COLON_PREFIX_REGEX, value: SENSITIVE_HEADER_ASSIGNMENT_VALUE_STICKY_REGEX },
+  { prefix: SENSITIVE_OPTION_PREFIX_REGEX, value: SENSITIVE_OPTION_VALUE_STICKY_REGEX },
+  { prefix: SENSITIVE_QUERY_PREFIX_REGEX, value: SENSITIVE_QUERY_VALUE_STICKY_REGEX },
+  { prefix: CURL_USER_EQUALS_PREFIX_REGEX, value: CURL_USER_VALUE_STICKY_REGEX, maskFullMatch: true },
+];
+
 interface HttpHeaderValue {
   start: number;
   credentialStart: number;
@@ -128,20 +165,176 @@ export interface SensitiveRange {
   readonly end: number;
 }
 
+interface QuotedAssignmentRanges {
+  readonly valueRanges: SensitiveRange[];
+  readonly exclusions: SensitiveRange[];
+  readonly rawValues: string[];
+}
+
+interface UrlUserinfoRanges {
+  readonly valueRanges: SensitiveRange[];
+  readonly exclusions: SensitiveRange[];
+}
+
+interface PrefixedValueMatch {
+  readonly index: number;
+  readonly maskStart: number;
+  readonly maskEnd: number;
+  readonly capturedValue: string;
+}
+
 type ShellHeaderQuote = "'" | '"' | '\\"';
 
-function* httpHeaderValues(text: string): Generator<HttpHeaderValue> {
+// Scans a prefix-and-value pattern outside `exclusions` in strictly forward linear time.
+// When a prefix starts inside an excluded range, the scanner skips directly to `exclusion.end`
+// without reading the value part, preventing quadratic rescanning on semicolon-separated lists
+// such as repeated `https://token:p@host;` while still finding trailing assignments.
+function* matchPrefixedOutside(
+  text: string,
+  pattern: PrefixedValuePattern,
+  exclusions: readonly SensitiveRange[],
+): Generator<PrefixedValueMatch> {
+  const prefix = new RegExp(pattern.prefix.source, pattern.prefix.flags);
+  const value = new RegExp(pattern.value.source, pattern.value.flags);
+  let exclusionIndex = 0;
+  for (let prefixMatch = prefix.exec(text); prefixMatch !== null; prefixMatch = prefix.exec(text)) {
+    while (exclusionIndex < exclusions.length && exclusions[exclusionIndex]!.end <= prefixMatch.index) {
+      exclusionIndex += 1;
+    }
+    const exclusion = exclusions[exclusionIndex];
+    if (exclusion !== undefined && exclusion.start <= prefixMatch.index) {
+      prefix.lastIndex = Math.max(prefix.lastIndex, exclusion.end);
+      continue;
+    }
+    const valueStart = prefix.lastIndex;
+    value.lastIndex = valueStart;
+    const valueMatch = value.exec(text);
+    if (valueMatch === null) {
+      if (prefix.lastIndex === prefixMatch.index) prefix.lastIndex += 1;
+      continue;
+    }
+    const capturedValue = valueMatch[1];
+    if (capturedValue !== undefined) {
+      const maskEnd = pattern.maskFullMatch ? value.lastIndex : valueStart + capturedValue.length;
+      yield {
+        index: prefixMatch.index,
+        maskStart: valueStart,
+        maskEnd,
+        capturedValue,
+      };
+    }
+    prefix.lastIndex = value.lastIndex;
+  }
+}
+
+function* matchesOutside(
+  text: string,
+  pattern: RegExp,
+  exclusions: readonly SensitiveRange[],
+): Generator<RegExpExecArray> {
+  const matcher = new RegExp(pattern.source, pattern.flags);
+  let exclusionIndex = 0;
+  for (let match = matcher.exec(text); match !== null; match = matcher.exec(text)) {
+    while (exclusionIndex < exclusions.length && exclusions[exclusionIndex]!.end <= match.index) {
+      exclusionIndex += 1;
+    }
+    const exclusion = exclusions[exclusionIndex];
+    if (exclusion !== undefined && exclusion.start <= match.index) {
+      matcher.lastIndex = Math.max(matcher.lastIndex, exclusion.end);
+      continue;
+    }
+    yield match;
+  }
+}
+
+function collectQuotedAssignmentRanges(text: string): QuotedAssignmentRanges {
+  const valueRanges: SensitiveRange[] = [];
+  const exclusions: SensitiveRange[] = [];
+  const rawValues: string[] = [];
+  for (const match of text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX)) {
+    const rawValue = match[2]!;
+    const quoteWidth = rawValue.startsWith('\\"') ? 2 : 1;
+    valueRanges.push({
+      start: match.index + match[1]!.length + quoteWidth,
+      end: match.index + match[0].length - quoteWidth,
+    });
+    exclusions.push({
+      start: match.index,
+      end: match.index + match[0].length,
+    });
+    rawValues.push(rawValue);
+  }
+  return { valueRanges, exclusions, rawValues };
+}
+
+function firstTrailingAssignmentIndex(segment: string): number {
+  let earliest = -1;
+  for (const pattern of URL_TRAILING_ASSIGNMENT_PATTERNS) {
+    for (const match of matchPrefixedOutside(segment, pattern, [])) {
+      if (earliest < 0 || match.index < earliest) {
+        earliest = match.index;
+      }
+      break;
+    }
+  }
+  const headerMatcher = new RegExp(HTTP_HEADER_PREFIX_REGEX.source, HTTP_HEADER_PREFIX_REGEX.flags);
+  const headerMatch = headerMatcher.exec(segment);
+  if (headerMatch !== null && (earliest < 0 || headerMatch.index < earliest)) {
+    earliest = headerMatch.index;
+  }
+  return earliest;
+}
+
+// Masks only URL userinfo (`user:password` before `@`), never the whole URL.
+// When a sensitive assignment starts after a valid closing `@` of the same authority run,
+// the URL userinfo stops at the last `@` before that assignment so neither match swallows the other.
+function collectUrlUserinfoRanges(
+  text: string,
+  quotedExclusions: readonly SensitiveRange[],
+): UrlUserinfoRanges {
+  const valueRanges: SensitiveRange[] = [];
+  const exclusions: SensitiveRange[] = [];
+  for (const match of matchesOutside(text, URL_USERINFO_CREDENTIALS_REGEX, quotedExclusions)) {
+    const start = match.index + match[1]!.length;
+    const rawEnd = match.index + match[0].length - 1;
+    const colon = text.indexOf(':', start);
+    const firstValidAt = text.indexOf('@', colon + 2);
+    let end = rawEnd;
+    if (firstValidAt < rawEnd) {
+      let segmentEnd = rawEnd + 1;
+      while (segmentEnd < text.length && !URL_AUTHORITY_TRAILING_DELIMITER_REGEX.test(text[segmentEnd]!)) {
+        segmentEnd += 1;
+      }
+      const trailingIndex = firstTrailingAssignmentIndex(text.slice(firstValidAt + 1, segmentEnd));
+      if (trailingIndex >= 0 && firstValidAt + 1 + trailingIndex < rawEnd) {
+        end = text.lastIndexOf('@', firstValidAt + trailingIndex);
+      }
+    }
+    valueRanges.push({ start, end });
+    // Interior assignments before the closing `@` belong to the URL password; skipping them
+    // prevents bare-assignment matches from eating `@host`. When the password starts with `@`
+    // (`user:@...`), only `user:` is excluded so ambiguous `user:@host;TOKEN=left@secret` keeps
+    // both ranges and merges their union instead of leaking either side.
+    exclusions.push(text[colon + 1] === '@' ? { start, end: colon + 1 } : { start, end: end + 1 });
+  }
+  return { valueRanges, exclusions };
+}
+
+function* httpHeaderValues(
+  text: string,
+  exclusions: readonly SensitiveRange[],
+): Generator<HttpHeaderValue> {
   const headers = new RegExp(HTTP_HEADER_PREFIX_REGEX.source, HTTP_HEADER_PREFIX_REGEX.flags);
-  const quotedAssignments = text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX);
-  let quotedAssignment = quotedAssignments.next().value;
+  let exclusionIndex = 0;
   const authScheme = /([A-Za-z]+)[ \t]+/y;
   for (let match = headers.exec(text); match !== null; match = headers.exec(text)) {
-    while (quotedAssignment !== undefined && quotedAssignment.index + quotedAssignment[0].length <= match.index) {
-      quotedAssignment = quotedAssignments.next().value;
+    while (exclusionIndex < exclusions.length && exclusions[exclusionIndex]!.end <= match.index) {
+      exclusionIndex += 1;
     }
-    if (quotedAssignment !== undefined && quotedAssignment.index <= match.index) {
-      // Quoted assignments use the same boundary as display redaction.
-      headers.lastIndex = quotedAssignment.index + quotedAssignment[0].length;
+    const exclusion = exclusions[exclusionIndex];
+    if (exclusion !== undefined && exclusion.start <= match.index) {
+      // Quoted assignments and URL userinfo use the same boundary as display redaction.
+      headers.lastIndex = Math.max(headers.lastIndex, exclusion.end);
       continue;
     }
     const start = headers.lastIndex;
@@ -195,60 +388,23 @@ function httpHeaderValueEnd(text: string, start: number, shellQuote: ShellHeader
   return cursor;
 }
 
-function redactHttpHeaders(text: string): string {
-  const parts: string[] = [];
-  let copiedThrough = 0;
-  for (const { start, end, scheme } of httpHeaderValues(text)) {
-    parts.push(text.slice(copiedThrough, start), scheme === undefined ? REDACTED_VALUE : scheme + ' ' + REDACTED_VALUE);
-    copiedThrough = end;
-  }
-  parts.push(text.slice(copiedThrough));
-  return parts.join('');
-}
-
+// Collects all sensitive ranges on the original text, merges overlapping ranges, and replaces once.
 export function sanitizeSensitiveText(text: string): string {
   if (!text) return text;
-  const sanitized = text
-    .replace(PEM_PRIVATE_KEY_REGEX, REDACTED_VALUE)
-    .replace(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX, (_match, prefix: string, quotedValue: string) => {
-      const quote = quotedValue.startsWith('\\"') ? '\\"' : quotedValue[0];
-      return `${prefix}${quote}${REDACTED_VALUE}${quote}`;
-    })
-    .replace(URL_USERINFO_CREDENTIALS_REGEX, `$1${REDACTED_VALUE}@`);
-  return redactHttpHeaders(sanitized.replace(BARE_BEARER_VALUE_REGEX, `$1${REDACTED_VALUE}`))
-    .replace(CURL_USER_EQUALS_REGEX, `$1${REDACTED_VALUE}`)
-    .replace(CURL_USER_SPACE_REGEX, `$1${REDACTED_VALUE}`)
-    .replace(CURL_SHORT_USER_COMPACT_REGEX, `$1$2${REDACTED_VALUE}`)
-    .replace(SENSITIVE_HEADER_ASSIGNMENT_BARE_VALUE_REGEX, `$1${REDACTED_VALUE}$3`)
-    .replace(SENSITIVE_HEADER_ASSIGNMENT_COLON_VALUE_REGEX, `$1${REDACTED_VALUE}$3`)
-    .replace(SENSITIVE_ASSIGNMENT_BARE_VALUE_REGEX, `$1${REDACTED_VALUE}$3`)
-    .replace(SENSITIVE_OPTION_VALUE_REGEX, `$1${REDACTED_VALUE}`)
-    .replace(SENSITIVE_QUERY_VALUE_REGEX, `$1${REDACTED_VALUE}`)
-    .replace(KNOWN_TOKEN_REGEX, REDACTED_VALUE);
+  return maskSensitiveRanges(text, sensitiveTextRanges(text, EMPTY_SENSITIVE_VALUES));
 }
 
 export function isSensitiveKeyName(key: string): boolean {
   return SENSITIVE_KEY_NAME_REGEX.test(key);
 }
 
-export function collectEmbeddedSensitiveValues(text: string, values: Set<string>): void {
-  addMatches(text, PEM_PRIVATE_KEY_REGEX, 0, values);
-  for (const match of text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX)) {
-    const quotedValue = match[2]!;
-    addSensitiveValue(values, quotedValue);
-    // Embedded credentials stay within the assignment's quote boundary.
-    collectHttpHeaderSensitiveValues(stripMatchingQuotes(quotedValue), values);
-  }
-  for (const match of bareAssignments(text)) addSensitiveValue(values, match[2]!);
-  addMatches(text, SENSITIVE_HEADER_ASSIGNMENT_BARE_VALUE_REGEX, 2, values);
-  addMatches(text, SENSITIVE_HEADER_ASSIGNMENT_COLON_VALUE_REGEX, 2, values);
-  addMatches(text, SENSITIVE_OPTION_VALUE_REGEX, 2, values);
-  addMatches(text, SENSITIVE_QUERY_VALUE_REGEX, 2, values);
-  addMatches(text, KNOWN_TOKEN_REGEX, 0, values);
-  addMatches(text, BARE_BEARER_VALUE_REGEX, 2, values);
-  collectHttpHeaderSensitiveValues(text, values);
-  for (const match of text.matchAll(URL_USERINFO_CREDENTIALS_REGEX)) {
-    const userinfo = match[2]!;
+function collectUrlUserinfoValues(
+  text: string,
+  valueRanges: readonly SensitiveRange[],
+  values: Set<string>,
+): void {
+  for (const { start, end } of valueRanges) {
+    const userinfo = text.slice(start, end);
     const separator = userinfo.indexOf(':');
     // Skip an `@` immediately after `:` (a password starting with `@`), and look for the first
     // `@` that can close a non-empty password, as in `https://u:secret@db;owner=ops@example.test`
@@ -270,13 +426,66 @@ export function collectEmbeddedSensitiveValues(text: string, values: Set<string>
     if (password.length > 0) values.add(password);
     addSensitiveValue(values, userinfo);
   }
-  addMatches(text, CURL_USER_EQUALS_REGEX, 2, values, true);
-  addMatches(text, CURL_USER_SPACE_REGEX, 2, values, true);
-  addMatches(text, CURL_SHORT_USER_COMPACT_REGEX, 3, values, true);
 }
 
-function collectHttpHeaderSensitiveValues(text: string, values: Set<string>): void {
-  for (const { start, end } of httpHeaderValues(text)) {
+// Tracking candidate collection is intentionally separate from display masking exclusions:
+// quoted assignments are masked as a single display span, but their inner text is still
+// inspected within the quote boundary so embedded URL credentials and headers are tracked.
+export function collectEmbeddedSensitiveValues(text: string, values: Set<string>): void {
+  const queue: Array<{ text: string; depth: number }> = [{ text, depth: 0 }];
+  for (let index = 0; index < queue.length; index += 1) {
+    const { text: current, depth } = queue[index]!;
+    addMatches(current, PEM_PRIVATE_KEY_REGEX, 0, values);
+    const quoted = collectQuotedAssignmentRanges(current);
+    for (const rawValue of quoted.rawValues) {
+      addSensitiveValue(values, rawValue);
+      const inner = stripMatchingQuotes(rawValue);
+      if (depth < MAX_QUOTED_COLLECTION_DEPTH && inner.length > 0 && inner.length < current.length) {
+        queue.push({ text: inner, depth: depth + 1 });
+      }
+    }
+    const urlUserinfo = collectUrlUserinfoRanges(current, quoted.exclusions);
+    const scanExclusions = mergedRanges([...quoted.exclusions, ...urlUserinfo.exclusions]);
+    for (const pattern of VALUE_PATTERNS) {
+      for (const match of matchPrefixedOutside(current, pattern, scanExclusions)) {
+        addSensitiveValue(values, match.capturedValue);
+        if (pattern.splitShellDelimiters && /[;&|]/.test(match.capturedValue)) {
+          const segments = match.capturedValue.split(/[;&|]+/);
+          const head = segments[0];
+          if (head !== undefined && head.length > 0) {
+            addSensitiveValue(values, head);
+          }
+          if (depth < MAX_QUOTED_COLLECTION_DEPTH) {
+            for (let segIndex = 1; segIndex < segments.length; segIndex += 1) {
+              const segment = segments[segIndex]!;
+              if (segment.length > 0) {
+                queue.push({ text: segment, depth: depth + 1 });
+              }
+            }
+          }
+        }
+      }
+    }
+    addMatches(current, KNOWN_TOKEN_REGEX, 0, values);
+    collectHttpHeaderSensitiveValues(current, values, scanExclusions);
+    collectUrlUserinfoValues(current, urlUserinfo.valueRanges, values);
+    for (const pattern of CURL_USER_PATTERNS) {
+      for (const match of matchPrefixedOutside(current, pattern, scanExclusions)) {
+        addSensitiveValue(values, match.capturedValue);
+        if (pattern.addCredentialParts) {
+          addCredentialComponents(values, match.capturedValue);
+        }
+      }
+    }
+  }
+}
+
+function collectHttpHeaderSensitiveValues(
+  text: string,
+  values: Set<string>,
+  exclusions: readonly SensitiveRange[],
+): void {
+  for (const { start, end } of httpHeaderValues(text, exclusions)) {
     const value = text.slice(start, end);
     addSensitiveValue(values, value);
     addCredentialComponents(values, value);
@@ -300,7 +509,8 @@ export function addSensitiveValue(values: Set<string>, rawValue: string, key?: s
 }
 
 export function sanitizeTextWithValues(text: string, sensitiveValues: ReadonlySet<string>): string {
-  return sanitizeSensitiveText(maskSensitiveRanges(text, knownValueRanges(text, sensitiveValues)));
+  if (!text) return text;
+  return maskSensitiveRanges(text, sensitiveTextRanges(text, sensitiveValues));
 }
 
 function addMatches(
@@ -355,49 +565,30 @@ function stripMatchingQuotes(value: string): string {
     : value;
 }
 
-// Bare matches inside a quoted assignment would extend past its closing `\"`
-// (e.g. `token=\"x-secret==\"` yields `=\`), and masking ranges would then eat the escape.
-function* bareAssignments(text: string): Generator<RegExpExecArray> {
-  const quotedAssignments = text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX);
-  let quotedAssignment = quotedAssignments.next().value;
-  for (const match of text.matchAll(SENSITIVE_ASSIGNMENT_BARE_VALUE_REGEX)) {
-    while (quotedAssignment !== undefined && quotedAssignment.index + quotedAssignment[0].length <= match.index) {
-      quotedAssignment = quotedAssignments.next().value;
-    }
-    if (quotedAssignment === undefined || quotedAssignment.index > match.index) yield match;
-  }
-}
-
-/** Finds the same values as sanitizeSensitiveText, on the original text. */
+/**
+ * Finds all sensitive value ranges on the original text (URL userinfo only, not full URLs;
+ * assignments, headers, options, queries, PEM blocks, known tokens, and known values).
+ * Callers merge overlapping ranges and replace each merged span once via `maskSensitiveRanges`.
+ */
 export function sensitiveTextRanges(text: string, values: ReadonlySet<string>): SensitiveRange[] {
   const ranges: SensitiveRange[] = [];
-  for (const match of text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX)) {
-    const quoteWidth = match[2]!.startsWith('\\"') ? 2 : 1;
-    ranges.push({ start: match.index + match[1]!.length + quoteWidth, end: match.index + match[0].length - quoteWidth });
-  }
-  const valueMatches = [
-    bareAssignments(text),
-    text.matchAll(SENSITIVE_HEADER_ASSIGNMENT_BARE_VALUE_REGEX),
-    text.matchAll(SENSITIVE_HEADER_ASSIGNMENT_COLON_VALUE_REGEX),
-    text.matchAll(SENSITIVE_OPTION_VALUE_REGEX),
-    text.matchAll(SENSITIVE_QUERY_VALUE_REGEX),
-    text.matchAll(BARE_BEARER_VALUE_REGEX),
-  ];
-  for (const matches of valueMatches) {
-    for (const match of matches) {
-      const start = match.index + match[1]!.length;
-      ranges.push({ start, end: start + match[2]!.length });
+  const quoted = collectQuotedAssignmentRanges(text);
+  for (const range of quoted.valueRanges) ranges.push(range);
+  const urlUserinfo = collectUrlUserinfoRanges(text, quoted.exclusions);
+  for (const range of urlUserinfo.valueRanges) ranges.push(range);
+  const displayExclusions = mergedRanges([...quoted.exclusions, ...urlUserinfo.exclusions]);
+  for (const pattern of VALUE_PATTERNS) {
+    for (const match of matchPrefixedOutside(text, pattern, displayExclusions)) {
+      ranges.push({ start: match.maskStart, end: match.maskEnd });
     }
   }
-  for (const { credentialStart, end } of httpHeaderValues(text)) ranges.push({ start: credentialStart, end });
-  for (const match of text.matchAll(URL_USERINFO_CREDENTIALS_REGEX)) {
-    ranges.push({ start: match.index + match[1]!.length, end: match.index + match[0].length - 1 });
+  for (const { credentialStart, end } of httpHeaderValues(text, displayExclusions)) {
+    ranges.push({ start: credentialStart, end });
   }
-  for (const pattern of [CURL_USER_EQUALS_REGEX, CURL_USER_SPACE_REGEX]) {
-    for (const match of text.matchAll(pattern)) ranges.push({ start: match.index + match[1]!.length, end: match.index + match[0].length });
-  }
-  for (const match of text.matchAll(CURL_SHORT_USER_COMPACT_REGEX)) {
-    ranges.push({ start: match.index + match[1]!.length + match[2]!.length, end: match.index + match[0].length });
+  for (const pattern of CURL_USER_PATTERNS) {
+    for (const match of matchPrefixedOutside(text, pattern, displayExclusions)) {
+      ranges.push({ start: match.maskStart, end: match.maskEnd });
+    }
   }
   for (const pattern of [KNOWN_TOKEN_REGEX, PEM_PRIVATE_KEY_REGEX]) {
     for (const match of text.matchAll(pattern)) ranges.push({ start: match.index, end: match.index + match[0].length });
