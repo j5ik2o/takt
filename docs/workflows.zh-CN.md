@@ -912,7 +912,7 @@ steps:
 - 无需修改 workflow 即可更改 `max_visits`：`.takt/config.yaml`（项目）或 `~/.takt/config.yaml`（全局）中的 `workflow_overrides.steps.<step>.max_visits` 会替换 YAML 中的值，项目优先于全局。无法通过覆盖取消上限，请改为指定更大的数值。parallel 的 sub-step 不接受 `max_visits`。
 - 早于这些 key 的 TAKT 版本会忽略它们，用该版本重新保存 config 会丢失 `max_visits`。
 
-内置开发 workflow 在 `replan`、`fix-replan`、`verification-replan` 上设置了 `max_visits: 4`。`development-core` 的 `[replan, peer-review]` loop monitor 忽略 `implement` 并使用 `threshold: 2`：独立评审连续两次要求重新规划时，judge 比较最近两次评审结果，仅当相同的指摘在没有新差异的情况下重复出现时才停止。
+内置开发 workflow 在 `replan`、`fix-replan`、`verification-replan` 上设置了 `max_visits: 4`。`development-core` 的 `[replan, peer-review]` loop monitor 忽略 `implement` 并使用 `threshold: 1`（首次评审来自 `plan`，因此独立评审连续两次要求重新规划时达到 1 个周期）：此时 judge 比较最近两次评审结果，仅当相同的指摘在没有新差异的情况下重复出现时才停止。
 
 ### `subworkflow`
 

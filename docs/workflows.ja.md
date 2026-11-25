@@ -1118,7 +1118,7 @@ steps:
 - `max_visits` は workflow を書き換えずに変えられます。`.takt/config.yaml`（プロジェクト）または `~/.takt/config.yaml`（グローバル）の `workflow_overrides.steps.<step>.max_visits` が YAML の値を置き換えます。プロジェクトがグローバルより優先です。上限を外すことはできないので、大きな数を指定してください。parallel の sub-step には `max_visits` を付けられません。
 - これらのキーより前の TAKT はキーを無視します。その版で config を保存し直すと `max_visits` が消えます。
 
-builtin の開発 workflow は `replan`・`fix-replan`・`verification-replan` に `max_visits: 4` を設定しています。`development-core` の `[replan, peer-review]` の loop monitor は `implement` を数えずに `threshold: 2` で動きます。独立レビューが 2 回続けて再計画を求めると、judge が直近 2 回のレビュー結果を比べ、同じ指摘が新しい差分なしに繰り返されているときだけ止めます。1 週間ぶんの実測では、成功した run が replan 系 step に入ったのは 1 run あたり最大 2 回、失敗した run は最大 4 回で、長引いた失敗 run はどれも独立レビューが BLOCKED を 2 回続けて返して終わっていました。
+builtin の開発 workflow は `replan`・`fix-replan`・`verification-replan` に `max_visits: 4` を設定しています。`development-core` の `[replan, peer-review]` の loop monitor は `implement` を数えずに `threshold: 1` で動きます（初回は `plan` から来るため 0 周で、独立レビューが 2 回続けて再計画を求めた時点で 1 周に達します）。その時点で judge が直近 2 回のレビュー結果を比べ、同じ指摘が新しい差分なしに繰り返されているときだけ止めます。1 週間ぶんの実測では、成功した run が replan 系 step に入ったのは 1 run あたり最大 2 回、失敗した run は最大 4 回で、長引いた失敗 run はどれも独立レビューが BLOCKED を 2 回続けて返して終わっていました。
 
 ### `subworkflow`
 

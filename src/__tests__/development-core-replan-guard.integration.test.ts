@@ -67,13 +67,17 @@ const cases = languages.flatMap(language => placements.map(placement => ({ langu
  * Shipped graph and loop guards; agent execution is replaced by the mock provider.
  * As a workflow_call child it runs the way taktdash-change runs it: in its own engine under a caller step.
  */
-function start(config: WorkflowConfig, placement: Placement): WorkflowEngine {
+function start(
+  config: WorkflowConfig,
+  placement: Placement,
+  options: { initialStep?: string; onUserInput?: () => Promise<string | null> } = {},
+): WorkflowEngine {
   const replanReport = config.steps.find(step => step.name === 'replan')?.outputContracts?.[0];
   if (!replanReport) throw new Error('Missing replan report');
   const core: WorkflowConfig = {
     ...config,
     maxSteps: 60,
-    initialStep: 'replan',
+    ...(options.initialStep === undefined ? {} : { initialStep: options.initialStep }),
     steps: config.steps.map(step => makeStep(step.name, {
       rules: step.rules,
       // The real peer-review child writes review-resolution.md, which the loop-monitor judge reads.
@@ -99,19 +103,23 @@ function start(config: WorkflowConfig, placement: Placement): WorkflowEngine {
     model: 'mock-model',
     reportDirName: 'reports',
     workflowCallResolver: () => core,
+    ...(options.onUserInput ? { onUserInput: options.onUserInput } : {}),
   });
   return engine;
 }
 
-/** A judged label for one step entered, or the loop-monitor judge's choice between two steps. */
-type Turn = { label: string } | { judge: string };
+/** A judged label for one step entered, a blocked retry, or the loop-monitor judge's choice between two steps. */
+type Turn = { label: string } | { judge: string } | { blocked: true };
 
 /** Mocks the agent and status judgment for each turn, in route order. */
 function script(turns: Turn[]): void {
-  mockRunAgentSequence(turns.map(turn => 'judge' in turn
-    ? makeResponse({ content: JSON.stringify({ content: 'Compared the last two review results.' }) })
-    : makeResponse({ content: 'Recorded the current state.' })));
+  mockRunAgentSequence(turns.map((turn) => {
+    if ('blocked' in turn) return makeResponse({ status: 'blocked', content: 'Need user input.' });
+    if ('judge' in turn) return makeResponse({ content: JSON.stringify({ content: 'Compared the last two review results.' }) });
+    return makeResponse({ content: 'Recorded the current state.' });
+  }));
   for (const turn of turns) {
+    if ('blocked' in turn) continue;
     const label = 'judge' in turn ? turn.judge : turn.label;
     vi.mocked(runStatusJudgmentPhase).mockResolvedValueOnce({ label, method: 'phase3_tag' });
   }
@@ -124,10 +132,14 @@ function judgeLabel(config: WorkflowConfig, next: string, index: number): string
   return rule.condition.label;
 }
 
-async function runAndRecord(config: WorkflowConfig, placement: Placement) {
+async function runAndRecord(
+  config: WorkflowConfig,
+  placement: Placement,
+  options?: { initialStep?: string; onUserInput?: () => Promise<string | null> },
+) {
   const stepStarts: string[] = [];
   const abortReasons: string[] = [];
-  const run = start(config, placement);
+  const run = start(config, placement, options);
   run.on('step:start', (step) => stepStarts.push(step.name));
   run.on('workflow:abort', (_state, reason) => abortReasons.push(reason));
   const result = await run.run();
@@ -141,25 +153,40 @@ async function runAndRecord(config: WorkflowConfig, placement: Placement) {
 }
 
 describe('development-core stops laps that make no progress', () => {
-  it.each(cases)('$language $placement: the review returning BLOCKED twice goes to the judge, which stops on the same findings', async ({ language, placement }) => {
+  it.each(cases)('$language $placement: starting from plan, BLOCKED twice in a row goes to the judge, which stops on the same findings', async ({ language, placement }) => {
     const config = load(language);
+    const initial: Turn[] = [
+      { label: semanticLabel(config, 'plan', 'write_tests') },
+      { label: semanticLabel(config, 'write_tests', 'implement') },
+      { label: semanticLabel(config, 'implement', 'peer-review') },
+      { label: semanticLabel(config, 'peer-review', 'replan') },
+    ];
     const lap: Turn[] = [
       { label: semanticLabel(config, 'replan', 'implement') },
       { label: semanticLabel(config, 'implement', 'peer-review') },
       { label: semanticLabel(config, 'peer-review', 'replan') },
     ];
     // 同じ指摘が新しい差分なしに繰り返されている
-    script([...lap, ...lap, { judge: judgeLabel(config, 'ABORT', 0) }, ...lap, ...lap]);
+    script([...initial, ...lap, { judge: judgeLabel(config, 'ABORT', 0) }, ...lap, ...lap]);
 
     const { result, stepStarts, judges } = await runAndRecord(config, placement);
 
     expect(result.status).toBe('aborted');
-    expect(stepStarts).toEqual(['replan', 'implement', 'peer-review', 'replan', 'implement', 'peer-review']);
+    expect(stepStarts).toEqual([
+      'plan', 'write_tests', 'implement', 'peer-review',
+      'replan', 'implement', 'peer-review',
+    ]);
     expect(judges).toEqual(['_loop_judge_replan_peer-review']);
   });
 
   it.each(cases)('$language $placement: new findings keep the lap going until replan reaches max_visits 4', async ({ language, placement }) => {
     const config = load(language);
+    const initial: Turn[] = [
+      { label: semanticLabel(config, 'plan', 'write_tests') },
+      { label: semanticLabel(config, 'write_tests', 'implement') },
+      { label: semanticLabel(config, 'implement', 'peer-review') },
+      { label: semanticLabel(config, 'peer-review', 'replan') },
+    ];
     const lap: Turn[] = [
       { label: semanticLabel(config, 'replan', 'implement') },
       { label: semanticLabel(config, 'implement', 'peer-review') },
@@ -167,13 +194,23 @@ describe('development-core stops laps that make no progress', () => {
     ];
     // 新しい再計画でレビュー指摘を解消できる具体的な差分・検証結果がある
     const newFindings: Turn = { judge: judgeLabel(config, 'replan', 1) };
-    script([...lap, ...lap, newFindings, ...lap, ...lap, newFindings, ...lap, ...lap]);
+    script([
+      ...initial,
+      ...lap, newFindings,
+      ...lap, newFindings,
+      ...lap, newFindings,
+      ...lap, newFindings,
+      ...lap,
+    ]);
 
     const { result, stepStarts, judges, abortReasons } = await runAndRecord(config, placement);
 
     expect(result.status).toBe('aborted');
-    expect(judges).toHaveLength(2);
-    expect(stepStarts).toEqual([1, 2, 3, 4].flatMap(() => ['replan', 'implement', 'peer-review']));
+    expect(judges).toHaveLength(4);
+    expect(stepStarts).toEqual([
+      'plan', 'write_tests', 'implement', 'peer-review',
+      ...[1, 2, 3, 4].flatMap(() => ['replan', 'implement', 'peer-review']),
+    ]);
     expect(abortReasons).toContainEqual(expect.stringMatching(/replan" already completed 4 times \(max_visits: 4\)/));
   });
 
@@ -183,7 +220,7 @@ describe('development-core stops laps that make no progress', () => {
     const needsReplan = { label: semanticLabel(config, 'implement', 'replan') };
     script([toImplement, needsReplan, toImplement, needsReplan, toImplement, needsReplan]);
 
-    const { result, stepStarts, abortReasons } = await runAndRecord(config, placement);
+    const { result, stepStarts, abortReasons } = await runAndRecord(config, placement, { initialStep: 'replan' });
 
     expect(result.status).toBe('aborted');
     expect(stepStarts).toEqual(['replan', 'implement', 'replan', 'implement']);
@@ -202,8 +239,24 @@ describe('development-core stops laps that make no progress', () => {
     const needsReplan = { label: semanticLabel(config, 'implement', 'replan') };
     script([toImplement, needsReplan, toImplement, needsReplan, toImplement, needsReplan]);
 
-    const { stepStarts } = await runAndRecord(config, 'root');
+    const { stepStarts } = await runAndRecord(config, 'root', { initialStep: 'replan' });
 
     expect(stepStarts).toEqual(['replan', 'implement', 'replan', 'implement']);
+  });
+
+  it('does not count blocked retries of the same visit toward max_visits', async () => {
+    const config = load('en', 'workflow_overrides:\n  steps:\n    replan:\n      max_visits: 1\n');
+    const toImplement = { label: semanticLabel(config, 'replan', 'implement') };
+    const needsReplan = { label: semanticLabel(config, 'implement', 'replan') };
+    script([{ blocked: true }, { blocked: true }, toImplement, needsReplan, toImplement]);
+
+    const { result, stepStarts, abortReasons } = await runAndRecord(config, 'root', {
+      initialStep: 'replan',
+      onUserInput: async () => 'continue',
+    });
+
+    expect(result.status).toBe('aborted');
+    expect(stepStarts).toEqual(['replan', 'replan', 'replan', 'implement']);
+    expect(abortReasons).toContainEqual(expect.stringMatching(/replan" already completed 1 times \(max_visits: 1\)/));
   });
 });
