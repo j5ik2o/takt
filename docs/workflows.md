@@ -1129,8 +1129,8 @@ steps:
     stop_on_repeated_verdict: true # stop when it returns the same verdict twice in a row
 ```
 
-- `max_visits` counts entries of the step within one workflow engine (a subworkflow call has its own count). Entering it once more aborts the run with `Visit limit reached: step "replan" already ran 4 times (max_visits: 4); ...`.
-- `stop_on_repeated_verdict` aborts when the step matches the same rule as on its previous visit and that rule leads to another step. Terminal results (`COMPLETE`, `ABORT`, `return`) are never counted.
+- `max_visits` counts entries of the step within one workflow engine run (each subworkflow call has its own count, and a resumed run counts from zero, so the visit being retried can still run). Entering it once more aborts the run with `Visit limit reached: step "replan" already ran 4 times (max_visits: 4); ...`.
+- `stop_on_repeated_verdict` aborts when the step matches the same rule as on its previous visit and that rule is not terminal (a transition back to the same step counts too). Terminal results (`COMPLETE`, `ABORT`, `return`) are never counted.
 - The stop reason is a single line in the run's abort reason (`meta.json` `reason` and the `workflow_abort` log entry).
 - `max_visits` can be changed without editing the workflow: `workflow_overrides.steps.<step>.max_visits` in `.takt/config.yaml` (project) or `~/.takt/config.yaml` (global) replaces the YAML value; project wins over global.
 

@@ -1113,8 +1113,8 @@ steps:
     stop_on_repeated_verdict: true # 同じ判定を 2 回続けて返したら止める
 ```
 
-- `max_visits` は 1 つの workflow engine の中でその step に入った回数を数えます（サブワークフロー呼び出しは呼び出しごとに数え直します）。上限を超えて入ろうとすると、`Visit limit reached: step "replan" already ran 4 times (max_visits: 4); ...` を理由に run を止めます。
-- `stop_on_repeated_verdict` は、その step が前回と同じ rule に一致し、その rule が別の step へ進む場合に run を止めます。終端（`COMPLETE`・`ABORT`・`return`）は数えません。
+- `max_visits` は 1 つの workflow engine の実行の中でその step に入った回数を数えます（サブワークフロー呼び出しは呼び出しごとに、再開した run は 0 から数え直すので、やり直す回はそのまま実行できます）。上限を超えて入ろうとすると、`Visit limit reached: step "replan" already ran 4 times (max_visits: 4); ...` を理由に run を止めます。
+- `stop_on_repeated_verdict` は、その step が前回と同じ rule に一致し、その rule が終端でない場合（同じ step へ戻る遷移も含む）に run を止めます。終端（`COMPLETE`・`ABORT`・`return`）は数えません。
 - 止めた理由は 1 行で run の中断理由（`meta.json` の `reason` と `workflow_abort` ログ）に残ります。
 - `max_visits` は workflow を書き換えずに変えられます。`.takt/config.yaml`（プロジェクト）または `~/.takt/config.yaml`（グローバル）の `workflow_overrides.steps.<step>.max_visits` が YAML の値を置き換えます。プロジェクトがグローバルより優先です。
 

@@ -49,6 +49,7 @@ function makeDeps(
     applyRuntimeEnvironment: vi.fn(),
     loopDetectorCheck: () => ({ count: 1, isLoop: false }),
     cycleDetectorRecordAndCheck: () => ({ triggered: false, cycleCount: 0 }),
+    stepVisitEnter: () => undefined,
     stepVerdictRecordAndCheck: () => undefined,
     resolveDoneTransition: vi.fn(() => ({ nextStep: 'COMPLETE', commandGates: 'required' as const })),
     runLoopMonitorJudge: vi.fn(),

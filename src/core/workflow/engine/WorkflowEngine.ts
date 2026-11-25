@@ -46,7 +46,7 @@ import type {
 import { LoopDetector } from './loop-detector.js';
 import { createInitialState, addUserInput as addUserInputToState } from './state-manager.js';
 import { CycleDetector } from './cycle-detector.js';
-import { StepVerdictHistory } from './step-visit-guard.js';
+import { StepLoopGuard } from './step-visit-guard.js';
 import { runSingleWorkflowIteration, runWorkflowToCompletion } from './WorkflowRunLoop.js';
 import { validateWorkflowConfig } from './WorkflowValidator.js';
 import { getWorkflowResumeFrameKind, isWorkflowCallStep } from '../step-kind.js';
@@ -135,7 +135,7 @@ export class WorkflowEngine extends EventEmitter {
   private maxSteps: WorkflowMaxSteps;
   private loopDetector: LoopDetector;
   private cycleDetector: CycleDetector;
-  private readonly stepVerdictHistory = new StepVerdictHistory();
+  private readonly stepLoopGuard = new StepLoopGuard();
   private reportDir: string;
   private runPaths: RunPaths;
   private readonly workflowResults: WorkflowResultsStore;
@@ -529,7 +529,8 @@ export class WorkflowEngine extends EventEmitter {
             };
           },
           cycleDetectorRecordAndCheck: (stepName, nextStep) => this.cycleDetector.recordAndCheck(stepName, nextStep),
-          stepVerdictRecordAndCheck: (step, matchedRuleIndex) => this.stepVerdictHistory.recordAndCheck(step, matchedRuleIndex),
+          stepVisitEnter: (step) => this.stepLoopGuard.enter(step),
+          stepVerdictRecordAndCheck: (step, matchedRuleIndex) => this.stepLoopGuard.recordVerdict(step, matchedRuleIndex),
           resolveDoneTransition: this.stepCoordinator.resolveTransitionFromDone.bind(this.stepCoordinator),
           runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
           runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
@@ -1118,7 +1119,8 @@ export class WorkflowEngine extends EventEmitter {
             };
           },
           cycleDetectorRecordAndCheck: (stepName, nextStep) => this.cycleDetector.recordAndCheck(stepName, nextStep),
-          stepVerdictRecordAndCheck: (step, matchedRuleIndex) => this.stepVerdictHistory.recordAndCheck(step, matchedRuleIndex),
+          stepVisitEnter: (step) => this.stepLoopGuard.enter(step),
+          stepVerdictRecordAndCheck: (step, matchedRuleIndex) => this.stepLoopGuard.recordVerdict(step, matchedRuleIndex),
           resolveDoneTransition: this.stepCoordinator.resolveTransitionFromDone.bind(this.stepCoordinator),
           runLoopMonitorJudge: this.stepCoordinator.runLoopMonitorJudge.bind(this.stepCoordinator),
           runStep: this.stepCoordinator.runStep.bind(this.stepCoordinator),
