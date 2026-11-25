@@ -2783,3 +2783,56 @@ steps:
     expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('named.yaml'));
   });
 });
+
+describe('named workflow lookup explanation agrees with the lookup', () => {
+  // Every combination of the settings that decide whether the builtin is a candidate,
+  // crossed with whether a builtin of that name exists and whether a project copy exists.
+  const enableValues = [undefined, true, false] as const;
+  const listedValues = [false, true] as const;
+  const names = ['development-core', 'no-such-builtin-workflow'] as const;
+  const projectCopyValues = [false, true] as const;
+  const cases = enableValues.flatMap((enable) => listedValues.flatMap((listed) =>
+    names.flatMap((name) => projectCopyValues.map((projectCopy) => ({ enable, listed, name, projectCopy })))));
+
+  let projectDir: string;
+  beforeEach(() => {
+    projectDir = mkdtempSync(join(tmpdir(), 'takt-lookup-explanation-'));
+  });
+  afterEach(() => {
+    rmSync(projectDir, { recursive: true, force: true });
+    invalidateAllResolvedConfigCache();
+  });
+
+  it.each(cases)('enable=$enable listed=$listed name=$name projectCopy=$projectCopy', async ({ enable, listed, name, projectCopy }) => {
+    const { explainNamedWorkflowLookup, findWorkflowInLookupDirs, getNamedWorkflowLookupDirs } = await import(
+      '../infra/config/loaders/workflowLookupDirectories.js'
+    );
+    const config = [
+      ...(enable === undefined ? [] : [`enable_builtin_workflows: ${enable}`]),
+      ...(listed ? ['disabled_builtins:', `  - ${name}`] : []),
+    ].join('\n');
+    writeFileSync(join(process.env.TAKT_CONFIG_DIR!, 'config.yaml'), `${config}\n`, 'utf-8');
+    if (projectCopy) writeWorkflow(projectDir, `.takt/workflows/${name}.yaml`, `name: ${name}\nsteps: []\n`);
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    const { searched, excluded } = explainNamedWorkflowLookup(name, projectDir);
+    const match = findWorkflowInLookupDirs(name, getNamedWorkflowLookupDirs(projectDir));
+    const builtinIsCandidate = enable !== false && !listed;
+
+    // The builtin is either searched or excluded with its reason, never both and never neither.
+    expect(searched.some((line) => line.startsWith('builtin: '))).toBe(builtinIsCandidate);
+    expect(excluded).toHaveLength(builtinIsCandidate ? 0 : 1);
+    if (!builtinIsCandidate) {
+      expect(excluded[0]).toContain(enable === false
+        ? 'excluded because enable_builtin_workflows is false'
+        : `excluded because disabled_builtins lists "${name}"`);
+    }
+    // Project and user candidates are always listed, in lookup order.
+    expect(searched[0]).toContain(join(projectDir, '.takt', 'workflows', `${name}.yaml`));
+    expect(searched[1]).toMatch(/^user: /);
+    // The explanation describes the lookup that actually ran.
+    const expectedSource = projectCopy ? 'project' : builtinIsCandidate && name === 'development-core' ? 'builtin' : undefined;
+    expect(match?.source).toBe(expectedSource);
+  });
+});
