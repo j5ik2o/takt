@@ -66,6 +66,7 @@ function emitToolUseEvents(onStream: StreamCallback | undefined, events: ClaudeT
 function createProviderErrorResponse(
   input: NormalizeClaudeTerminalResponseInput,
   message: string,
+  rejectedStructuredOutput?: Record<string, unknown>,
 ): AgentResponse {
   emitResult(input.onStream, {
     result: input.assistantText,
@@ -81,6 +82,7 @@ function createProviderErrorResponse(
     sessionId: input.sessionId,
     error: message,
     failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+    ...(rejectedStructuredOutput === undefined ? {} : { rejectedStructuredOutput }),
     providerUsage: {
       usageMissing: true,
       reason: USAGE_MISSING_REASONS.NOT_SUPPORTED_BY_PROVIDER,
@@ -111,18 +113,6 @@ function createRateLimitedResponse(
   };
 }
 
-function normalizeStructuredOutput(
-  content: string,
-  outputSchema: Record<string, unknown> | undefined,
-): Record<string, unknown> | undefined {
-  const structuredOutput = parseStructuredOutput(content, outputSchema !== undefined);
-  if (outputSchema === undefined || structuredOutput === undefined) {
-    return structuredOutput;
-  }
-  validateStructuredOutputAgainstSchema(structuredOutput, outputSchema);
-  return structuredOutput;
-}
-
 export function normalizeClaudeTerminalResponse(input: NormalizeClaudeTerminalResponseInput): AgentResponse {
   emitToolUseEvents(input.onStream, input.events);
 
@@ -135,12 +125,18 @@ export function normalizeClaudeTerminalResponse(input: NormalizeClaudeTerminalRe
     return createRateLimitedResponse(input, rateLimitSource, finalText.trim());
   }
 
-  let structuredOutput: Record<string, unknown> | undefined;
-  try {
-    structuredOutput = normalizeStructuredOutput(finalText, input.outputSchema);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return createProviderErrorResponse(input, `Claude terminal structured output validation failed: ${detail}`);
+  const structuredOutput = parseStructuredOutput(finalText, input.outputSchema !== undefined);
+  if (input.outputSchema !== undefined && structuredOutput !== undefined) {
+    try {
+      validateStructuredOutputAgainstSchema(structuredOutput, input.outputSchema);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      return createProviderErrorResponse(
+        input,
+        `Claude terminal structured output validation failed: ${detail}`,
+        structuredOutput,
+      );
+    }
   }
 
   if (input.outputSchema !== undefined && structuredOutput === undefined) {

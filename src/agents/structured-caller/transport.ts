@@ -200,6 +200,12 @@ export async function executeStructuredAgent<T extends Record<string, unknown>>(
   );
 
   if (response.status !== 'done') {
+    if (response.rejectedStructuredOutput !== undefined) {
+      throw new StructuredAgentContractError(
+        response.error || 'Structured output validation failed',
+        { ...response, structuredOutput: response.rejectedStructuredOutput },
+      );
+    }
     if (response.failureCategory !== undefined) {
       throw createAgentResponseFailureError(response, `Structured agent "${options.name}" did not complete`);
     }
