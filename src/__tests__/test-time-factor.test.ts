@@ -94,7 +94,10 @@ describe('the deadline a vi.waitFor call wrote', () => {
 
   it('keeps the fields of an assertion error on the annotated copy', () => {
     class AssertionError extends Error {
-      name = 'AssertionError';
+      override name = 'AssertionError';
+      actual?: unknown;
+      expected?: unknown;
+      operator?: string;
     }
     const assertion = Object.assign(new AssertionError('expected 1 to be 2'), {
       actual: 1,
