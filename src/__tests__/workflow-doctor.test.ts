@@ -628,6 +628,15 @@ steps:
     await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
   });
 
+  it('does not treat the discovery placeholder of a required workflow_ref param as an unresolved call', async () => {
+    writeWorkflowRefComposer(projectDir);
+
+    await expect(doctorWorkflowCommand(['composer'], projectDir)).resolves.toBeUndefined();
+
+    expect(mockError).not.toHaveBeenCalled();
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('composer.yaml'));
+  });
+
   it('attributes runtime validation errors to the referenced step fragment', async () => {
     const fragmentPath = writeWorkflow(projectDir, '.takt/steps/opencode-review.yaml', `provider: opencode
 instruction: review the implementation

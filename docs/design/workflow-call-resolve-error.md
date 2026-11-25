@@ -46,7 +46,7 @@ PR: https://github.com/j5ik2o/takt/pull/167 ／ 後追いで書いた設計（�
 - 境界: builtin の全体無効と個別無効が両方ある（全体無効の理由を優先して1件だけ出す）。
 - 入れ子: 呼び出し先のさらに先の呼び出しが解決できない（bundle も doctor も再帰で同じ扱い）。
 - 区切り: 不正な識別子 `a//b`・`..`（既存の識別子エラーが先に出る）。
-- `{$param}` の呼び出し（discovery 読み込みで文字列でない）: doctor は飛ばす。
+- `{$param}` の呼び出し: callable を単体で診断すると、既定値の無い `workflow_ref` には discovery 読み込みが仮名（`__takt_discovery_workflow_ref___<param>`）を入れる。doctor は仮名の呼び出しを飛ばす（Devin の指摘で直した）。既定値がある `workflow_ref` は実名なので確かめる。
 - 長さ・Unicode: パスや名前はそのまま連結するだけで、切り詰めない。terminal ではエスケープされる。
 - 並行・再開: 再開（`resumeSource`）の run でも順序は同じ。失敗した run は既存の失敗 run と同じ形で残るので、再開・一覧の扱いは変わらない。
 - `.yml` だけがある場合: 候補は `.yaml (or .yml)` と書く。

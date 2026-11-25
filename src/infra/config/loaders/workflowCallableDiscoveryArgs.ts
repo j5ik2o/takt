@@ -7,6 +7,11 @@ type RawWorkflowConfig = z.output<typeof WorkflowConfigRawSchema>;
 
 const DISCOVERY_PLACEHOLDER_PREFIX = '__takt_discovery_param__';
 const DISCOVERY_WORKFLOW_REF_PREFIX = '__takt_discovery_workflow_ref__';
+
+/** True for the stand-in name discovery loading gives a required workflow_ref param with no arg. */
+export function isDiscoveryWorkflowRefPlaceholder(identifier: string): boolean {
+  return identifier.startsWith(`${DISCOVERY_WORKFLOW_REF_PREFIX}_`);
+}
 const DISCOVERY_FACET_POOL_PREFIX = '__takt_discovery_pool__';
 
 const FACET_SECTION_BY_KIND = {
