@@ -82,6 +82,16 @@ describe('sensitiveText', () => {
     expect(sanitizeSensitiveText(text)).toBe(expected);
   });
 
+  it.each([
+    'url=https://u:pa55-word@db.internal;owner=ops@example.test',
+    'https://u:pa55-word@host&notify=ops@example.test',
+    'https://u:pa55-word@host|ops@example.test',
+    'https://u:pa55-word@host:8080;ops@example.test',
+    'https://u:pa55-word@host!ops@x',
+  ])('redacts the password where it is echoed later when a later @ follows in %s', (command) => {
+    expect(sanitizeSensitiveTextWithKnownValues('echoed pa55-word', { command })).toBe('echoed [REDACTED]');
+  });
+
   // Known limit: a scheme is ASCII letters, digits, `+`, `-` and `.` with at least one letter.
   it.each(['aé://user:name@host', 'é://user:name@host'])('does not treat %s as a URL with credentials', (text) => {
     expect(sanitizeSensitiveText(text)).toBe(text);

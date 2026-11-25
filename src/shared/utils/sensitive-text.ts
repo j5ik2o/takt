@@ -244,7 +244,18 @@ export function collectEmbeddedSensitiveValues(text: string, values: Set<string>
   addMatches(text, KNOWN_TOKEN_REGEX, 0, values);
   addMatches(text, BARE_BEARER_VALUE_REGEX, 2, values);
   collectHttpHeaderSensitiveValues(text, values);
-  addMatches(text, URL_USERINFO_CREDENTIALS_REGEX, 2, values, true);
+  for (const match of text.matchAll(URL_USERINFO_CREDENTIALS_REGEX)) {
+    const userinfo = match[2]!;
+    addSensitiveValue(values, userinfo);
+    addCredentialComponents(values, userinfo);
+    // The userinfo may run past an `@` that ends the password, as in
+    // `https://u:secret@db;owner=ops@example.test`, so the part up to the first `@` is kept too.
+    const firstAt = userinfo.indexOf('@');
+    if (firstAt >= 0) {
+      addSensitiveValue(values, userinfo.slice(0, firstAt));
+      addCredentialComponents(values, userinfo.slice(0, firstAt));
+    }
+  }
   addMatches(text, CURL_USER_EQUALS_REGEX, 2, values, true);
   addMatches(text, CURL_USER_SPACE_REGEX, 2, values, true);
   addMatches(text, CURL_SHORT_USER_COMPACT_REGEX, 3, values, true);
