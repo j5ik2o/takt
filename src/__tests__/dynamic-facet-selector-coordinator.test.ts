@@ -28,6 +28,7 @@ vi.mock('../agents/agent-usecases.js', async (importOriginal) => ({
 
 import { executeStructuredAgent, type StructuredAgentResponse } from '../agents/structured-caller/transport.js';
 import { executeAgent } from '../agents/agent-usecases.js';
+import { normalizeClaudeTerminalResponse } from '../infra/claude-terminal/response-normalizer.js';
 import * as contextBuilder from '../core/workflow/dynamic-facets/dynamicFacetContextBuilder.js';
 
 const mockedExecuteAgent = vi.mocked(executeStructuredAgent);
@@ -580,6 +581,45 @@ describe('DynamicFacetSelectorCoordinator', () => {
       engineOptions: makeOptions({
         selectorProvider: {
           provider,
+          providerSource: 'step',
+          model: 'm',
+          modelSource: 'step',
+          providerOptions: {},
+        },
+      } as Partial<WorkflowEngineOptions>),
+    }));
+
+    const failure = await coordinator
+      .resolveDynamicFacets(makeStep(), makeState(), 'task', pool)
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    const reason = (failure as Error).message;
+    expect(reason).toContain('Dynamic facet selector for "fix"');
+    expect(reason).toContain('returned selected_ids: ["coding"]');
+    expect(reason).toContain('allowed candidate ids: ["frontend","backend"]');
+  });
+
+  it('names the returned and allowed ids when Claude Terminal rejects an id outside the pool against the schema', async () => {
+    const transport = await vi.importActual<typeof import('../agents/structured-caller/transport.js')>(
+      '../agents/structured-caller/transport.js',
+    );
+    mockedExecuteAgent.mockImplementationOnce(transport.executeStructuredAgent);
+    vi.mocked(executeAgent).mockImplementationOnce(async (_persona, _instruction, options) => normalizeClaudeTerminalResponse({
+      agentName: 'selector',
+      sessionId: 'terminal-session',
+      assistantText: 'Reading the pool.\n{"selected_ids":["coding"],"rationale":"x"}',
+      lastAssistantText: '{"selected_ids":["coding"],"rationale":"x"}',
+      outputSchema: options.outputSchema,
+    }));
+    const pool = makePool([
+      { id: 'frontend', description: 'Frontend' },
+      { id: 'backend', description: 'Backend' },
+    ]);
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps({
+      engineOptions: makeOptions({
+        selectorProvider: {
+          provider: 'claude-terminal',
           providerSource: 'step',
           model: 'm',
           modelSource: 'step',
