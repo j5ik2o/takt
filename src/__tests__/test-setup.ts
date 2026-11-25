@@ -17,6 +17,9 @@ globalThis.console.Console = Console;
 
 // TEST_TIME_FACTOR also stretches every vi.waitFor deadline, including the 1s
 // default. At the default factor of 1, vi.waitFor is left as Vitest made it.
+// The property is assigned rather than spied: many tests call
+// vi.restoreAllMocks(), which would restore a spy and silently drop the factor
+// for the rest of that file.
 if (testTimeFactor !== 1) vi.waitFor = withScaledWaitFor(vi.waitFor.bind(vi));
 
 const shouldForceNoTty = process.env.TAKT_TEST_FLG_TOUCH_TTY !== '1';
