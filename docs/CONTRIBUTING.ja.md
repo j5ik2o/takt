@@ -56,7 +56,7 @@ npm run test:e2e:smoke
 
 GitHub Actions ではプルリクエスト時に重い結合テストを全件実行します。ローカルでは対象ファイルを指定してください。ローカルで意図的に全件実行する場合は `TAKT_ALLOW_FULL_HEAVY_IT=1 npm run test:it:heavy` を使います。リリースチェックでは依存同期、ビルド、npm 10、11、12 による pack 済みパッケージのグローバルインストール確認、実際の npm レジストリを使った全 managed provider の `takt install` 確認、lint、ユニットテスト、結合テスト、E2E を実行します。
 
-負荷の高い機械や遅い機械では、`TEST_TIME_FACTOR` でテストの時間の上限を伸ばせます（例: `TEST_TIME_FACTOR=2 npm test`）。Vitest のテスト・フック・teardown のタイムアウトと、`src/__tests__/` の `vi.waitFor` の期限に倍率が掛かります。既定は 1 で、このときは何も変わりません。正の数でない値を指定すると、エラーで止まります。テストが自分で持つ時間の上限は、`scripts/test-time-factor.mjs` の `scaledMs(ms)` で書いてください。待ち忘れや競合は倍率では直りません。テストの側を直してください。
+負荷の高い機械や遅い機械では、`TEST_TIME_FACTOR` でテストの時間の上限を伸ばせます（例: `TEST_TIME_FACTOR=2 npm test`）。Vitest のテスト・フック・teardown のタイムアウトと、`src/__tests__/` の `vi.waitFor` の期限に倍率が掛かります。既定は 1 で、このときは何も変わりません。正の数でない値を指定すると、エラーで止まります。倍率が 1 を超えるとき、期限切れになった `vi.waitFor` のエラー文には、テストが書いた期限と倍率が出ます。テストが自分で持つ時間の上限は、`scripts/test-time-factor.mjs` の `scaledMs(ms)` で書いてください。待ち忘れや競合は倍率では直りません。テストの側を直してください。
 
 E2E テストの実行方法と前提条件は [E2E テスト概要](./testing/e2e.md) を参照してください。
 

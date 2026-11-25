@@ -41,7 +41,43 @@ export function scaleWaitForOptions(options, factor = testTimeFactor) {
   return { ...options, timeout: scaledMs(options?.timeout ?? WAIT_FOR_DEFAULT_TIMEOUT_MS, factor) };
 }
 
+/** The deadline a `vi.waitFor` call was written with, before scaling. */
+export function writtenWaitForTimeoutMs(options) {
+  return typeof options === 'number' ? options : (options?.timeout ?? WAIT_FOR_DEFAULT_TIMEOUT_MS);
+}
+
+/**
+ * What a scaled wait adds to the report of an expiry: the deadline the test
+ * wrote next to the one the factor made, so `Timed out in waitFor!` after 2s
+ * reads against the 1s in the test. Empty at factor 1, where nothing is wrapped.
+ */
+export function waitForExpirySuffix({ writtenMs, factor }) {
+  if (factor === 1) return '';
+  return ` (vi.waitFor waited ${scaledMs(writtenMs, factor)}ms: written ${writtenMs}ms x TEST_TIME_FACTOR=${factor})`;
+}
+
+/**
+ * Name the written deadline and the factor on a wait that ran out of time.
+ * Vitest rejects a `waitFor` only when its deadline passes, so every rejection
+ * of a scaled wait is an expiry. The error is the rejection value itself and its
+ * message is appended in place: the report keeps the error's own stack, which
+ * points at the test rather than at this wrapper.
+ */
+export function annotateWaitForTimeout(error, { writtenMs, factor }) {
+  if (!(error instanceof Error)) return error;
+  error.message = `${error.message}${waitForExpirySuffix({ writtenMs, factor })}`;
+  return error;
+}
+
 /** Wrap a `vi.waitFor` implementation so every call's deadline is scaled. */
 export function withScaledWaitFor(waitFor, factor = testTimeFactor) {
-  return (callback, options) => waitFor(callback, scaleWaitForOptions(options, factor));
+  if (factor === 1) return waitFor;
+  return async (callback, options) => {
+    const writtenMs = writtenWaitForTimeoutMs(options);
+    try {
+      return await waitFor(callback, scaleWaitForOptions(options, factor));
+    } catch (error) {
+      throw annotateWaitForTimeout(error, { writtenMs, factor });
+    }
+  };
 }
