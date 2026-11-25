@@ -58,13 +58,16 @@ const SENSITIVE_OPTION_VALUE_REGEX = new RegExp(
 );
 const HTTP_HEADER_PREFIX_REGEX = /\b(Authorization|(?:Set-)?Cookie)\s*:\s*/gi;
 // `user:password@` after a URL scheme. The match starts at `://` and the lookbehind then
-// checks that a scheme (`\b[A-Za-z][A-Za-z0-9+.-]*`) ends there, so each scheme-like run is
-// read once, from its own `://`. Starting at the scheme instead rescans the rest of a run of
-// letters and hyphens from every letter after a `-` (quadratic), and a plain "not preceded by
-// a scheme character" lookbehind would miss `1-http://user:pass@host`.
-// The userinfo is split at its first colon past the first character: trying each colon as the
-// separator finds the same matches but rescans the rest of a colon-separated run every time.
-const URL_USERINFO_CREDENTIALS_REGEX = /(:\/\/)(?<=\b[A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#\s@][^/?#\s@:]*:[^/?#\s@]+)@/g;
+// checks that a scheme ends there, so each scheme-like run is read once, from its own `://`.
+// Starting at the scheme instead rescans the rest of a run of letters and hyphens from every
+// letter after a `-` (quadratic). The lookbehind only asks for a letter somewhere in the run
+// of scheme characters, so `1-http://`, `9http://` and `_http://` all count.
+// The user ends at the first colon and may be empty (`redis://:password@host`): trying each
+// colon as the separator rescans the rest of a colon-separated run every time.
+// The password runs to the last `@` of the authority, so an unencoded `@` in it stays hidden.
+// Past the first `@` it stops at quotes, commas and brackets, which keeps the host and a later
+// address readable in `"https://user:pass@host","admin@example.test"`.
+const URL_USERINFO_CREDENTIALS_REGEX = /(:\/\/)(?<=[A-Za-z][0-9+.-]*:\/\/)([^/?#\s@:]*:[^/?#\s@]+(?:@[^/?#\s@"'`,<>()[\]{}]*)*)@/g;
 const CURL_USER_VALUE_PATTERN = [
   String.raw`(?<=\\")(?!\+)[^":]*:[^"]*?(?=\\")`,
   String.raw`"(?!\+)[^":]*:[^"]*"`,

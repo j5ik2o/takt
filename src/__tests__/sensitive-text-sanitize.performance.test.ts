@@ -30,6 +30,7 @@ describe('sanitizeSensitiveText performance', () => {
     ['an OpenAI key prefix in a hyphenated run', 'sk-'],
     ['a JSON web token prefix in a hyphenated run', 'eyJ-'],
     ['an AWS access key prefix in a hyphenated run', 'AKIA-'],
+    ['a run of digits and hyphens', '1-'],
     ['a JSON web token prefix', 'eyJ_-'],
     ['a JSON web token with a missing part', 'eyJabcdefgh.eyJabcdefgh '],
     ['a bearer scheme', 'Bearer abc '],
@@ -56,14 +57,18 @@ describe('sanitizeSensitiveText performance', () => {
     expect(elapsed(256 * 1024)).toBeLessThan(2000);
   });
 
-  // One URL whose userinfo is a long run of colons and never reaches an `@`. Trying every
-  // colon as the user/password separator rescans the rest of the run each time (18s at 256KiB).
+  // One URL whose userinfo is a long run of separators. Trying every colon as the
+  // user/password separator rescans the rest of the run each time (18s at 256KiB).
   it.each([
-    ['colon-separated words', 'a:'],
-    ['colons only', ':'],
-  ])('stays linear on a URL followed by %s without an @', (_name, unit) => {
+    ['colon-separated words without an @', 'https://', 'a:'],
+    ['colons only without an @', 'https://', ':'],
+    ['a password of @-separated words', 'https://user:pass', '@a'],
+    ['a password of @ only', 'https://user:pass', '@'],
+    ['a scheme behind a run of digits and hyphens', '', '1-'],
+  ])('stays linear on a URL followed by %s', (_name, head, unit) => {
     const elapsed = (bytes: number): number => {
-      const input = 'https://' + unit.repeat(Math.ceil(bytes / unit.length));
+      const body = unit.repeat(Math.ceil(bytes / unit.length));
+      const input = head === '' ? `${body}x://user:pass@host` : head + body;
       const start = performance.now();
       sanitizeSensitiveText(input);
       return performance.now() - start;
