@@ -61,7 +61,7 @@ export function managerStateReads(fixture) {
   const tasks = records.map((record, index) => {
     const task = toTaskState(`${fixture.cwd}/.takt/tasks.yaml`, record);
     const summary = { name: task.name, goalId: task.goalId, status: task.status };
-    for (const key of ['executionId', 'summary', 'startedAt', 'workflow', 'runSlug']) {
+    for (const key of ['executionId', 'summary', 'startedAt', 'createdAt', 'completedAt', 'sourceRunSlug', 'workflow', 'runSlug']) {
       if (task[key] !== undefined) summary[key] = task[key];
     }
     if (task.runSlug !== undefined) {
