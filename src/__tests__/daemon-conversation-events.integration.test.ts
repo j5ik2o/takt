@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import * as slackPorts from '../features/daemon/slackPorts.js';
 import * as watcherModule from '../features/daemon/watchers/index.js';
+import * as patrolModule from '../features/daemon/patrols.js';
 import { WatchGoalReader, type WatchGoal } from '../features/daemon/watchers/goalReader.js';
 import * as workspaceRegistry from '../infra/config/global/workspaceRegistry.js';
 import { createDaemonDispatcher } from '../features/daemon/dispatcher.js';
@@ -60,6 +61,8 @@ const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close(); vi.restoreAllMocks(); });
 
 async function fixture(seed?: (directory: string, repository: string) => Promise<void>) {
+  // 見回りのループは watchers と違い drain・close されない。ゴールがあるとターンを積むため、起動しない。
+  vi.spyOn(patrolModule, 'startManagerPatrols').mockImplementation(() => ({ wake() {}, async drain() {}, async close() {} }));
   const directory = getGlobalConfigDir();
   const repository = join(directory, 'repository');
   await mkdir(join(repository, '.takt'), { recursive: true });
@@ -463,6 +466,14 @@ function goalAnswerService(directory: string, execute: PreparedConversationRunti
     return { provider: 'mock', model: null, language: 'en', contextKey: 'goal-answer', executor: { execute } };
   }, async close() {} });
 }
+
+it('starts no patrol turn for a goal saved before the fixture daemon starts', async () => {
+  const f = await goalAnswerFixture(goalRecord());
+  // 見回りが動いていれば、最初の周回はこの待ちの間にターンを積む。
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  await f.dispatcher.drain();
+  expect(f.runner.calls).toHaveLength(0);
+});
 
 it('deduplicates one saved goal answer delivered through different inbox files', async () => {
   const questionId = randomUUID();
@@ -1615,6 +1626,8 @@ it('releases pending goal reads before awaiting watcher shutdown', async () => {
     rejectRead(new Error('reader closed'));
     await closeReader.call(this);
   });
+  // 保存済みのゴールを見回りが読むと、watcher の読み取りと区別できない。watcher の終了だけを見るため起動しない。
+  vi.spyOn(patrolModule, 'startManagerPatrols').mockImplementation(() => ({ wake() {}, async drain() {}, async close() {} }));
   const restoreErrorLog = installDaemonErrorLog(async () => {});
   const daemon = await startDaemon({ configDirectory: directory,
     owner: { pid: process.pid, identity: { startTime: 'pending-goal' }, version: 'test', cliPath: '/daemon.js' },
