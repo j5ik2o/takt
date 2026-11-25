@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
 
-const doubles = vi.hoisted(() => ({ execFile: vi.fn(), resolve: vi.fn(), exists: vi.fn(), resolveGeneration: vi.fn(), origins: [] as string[] }));
-vi.mock('../infra/managed-providers/generation.js', () => ({ resolveManagedGeneration: doubles.resolveGeneration }));
+const doubles = vi.hoisted(() => ({ execFile: vi.fn(), resolve: vi.fn(), exists: vi.fn(), inspect: vi.fn(), origins: [] as string[] }));
+vi.mock('../infra/managed-providers/package.js', () => ({ inspectManagedProvider: doubles.inspect }));
 vi.mock('node:child_process', async (importOriginal) => ({
   ...await importOriginal<typeof import('node:child_process')>(), execFile: doubles.execFile,
 }));
@@ -25,7 +25,7 @@ describe('Claude SDK runtime preflight', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     doubles.origins.length = 0;
-    doubles.resolveGeneration.mockReset().mockResolvedValue('/managed/sdk');
+    doubles.inspect.mockReset().mockResolvedValue({ state: 'ready', directory: '/managed/sdk' });
     doubles.resolve.mockReset().mockReturnValue('/sdk/claude');
     doubles.exists.mockReset().mockReturnValue(true);
     doubles.execFile.mockReset().mockImplementation((_command, _args, _options, callback) => {
@@ -38,6 +38,7 @@ describe('Claude SDK runtime preflight', () => {
     expect(doubles.origins).toEqual([join('/managed/sdk', 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'package.json')]);
     expect(doubles.resolve).toHaveBeenCalledWith(expect.stringContaining('@anthropic-ai/claude-agent-sdk-'));
     expect(doubles.execFile).toHaveBeenCalledWith('/sdk/claude', ['--help'], expect.objectContaining({ cwd: '/repo' }), expect.any(Function));
+    expect(doubles.inspect.mock.invocationCallOrder[0]).toBeLessThan(doubles.execFile.mock.invocationCallOrder[0]!);
   });
 
   it('rejects missing optional native packages before launching a process', async () => {
@@ -49,21 +50,36 @@ describe('Claude SDK runtime preflight', () => {
   });
 
   it('asks for takt install claude-sdk when the managed SDK is missing', async () => {
-    doubles.resolveGeneration.mockResolvedValue(undefined);
+    doubles.inspect.mockResolvedValue({ state: 'missing' });
     await expect(assertClaudeSdkRuntime({})).rejects.toThrow('Run `takt install claude-sdk`.');
     expect(doubles.execFile).not.toHaveBeenCalled();
   });
 
   it('keeps the cause when the managed SDK link is broken', async () => {
     const cause = new Error('Managed current generation is not a link.');
-    doubles.resolveGeneration.mockRejectedValue(cause);
+    doubles.inspect.mockResolvedValue({ state: 'missing', cause });
     await expect(assertClaudeSdkRuntime({})).rejects.toMatchObject({ message: expect.stringContaining('takt install claude-sdk'), cause });
     expect(doubles.execFile).not.toHaveBeenCalled();
   });
 
+  it('does not run a modified managed CLI before the integrity check rejects it', async () => {
+    const cause = new Error('Managed SDK integrity check failed.');
+    doubles.inspect.mockResolvedValue({ state: 'missing', cause });
+    await expect(assertClaudeSdkRuntime({ tools: ['Read'] })).rejects.toMatchObject({
+      message: expect.stringContaining('failed an integrity check'), cause,
+    });
+    expect(doubles.execFile).not.toHaveBeenCalled();
+  });
+
+  it('accepts a stale installation that passed its integrity check, as the query does', async () => {
+    doubles.inspect.mockResolvedValue({ state: 'stale', directory: '/managed/sdk' });
+    await expect(assertClaudeSdkRuntime({})).resolves.toBeUndefined();
+    expect(doubles.execFile).toHaveBeenCalledOnce();
+  });
+
   it('runs a configured JavaScript CLI with Node and the resolved environment', async () => {
     await assertClaudeSdkRuntime({ pathToClaudeCodeExecutable: '/custom/cli.mjs', cwd: '/repo', env: { PATH: '/custom/bin' } });
-    expect(doubles.resolveGeneration).not.toHaveBeenCalled();
+    expect(doubles.inspect).not.toHaveBeenCalled();
     expect(doubles.resolve).not.toHaveBeenCalled();
     expect(doubles.execFile).toHaveBeenCalledWith(process.execPath, ['/custom/cli.mjs', '--help'], expect.objectContaining({ cwd: '/repo', env: { PATH: '/custom/bin' } }), expect.any(Function));
   });
@@ -96,6 +112,7 @@ describe('Claude SDK runtime preflight', () => {
     await expect(assertClaudeSdkRuntime({}, controller.signal)).rejects.toBe(controller.signal.reason);
 
     expect(doubles.execFile).not.toHaveBeenCalled();
+    expect(doubles.inspect).not.toHaveBeenCalled();
     expect(doubles.resolve).not.toHaveBeenCalled();
   });
 });

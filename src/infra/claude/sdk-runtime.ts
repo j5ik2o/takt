@@ -3,20 +3,16 @@ import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
-import { resolveManagedGeneration } from '../managed-providers/generation.js';
-import { managedPackageRoot } from '../managed-providers/package.js';
+import { inspectManagedProvider } from '../managed-providers/package.js';
 
 // Look where the query loads the SDK from: the installation made by `takt install claude-sdk`.
-// The query verifies that installation's integrity when it loads it, so this only locates it.
+// The preflight runs that CLI, so require the integrity check the query applies before launching it:
+// a modified installation must not run even once.
 async function resolveBundledCli(): Promise<string> {
-  const missing = 'Claude SDK is not installed. Run `takt install claude-sdk`.';
-  let directory: string | undefined;
-  try {
-    directory = await resolveManagedGeneration(managedPackageRoot('claude-sdk'), { platform: process.platform });
-  } catch (cause) {
-    throw new Error(missing, { cause });
-  }
-  if (directory === undefined) throw new Error(missing);
+  const missing = 'Claude SDK is not installed or failed an integrity check. Run `takt install claude-sdk`.';
+  // A stale installation passed its integrity check, and the query accepts it too.
+  const { state, directory, cause } = await inspectManagedProvider('claude-sdk');
+  if (state === 'missing' || directory === undefined) throw new Error(missing, { cause });
   const sdkRequire = createRequire(join(directory, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'package.json'));
   const base = `@anthropic-ai/claude-agent-sdk-${process.platform === 'android' ? 'linux' : process.platform}-${process.arch}`;
   const report = (process.platform === 'linux' ? process.report?.getReport() : undefined) as
