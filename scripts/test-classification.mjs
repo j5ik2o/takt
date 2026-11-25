@@ -247,8 +247,10 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/codex-client-retry.test.ts',
   'src/__tests__/codex-compaction.test.ts',
   'src/__tests__/codex-interactive-session-recovery.integration.test.ts',
+  'src/__tests__/codex-model-context-windows.test.ts',
   'src/__tests__/codex-skill-config.test.ts',
   'src/__tests__/config-path-collision.test.ts',
+  'src/__tests__/context-window.test.ts',
   'src/__tests__/conversation-session-failure.test.ts',
   'src/__tests__/conversationLoop-resume.test.ts',
   'src/__tests__/conversationSession.test.ts',
@@ -397,6 +399,7 @@ export const lightContractIntegrationTestFiles = Object.freeze([
   'src/__tests__/daemon-dispatcher.integration.test.ts',
   'src/__tests__/daemon-manager-patrol.integration.test.ts',
   'src/__tests__/daemon-reachability.integration.test.ts',
+  'src/__tests__/manager-image-attachments.integration.test.ts',
   'src/__tests__/sigint-interrupt.test.ts',
 ]);
 

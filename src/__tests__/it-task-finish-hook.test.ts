@@ -34,7 +34,7 @@ import { executeTaskAndCompleteWithDetails } from '../features/tasks/execute/tas
 import { executePrWorkflow, resolveMergeSettings } from '../features/merge/index.js';
 import { invalidatePendingGoalTasksWithFinishHook, runTaskFinishHooks } from '../features/tasks/execute/taskFinishHook.js';
 import { claimTasksWithGoalCompletions } from '../features/tasks/execute/claimTasks.js';
-import { goalId } from './helpers/goal-fixtures.js';
+import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/index.js';
 
@@ -417,18 +417,12 @@ describe('task finish hook', () => {
 
   it('reports a goal task that is saved as failed while it is claimed', async () => {
     const project = createProject();
-    const task = project.runner.addTask('Goal work', { workflow: 'default' });
-    const claimForReal = project.runner.claimNextTasks.bind(project.runner);
-    // Stand-in for the claim-time setup failure of a goal task: the task is saved as failed and
-    // reported through the callback, and never handed out for execution.
-    vi.spyOn(project.runner, 'claimNextTasks').mockImplementation((count, _setupFailure, onSetupFailed) => {
-      const claimed = claimForReal(count)[0]!;
-      const now = new Date().toISOString();
-      project.runner.failTask({ task: claimed, success: false, response: 'runtime assignment is gone',
-        executionLog: [], startedAt: now, completedAt: now });
-      onSetupFailed?.(project.runner.listTaskStateItems().find((item) => item.name === claimed.name)!);
-      return [];
-    });
+    const goalDirectory = path.join(project.dir, '.takt', 'goals', goalId);
+    fs.mkdirSync(goalDirectory, { recursive: true });
+    fs.writeFileSync(path.join(goalDirectory, 'goal.json'), JSON.stringify(goalRecord()));
+    // The saved runtime assignment is not defined in runtime.yaml, so the claim saves the goal task
+    // as failed and never hands it out for execution.
+    const task = project.runner.addTask('Goal work', { workflow: 'default', goal_id: goalId, runtime_assignment: 'gone' });
 
     const claimed = claimTasksWithGoalCompletions(project.runner, 1, project.dir, new AbortController().signal);
 

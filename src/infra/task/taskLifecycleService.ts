@@ -1,7 +1,6 @@
 import { TaskRecordSchema, type TaskFileData, type TaskRecord, type TaskFailure } from './schema.js';
 import type { TaskInfo, TaskResult, TaskState } from './types.js';
 import { resolveTaskContent, toTaskInfo, toTaskState } from './mapper.js';
-import type { GoalTaskSetupGuard } from './goalTaskSetupGuard.js';
 import { cleanupTaskSpecDirectory, prepareTaskSpecDirectory, type PreparedTaskSpecDirectory } from './enqueueService.js';
 import { TaskStore } from './store.js';
 import { isFileLockTimeoutError } from '../fs/file-lock.js';
@@ -246,22 +245,12 @@ export class TaskLifecycleService {
     return toTaskInfo(this.projectDir, this.tasksFile, created);
   }
 
-  claimNextTasks(
-    count: number,
-    goalSetupGuard?: GoalTaskSetupGuard,
-    onSetupFailed?: (task: TaskState) => void,
-  ): TaskInfo[] {
+  claimNextTasks(count: number, goalSetupFailure?: (task: TaskInfo) => string | undefined): TaskInfo[] {
     if (count <= 0) {
       return [];
     }
 
     const claimed: TaskInfo[] = [];
-    const setupFailures: TaskRecord[] = [];
-    const recordSetupFailure = (task: TaskRecord, next: TaskRecord, reason: string): TaskRecord => {
-      const failed = this.buildSetupFailedTaskRecord(task, next, reason);
-      setupFailures.push(failed);
-      return failed;
-    };
 
     withGoalExecutionLock(this.projectDir, () => this.store.update((current) => {
       let remaining = count;
@@ -291,13 +280,13 @@ export class TaskLifecycleService {
           } catch (error) {
             if (task.goal_id === undefined) throw error;
             const reason = sanitizeSensitiveText(getErrorMessage(error));
-            return recordSetupFailure(task, next, reason);
+            return this.buildSetupFailedTaskRecord(task, next, reason);
           }
-          if (task.goal_id !== undefined && goalSetupGuard !== undefined) {
-            const reason = goalSetupGuard.setupFailureReason(info);
+          if (task.goal_id !== undefined && goalSetupFailure !== undefined) {
+            const reason = goalSetupFailure(info);
             if (reason !== undefined) {
               this.onWarning?.(`Task ${task.name} cannot run: ${sanitizeSensitiveText(reason)}`);
-              return recordSetupFailure(task, next, reason);
+              return this.buildSetupFailedTaskRecord(task, next, reason);
             }
           }
           claimed.push(info);
@@ -319,9 +308,6 @@ export class TaskLifecycleService {
       },
     }));
 
-    if (onSetupFailed !== undefined) {
-      for (const task of setupFailures) onSetupFailed(toTaskState(this.tasksFile, task));
-    }
     return claimed;
   }
 
