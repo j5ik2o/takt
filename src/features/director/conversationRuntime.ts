@@ -42,11 +42,14 @@ export async function prepareDirectorTurn(
 export function createDaemonConversationRuntime(configDirectory: string, actions: DirectorStateActions): ConversationRuntime {
   const managers = createConversationRuntime(configDirectory);
   const connections = new Set<() => Promise<void>>();
+  let closed = false;
   return {
     async resolve(assignment, signal, overrides) {
       if (assignment.kind !== 'daemon') return managers.resolve(assignment, signal, overrides);
       const prepared = await prepareDirectorTurn(configDirectory, actions, signal, overrides ?? {});
       const { executor, dispose, ...configuration } = prepared;
+      // close() の後に準備が終わった接続は connections に載らず、誰にも破棄されない。
+      if (closed) { await dispose(); throw new Error('Conversation runtime is closed'); }
       let released: Promise<void> | undefined;
       const release = (): Promise<void> => released ??= Promise.resolve().then(dispose).finally(() => { connections.delete(release); });
       connections.add(release);
@@ -58,6 +61,7 @@ export function createDaemonConversationRuntime(configDirectory: string, actions
       };
     },
     async close() {
+      closed = true;
       const results = await Promise.allSettled([managers.close(), ...[...connections].map((release) => release())]);
       connections.clear();
       const errors = results.filter((result) => result.status === 'rejected').map((result) => result.reason);

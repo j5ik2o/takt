@@ -28,6 +28,9 @@ export interface ConversationRuntime {
 
 export function createConversationRuntime(configDirectory: string): ConversationRuntime {
   const entries = new Map<string, PreparedConversationRuntime & { dispose(): Promise<void> }>();
+  let closed = false;
+  // close() の後に準備が終わった接続は entries に載らず、誰にも破棄されない。
+  const assertOpen = (): void => { if (closed) throw new Error('Conversation runtime is closed'); };
   return {
     async resolve(assignment, signal, agentOverrides) {
       if (assignment.kind === 'daemon') throw new Error('Director runtime is required for daemon conversations');
@@ -62,11 +65,13 @@ export function createConversationRuntime(configDirectory: string): Conversation
         conversationTurn: () => activeTurn === undefined || activeTurn.signal.aborted ? undefined : { patrol: activeTurn.patrol },
       });
       try {
+        assertOpen();
         await plan.ctx.provider.preflight?.({
           cwd, abortSignal: signal, model: plan.ctx.model, providerOptions: plan.ctx.providerOptions,
           permissionMode: 'full', mcpServers: mcp.servers, outputSchema: getManagerOutputSchema(plan.ctx.providerType),
           aiReviewPermissions: plan.ctx.aiReviewPermissions,
         });
+        assertOpen();
         const executor = createManagerTurnExecutor(cwd, { ...plan, ctx: { ...plan.ctx, mcpServers: mcp.servers } });
         const entry = { provider: plan.ctx.providerType, model: plan.ctx.model ?? null, language: plan.ctx.lang,
           contextKey, executor: { async execute(turn: Parameters<typeof executor.execute>[0]) {
@@ -80,6 +85,7 @@ export function createConversationRuntime(configDirectory: string): Conversation
       } catch (error) { await mcp.dispose(); throw error; }
     },
     async close() {
+      closed = true;
       const results = await Promise.allSettled([...entries.values()].map((entry) => entry.dispose()));
       entries.clear();
       const errors = results.filter((result) => result.status === 'rejected').map((result) => result.reason);

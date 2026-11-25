@@ -112,6 +112,18 @@ it('shares an awaited release between the caller and runtime close without dispo
   expect(otherDispose).toHaveBeenCalledOnce();
 });
 
+it('disposes a director connection whose preparation finishes after close', async () => {
+  const gate = deferred<void>();
+  doubles.preflight.mockImplementationOnce(() => gate.promise);
+  const runtime = createDaemonConversationRuntime('/config', notices);
+  const resolving = runtime.resolve({ kind: 'daemon', repositoryDirectories: [] }, signal());
+  await vi.waitFor(() => expect(doubles.preflight).toHaveBeenCalledOnce());
+  await runtime.close();
+  gate.resolve();
+  await expect(resolving).rejects.toThrow('Conversation runtime is closed');
+  expect(doubles.dispose).toHaveBeenCalledOnce();
+});
+
 it('propagates a release failure and shares it with concurrent runtime cleanup', async () => {
   doubles.dispose.mockRejectedValueOnce(new Error('connection cleanup failed'));
   const runtime = createDaemonConversationRuntime('/config', notices);

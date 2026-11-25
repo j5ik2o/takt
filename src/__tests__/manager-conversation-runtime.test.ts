@@ -87,6 +87,18 @@ it('disposes MCP after failed preflight and permits another preparation', async 
   await runtime.resolve(assignment, signal); expect(doubles.connect).toHaveBeenCalledTimes(2);
 });
 
+it.each(['connection', 'preflight'] as const)('disposes MCP when close finishes while %s is still being prepared', async (stage) => {
+  const gate = deferred<void>();
+  const pending = stage === 'connection' ? doubles.connect : doubles.preflight;
+  pending.mockImplementationOnce(async () => { await gate.promise; return { servers: {}, dispose: doubles.dispose }; });
+  const resolving = runtime.resolve(assignment, signal);
+  await vi.waitFor(() => expect(pending).toHaveBeenCalledOnce());
+  await runtime.close();
+  gate.resolve();
+  await expect(resolving).rejects.toThrow('Conversation runtime is closed');
+  expect(doubles.dispose).toHaveBeenCalledOnce();
+});
+
 it('waits for MCP disposal during close and reports its failure', async () => {
   await runtime.resolve(assignment, signal);
   doubles.dispose.mockRejectedValueOnce(new Error('cleanup failed'));
