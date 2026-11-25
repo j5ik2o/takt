@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  createBoundedSensitiveValues, createSensitiveTextStreamRedactor, MAX_TRACKED_SENSITIVE_VALUES,
-  MAX_TRACKED_SENSITIVE_VALUE_BYTES, sanitizeSensitiveText, sanitizeSensitiveTextWithKnownValues,
-  sanitizeSensitiveValue, sanitizeSensitiveValueWithKnownValues,
+  createBoundedSensitiveValues, createSensitiveTextStreamRedactor, MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES,
+  MAX_TRACKED_SENSITIVE_VALUES, MAX_TRACKED_SENSITIVE_VALUE_BYTES, sanitizeSensitiveText,
+  sanitizeSensitiveTextWithKnownValues, sanitizeSensitiveValue, sanitizeSensitiveValueWithKnownValues,
 } from '../shared/utils/sensitiveText.js';
 import { SensitiveTextStreamBuffer, maskSensitiveTextChunks } from '../shared/utils/sensitive-stream.js';
 import { maskSensitiveRanges } from '../shared/utils/sensitive-text.js';
@@ -420,13 +420,51 @@ describe('sensitiveText', () => {
   it.each(['count', 'bytes'])('bounds known-value tracking without masking unrelated output after the %s limit', (budget) => {
     const values = createBoundedSensitiveValues();
     values.collect({ token: 'known-0-value' });
-    if (budget === 'count') for (let index = 1; index < MAX_TRACKED_SENSITIVE_VALUES + 10; index++) values.collect({ token: `known-${index}-value` });
-    else values.collect({ token: 'x'.repeat(MAX_TRACKED_SENSITIVE_VALUE_BYTES + 1) });
+    if (budget === 'count') {
+      for (let index = 1; index < MAX_TRACKED_SENSITIVE_VALUES + 10; index++) values.collect({ token: `known-${index}-value` });
+    } else {
+      let index = 1;
+      while (values.storedValueBytes < MAX_TRACKED_SENSITIVE_VALUE_BYTES) {
+        const remaining = MAX_TRACKED_SENSITIVE_VALUE_BYTES - values.storedValueBytes;
+        const size = Math.min(MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES, remaining);
+        const prefix = `b${String(index++).padStart(3, '0')}-`;
+        values.collect({ token: prefix + 'x'.repeat(Math.max(0, size - prefix.length)) });
+      }
+      values.collect({ token: 'overflow-after-full-bytes' });
+    }
     expect(values.exhausted).toBe(true);
+    expect(values.hasUntrackedValues).toBe(true);
     expect(values.values.size).toBeLessThanOrEqual(MAX_TRACKED_SENSITIVE_VALUES);
     expect(values.storedValueBytes).toBeLessThanOrEqual(MAX_TRACKED_SENSITIVE_VALUE_BYTES);
     expect(sanitizeSensitiveTextWithKnownValues('ordinary progress', values)).toBe('ordinary progress');
     expect(sanitizeSensitiveTextWithKnownValues('known-0-value', values)).toBe('[REDACTED]');
+  });
+
+  it('skips an oversized or remaining-budget-exceeding candidate while continuing to track smaller secrets', () => {
+    const values = createBoundedSensitiveValues();
+    values.collect({ token: 'known-0-value' });
+    values.collect({ token: 'x'.repeat(MAX_TRACKED_SENSITIVE_VALUE_BYTES + 1) });
+    expect(values.exhausted).toBe(false);
+    expect(values.hasUntrackedValues).toBe(true);
+    expect(values.skippedValueCount).toBe(1);
+
+    // Fill until only 64 bytes remain, then send a 128-byte candidate that does not fit.
+    let index = 1;
+    while (MAX_TRACKED_SENSITIVE_VALUE_BYTES - values.storedValueBytes > 64) {
+      const remainingToLeave64 = MAX_TRACKED_SENSITIVE_VALUE_BYTES - values.storedValueBytes - 64;
+      const size = Math.min(MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES, remainingToLeave64);
+      const prefix = `p${String(index++).padStart(3, '0')}-`;
+      values.collect({ token: prefix + 'y'.repeat(Math.max(0, size - prefix.length)) });
+    }
+    values.collect({ token: 'z'.repeat(128) });
+    values.collect({ token: 'later-small-secret' });
+
+    expect(values.exhausted).toBe(false);
+    expect(values.hasUntrackedValues).toBe(true);
+    expect(values.skippedValueCount).toBe(2);
+    expect(values.storedValueBytes).toBeLessThanOrEqual(MAX_TRACKED_SENSITIVE_VALUE_BYTES);
+    expect(sanitizeSensitiveTextWithKnownValues('echo later-small-secret', values)).toBe('echo [REDACTED]');
+    expect(sanitizeSensitiveTextWithKnownValues('ordinary progress', values)).toBe('ordinary progress');
   });
 
   it('masks every explicit key/value after reaching the candidate limit', () => {

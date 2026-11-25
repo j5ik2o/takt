@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createSensitiveTextStreamRedactor, sanitizeSensitiveText } from '../shared/utils/sensitiveText.js';
+import { Phase1ExecutionLog } from '../core/workflow/phase1-execution-log.js';
+import {
+  createSensitiveTextStreamRedactor,
+  MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES,
+  sanitizeSensitiveText,
+  sanitizeSensitiveTextWithKnownValues,
+} from '../shared/utils/sensitiveText.js';
 
 describe('sanitizeSensitiveText performance', () => {
   it('sanitizes a 64KiB uniform alphanumeric run without quadratic blowup', () => {
@@ -64,6 +70,9 @@ describe('sanitizeSensitiveText performance', () => {
     ['colons only without an @', 'https://', ':'],
     ['a password of @-separated words', 'https://user:pass', '@a'],
     ['a password of @ only', 'https://user:pass', '@'],
+    ['a leading-@ password without a closing @', 'https://user:@', 'a'],
+    ['a leading-@ password of @-separated words', 'https://user:', '@a'],
+    ['a leading-@ password of @ only', 'https://user:@', '@'],
     ['a scheme behind a run of digits and hyphens', '', '1-'],
   ])('stays linear on a URL followed by %s', (_name, head, unit) => {
     const elapsed = (bytes: number): number => {
@@ -88,6 +97,21 @@ describe('sensitive text stream redactor performance', () => {
       (bytes: number) => ({ text: 'https://u:' + 'p@'.repeat(bytes / 2) + 'host\n', source: {} })],
     ['a long known value',
       (bytes: number) => ({ text: 'p@'.repeat(bytes / 2) + '\n', source: { token: 'p@'.repeat(bytes / 2) } })],
+    ['a tracked 4KiB @-containing URL password echoed in long output',
+      (bytes: number) => {
+        const password = 'p@'.repeat(2 * 1024);
+        const line = `https://u:${password}@host\n`;
+        const pad = 'a@'.repeat(Math.max(1, Math.floor((bytes - line.length) / 2))) + '\n';
+        return { text: line + pad, source: {} };
+      }],
+    ['a tracked max-sized known value against long output',
+      (bytes: number) => {
+        const value = 'p@'.repeat(MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES / 2 - 1) + 'X!';
+        return {
+          text: 'p@'.repeat(bytes / 2) + '\n',
+          source: { token: value },
+        };
+      }],
   ])('stays linear on %s', (_name, input) => {
     const elapsed = (bytes: number): number => {
       const { text, source } = input(bytes);
@@ -96,6 +120,41 @@ describe('sensitive text stream redactor performance', () => {
       redactor.write(text, source);
       redactor.flush(source);
       return performance.now() - start;
+    };
+    elapsed(1024); // warm up regexes and JIT
+
+    expect(elapsed(64 * 1024)).toBeLessThan(500);
+    expect(elapsed(256 * 1024)).toBeLessThan(2000);
+  });
+
+  it('keeps sanitizeSensitiveTextWithKnownValues linear on overlapping copies of a repetitive long URL password', () => {
+    const elapsed = (bytes: number): number => {
+      const password = 'x@'.repeat(bytes / 2);
+      const url = `https://u:${password}@host`;
+      const text = `echoed ${password.repeat(2)}`;
+      const start = performance.now();
+      const masked = sanitizeSensitiveTextWithKnownValues(text, { command: url });
+      const duration = performance.now() - start;
+      expect(masked).toBe('echoed [REDACTED]');
+      return duration;
+    };
+    elapsed(1024); // warm up regexes and JIT
+
+    expect(elapsed(64 * 1024)).toBeLessThan(500);
+    expect(elapsed(256 * 1024)).toBeLessThan(2000);
+  });
+
+  it('keeps Phase1ExecutionLog linear on consecutive echoes of a repetitive long URL password', () => {
+    const elapsed = (bytes: number): number => {
+      const password = 'x@'.repeat(bytes / 2);
+      const log = new Phase1ExecutionLog();
+      log.recordEvent({ type: 'text', data: { text: `https://u:${password}@host\n` } });
+      log.recordEvent({ type: 'text', data: { text: password.repeat(3) } });
+      const start = performance.now();
+      const output = log.toReportInput();
+      const duration = performance.now() - start;
+      expect(output).not.toContain('x@x@x@');
+      return duration;
     };
     elapsed(1024); // warm up regexes and JIT
 

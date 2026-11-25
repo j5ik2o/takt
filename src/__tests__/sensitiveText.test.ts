@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createBoundedSensitiveValues,
   MAX_INSPECTED_BYTES_PER_SOURCE,
+  MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES,
   MAX_TRACKED_SENSITIVE_VALUE_BYTES,
   MAX_TRACKED_SENSITIVE_VALUES,
   createSensitiveTextStreamRedactor,
@@ -47,6 +48,9 @@ describe('sensitiveText', () => {
     ['an empty user', 'redis://:pa55-word@host:6379/0', 'redis://[REDACTED]@host:6379/0'],
     ['an @ in the password', 'https://user:p@ss@host/path', 'https://[REDACTED]@host/path'],
     ['several @ in the password', 'https://user:p@s@s@host', 'https://[REDACTED]@host'],
+    ['an @ at the start of the password', 'https://user:@pass@host', 'https://[REDACTED]@host'],
+    ['a single @ as the password', 'https://user:@@host', 'https://[REDACTED]@host'],
+    ['an empty user and a leading @ in the password', 'redis://:@pass@host', 'redis://[REDACTED]@host'],
     ['an @ at the end of the password', 'https://user:pass@@host', 'https://[REDACTED]@host'],
     ['an empty user and an @ in the password', 'redis://:p@ss@host', 'redis://[REDACTED]@host'],
   ])('redacts URL userinfo with %s', (_name, text, expected) => {
@@ -120,7 +124,57 @@ describe('sensitiveText', () => {
     redactor.write('clone https://u:pa55-word@' + 'x@'.repeat(300 * 1024) + 'host failed\n', {});
     redactor.write('token=later-secret-value\n', {});
 
+    expect(redactor.sensitiveValues.exhausted).toBe(false);
+    expect(redactor.sensitiveValues.hasUntrackedValues).toBe(true);
+    expect(redactor.sensitiveValues.skippedValueCount).toBeGreaterThan(0);
     expect(redactor.write('echoed later-secret-value\n', {})).toBe('echoed [REDACTED]\n');
+  });
+
+  it('keeps tracking a later secret after a near-1MiB @ run follows a URL password in a stream', () => {
+    const redactor = createSensitiveTextStreamRedactor();
+    const nearBudgetRun = 'x@'.repeat(Math.floor((MAX_TRACKED_SENSITIVE_VALUE_BYTES - 64) / 2));
+    redactor.write(`clone https://u:pa55-word@${nearBudgetRun}host failed\n`, {});
+    redactor.write('token=later-secret-value\n', {});
+
+    expect(redactor.sensitiveValues.exhausted).toBe(false);
+    expect(redactor.sensitiveValues.hasUntrackedValues).toBe(true);
+    expect(redactor.sensitiveValues.skippedValueCount).toBeGreaterThan(0);
+    expect(redactor.sensitiveValues.storedValueBytes).toBeLessThan(1024);
+    expect(redactor.write('echoed pa55-word and later-secret-value\n', {})).toBe('echoed [REDACTED] and [REDACTED]\n');
+  });
+
+  it.each([
+    ['257-character password containing @', `pa55@${'a'.repeat(244)}TAIL_257`],
+    ['4096-character password containing @', `pa55@${'b'.repeat(4082)}TAIL_4096`],
+    ['257-character password starting with @', `@${'c'.repeat(248)}TAIL_AT1`],
+  ])('redacts a %s where it is echoed later and in a stream', (_name, password) => {
+    const url = `https://longuser:${password}@host/repo.git`;
+    const command = `clone ${url} failed\n`;
+    const redactor = createSensitiveTextStreamRedactor();
+
+    expect(sanitizeSensitiveText(url)).toBe('https://[REDACTED]@host/repo.git');
+    expect(sanitizeSensitiveTextWithKnownValues(`echoed ${password}`, { command })).toBe('echoed [REDACTED]');
+    expect(sanitizeSensitiveTextWithKnownValues('longuser: kept', { command })).toBe('longuser: kept');
+    expect(redactor.write(command, {})).toBe('clone https://[REDACTED]@host/repo.git failed\n');
+    expect(redactor.write(`echoed ${password}\n`, {})).toBe('echoed [REDACTED]\n');
+    expect(redactor.sensitiveValues.exhausted).toBe(false);
+    expect(redactor.sensitiveValues.hasUntrackedValues).toBe(false);
+  });
+
+  it('tracks a 257-character password with @ even when an oversized username pushes userinfo over the single-value limit', () => {
+    const password = `pa55@${'d'.repeat(244)}TAIL_USR`;
+    const longUser = 'u'.repeat(MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES + 128);
+    const command = `clone https://${longUser}:${password}@host failed\n`;
+    const redactor = createSensitiveTextStreamRedactor();
+    redactor.write(command, {});
+    redactor.write('token=later-secret-value\n', {});
+
+    expect(sanitizeSensitiveTextWithKnownValues(`echoed ${password}`, { command })).toBe('echoed [REDACTED]');
+    expect(redactor.write(`echoed ${password}\n`, {})).toBe('echoed [REDACTED]\n');
+    expect(redactor.write('echoed later-secret-value\n', {})).toBe('echoed [REDACTED]\n');
+    expect(redactor.sensitiveValues.exhausted).toBe(false);
+    expect(redactor.sensitiveValues.hasUntrackedValues).toBe(true);
+    expect(redactor.sensitiveValues.skippedValueCount).toBeGreaterThan(0);
   });
 
   // Known limit: a scheme is ASCII letters, digits, `+`, `-` and `.` with at least one letter.
@@ -587,19 +641,82 @@ describe('sensitiveText', () => {
     expect(bounded.values.size).toBe(MAX_TRACKED_SENSITIVE_VALUES);
   });
 
-  it('accepts exactly 1MiB of retained sensitive candidate bytes', () => {
+  it('accepts a single sensitive candidate up to the per-value byte limit', () => {
     const bounded = createBoundedSensitiveValues();
-    bounded.collect({ token: 'x'.repeat(MAX_TRACKED_SENSITIVE_VALUE_BYTES) });
+    bounded.collect({ token: 'x'.repeat(MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES) });
 
     expect(bounded.exhausted).toBe(false);
-    expect(bounded.storedValueBytes).toBe(MAX_TRACKED_SENSITIVE_VALUE_BYTES);
+    expect(bounded.hasUntrackedValues).toBe(false);
+    expect(bounded.skippedValueCount).toBe(0);
+    expect(bounded.storedValueBytes).toBe(MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES);
   });
 
-  it('accepts exactly 16MiB from one inspected source', () => {
+  it('skips a single candidate exceeding the per-value byte limit without starving later values', () => {
+    const bounded = createBoundedSensitiveValues();
+    const oversized = 'x'.repeat(MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES + 1);
+    bounded.collect({ token: oversized });
+    bounded.collect({ token: 'later-secret-value' });
+
+    expect(bounded.exhausted).toBe(false);
+    expect(bounded.hasUntrackedValues).toBe(true);
+    expect(bounded.skippedValueCount).toBe(1);
+    expect(bounded.skippedValueBytes).toBe(MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES + 1);
+    expect(bounded.values.has(oversized)).toBe(false);
+    expect(bounded.values.has('later-secret-value')).toBe(true);
+  });
+
+  it('does not inflate skipped counters when two BoundedSensitiveValues sync repeatedly', () => {
+    const primary = createBoundedSensitiveValues();
+    const mirror = createBoundedSensitiveValues();
+    const oversized = 'x'.repeat(MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES + 1);
+    primary.collect({ token: oversized });
+    primary.collect({ token: 'normal-secret' });
+
+    for (let i = 0; i < 5; i += 1) {
+      mirror.collect(primary);
+      primary.collect(mirror);
+    }
+
+    expect(primary.skippedValueCount).toBe(1);
+    expect(primary.skippedValueBytes).toBe(MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES + 1);
+    expect(primary.hasUntrackedValues).toBe(true);
+    expect(mirror.skippedValueCount).toBe(0);
+    expect(mirror.skippedValueBytes).toBe(0);
+    expect(mirror.hasUntrackedValues).toBe(true);
+    expect(mirror.values.has('normal-secret')).toBe(true);
+  });
+
+  it('accepts exactly 1MiB of retained sensitive candidate bytes across bounded values', () => {
+    const bounded = createBoundedSensitiveValues();
+    const count = MAX_TRACKED_SENSITIVE_VALUE_BYTES / MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES;
+    bounded.collect({
+      token: Array.from({ length: count }, (_, index) => {
+        const prefix = `s${String(index).padStart(3, '0')}-`;
+        return prefix + 'x'.repeat(MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES - prefix.length);
+      }),
+    });
+
+    expect(bounded.exhausted).toBe(false);
+    expect(bounded.hasUntrackedValues).toBe(false);
+    expect(bounded.storedValueBytes).toBe(MAX_TRACKED_SENSITIVE_VALUE_BYTES);
+
+    bounded.collect({ token: 'overflow-after-full' });
+    expect(bounded.exhausted).toBe(true);
+    expect(bounded.hasUntrackedValues).toBe(true);
+  });
+
+  it('accepts exactly 16MiB from one inspected source and records truncation beyond it', () => {
     const bounded = createBoundedSensitiveValues();
     bounded.collect('x'.repeat(MAX_INSPECTED_BYTES_PER_SOURCE));
 
     expect(bounded.exhausted).toBe(false);
+    expect(bounded.hasUntrackedValues).toBe(false);
+    expect(bounded.truncatedSourceCount).toBe(0);
+
+    bounded.collect('x'.repeat(MAX_INSPECTED_BYTES_PER_SOURCE + 1));
+    expect(bounded.exhausted).toBe(false);
+    expect(bounded.hasUntrackedValues).toBe(true);
+    expect(bounded.truncatedSourceCount).toBe(1);
   });
 
   it('redacts sensitive-key values when repeated in sibling, nested, and array fields', () => {

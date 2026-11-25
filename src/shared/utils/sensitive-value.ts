@@ -9,33 +9,72 @@ import {
 const MAX_SENSITIVE_VALUE_NODES = 10_000;
 export const MAX_TRACKED_SENSITIVE_VALUES = 1_024;
 export const MAX_TRACKED_SENSITIVE_VALUE_BYTES = 1024 * 1024;
+export const MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES = 16 * 1024;
 export const MAX_INSPECTED_BYTES_PER_SOURCE = 16 * 1024 * 1024;
 
 export interface SensitiveValues {
   values: Set<string>;
   inspectedBytes: number;
+  truncated: boolean;
 }
 
 /**
  * 予算は「検査した量」ではなく「保持している機密候補」に課金する。
  * Write/Edit 本文などの非機密の大きな入力でも、候補を増やさず継続できる。
- * 上限を超えた候補は追跡しない。サイズを秘密値の根拠にして全出力を伏せない。
+ * 1 候補あたりの上限または合計バイト残量を超える候補はその候補だけを見送り、
+ * 後続の別の秘密値の追跡は止めない（見送った件数・バイト数で追跡不能を記録する）。
+ * 件数上限または合計バイト満杯に達して新規候補を一切保持できないときだけ exhausted にする。
  * 1 つの入力の検査上限（バイト・ノード数）は走査コストのためのもので、超えた入力も
- * それまでに集めた候補を追加し、以後の入力の追跡は止めない。
+ * それまでに集めた候補を追加し、打ち切り回数を記録したうえで以後の入力の追跡は止めない。
  */
 export class BoundedSensitiveValues {
   readonly values = new Set<string>();
   exhausted = false;
   storedValueBytes = 0;
+  skippedValueCount = 0;
+  skippedValueBytes = 0;
+  truncatedSourceCount = 0;
+  private inheritedUntrackedValues = false;
+
+  get hasUntrackedValues(): boolean {
+    return (
+      this.exhausted
+      || this.skippedValueCount > 0
+      || this.truncatedSourceCount > 0
+      || this.inheritedUntrackedValues
+    );
+  }
+
   collect(source: unknown): void {
-    if (this.exhausted) return;
+    if (source === this || this.exhausted) return;
+    const isBoundedSource = source instanceof BoundedSensitiveValues;
+    if (isBoundedSource && source.hasUntrackedValues) {
+      this.inheritedUntrackedValues = true;
+    }
     const collected = collectSensitiveStringValues(source, MAX_INSPECTED_BYTES_PER_SOURCE);
+    if (!isBoundedSource && collected.truncated) {
+      this.truncatedSourceCount += 1;
+    }
     for (const value of collected.values) {
       if (this.values.has(value)) continue;
+      if (this.values.size >= MAX_TRACKED_SENSITIVE_VALUES || this.storedValueBytes >= MAX_TRACKED_SENSITIVE_VALUE_BYTES) {
+        this.exhausted = true;
+        break;
+      }
       const bytes = Buffer.byteLength(value, 'utf8');
-      if (this.values.size >= MAX_TRACKED_SENSITIVE_VALUES) { this.exhausted = true; break; }
-      if (this.storedValueBytes + bytes > MAX_TRACKED_SENSITIVE_VALUE_BYTES) { this.exhausted = true; break; }
-      this.values.add(value); this.storedValueBytes += bytes;
+      if (
+        bytes > MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES
+        || this.storedValueBytes + bytes > MAX_TRACKED_SENSITIVE_VALUE_BYTES
+      ) {
+        this.skippedValueCount += 1;
+        this.skippedValueBytes += bytes;
+        continue;
+      }
+      this.values.add(value);
+      this.storedValueBytes += bytes;
+    }
+    if (isBoundedSource && source.exhausted) {
+      this.exhausted = true;
     }
   }
 
@@ -43,6 +82,10 @@ export class BoundedSensitiveValues {
     this.values.clear();
     this.exhausted = false;
     this.storedValueBytes = 0;
+    this.skippedValueCount = 0;
+    this.skippedValueBytes = 0;
+    this.truncatedSourceCount = 0;
+    this.inheritedUntrackedValues = false;
   }
 }
 
@@ -173,9 +216,10 @@ export function collectSensitiveStringValues(
     return {
       values: new Set(source.values),
       inspectedBytes: 0,
+      truncated: source.hasUntrackedValues,
     };
   }
-  const result: SensitiveValues = { values: new Set(), inspectedBytes: 0 };
+  const result: SensitiveValues = { values: new Set(), inspectedBytes: 0, truncated: false };
   const work: ValueWorkItem[] = [{ value: source, sensitiveContext: false }];
   const seen = new WeakSet<object>();
   let visitedNodes = 0;
@@ -191,6 +235,7 @@ export function collectSensitiveStringValues(
     if (typeof item.value === 'string') {
       result.inspectedBytes += Buffer.byteLength(item.value);
       if (result.inspectedBytes > maxInspectedBytes) {
+        result.truncated = true;
         break;
       }
       if (sensitiveContext) {
@@ -200,6 +245,7 @@ export function collectSensitiveStringValues(
       continue;
     }
     if (result.inspectedBytes > maxInspectedBytes) {
+      result.truncated = true;
       break;
     }
     if (item.value === null || typeof item.value !== 'object' || seen.has(item.value)) {
@@ -210,6 +256,7 @@ export function collectSensitiveStringValues(
       MAX_SENSITIVE_VALUE_NODES - visitedNodes - work.length,
     );
     if (entries === undefined) {
+      result.truncated = true;
       break;
     }
     seen.add(item.value);

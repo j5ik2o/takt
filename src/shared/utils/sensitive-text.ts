@@ -64,11 +64,11 @@ const HTTP_HEADER_PREFIX_REGEX = /\b(Authorization|(?:Set-)?Cookie)\s*:\s*/gi;
 // of scheme characters, so `1-http://`, `9http://` and `_http://` all count.
 // The user ends at the first colon and may be empty (`redis://:password@host`): trying each
 // colon as the separator rescans the rest of a colon-separated run every time.
-// The password runs to the last `@` of the authority, so an unencoded `@` in it stays hidden.
-// Past the first `@` it stops at quotes, commas and brackets, which keeps the host and a later
-// address readable in `"https://user:pass@host","admin@example.test"`.
-const URL_USERINFO_CREDENTIALS_REGEX = /(:\/\/)(?<=[A-Za-z][0-9+.-]*:\/\/)([^/?#\s@:]*:[^/?#\s@]+(?:@[^/?#\s@"'`,<>()[\]{}]*)*)@/g;
-const MAX_TRACKED_URL_CREDENTIAL_LENGTH = 256;
+// The password is non-empty, may start with `@`, and runs to the last `@` of the authority so
+// unencoded `@` characters in it stay hidden. Past the first `@` a single character class (not
+// a repeated group) keeps long `@` runs in bounded regexp stack and stops at quotes, commas and
+// brackets, keeping the host and a later address readable in `"https://user:pass@host","admin@example.test"`.
+const URL_USERINFO_CREDENTIALS_REGEX = /(:\/\/)(?<=[A-Za-z][0-9+.-]*:\/\/)([^/?#\s@:]*:(?:[^/?#\s@]+(?:@[^/?#\s"'`,<>()[\]{}]*)?|@[^/?#\s"'`,<>()[\]{}]*))@/g;
 const CURL_USER_VALUE_PATTERN = [
   String.raw`(?<=\\")(?!\+)[^":]*:[^"]*?(?=\\")`,
   String.raw`"(?!\+)[^":]*:[^"]*"`,
@@ -253,18 +253,21 @@ export function collectEmbeddedSensitiveValues(text: string, values: Set<string>
       addCredentialComponents(values, userinfo);
       continue;
     }
+    const separator = userinfo.indexOf(':');
     // The userinfo may run past an `@` that ends the password, as in
-    // `https://u:secret@db;owner=ops@example.test`. The part up to the first `@` goes first, and
-    // only that part is split like a cookie: past the first `@`, `owner=ops` is not a credential.
-    addSensitiveValue(values, userinfo.slice(0, firstAt));
-    addCredentialComponents(values, userinfo.slice(0, firstAt));
-    // The whole userinfo and the whole password also cover a password with an unencoded `@`. Each
-    // is tracked for later output only up to a length limit, checked on its own so that a long user
-    // does not drop a short password. A longer one is still hidden where it appears; tracking it
-    // would use up the bounded budget of tracked values and stop the tracking of every later value.
-    if (userinfo.length <= MAX_TRACKED_URL_CREDENTIAL_LENGTH) addSensitiveValue(values, userinfo);
-    const password = userinfo.slice(userinfo.indexOf(':') + 1);
-    if (password.length > 0 && password.length <= MAX_TRACKED_URL_CREDENTIAL_LENGTH) values.add(password);
+    // `https://u:secret@db;owner=ops@example.test`. The part up to the first `@` goes first when
+    // the password does not start with `@`, and only that part is split like a cookie: past the
+    // first `@`, `owner=ops` is not a credential.
+    if (firstAt > separator + 1) {
+      addSensitiveValue(values, userinfo.slice(0, firstAt));
+      addCredentialComponents(values, userinfo.slice(0, firstAt));
+    }
+    // The whole password and whole userinfo also cover a password with an unencoded `@`.
+    // Adding the password before the full userinfo lets bounded trackers keep a shorter password
+    // even when a long username pushes the full userinfo over the per-value byte limit.
+    const password = userinfo.slice(separator + 1);
+    if (password.length > 0) values.add(password);
+    addSensitiveValue(values, userinfo);
   }
   addMatches(text, CURL_USER_EQUALS_REGEX, 2, values, true);
   addMatches(text, CURL_USER_SPACE_REGEX, 2, values, true);
@@ -419,8 +422,44 @@ function knownValueRanges(text: string, values: ReadonlySet<string>): SensitiveR
 export function substringSensitiveRanges(text: string, values: Iterable<string>): SensitiveRange[] {
   const ranges: SensitiveRange[] = [];
   for (const value of values) {
-    if (value === '') continue;
-    for (let start = text.indexOf(value); start >= 0; start = text.indexOf(value, start + 1)) ranges.push({ start, end: start + value.length });
+    const length = value.length;
+    if (length === 0 || length > text.length) continue;
+    const first = text.indexOf(value);
+    if (first < 0) continue;
+    let spanStart = first;
+    let spanEnd = first + length;
+    if (spanEnd === text.length) {
+      ranges.push({ start: spanStart, end: spanEnd });
+      continue;
+    }
+    // KMP with on-the-fly span merging keeps overlapping copies of a long repetitive value
+    // linear in O(|text| + |value|) instead of quadratic repeated indexOf(value, start + 1).
+    const failure = new Int32Array(length);
+    for (let i = 1, k = 0; i < length; i++) {
+      while (k > 0 && value[i] !== value[k]) k = failure[k - 1]!;
+      if (value[i] === value[k]) k++;
+      failure[i] = k;
+    }
+    let matched = failure[length - 1]!;
+    for (let i = spanEnd; i < text.length; i++) {
+      while (matched > 0 && text[i] !== value[matched]) matched = failure[matched - 1]!;
+      if (text[i] === value[matched]) {
+        matched++;
+        if (matched === length) {
+          const matchStart = i + 1 - length;
+          const matchEnd = i + 1;
+          if (matchStart <= spanEnd) {
+            spanEnd = matchEnd;
+          } else {
+            ranges.push({ start: spanStart, end: spanEnd });
+            spanStart = matchStart;
+            spanEnd = matchEnd;
+          }
+          matched = failure[matched - 1]!;
+        }
+      }
+    }
+    ranges.push({ start: spanStart, end: spanEnd });
   }
   return ranges;
 }
