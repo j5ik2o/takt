@@ -29,3 +29,12 @@ quality-gates/logs/
 !facets/instructions/**
 !facets/output-contracts/
 !facets/output-contracts/**
+
+# Task finish hook (notify Orca when a TAKT task ends); logs stay local
+!notify-orca.json
+!scripts/
+!scripts/**
+__pycache__/
+*.pyc
+notify-orca.log
+notify-orca.stderr

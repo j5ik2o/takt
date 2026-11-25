@@ -59,3 +59,14 @@ rate_limit_fallback:
   switch_chain:
     - provider: opencode
       model: dgx/deepseek-v4.1-flash
+
+# キューのタスクの最終状態（完了・失敗・中断・PR 失敗・工程の上限）を保存した後、
+# 再開位置を変えずに Orca の担当ボットへ知らせる。作業ディレクトリはプロジェクトルート。
+# 終わり方と run・タスク・ゴールの情報は TAKT_FINISH_* の環境変数で渡る。
+# 宛先は .takt/notify-orca.json の default_bot、またはタスクの指示文の `orca: bot=<名前> item=<番号>`。
+# 通知のスクリプトは orca を 10 秒で打ち切り、どんな失敗でも終了コード 0 で終わる。
+# task_finish_hook を知らない古い TAKT はこの設定を読めず、設定エラーにする。
+# TAKT の版を戻すときは、先にこのキーを消す。
+task_finish_hook:
+  command: [python3, .takt/scripts/notify_orca.py]
+  timeout_ms: 15000
