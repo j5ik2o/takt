@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
-import { sanitizeSensitiveValueWithStringReplacer } from '../../shared/utils/sensitive-value.js';
+import {
+  sanitizeSensitiveValueWithStringReplacer,
+  sanitizeSensitiveValueWithStringReplacerAndKnownValues,
+} from '../../shared/utils/sensitive-value.js';
 
 const TOOL_CONTENT_INPUT_KEYS = new Map<string, ReadonlySet<string>>([
   ['edit', new Set(['oldstring', 'newstring'])],
@@ -19,19 +22,26 @@ function describeToolContent(value: string): ToolContentDescriptor {
   };
 }
 
+/**
+ * `known.source`: also hide the values tracked from it, in the same pass. Masking the sanitized
+ * input once more with those values instead chains two maskings, and the previous implementation
+ * hid more there than a single new pass would (#151).
+ */
 export function sanitizeOpenCodeToolInput(
   value: Record<string, unknown>,
   tool?: string,
+  known?: { readonly source: unknown },
 ): Record<string, unknown> {
   const toolContentKeys = tool === undefined
     ? undefined
     : TOOL_CONTENT_INPUT_KEYS.get(tool.toLowerCase());
-  const sanitized = sanitizeSensitiveValueWithStringReplacer(
-    value,
-    (text, key) => key !== undefined && toolContentKeys?.has(key.toLowerCase()) === true
+  const replacer = (text: string, key: string | undefined): { value: ToolContentDescriptor } | undefined =>
+    key !== undefined && toolContentKeys?.has(key.toLowerCase()) === true
       ? { value: describeToolContent(text) }
-      : undefined,
-  );
+      : undefined;
+  const sanitized = known === undefined
+    ? sanitizeSensitiveValueWithStringReplacer(value, replacer)
+    : sanitizeSensitiveValueWithStringReplacerAndKnownValues(value, replacer, known.source);
   return sanitized !== null && typeof sanitized === 'object' && !Array.isArray(sanitized)
     ? sanitized as Record<string, unknown>
     : { redacted: sanitized };
