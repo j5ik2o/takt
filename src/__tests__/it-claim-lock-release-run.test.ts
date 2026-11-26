@@ -18,6 +18,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
+import { scaledMs } from '../../scripts/test-time-factor.mjs';
 
 const require = createRequire(import.meta.url);
 const repositoryRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)));
@@ -75,7 +76,8 @@ it('runs the claimed task and ends normally when the tasks.yaml.lock release aft
   const child = spawnSync(process.execPath, [
     '--import', tsxUrl, '--import', pathToFileURL(preload).href, cliEntry, 'run', '--provider', 'mock',
   ], {
-    cwd: dir, encoding: 'utf8', timeout: 120_000,
+    // Devin (PR #182): limits this test owns follow TEST_TIME_FACTOR, as CONTRIBUTING.md asks.
+    cwd: dir, encoding: 'utf8', timeout: scaledMs(120_000),
     env: { ...process.env, TAKT_NO_TTY: '1', TAKT_MOCK_SCENARIO: scenario },
   });
   const output = `${child.stdout}\n${child.stderr}`;
@@ -87,4 +89,4 @@ it('runs the claimed task and ends normally when the tasks.yaml.lock release aft
   expect(saved.tasks.map((task) => [task.name, task.status])).toEqual([['claimed-task', 'completed']]);
   // The lock left by the failed release was removed by this process's next acquisition.
   expect(existsSync(join(dir, '.takt', 'tasks.yaml.lock'))).toBe(false);
-}, 150_000);
+}, scaledMs(150_000));

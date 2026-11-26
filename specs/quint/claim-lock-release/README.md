@@ -37,7 +37,7 @@ long-lived manager/daemon process (M) share `tasks.yaml` and its locks. Design:
   (the first read in `recoverStaleLock`) or `SecondReadFails` (the re-read just before the unlink);
   the next read succeeds. The acquisition then ends as `UnreadableWait` (the record is kept and the
   acquisition waits under the rule for an unreadable lock, which removes it once older than
-  `STALE_MS`; a bounded wait, not counted as a self-wait), `RecordLost` (the record is dropped
+  `STALE_MS`; a wait that lasts only while the file cannot be read, not counted as a self-wait), `RecordLost` (the record is dropped
   without removing the file; from then on the process waits on itself), or `ReadFailed` (the read
   error is thrown; claiming stops with `ReadStop`).
 - Notifications are split: the finish hook (`hooks`; needed by a claim's setup failure and an
@@ -71,7 +71,11 @@ Not modelled:
   its active tasks settle (`parallelExecution.ts:257-259`), so other processes wait longer for
   dead-owner recovery than in the model. This does not change any safety property.
 - How long `UnreadableWait` lasts: the rule for an unreadable lock (`STALE_MS`) is not modelled; the
-  wait is a retryable timeout, as for any held lock.
+  wait is a retryable timeout, as for any held lock. `STALE_MS` is when the removal attempts start,
+  not a bound: a round where only one of its two reads fails removes nothing (design 3-3).
+- A lock that someone else replaced (`Gone`) held by its new owner: each operation is one atomic
+  step, so that owner's lock ends with its own step and its own release outcome. Waiting on it in
+  between is a retryable timeout, which `Timeout` already models.
 - The immediate retry after removing an own lock file (design 3-1 / 3-2) and clearing the record on
   a direct acquisition: an acquisition is one atomic step here. Unit tests cover them.
 - The finish hook when the project has no `task_finish_hook` (no re-read happens then).
@@ -89,7 +93,7 @@ Not modelled:
 | `noLostNotice` | Every task an operation saved as failed gets each notification it needs (finish hook, manager completion event) exactly once, whatever the release did. |
 | `noDuplicateNotice` / `noFalseNotice` | Each at most once, and only for a task an operation that needs it saved as failed. |
 | `releaseFailureReported` | A release after a write that did not remove the lock cleanly (an unreadable own file included) is warned or thrown to the caller; never silent. |
-| `noSelfWait` | No process waits on a lock file it left behind itself, except while a recorded one cannot be read (`UnreadableWait`, bounded by `STALE_MS`). |
+| `noSelfWait` | No process waits on a lock file it left behind itself, except while a recorded one cannot be read (`UnreadableWait`; from `STALE_MS` on, the rule for an unreadable lock tries to remove it). |
 | `stopsOnlyWhenUnlinkFails` | On the write path, claiming stops only when a lock file cannot be removed; a read that fails once does not stop it. |
 | `noFalseCleanEnd` | `takt run` never ends normally while a task it saved as running has not run. |
 
@@ -105,6 +109,6 @@ Run from this directory. quint 0.32.0.
 | `quint test claimLockRelease_test.qnt --main secondDesignTest` | 4 passing |
 | `quint test claimLockRelease_test.qnt --main fixedTest` | 14 passing |
 | `quint run claimLockRelease.qnt --main <m> --invariant <inv> --max-samples 3000 --max-steps 12 --seed 0x2a` (9 invariants × 5 instances) | `current`: `noOrphanRunning`, `noLostNotice`, `releaseFailureReported`, `noSelfWait`, `stopsOnlyWhenUnlinkFails` violated; the other four hold (`noFalseCleanEnd` holds: the run fails instead). `returnOnly` and `firstDesign`: `noLostNotice`, `releaseFailureReported`, `noSelfWait` violated. `secondDesign`: `noOrphanRunning`, `noSelfWait`, `stopsOnlyWhenUnlinkFails` violated (`noOrphanRunning` because a run stopped by a read failure leaves its claimed tasks). `fixed`: no violation. |
-| `quint run claimLockRelease.qnt --main fixed --invariant safety --max-samples 10000 --max-steps 15 --seed 0x2a --witnesses …` (13 witnesses) | No violation. Every witness reached: the fewest is `wTaskRanAfterReleaseFailure` in 2,318 traces; `wSelfRecovered` 3,101, `wWaitedOnUnreadableOwn` 4,641, `wHookAfterStuckForGood` 4,855, `wRunEndedAfterReleaseFailure` 2,688. |
-| `quint verify --main fixed --invariant safety --max-steps 5` | No violation (98 s). Every counterexample below is at most 3 steps deep. (The glitches add branching; 6 steps took 282 s before them and was not rerun.) |
+| `quint run claimLockRelease.qnt --main fixed --invariant safety --max-samples 10000 --max-steps 15 --seed 0x2a --witnesses …` (13 witnesses) | No violation. Every witness reached: the fewest is `wRunEndedAfterReleaseFailure` in 671 traces; `wTaskRanAfterReleaseFailure` 1,844, `wSelfRecovered` 3,101, `wUnseenReported` 4,223, `wWaitedOnUnreadableOwn` 4,641, `wHookAfterStuckForGood` 4,855. The two ghosts tie witnesses to their fault: `heldAfterReleaseFailure` (the tasks a claim queued when its release failed) for `wTaskRanAfterReleaseFailure` / `wRunEndedAfterReleaseFailure`, and `lastRelease` (outcome and report of the last release) for `wUnseenReported`. |
+| `quint verify --main fixed --invariant safety --max-steps 5` | No violation (118 s). Every counterexample below is at most 3 steps deep. (The glitches add branching; 6 steps took 282 s before them and was not rerun.) |
 | `quint verify --max-steps 4` on the old shapes | `secondDesign`: `noSelfWait`, `stopsOnlyWhenUnlinkFails`; `firstDesign`: `noLostNotice` — each gives a counterexample (7–8 s each). Earlier runs also checked `firstDesign` `releaseFailureReported` / `noSelfWait`, `current` `noOrphanRunning`, `returnOnly` `noSelfWait`. So `verify` is not vacuous. |

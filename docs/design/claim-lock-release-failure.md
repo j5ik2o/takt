@@ -95,7 +95,7 @@ Saved .takt/tasks.yaml, but releasing a lock afterwards failed: <detail>. This p
 
 #### 3-1. `file-lock.ts`（`tasks.yaml.lock`）
 
-- 解放で読めない自分のファイルを、黙って残さない（設計レビュー 高-2）。`readSnapshot` は、開くときの EACCES・EPERM と読むときの例外を、`content: undefined` に加えて `readError` として返す（他人のロックの扱いは今のまま。読めない他人のロックは、`STALE_MS` を過ぎてから回収する）。解放（`withFileLock` の `finally`）は、`unlinkSnapshot` の代わりに `releaseLock(path, acquired)` を呼ぶ。
+- 解放で読めない自分のファイルを、黙って残さない（設計レビュー 高-2）。`readSnapshot` は、開くときの EACCES・EPERM・EIO と読むときの例外を、`content: undefined` に加えて `readError` として返す（開くときの EIO は PR #182 の CodeRabbit の指摘で足した。投げると、記録した自分のファイルを一度開けなかっただけで claim が止まり、中-B と同じ穴になる。他人のロックの扱いは今のまま。読めない他人のロックは、`STALE_MS` を過ぎてから回収する）。解放（`withFileLock` の `finally`）は、`unlinkSnapshot` の代わりに `releaseLock(path, acquired)` を呼ぶ。
   - ファイルが無い: 何もしない（今と同じ。ロックは残っていない）。
   - dev・ino が取ったときと違う: 置き換わったので、何もしない（今と同じ）。
   - dev・ino が同じで、読めない（`readError` がある）: `readError` を投げる。
@@ -106,7 +106,7 @@ Saved .takt/tasks.yaml, but releasing a lock afterwards failed: <detail>. This p
 - 回収: `recoverStaleLock` は、そのパスに記録があれば、`removeRecordedLock(path, record)` を呼ぶ。これは `unlinkSnapshot` を使わない。`unlinkSnapshot` は読み直しに失敗すると黙って戻るので、外せたかが分からない（再レビュー 中-A）。`removeRecordedLock` は1回読み、`releaseLock` と同じ場合分けで決め、「外した」「待つ」「記録と違う」のどれかを返す。
   - ファイルが無い: 記録を消し、「外した」を返す（すぐ取り直す）。
   - dev・ino・中身が記録と一致する: 持ち主の生死を見ずに `unlinkSync` を呼ぶ。成功したか ENOENT なら、記録を消し、「外した」を返す。ENOENT 以外の失敗は、記録を残したまま投げる（3-3）。
-  - dev・ino が一致して読めない（`readError` がある）: 投げない。記録を残し、「待つ」を返す（再レビュー 中-B）。`recoverStaleLock` は、読めないロックの今の規則に戻る（`STALE_MS` を過ぎるまで待ち、過ぎたら `unlinkSnapshot` で外す。`file-lock.ts:103-108`）。待ちのループの次の回（25 ミリ秒後）に読めれば、記録と照合して外す。
+  - dev・ino が一致して読めない（`readError` がある）: 投げない。記録を残し、「待つ」を返す（再レビュー 中-B）。`recoverStaleLock` は、読めないロックの今の規則に戻る（`STALE_MS` を過ぎるまで待ち、過ぎたら `unlinkSnapshot` で外そうとする。`file-lock.ts:103-108`）。待ちのループの次の回（25 ミリ秒後）に読めれば、記録と照合して外す。`STALE_MS` は回収を試み始めるしきい値で、回収が済むことは保証しない（3-3）。
   - それ以外（置き換わった、中身が違う）: 記録を消し、「記録と違う」を返す。`recoverStaleLock` は今の回収の判定に進む。
   - 外せたかどうかは `unlinkSync` が成功したかだけで決める。記録を消すのは、外せたときと、ファイルが無いか別のものになったと読めたときだけで、読めなかったときは消さない。
   - `unlinkSnapshot` の黙った振る舞いは、死んだ持ち主と古いロックの回収（他人のファイル）で今までどおり使う。
@@ -129,7 +129,7 @@ Saved .takt/tasks.yaml, but releasing a lock afterwards failed: <detail>. This p
 #### 3-3. 共通
 
 - 記録と一致したファイルの `unlink` が失敗したら、その例外をそのまま取得の失敗として投げる（今の死んだ持ち主の回収と同じ扱い）。claim では分類されない例外なので `preparationFailure` になり、run は失敗で終わる。何度やっても外せないロックのファイルを、時間切れの再試行で待ち続けることはなくなる。
-- 記録と一致するかを読んで確かめられないときは、投げずに待つ（3-1）。一度読めなかっただけで claim を止めない。ずっと読めなければ、記録の無いファイルと同じく `STALE_MS` の後に外れる。それまでの待ちは時間切れ（再試行の対象）になる。自分のファイルを待つのは、読めない間の最大 `STALE_MS`（30 秒）に限られる。
+- 記録と一致するかを読んで確かめられないときは、投げずに待つ（3-1）。一度読めなかっただけで claim を止めない。待ちのループの1回には読みが2つある（`recoverStaleLock` の最初の読みと、外す直前の読み直し）。両方とも読めた回は、記録と照合して外す。`STALE_MS` を過ぎた後は、両方とも読めなかった回も、記録の無いファイルと同じ規則（`unlinkSnapshot`）で外す。片方だけが読めなかった回は外さない。最初の読みが失敗して読み直しが通ると、`unlinkSnapshot` は中身が違うとみなして戻る（PR #182 の CodeRabbit の指摘）。だから `STALE_MS` は回収を試み始めるしきい値で、待ちの上限ではない。毎回どちらか片方だけが読めない状態が続けば、取得は時間切れ（再試行の対象）を繰り返す。確かめられない自分のファイルを外さないための待ちで、`noSelfWait` の例外（`UnreadableWait`）はこの待ちを指す。
 - `private-file-lock.ts` の `removeLockIfUnchanged` は真偽を返し、読みの失敗を投げる。3-1 の中-A の穴は無い。読みの失敗は今と同じく投げる（`private-file-lock.ts` の取得は、今も読みの失敗を投げる。これを待ちに変えるのは、記録の有無にかかわらない別の話なので、この直しの外）。
 - 解放と回収は、同期の `runPrivateFileExclusive` と非同期の `runPrivateFileExclusiveAsync` で共通なので、両方に効く。
 
@@ -142,7 +142,9 @@ Saved .takt/tasks.yaml, but releasing a lock afterwards failed: <detail>. This p
 ### 4. 範囲の外（変えないもの）
 
 - 読み取り（`TaskStore.read`・`listTaskStateItems`）の後の解放の失敗。`unlink` の失敗は今と同じく投げる。解放のときに自分のファイルを読めない場合（`Unseen`）は、今は黙って戻るが、3-1 の後は `readError` を投げるようになる（再レビュー 低-1）。claim の最初の読み（`claimTasks.ts:38`）で起きると、一時的な失敗でも claim は止まる。黙ってファイルを残し、自分を待ち続ける今よりはよい。何も書いていないので失われるものは無く、3節の記録で、次の取得からは自分を待たない。読みの後の解放の失敗を、止めずに警告にするのは別件にする。Quint の `stopsOnlyWhenUnlinkFails` が守るのは書き込みの経路だけである（設計レビュー 低-2）。
-- 上の4つ以外の書き込み（`GoalStore.update`、`autoRun`、merge のタスクの作成、タスクの完了の書き込みなど）の解放の失敗。今と同じく投げる。3節の記録で、プロセスが自分を待ち続けることはなくなる。
+- 上の4つ以外の書き込み（`GoalStore.update`、`autoRun`、merge のタスクの作成、タスクの完了の書き込みなど）の解放の失敗。今と同じく投げる。3節の記録で、プロセスが自分を待ち続けることはなくなる。ただし `file-lock.ts` の `Unseen` は、今は黙って戻るので、これらの書き込みでも新たに投げるようになる。そのうち、書いた後の例外で書いた結果を捨てる次の2か所は、PR #182 のレビュー（Devin）を受けて範囲に入れ、2節と同じ形で直す。
+  - タスクの追加（`saveEnqueuedTaskFile` の `publish`、`enqueuedTaskFile.ts`）: `addTask` が投げると、指示書のディレクトリを消す（`cleanupTaskSpecDirectory`）。書いた後なら消さずに投げる。tasks.yaml のタスクは実行できるまま残る。
+  - ゴールの中止・再開（`setGoalExecutionStatus`、`goals/execution.ts`）と呼び出し元（`goalExecutionOperations.ts` の `changeGoalExecution`、`conversationService.ts` の `pause_goal`・`resume_goal`・`abort_goal`）: `goal.json` を保存した後に投げると、`deleteGoalEvents`・`resumed` の知らせ・pending の無効化と終了フック・manager の起動が呼ばれない。中止はもう一度呼んでも遷移が済んでいるので取り返せない。保存した後なら、これらを済ませてから解放の例外を投げる（`reconcileLostRun` と同じ）。
 - 自分が外し損ねたロックを、自分が次に取るまでは、ほかのプロセスが待つこと。自分が終われば、死んだ持ち主のロックとして回収される。待ちの長さは、自分の次の取得か終了までになる（Quint の `otherWaitsUntilOwnerRecoversTest`）。claim を止めた `takt run` は、実行中のタスクが終わるまで生きている（`parallelExecution.ts:257-259`）ので、その間はほかのプロセスが待つ。
 - 外し損ねた直後に、すぐもう一度外してみること。次の取得で外すので、足さない。長く生きて、しばらくロックを取らないプロセス（道具の呼び出しを待つ MCP のサーバーなど）が外し損ねると、ほかのプロセスはその間ずっと待ち、`takt run` は時間切れの再試行を続ける（再レビュー 低-7）。今のコード（そのプロセスが終わるまで外れない）より悪くはならない。直後に1回だけ試しても、EIO や EACCES はすぐには直らないことが多く、待ちを縮める確かな手にならない。持ち主が生きているロックの待ちに上限を設けるのは、排他の規則を変えるので別件にする。
 - `writeAtomic` の link の経路（`rejectExisting`。`goal-execution.lock` の取得で使う）で、link が成功した後の一時ファイルの後片付けが ENOENT 以外で失敗すると、自分の token を書いたロックが公開されたまま取得が例外になり、記録もされない（`private-file.ts:146-149` と `:162-164`、`private-file-lock.ts:122-129`）。次の取得は生きている自分を待つ。取得の側の穴で、解放の失敗とは別の経路なので、別件にする（再レビュー 低-6）。
@@ -159,7 +161,7 @@ Quint の `safety` は次の9つの連言で、`fixed` で違反が無い。
 3. `noLostNotice`: 処理が failed と書いたタスクは、解放の成否にかかわらず、終了フック（claim の setup の失敗と中止）と manager の完了の知らせ（claim の setup の失敗と回復）が、それぞれちょうど1回出る。
 4. `noDuplicateNotice`・`noFalseNotice`: どちらも多くとも1回で、それを要する処理が failed と書いたタスクにだけ出る。
 5. `releaseFailureReported`: 書いた後にロックがきれいに外れなかったこと（読めない自分のファイルを含む）は、警告か呼び出し元への例外で必ず出る。黙って捨てない。
-6. `noSelfWait`: どのプロセスも、自分が外し損ねたロックのファイルを待たない。例外は、記録したファイルが読めない間の待ちだけで、これは `STALE_MS` で終わる（モデルの `UnreadableWait`）。
+6. `noSelfWait`: どのプロセスも、自分が外し損ねたロックのファイルを待たない。例外は、記録したファイルが読めない間の待ちだけ（モデルの `UnreadableWait`）。`STALE_MS` を過ぎると回収を試みるが、回収が済むのは、待ちの1回の2つの読みが両方とも通るか、両方とも失敗した回である（3-3）。
 7. `stopsOnlyWhenUnlinkFails`: 書き込みの経路で claim が止まるのは、ロックのファイルが外せないときだけ。一度読めなかっただけでは止まらない。
 8. `noFalseCleanEnd`: `takt run` は、自分が running と書いたタスクを実行しないまま、正常には終わらない。
 
@@ -184,7 +186,7 @@ Quint の `safety` は次の9つの連言で、`fixed` で違反が無い。
 再レビューで足したもの（再レビュー 中-A・中-B）:
 
 - 記録した自分のファイルを回収するときの、一時的な読みの失敗（`Glitch`）。`FirstReadFails` は `recoverStaleLock` の最初の読み、`SecondReadFails` は外す直前の読み直しで、次の読みは成功する。
-- 取得の結果に、`UnreadableWait`（記録を残して待つ。`STALE_MS` で終わる待ちなので自分待ちに数えない）、`RecordLost`（外さずに記録を消し、以後は自分を待つ）、`ReadFailed`（読みの例外を投げ、claim が止まる。止まった理由は `ReadStop`）を足した。
+- 取得の結果に、`UnreadableWait`（記録を残して待つ。読めない間だけの待ちなので自分待ちに数えない。`STALE_MS` からは回収を試みる）、`RecordLost`（外さずに記録を消し、以後は自分を待つ）、`ReadFailed`（読みの例外を投げ、claim が止まる。止まった理由は `ReadStop`）を足した。
 - 版 `secondDesign`（1回目のレビューを反映した設計、`b82a56d2a`）を足した。`FirstReadFails` で `ReadFailed`、`SecondReadFails` で `RecordLost`（`unlinkSnapshot` が黙って戻り、外せたとみなす）になる。`firstDesign` は、どちらでも `RecordLost`（読めないファイルを「中身が違う」とみなして記録を消す）になる。`fixed` は、どちらでも `UnreadableWait` になる。
 
 | 版 | 中身 |
@@ -199,8 +201,8 @@ Quint の `safety` は次の9つの連言で、`fixed` で違反が無い。
 |---|---|
 | `quint test`（`currentTest` 7件、`returnOnlyTest` 3件、`firstDesignTest` 4件、`secondDesignTest` 4件、`fixedTest` 14件） | 32件すべて通る。 |
 | `quint run`（9つの不変条件 × 5つの版、3,000 標本、12 ステップ、seed 0x2a） | `current` は `noOrphanRunning`・`noLostNotice`・`releaseFailureReported`・`noSelfWait`・`stopsOnlyWhenUnlinkFails` が破れる（`noFalseCleanEnd` は保たれる。run は失敗で終わる）。`returnOnly` と `firstDesign` は `noLostNotice`・`releaseFailureReported`・`noSelfWait` が破れる。`secondDesign` は `noOrphanRunning`・`noSelfWait`・`stopsOnlyWhenUnlinkFails` が破れる（`noOrphanRunning` は、読みの失敗で止まった run の claim したタスクが残るため）。`fixed` は9つとも違反なし。 |
-| `quint run --main fixed --invariant safety`（10,000 標本、15 ステップ、witness 13個） | 違反なし。witness はすべて到達（最少は `wTaskRanAfterReleaseFailure` の 2,318 本、`wSelfRecovered` 3,101 本、`wWaitedOnUnreadableOwn` 4,641 本、`wHookAfterStuckForGood` 4,855 本、`wRunEndedAfterReleaseFailure` 2,688 本）。 |
-| `quint verify --main fixed --invariant safety --max-steps 5` | 違反なし（98 秒）。下の反例はどれも3手以内。`Glitch` で分岐が増えたので、6手（前の版は 282 秒）は流していない。 |
+| `quint run --main fixed --invariant safety`（10,000 標本、15 ステップ、witness 13個） | 違反なし。witness はすべて到達（最少は `wRunEndedAfterReleaseFailure` の 671 本、`wTaskRanAfterReleaseFailure` 1,844 本、`wSelfRecovered` 3,101 本、`wUnseenReported` 4,223 本、`wWaitedOnUnreadableOwn` 4,641 本、`wHookAfterStuckForGood` 4,855 本）。`wTaskRanAfterReleaseFailure`・`wRunEndedAfterReleaseFailure` は、解放に失敗した claim がキューに入れたタスク（ghost の `heldAfterReleaseFailure`）の実行と、その run の正常終了に結び付けた。`wUnseenReported` は、最後の解放（ghost の `lastRelease`）が `Unseen` で、報告され、残したファイルが記録された状態に結び付けた（PR #182 の Devin・CodeRabbit の指摘）。 |
+| `quint verify --main fixed --invariant safety --max-steps 5` | 違反なし（118 秒）。下の反例はどれも3手以内。`Glitch` で分岐が増えたので、6手（前の版は 282 秒）は流していない。 |
 | `quint verify --max-steps 4` で反例が出ることの確かめ | `secondDesign` の `noSelfWait`・`stopsOnlyWhenUnlinkFails`、`firstDesign` の `noLostNotice` で反例が出る（各7〜8秒）。前の版では `firstDesign` の `releaseFailureReported`・`noSelfWait`、`current` の `noOrphanRunning`、`returnOnly` の `noSelfWait` でも確かめた。verify が空振りでない。 |
 
 直す前の形での反例:
@@ -238,7 +240,7 @@ fast-check（`^4.11.0`）で書く。除外は無い。
 | 外し損ねた後に、別のプロセスが（死んだ持ち主として）回収して取り直したファイル | dev・ino・中身が違うので外さない。記録は消す。 |
 | 外し損ねた後に、人が消したファイル | 次の取得は直接取れる。そこで記録を消す。 |
 | 外し損ねた後に人が消し、同じ inode で別のファイルができる | 中身が自分のものと同じになるのは、自分が取ったときだけで、そのとき記録は消える。ほかのファイルは中身が違うので外さない。 |
-| 解放のときに自分のロックのファイルを開けない（EACCES・EPERM）か読めない（EIO） | `file-lock.ts` は今は黙って戻る。直した後は例外を投げて記録する。次の取得で読めれば外し、読めなければ記録を残して待つ（`STALE_MS` を過ぎれば今の規則で外れる）。 |
+| 解放のときに自分のロックのファイルを開けない（EACCES・EPERM）か読めない（EIO） | `file-lock.ts` は今は黙って戻る。直した後は例外を投げて記録する。次の取得で読めれば外し、読めなければ記録を残して待つ（`STALE_MS` を過ぎれば今の規則で回収を試みる。3-3）。 |
 | 記録と一致した後の、外す直前の読み直しが一時的に EIO になる | 外せたとみなさない。記録を残して待ち、次の回で外す（再レビュー 中-A）。 |
 | 記録した自分のファイルを、回収のときに一度だけ読めない | 投げずに待つ。claim は止まらない（再レビュー 中-B）。 |
 | action と解放の両方が投げる（`tasks.yaml.lock`） | `AggregateError([actionError, releaseError])` にする。今は解放の例外が action の例外を上書きする（再レビュー 低-4）。 |
@@ -332,6 +334,23 @@ fast-check（`^4.11.0`）で書く。除外は無い。
 | 低-5 heavy IT で `unlink` を一度だけ失敗させる方法が無い | 直す（記述）。`--import` の preload で `fs.unlinkSync` を差し替え、`syncBuiltinESMExports()` で反映する方法を書いた | 試験の10 |
 | 低-6 link の経路の後片付けの失敗で、自分のロックが記録されずに残る | 別件。取得の側の穴で、解放の失敗とは別の経路 | 4節 |
 | 低-7 しばらく取得しない長く生きるプロセスが外し損ねると、ほかのプロセスが長く待つ | 別件。今のコードより悪くはならない。直後の1回の再試行は確かな手にならず、持ち主が生きているロックの待ちに上限を設けるのは排他の規則を変える | 4節 |
+
+### PR #182 のレビューボット（Devin 5件、CodeRabbit 8件）
+
+| 指摘 | 扱い | 反映した先 |
+|---|---|---|
+| Devin `file-lock.ts:106` タスクの追加で、保存後の解放の失敗が指示書を消す | 直す（実装）。書いた後なら指示書を消さずに投げる | 4節 |
+| Devin `file-lock.ts:245` ゴールの中止・再開で、保存後の解放の失敗が後続の処理を止める | 直す（実装）。後続を済ませてから投げる | 4節 |
+| Devin `claimLockRelease.qnt:415`、CodeRabbit `:406`・`:415` witness が対象の障害に結び付いていない | 直す。ghost の `heldAfterReleaseFailure`・`lastRelease` で、解放に失敗した claim のタスクと `Unseen` の報告に結び付けた | Quint、README |
+| CodeRabbit `claimLockRelease.qnt:151` `Gone` が置き換えた持ち主のロックを残さない | 採らない。各操作は1手で、置き換えた持ち主のロックはその持ち主の手の中で終わる。その間の待ちは `Timeout` で表している。コメントと README に書いた | Quint、README |
+| Devin `it-claim-lock-release-run.test.ts:78` 試験の期限が `TEST_TIME_FACTOR` に従わない | 直す。`scaledMs` にした（`it-lock-release-finish-hook.test.ts` も） | 試験 |
+| Devin `reconcileLostRun.ts:56` PR 説明が、投げる2か所を書いていない | 直す（PR 説明） | PR 説明 |
+| CodeRabbit 設計 132 行 `STALE_MS` を待ちの上限と書いている | 直す。回収を試み始めるしきい値と書き分けた | 3-1、3-3、守る不変条件、Quint、README |
+| CodeRabbit `private-file-lock-acquisition.test.ts:245` 置き換えの試験が、元のロックを誤って記録しても通る | 直す。元のロックを退避して戻し、記録が無いことを確かめる | 試験 |
+| CodeRabbit `private-file-lock-acquisition.test.ts:257` 置き換えで inode が再利用されうる | 直す。元のロックを退避したまま置き換える。CI の失敗（`13d200306` の前）の原因はこれ | 試験 |
+| CodeRabbit `file-lock.ts:143` 開くときの EIO が取得から生のまま出る | 直す（実装）。EACCES・EPERM と同じく `readError` にする | 3-1 |
+| CodeRabbit `private-file-lock.ts:115` 照合と `unlink` の間に別の回収と取得が入りうる | 別件。上流からある死んだ持ち主の回収の窓で、`file-lock.ts` のコメントのとおり受け入れている。この直しの記録の回収は、自分しか書けない中身のファイルだけを外すので、窓を広げない | — |
+| `13d200306` の `hasMatchingSnapshot`（size・mtimeMs・ctimeMs の照合） | 戻す（実装）。同じ inode の stat を比べるので、変わっていないファイルを誤って競合にはしない。ただし共有の読み（`readPrivateFileState`・`readRegularFileNoFollow`、呼び出し約20か所）で、追記されたファイルを競合にする。ロックを取らずに追記のファイルを読む `live-intervention-store.ts` の `read`（engine の各 runner が呼ぶ）は、`takt` の別のプロセスの追記と重なると、今までは返していたのに例外になる。CI の失敗の原因は試験の inode の再利用で、試験を直せば要らない | — |
 
 ## 進め方
 

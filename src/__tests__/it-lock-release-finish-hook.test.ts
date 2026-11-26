@@ -12,6 +12,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
+import { scaledMs } from '../../scripts/test-time-factor.mjs';
 import type { LockReleaseFaultState } from './helpers/lock-release-faults.js';
 
 const faults = vi.hoisted(() => ({ armed: [], times: 1, active: new Map(), failingReads: new Set() }) as LockReleaseFaultState);
@@ -37,6 +38,9 @@ import { TaskRunner } from '../infra/task/runner.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/index.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import { armAfterWrite, healLockReleaseFaults, LOCK_RELEASE_FAULTS } from './helpers/lock-release-faults.js';
+
+// Devin (PR #182): limits this test owns follow TEST_TIME_FACTOR, as CONTRIBUTING.md asks.
+const HOOK_TEST_TIMEOUT_MS = scaledMs(30_000);
 
 const HOOK_SCRIPT = `
 const fs = require('node:fs');
@@ -112,7 +116,7 @@ describe('aborting a goal when a lock release fails after the write (試験の5)
     expect(calls.map((call) => call.TAKT_FINISH_TASK_NAME).sort()).toEqual([first.name, second.name].sort());
     expect(calls.every((call) => call.TAKT_FINISH_STATUS === 'failed' && call.TAKT_FINISH_GOAL_ID === goalId)).toBe(true);
     expect(statuses(project)).toMatchObject({ [first.name]: 'failed', [second.name]: 'failed', [unrelated.name]: 'pending' });
-  }, 30_000);
+  }, HOOK_TEST_TIMEOUT_MS);
 
   it('does not call the hook when the abort fails before the write', async () => {
     const project = createProject();
@@ -123,7 +127,7 @@ describe('aborting a goal when a lock release fails after the write (試験の5)
 
     expect(hookCalls(project)).toEqual([]);
     expect(statuses(project)).toMatchObject({ [pending.name]: 'pending' });
-  }, 30_000);
+  }, HOOK_TEST_TIMEOUT_MS);
 });
 
 describe('claiming through the worker pool when a lock release fails after the write (試験の3)', () => {
@@ -140,5 +144,5 @@ describe('claiming through the worker pool when a lock release fails after the w
     expect(project.warnings.filter((warning) => warning.includes('releasing a lock afterwards failed'))).toHaveLength(1);
     expect(executeRunTaskAndComplete).not.toHaveBeenCalled();
     expect(statuses(project)).toMatchObject({ [broken.name]: 'failed' });
-  }, 30_000);
+  }, HOOK_TEST_TIMEOUT_MS);
 });

@@ -68,7 +68,10 @@ module claimLockRelease {
   // How the lock release after the write ends.
   //   Ok: removed.
   //   Gone: someone else removed or replaced the lock file ("ownership changed before release");
-  //         it throws, and no lock of this process is left.
+  //         it throws, and no lock of this process is left. A replacement is another acquisition,
+  //         and each operation is one atomic step here, so that holder's lock ends with its own
+  //         step and its own release outcome; waiting on it in between is a retryable timeout, as
+  //         `Timeout` already models. So Gone does not keep a lock for anyone.
   //   Stuck: the unlink fails (EIO, EACCES) and the file stays; a later unlink succeeds.
   //   StuckForGood: the file stays and every later unlink fails too.
   //   Unseen: the release cannot open or read its own lock file (EACCES / EPERM on open, EIO on
@@ -79,9 +82,10 @@ module claimLockRelease {
   // What an acquisition sees. Timeout: the lock names a live owner for the whole wait. UnlinkFails:
   // removing a lock file that may be removed (dead owner, or a recorded own one) fails.
   // UnreadableWait: a recorded own lock file could not be read at recovery; the record is kept and
-  // the acquisition waits under the rule for an unreadable lock (removed once older than STALE_MS),
-  // so the wait is bounded. RecordLost: the recovery dropped the record without removing the file;
-  // the file now names this live process with no record, so the acquisition waits on itself.
+  // the acquisition waits under the rule for an unreadable lock (removal tried once older than
+  // STALE_MS), so the wait lasts only while the file cannot be read. RecordLost: the recovery dropped
+  // the record without removing the file; the file now names this live process with no record, so
+  // the acquisition waits on itself.
   // ReadFailed: the recovery threw the read error, an unclassified error.
   type Acquire = Acquired | Timeout | UnlinkFails | UnreadableWait | RecordLost | ReadFailed
 
@@ -119,6 +123,11 @@ module claimLockRelease {
   var releaseFailures: Actor -> int   // releases after a write that did not remove the lock cleanly
   var releaseReported: Actor -> int   // of those, warned or thrown to the caller
   var waitingOnSelf: Actor -> bool    // the last acquisition timed out on a lock this actor left
+  // ghost: the tasks a claim by this actor queued when its release after the write did not remove
+  // the lock cleanly (ties the witnesses to the claim whose release failed)
+  var heldAfterReleaseFailure: Actor -> Set[TaskId]
+  // ghost: the last release after a write — who released, how it ended, and whether it was reported
+  var lastRelease: { by: Actor, outcome: ReleaseOutcome, reported: bool }
   var lastAction: str
 
   // ---------- functional layer ----------
@@ -205,6 +214,8 @@ module claimLockRelease {
     releaseFailures' = ACTORS.mapBy(_ => 0),
     releaseReported' = ACTORS.mapBy(_ => 0),
     waitingOnSelf' = ACTORS.mapBy(_ => false),
+    heldAfterReleaseFailure' = ACTORS.mapBy(_ => Set()),
+    lastRelease' = { by: NONE, outcome: Ok, reported: false },
     lastAction' = "init",
   }
 
@@ -219,12 +230,13 @@ module claimLockRelease {
     else if (PROCS.contains(a) and how == ReadFailed)
       procs' = procs.setBy(a, l => { ...l, phase: Stopped, stopReason: ReadStop, queue: Set() })
     else procs' = procs,  // M: the error goes to the caller (MCP tool, daemon turn)
-    // Waiting on an unreadable recorded file is bounded (STALE_MS) and is not a self-wait.
+    // Waiting on an unreadable recorded file lasts only while it cannot be read; not a self-wait.
     waitingOnSelf' = waitingOnSelf.set(a, (how == Timeout and orphanOf == a) or how == RecordLost),
     orphanRecorded' = if (how == RecordLost) false else orphanRecorded,
     tasks' = tasks, orphanOf' = orphanOf, orphanForGood' = orphanForGood,
     needHook' = needHook, needEvent' = needEvent, hooks' = hooks, events' = events,
     releaseFailures' = releaseFailures, releaseReported' = releaseReported,
+    heldAfterReleaseFailure' = heldAfterReleaseFailure, lastRelease' = lastRelease,
     lastAction' = name,
   }
 
@@ -238,6 +250,7 @@ module claimLockRelease {
     // The others warn (claim, run-start recovery) or throw after the notices (M).
     releaseReported' = incIf(releaseReported, a, throws(r)),
     waitingOnSelf' = waitingOnSelf.set(a, false),
+    lastRelease' = { by: a, outcome: r, reported: throws(r) },
   }
 
   // claimNextTasks(): one write saves the runnable pending tasks as running (owner p) and the
@@ -266,6 +279,9 @@ module claimLockRelease {
         procs' = if (keeps(r))
           procs.setBy(p, l => { ...l, queue: l.queue.union(claimed), retrying: false, attempted: true })
           else procs.setBy(p, l => { ...l, phase: Stopped, stopReason: ReleaseError, queue: Set() }),
+        heldAfterReleaseFailure' = if (r != Ok and keeps(r))
+          heldAfterReleaseFailure.setBy(p, s => s.union(claimed))
+          else heldAfterReleaseFailure,
         lastAction' =
           if (orphanOf == p and orphanRecorded) "claimAfterSelfRecovery"
           else if (r == Ok) "claim" else if (keeps(r)) "claimReleaseFailedKept" else "claimReleaseFailedStopped",
@@ -292,6 +308,7 @@ module claimLockRelease {
         events' = bump(events, lost, keeps(r)),
         procs' = if (keeps(r) or a == M) procs
           else procs.setBy(a, l => { ...l, phase: Stopped, stopReason: ReleaseError, queue: Set() }),
+        heldAfterReleaseFailure' = heldAfterReleaseFailure,
         lastAction' = if (r == Ok) "recover" else "recoverReleaseFailed",
       },
     }
@@ -313,6 +330,7 @@ module claimLockRelease {
         hooks' = bump(hooks, pend, hooksRun(M, r)),
         events' = events,
         procs' = procs,
+        heldAfterReleaseFailure' = heldAfterReleaseFailure,
         lastAction' = if (r == Ok) "invalidate" else "invalidateReleaseFailed",
       },
     }
@@ -328,7 +346,8 @@ module claimLockRelease {
     orphanOf' = orphanOf, orphanForGood' = orphanForGood, orphanRecorded' = orphanRecorded,
     needHook' = needHook, needEvent' = needEvent, hooks' = hooks, events' = events,
     releaseFailures' = releaseFailures, releaseReported' = releaseReported,
-    waitingOnSelf' = waitingOnSelf, lastAction' = "runTask",
+    waitingOnSelf' = waitingOnSelf, heldAfterReleaseFailure' = heldAfterReleaseFailure, lastRelease' = lastRelease,
+    lastAction' = if (heldAfterReleaseFailure.get(p).contains(t)) "runTaskAfterReleaseFailure" else "runTask",
   }
 
   // `takt run` ends normally (runWithWorkerPool: nothing active, no claimRetryAt, empty queue).
@@ -341,7 +360,9 @@ module claimLockRelease {
       tasks' = tasks, orphanOf' = orphanOf, orphanForGood' = orphanForGood, orphanRecorded' = orphanRecorded,
       needHook' = needHook, needEvent' = needEvent, hooks' = hooks, events' = events,
       releaseFailures' = releaseFailures, releaseReported' = releaseReported,
-      waitingOnSelf' = waitingOnSelf, lastAction' = "endRun",
+      waitingOnSelf' = waitingOnSelf, heldAfterReleaseFailure' = heldAfterReleaseFailure, lastRelease' = lastRelease,
+      // The queue is empty, so every task of a claim whose release failed has run.
+      lastAction' = if (heldAfterReleaseFailure.get(p) != Set()) "endRunAfterReleaseFailure" else "endRun",
     }
   }
 
@@ -384,7 +405,7 @@ module claimLockRelease {
   val releaseFailureReported: bool = ACTORS.forall(a => releaseReported.get(a) == releaseFailures.get(a))
 
   // No process waits on a lock file it left behind itself, except while that file cannot be read
-  // (bounded by STALE_MS; see UnreadableWait).
+  // (see UnreadableWait; from STALE_MS on, the rule for an unreadable lock tries to remove it).
   val noSelfWait: bool = ACTORS.forall(a => not(waitingOnSelf.get(a)))
 
   // Claiming stops only when a lock file cannot be removed (for writes; see README for reads). A read
@@ -403,7 +424,8 @@ module claimLockRelease {
 
   // ---------- witnesses (each should be reachable) ----------
   val wClaimKeptAfterReleaseFailure: bool = lastAction == "claimReleaseFailedKept"
-  val wTaskRanAfterReleaseFailure: bool = lastAction == "runTask" and releaseFailures.get("A") + releaseFailures.get("B") > 0
+  // A task held by a claim whose release failed runs.
+  val wTaskRanAfterReleaseFailure: bool = lastAction == "runTaskAfterReleaseFailure"
   val wSelfRecovered: bool = lastAction == "claimAfterSelfRecovery"
   val wUnlinkStop: bool = PROCS.exists(p => procs.get(p).stopReason == Unlink)
   val wOtherWaitsOnLiveOrphan: bool = lastAction == "claimTimeout" and orphanOf != NONE
@@ -411,11 +433,13 @@ module claimLockRelease {
   val wInvalidateReleaseFailed: bool = lastAction == "invalidateReleaseFailed"
   val wSetupHookAfterReleaseFailure: bool = lastAction == "claimReleaseFailedKept" and hooks.get("t2") == 1
   val wHookAfterStuckForGood: bool = orphanForGood and hooks.get("t1") + hooks.get("t2") > 0
-  val wUnseenReported: bool = orphanOf != NONE and orphanRecorded and not(orphanForGood)
-    and releaseReported.get("A") + releaseReported.get("B") + releaseReported.get(M) > 0
+  // The last release could not read its own lock file, reported it, and recorded the file it left.
+  val wUnseenReported: bool = lastRelease.outcome == Unseen and lastRelease.reported
+    and orphanOf == lastRelease.by and orphanRecorded
   val wWaitedOnUnreadableOwn: bool = lastAction == "claimWaitsUnreadable"
   val wRunEnded: bool = PROCS.exists(p => procs.get(p).phase == Ended)
-  val wRunEndedAfterReleaseFailure: bool = lastAction == "endRun" and releaseFailures.get("A") + releaseFailures.get("B") > 0
+  // The run whose claim's release failed ends normally after running what that claim held.
+  val wRunEndedAfterReleaseFailure: bool = lastAction == "endRunAfterReleaseFailure"
 }
 
 module current { import claimLockRelease(DESIGN = "Current").* from "./claimLockRelease" }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 const write = vi.hoisted(() => vi.fn());
@@ -232,40 +232,57 @@ describe('a private file lock this process failed to release (#169)', () => {
     await expectTakenWithoutWaiting(mode, lock);
   });
 
-  it.each(modes)('%s: does not record a lock whose ownership changed before release', async (mode) => {
-    const lock = await lockDirectory();
-    const replacement = JSON.stringify({ pid: process.pid, token: 'replacement-holder' });
-    const error = await failure(() => run(mode, lock, () => { unlinkSync(lock); writeFileSync(lock, replacement); return 1; }));
-    expect(String(error)).toContain('ownership changed before release');
-
+  /**
+   * Puts the original lock back from `aside` with its inode and token, then tries to take it. A record
+   * of the original would let this acquisition remove it and run the action; without one it times out.
+   */
+  async function expectOriginalNotRecorded(mode: 'sync' | 'async', lock: string, aside: string): Promise<void> {
+    renameSync(aside, lock);
+    const original = readFileSync(lock, 'utf8');
     const action = vi.fn(() => 2);
     const next = await failure(() => mode === 'sync' ? Promise.resolve(runPrivateFileExclusive(lock, action)) : runPrivateFileExclusiveAsync(lock, action, { timeoutMs: 0 }));
     expect(next).toBeInstanceOf(PrivateFileLockTimeoutError);
     expect(action).not.toHaveBeenCalled();
+    expect(readFileSync(lock, 'utf8')).toBe(original);
+  }
+
+  // CodeRabbit (PR #182): taking the lock against the replacement drops any record, because the
+  // replacement never matches it, so the replacement is checked by its content and the absence of a
+  // record against the original put back. The original is moved aside rather than unlinked, so the
+  // replacement cannot reuse its inode.
+  it.each(modes)('%s: does not record a lock whose ownership changed before release', async (mode) => {
+    const lock = await lockDirectory();
+    const aside = `${lock}.aside`;
+    const replacement = JSON.stringify({ pid: process.pid, token: 'replacement-holder' });
+    const error = await failure(() => run(mode, lock, () => { renameSync(lock, aside); writeFileSync(lock, replacement); return 1; }));
+    expect(String(error)).toContain('ownership changed before release');
     expect(readFileSync(lock, 'utf8')).toBe(replacement);
+
+    await expectOriginalNotRecorded(mode, lock, aside);
   });
 
+  // CodeRabbit (PR #182): unlinking the original and writing the replacement let Linux reuse the
+  // inode, so the release read passed its identity check and reported "ownership changed" instead of
+  // the conflict. Keeping the original under another path gives the replacement a new inode.
   it.each(modes)('%s: does not record a lock that was replaced while release read it', async (mode) => {
     const lock = await lockDirectory();
+    const aside = `${lock}.aside`;
     const replacement = JSON.stringify({ pid: process.pid, token: 'replacement-holder' });
     const error = await failure(() => run(mode, lock, () => {
       let replaced = false;
       beforeOpen.mockImplementation((path) => {
         if (path !== lock || replaced) return;
         replaced = true;
-        unlinkSync(lock);
+        renameSync(lock, aside);
         writeFileSync(lock, replacement);
       });
       return 1;
     }));
     expect(error).toBeInstanceOf(PrivateArtifactPublicationConflictError);
     heal();
-
-    const action = vi.fn(() => 2);
-    const next = await failure(() => mode === 'sync' ? Promise.resolve(runPrivateFileExclusive(lock, action)) : runPrivateFileExclusiveAsync(lock, action, { timeoutMs: 0 }));
-    expect(next).toBeInstanceOf(PrivateFileLockTimeoutError);
-    expect(action).not.toHaveBeenCalled();
     expect(readFileSync(lock, 'utf8')).toBe(replacement);
+
+    await expectOriginalNotRecorded(mode, lock, aside);
   });
 
   it.each(modes)('%s: matches the record through a relative and an absolute lock path', async (mode) => {

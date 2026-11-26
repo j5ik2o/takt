@@ -239,7 +239,7 @@ module fixedTest {
       .expect(orphanOf == NONE and not(waitingOnSelf.get(M)) and events.get("t3") == 1 and safety)
 
   // Medium-A / Medium-B: a read that fails once during the recovery keeps the record and goes on
-  // waiting (bounded by STALE_MS); the next read removes the file.
+  // waiting while it cannot be read; the next read removes the file.
   run firstReadGlitchWaitsThenRecoversTest =
     init.then(claim("A", Stuck, NoGlitch)).then(runTask("A", "t1")).then(claim("A", Ok, FirstReadFails))
       .expect(and {
