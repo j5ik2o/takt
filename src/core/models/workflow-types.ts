@@ -583,6 +583,7 @@ export interface LoopMonitorConfig {
   cycle: string[];
   ignoreSteps?: string[];
   threshold: number;
+  minTriggerVisits?: number;
   judge: LoopMonitorJudge;
 }
 

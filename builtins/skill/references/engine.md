@@ -327,9 +327,9 @@ loop_monitors:
 
 ### 検出ロジック
 
-1. step 遷移履歴を記録する（例: `[plan, implement, ai-antipattern-review-1st, ai-antipattern-fix, ai-antipattern-review-1st, ai-antipattern-fix, ...]`）
-2. 各 loop_monitor の `cycle` パターンが履歴の末尾に `threshold` 回以上連続で出現するかチェックする
-3. 閾値に達した場合:
+1. step 遷移履歴と各 step の完了回数を記録する（例: `[plan, implement, ai-antipattern-review-1st, ai-antipattern-fix, ai-antipattern-review-1st, ai-antipattern-fix, ...]`）
+2. 各 loop_monitor の `cycle` パターンが履歴の末尾に `threshold` 回以上連続で出現するかチェックする。`min_trigger_visits` が指定されている場合は、`cycle` 末尾の step のこの実行における完了回数が `min_trigger_visits` 未満のあいだ発動しない（judge 実行後に履歴はリセットされるが、完了回数はリセットしない）
+3. 発動条件を満たした場合:
    a. judge の `persona` キーからペルソナファイルを Read で読み込む
    b. `instruction` の `{cycle_count}` を実際のサイクル回数に置換する
    c. Task tool でチームメイト（judge）を起動する

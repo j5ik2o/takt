@@ -11,12 +11,15 @@ const PBT_NUM_RUNS = (() => {
 /**
  * One run-loop event for the guarded step, as WorkflowRunLoop produces them:
  * `start` and `retry` call checkEntry (a retry re-enters the visit that has not completed),
- * `complete` records a non-terminal verdict, `finish` records a terminal transition.
+ * `complete` records a non-terminal verdict, `completeWithoutRule` records a non-terminal
+ * completion without a matched rule (e.g. system step `wait.on_timeout`),
+ * `finish` records a terminal transition.
  */
 type Event =
   | { kind: 'start' }
   | { kind: 'retry' }
   | { kind: 'complete'; verdict: number }
+  | { kind: 'completeWithoutRule' }
   | { kind: 'finish' };
 
 /** mulberry32: a small seeded generator, so a failing case can be replayed from its seed. */
@@ -41,10 +44,11 @@ function generate(seed: number): Settings {
   const next = random(seed);
   const int = (min: number, max: number) => min + Math.floor(next() * (max - min + 1));
   const event = (): Event => {
-    switch (int(0, 3)) {
+    switch (int(0, 4)) {
       case 0: return { kind: 'start' };
       case 1: return { kind: 'retry' };
       case 2: return { kind: 'complete', verdict: int(0, 2) };
+      case 3: return { kind: 'completeWithoutRule' };
       default: return { kind: 'finish' };
     }
   };
@@ -71,7 +75,7 @@ interface Outcome {
   stop?: { reason: string; at: 'limit' | 'repeat' };
   startedVisits: number;
   completedVisits: number;
-  verdicts: number[];
+  verdicts: (number | undefined)[];
 }
 
 /** Replays the events the way the run loop would, skipping events that cannot happen in the current phase. */
@@ -100,17 +104,19 @@ function replay(maxVisits: number | undefined, stopOnRepeatedVerdict: boolean, e
       guard.recordCompletion(step, undefined);
       return outcome;
     }
-    outcome.verdicts.push(event.verdict);
-    const reason = guard.recordCompletion(step, event.verdict);
+    const verdict = event.kind === 'complete' ? event.verdict : undefined;
+    outcome.verdicts.push(verdict);
+    const reason = guard.recordCompletion(step, verdict);
     if (reason !== undefined) return { ...outcome, stop: { reason, at: 'repeat' } };
   }
   return outcome;
 }
 
 describe('StepLoopGuard properties', () => {
-  it('never starts more than max_visits visits, and stops at the limit only after max_visits completed', () => {
+  it('maintains completedVisits <= startedVisits <= max_visits, and stops at the limit only after max_visits completed', () => {
     forAll(({ maxVisits, stopOnRepeatedVerdict, events }) => {
       const outcome = replay(maxVisits, stopOnRepeatedVerdict, events);
+      expect(outcome.completedVisits).toBeLessThanOrEqual(outcome.startedVisits);
       if (maxVisits !== undefined) expect(outcome.startedVisits).toBeLessThanOrEqual(maxVisits);
       if (outcome.stop?.at === 'limit') {
         expect(maxVisits).toBeDefined();
@@ -123,7 +129,7 @@ describe('StepLoopGuard properties', () => {
     forAll(({ maxVisits, stopOnRepeatedVerdict, events }) => {
       const outcome = replay(maxVisits, stopOnRepeatedVerdict, events);
       const { verdicts } = outcome;
-      const pairs = verdicts.slice(1).map((verdict, index) => verdict === verdicts[index]);
+      const pairs = verdicts.slice(1).map((verdict, index) => verdict !== undefined && verdict === verdicts[index]);
       if (outcome.stop?.at === 'repeat') {
         expect(stopOnRepeatedVerdict).toBe(true);
         expect(pairs.at(-1)).toBe(true);

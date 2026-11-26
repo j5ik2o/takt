@@ -1110,6 +1110,8 @@ loop_monitors:
 
 `ignore_steps` はサイクル照合から中間 step を除外します。任意回数の検証・再修正 step を含む論理サイクルを監視するときに使用します。`cycle` に含む step と同じ step は指定できません。
 
+`min_trigger_visits`（任意の正の整数）は、`cycle` の末尾の step がこの workflow engine の実行で指定回数完了するまで monitor の発動を遅らせます。完了した visit は非終端遷移で終わったものだけを数え、同じ visit のやり直しは数えません。この回数は judge 実行後も消えず、サブワークフローの呼び出しごと・再開した run ごとに 0 から数え直します。このキーより前の TAKT はキーを無視します。
+
 `loop_monitors.judge` では provider、model、provider options を指定できません。設定済みの場合は runtime target `provider.targets.internal_agents.loop-judge` を使用し、未設定なら通常の runtime routing とトリガー元 step の fallback を使用します。
 
 loop-monitor judge は常に新しい provider session で実行されます。そのため `loop_monitors.judge` では `session_key` を指定できません。
@@ -1132,9 +1134,10 @@ steps:
 - `stop_on_repeated_verdict` が比べるのは、どの rule に一致したかだけで、出力に書かれた理由は比べません。その step が前回と同じ rule に一致し、その rule が終端でない場合（同じ step へ戻る遷移も含む）に run を止めます。終端（`COMPLETE`・`ABORT`・`return`）は比べません。理由の中身で判断したいときは `loop_monitors` の judge を使ってください。
 - 止めた理由は 1 行で run の中断理由（`meta.json` の `reason` と `workflow_abort` ログ）に残ります。
 - `max_visits` は workflow を書き換えずに変えられます。`.takt/config.yaml`（プロジェクト）または `~/.takt/config.yaml`（グローバル）の `workflow_overrides.steps.<step>.max_visits` が YAML の値を置き換えます。プロジェクトがグローバルより優先です。上限を外すことはできないので、大きな数を指定してください。parallel の sub-step には `max_visits` を付けられません。
+- 上限は `loop_monitors` より優先します。遷移先の step がすでに `max_visits` に達しているときは、どの loop monitor も調べる前に `Visit limit reached` で中断します。judge は動かず、別の step（例: `escalate`）へ進める judge の rule も使いません。上限に達する前はこれまでどおり judge が動きます。
 - これらのキーより前の TAKT はキーを無視します。その版で config を保存し直すと `max_visits` が消えます。
 
-builtin の開発 workflow は `replan`・`fix-replan`・`verification-replan` に `max_visits: 4` を設定しています。`development-core` の `[replan, peer-review]` の loop monitor は `implement` を数えずに `threshold: 1` で動きます（初回は `plan` から来るため 0 周で、独立レビューが 2 回続けて再計画を求めた時点で 1 周に達します）。その時点で judge が直近 2 回のレビュー結果を比べ、同じ指摘が新しい差分なしに繰り返されているときだけ止めます。1 週間ぶんの実測では、成功した run が replan 系 step に入ったのは 1 run あたり最大 2 回、失敗した run は最大 4 回で、長引いた失敗 run はどれも独立レビューが BLOCKED を 2 回続けて返して終わっていました。
+builtin の開発 workflow は `replan`・`fix-replan`・`verification-replan` に `max_visits: 4` を設定しています。`development-core` の `[replan, peer-review]` の loop monitor は `implement` を数えず、`threshold: 1` と `min_trigger_visits: 2` で動きます。どの step から開始・再開したかや、`implement` から直接 `replan` へ進んだかに関わらず、その実行で `peer-review` が 2 回完了してから judge を呼びます。独立レビューが再び再計画を求めたとき、judge が直近 2 回のレビュー結果を比べ、同じ指摘が新しい差分なしに繰り返されているときだけ止めます。1 週間ぶんの実測では、成功した run が replan 系 step に入ったのは 1 run あたり最大 2 回、失敗した run は最大 4 回で、長引いた失敗 run はどれも独立レビューが BLOCKED を 2 回続けて返して終わっていました。
 
 ### `subworkflow`
 

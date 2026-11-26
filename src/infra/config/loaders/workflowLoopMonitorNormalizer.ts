@@ -45,6 +45,7 @@ export function normalizeLoopMonitors(
     cycle: string[];
     ignore_steps?: string[];
     threshold: number;
+    min_trigger_visits?: number;
     judge: {
       persona?: string;
       input_reports?: z.infer<typeof WorkflowReportInputRawSchema>;
@@ -64,6 +65,7 @@ export function normalizeLoopMonitors(
     cycle: monitor.cycle,
     ignoreSteps: monitor.ignore_steps,
     threshold: monitor.threshold,
+    ...(monitor.min_trigger_visits === undefined ? {} : { minTriggerVisits: monitor.min_trigger_visits }),
     judge: normalizeLoopMonitorJudge(monitor.judge, workflowDir, sections, context),
   }));
 }

@@ -1035,6 +1035,7 @@ export const LoopMonitorSchema = z.object({
   cycle: z.array(z.string().min(1)).min(1),
   ignore_steps: z.array(z.string().min(1)).min(1).optional(),
   threshold: z.number().int().positive().optional().default(3),
+  min_trigger_visits: z.number().int().positive().safe().optional(),
   judge: LoopMonitorJudgeSchema,
 }).superRefine((monitor, ctx) => {
   const cycleSteps = new Set(monitor.cycle);

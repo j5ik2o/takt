@@ -8,11 +8,13 @@ function makeMonitor(
   cycle: string[],
   threshold: number,
   ignoreSteps?: string[],
+  minTriggerVisits?: number,
 ): LoopMonitorConfig {
   return {
     cycle,
     ignoreSteps,
     threshold,
+    ...(minTriggerVisits === undefined ? {} : { minTriggerVisits }),
     judge: {
       rules: [
         { condition: parseWorkflowRuleCondition('progress'), next: cycle[0]! },
@@ -120,5 +122,146 @@ describe('CycleDetector', () => {
     const detector = new CycleDetector();
 
     expect(detector.recordAndCheck('A', 'A').triggered).toBe(false);
+  });
+
+  describe('min_trigger_visits', () => {
+    it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, '2', null])(
+      'rejects invalid min_trigger_visits: %s',
+      (minTriggerVisits) => {
+        expect(LoopMonitorSchema.safeParse({
+          cycle: ['replan', 'peer-review'],
+          threshold: 1,
+          min_trigger_visits: minTriggerVisits,
+          judge: { rules: [{ condition: 'healthy', next: 'replan' }] },
+        }).success).toBe(false);
+      },
+    );
+
+    it.each([1, 2, Number.MAX_SAFE_INTEGER])('accepts valid min_trigger_visits: %s', (minTriggerVisits) => {
+      const parsed = LoopMonitorSchema.safeParse({
+        cycle: ['replan', 'peer-review'],
+        threshold: 1,
+        min_trigger_visits: minTriggerVisits,
+        judge: { rules: [{ condition: 'healthy', next: 'replan' }] },
+      });
+      expect(parsed.success).toBe(true);
+      if (parsed.success) {
+        expect(parsed.data.min_trigger_visits).toBe(minTriggerVisits);
+      }
+    });
+
+    it('delays triggering until the last step of cycle has completed minTriggerVisits times, and preserves counts across reset()', () => {
+      const monitor = makeMonitor(['replan', 'peer-review'], 1, ['implement'], 2);
+      const detector = new CycleDetector([monitor]);
+
+      // First lap: replan -> implement -> peer-review -> replan (peer-review completed 1 < 2)
+      expect(detector.recordAndCheck('replan', 'implement').triggered).toBe(false);
+      expect(detector.recordAndCheck('implement', 'peer-review').triggered).toBe(false);
+      expect(detector.recordAndCheck('peer-review', 'replan').triggered).toBe(false);
+
+      // Second lap: replan -> implement -> peer-review -> replan (peer-review completed 2 >= 2, 2 cycles in history)
+      expect(detector.recordAndCheck('replan', 'implement').triggered).toBe(false);
+      expect(detector.recordAndCheck('implement', 'peer-review').triggered).toBe(false);
+      expect(detector.recordAndCheck('peer-review', 'replan')).toEqual({
+        triggered: true,
+        cycleCount: 2,
+        monitor,
+      });
+
+      // reset() clears history but keeps completedCounts so the 3rd lap also triggers
+      detector.reset();
+      expect(detector.getHistory()).toEqual([]);
+      expect(detector.recordAndCheck('replan', 'implement').triggered).toBe(false);
+      expect(detector.recordAndCheck('implement', 'peer-review').triggered).toBe(false);
+      expect(detector.recordAndCheck('peer-review', 'replan')).toEqual({
+        triggered: true,
+        cycleCount: 1,
+        monitor,
+      });
+    });
+
+    it('triggers on the first completion when minTriggerVisits is 1', () => {
+      const monitor = makeMonitor(['A', 'B'], 1, undefined, 1);
+      const detector = new CycleDetector([monitor]);
+
+      expect(recordCycle(detector, monitor.cycle, 'A')).toEqual({
+        triggered: true,
+        cycleCount: 1,
+        monitor,
+      });
+    });
+
+    it('checks completed count of cycle lastStep rather than stepName when ignoreSteps sit after lastStep', () => {
+      const monitor = makeMonitor(['review', 'fix'], 1, ['verify'], 2);
+      const detector = new CycleDetector([monitor]);
+
+      // review -> fix (count 1) -> verify (count 1) -> verify (count 2) -> review
+      expect(detector.recordAndCheck('review', 'fix').triggered).toBe(false);
+      expect(detector.recordAndCheck('fix', 'verify').triggered).toBe(false);
+      expect(detector.recordAndCheck('verify', 'verify').triggered).toBe(false);
+      // Even though verify completed 2 times, lastStep ("fix") completed only 1 time (< 2).
+      expect(detector.recordAndCheck('verify', 'review').triggered).toBe(false);
+
+      // Second lap: fix completes a 2nd time -> triggers on verify -> review (2 cycles in history)
+      expect(detector.recordAndCheck('review', 'fix').triggered).toBe(false);
+      expect(detector.recordAndCheck('fix', 'verify').triggered).toBe(false);
+      expect(detector.recordAndCheck('verify', 'review')).toEqual({
+        triggered: true,
+        cycleCount: 2,
+        monitor,
+      });
+    });
+
+    it('matches the unguarded monitor iff lastStep completions reached minTriggerVisits, across arbitrary sequences and resets', () => {
+      const steps = ['replan', 'implement', 'peer-review', 'verify'] as const;
+      const mulberry32 = (seed: number): (() => number) => {
+        let state = seed >>> 0;
+        return () => {
+          state = (state + 0x6d2b79f5) >>> 0;
+          let t = state;
+          t = Math.imul(t ^ (t >>> 15), t | 1);
+          t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      };
+
+      for (let seed = 1; seed <= 200; seed++) {
+        const next = mulberry32(seed);
+        const int = (min: number, max: number) => min + Math.floor(next() * (max - min + 1));
+        const minTriggerVisits = int(1, 4);
+        const threshold = int(1, 2);
+        const guardedMonitor = makeMonitor(['replan', 'peer-review'], threshold, ['implement'], minTriggerVisits);
+        const plainMonitor = makeMonitor(['replan', 'peer-review'], threshold, ['implement']);
+        const guarded = new CycleDetector([guardedMonitor]);
+        const plain = new CycleDetector([plainMonitor]);
+        let peerReviewCompletions = 0;
+
+        const ops = int(1, 40);
+        for (let i = 0; i < ops; i++) {
+          if (next() < 0.15) {
+            guarded.reset();
+            plain.reset();
+            // reset() must not reduce completedCounts
+            continue;
+          }
+          const completed = steps[int(0, steps.length - 1)]!;
+          const nextStep = steps[int(0, steps.length - 1)]!;
+          if (completed === 'peer-review') {
+            peerReviewCompletions++;
+          }
+          const guardedResult = guarded.recordAndCheck(completed, nextStep);
+          const plainResult = plain.recordAndCheck(completed, nextStep);
+
+          if (peerReviewCompletions < minTriggerVisits) {
+            // Forward property: never triggers below minTriggerVisits
+            expect(guardedResult.triggered).toBe(false);
+          } else {
+            // Reverse property: once >= minTriggerVisits, triggers whenever the unguarded monitor triggers
+            expect(guardedResult.triggered).toBe(plainResult.triggered);
+            expect(guardedResult.cycleCount).toBe(plainResult.cycleCount);
+          }
+        }
+      }
+    });
   });
 });

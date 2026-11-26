@@ -2850,3 +2850,132 @@ describe('Outer loop over nested workflow_call steps (simple)', () => {
     }
   });
 });
+
+describe('WorkflowEngine Integration: max_visits vs loop_monitors judge escape route', () => {
+  let tmpDir: string;
+  let engine: WorkflowEngine | null = null;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    applyDefaultMocks();
+    tmpDir = createTestTmpDir();
+  });
+
+  afterEach(() => {
+    if (engine) {
+      cleanupWorkflowEngine(engine);
+      engine = null;
+    }
+    if (existsSync(tmpDir)) {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  function buildEscapeWorkflow(maxVisits: number): WorkflowConfig {
+    return {
+      name: 'max-visits-vs-escape',
+      description: 'Test precedence between max_visits and loop monitor judge escape rule',
+      maxSteps: 10,
+      initialStep: 'a',
+      loopMonitors: [
+        {
+          cycle: ['a', 'b'],
+          threshold: 1,
+          judge: {
+            persona: 'supervisor',
+            rules: [
+              normalizeRule({ condition: 'continue', next: 'a' }) as LoopMonitorRule,
+              normalizeRule({ condition: 'escape', next: 'escalate' }) as LoopMonitorRule,
+              normalizeRule({ condition: 'abort', next: 'ABORT' }) as LoopMonitorRule,
+            ],
+          },
+        },
+      ],
+      steps: [
+        makeStep('a', {
+          maxVisits,
+          rules: [makeRule('to b', 'b')],
+        }),
+        makeStep('b', {
+          rules: [makeRule('to a', 'a')],
+        }),
+        makeStep('escalate', {
+          rules: [makeRule('done', 'COMPLETE')],
+        }),
+      ],
+    };
+  }
+
+  it('aborts with Visit limit reached without calling the judge escape rule when nextStep reached max_visits', async () => {
+    const config = buildEscapeWorkflow(1);
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      model: 'mock-model',
+    });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'a', content: 'a done' }),
+      makeResponse({ persona: 'b', content: 'b done' }),
+      // Only consumed if the bug calls the judge and escapes to escalate
+      makeResponse({ persona: 'supervisor', content: 'escape' }),
+      makeResponse({ persona: 'escalate', content: 'escalated' }),
+    ]);
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // a -> b
+      { index: 0, method: 'phase3_tag' }, // b -> a
+      { index: 1, method: 'ai_judge' },   // judge -> escalate (should not run)
+      { index: 0, method: 'phase3_tag' }, // escalate -> COMPLETE (should not run)
+    ]);
+
+    const startedSteps: string[] = [];
+    const aborts: Array<{ reason: string; kind: string }> = [];
+    const cycleDetected = vi.fn();
+    engine.on('step:start', (step) => startedSteps.push(step.name));
+    engine.on('step:cycle_detected', cycleDetected);
+    engine.on('workflow:abort', (_state, reason, kind) => aborts.push({ reason, kind }));
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('aborted');
+    expect(cycleDetected).not.toHaveBeenCalled();
+    expect(startedSteps).toEqual(['a', 'b']);
+    expect(startedSteps).not.toContain('escalate');
+    expect(aborts).toHaveLength(1);
+    expect(aborts[0]?.kind).toBe('loop_detected');
+    expect(aborts[0]?.reason).toMatch(/^Visit limit reached: step "a"/);
+  });
+
+  it('still allows the judge escape rule below max_visits', async () => {
+    const config = buildEscapeWorkflow(2);
+    engine = new WorkflowEngine(config, tmpDir, 'test task', {
+      projectCwd: tmpDir,
+      provider: 'mock',
+      model: 'mock-model',
+    });
+
+    mockRunAgentSequence([
+      makeResponse({ persona: 'a', content: 'a done' }),
+      makeResponse({ persona: 'b', content: 'b done' }),
+      makeResponse({ persona: 'supervisor', content: 'escape' }),
+      makeResponse({ persona: 'escalate', content: 'escalated' }),
+    ]);
+    mockRuleEvaluationSequence([
+      { index: 0, method: 'phase3_tag' }, // a -> b
+      { index: 0, method: 'phase3_tag' }, // b -> a (triggers monitor)
+      { index: 1, method: 'ai_judge' },   // judge -> escalate
+      { index: 0, method: 'phase3_tag' }, // escalate -> COMPLETE
+    ]);
+
+    const startedSteps: string[] = [];
+    const cycleDetected = vi.fn();
+    engine.on('step:start', (step) => startedSteps.push(step.name));
+    engine.on('step:cycle_detected', cycleDetected);
+
+    const state = await engine.run();
+
+    expect(state.status).toBe('completed');
+    expect(cycleDetected).toHaveBeenCalledOnce();
+    expect(startedSteps).toEqual(['a', 'b', '_loop_judge_a_b', 'escalate']);
+  });
+});
