@@ -33,6 +33,7 @@ const configEnvKeys = [
   'TAKT_CODEX_CLI_PATH',
   'TAKT_CLAUDE_CLI_PATH',
   'TAKT_TELEMETRY_ROUTING_DECISIONS',
+  'TAKT_OBSERVABILITY',
 ] as const;
 
 type ConfigEnvKey = (typeof configEnvKeys)[number];
@@ -42,6 +43,7 @@ function snapshotConfigEnv(): Record<ConfigEnvKey, string | undefined> {
     TAKT_CODEX_CLI_PATH: process.env.TAKT_CODEX_CLI_PATH,
     TAKT_CLAUDE_CLI_PATH: process.env.TAKT_CLAUDE_CLI_PATH,
     TAKT_TELEMETRY_ROUTING_DECISIONS: process.env.TAKT_TELEMETRY_ROUTING_DECISIONS,
+    TAKT_OBSERVABILITY: process.env.TAKT_OBSERVABILITY,
   };
 }
 
@@ -329,6 +331,22 @@ workflow_overrides:
 
       expect(() => GlobalConfigManager.getInstance().load()).toThrow(
         `takt ${packageVersion} does not support key "future_only_key"`,
+      );
+    });
+
+    it('should name the unknown key, not a type error, when the file has both', () => {
+      writeFileSync(testConfigPath, 'language: 123\nfuture_only_key: true\n', 'utf-8');
+
+      expect(() => GlobalConfigManager.getInstance().load()).toThrow(
+        `takt ${packageVersion} does not support key "future_only_key"`,
+      );
+    });
+
+    it('should say the running takt version does not support an unknown key from a root JSON env override', () => {
+      process.env.TAKT_OBSERVABILITY = JSON.stringify({ future_only_key: true });
+
+      expect(() => GlobalConfigManager.getInstance().load()).toThrow(
+        `takt ${packageVersion} does not support key "observability.future_only_key"`,
       );
     });
 
