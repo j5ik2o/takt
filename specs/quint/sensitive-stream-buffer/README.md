@@ -76,7 +76,7 @@ The second PR's model is `sensitiveStreamUnion.qnt` below.
 The inner stream cuts where the previous stream cut (the first PR's buffer, `firstClosedLine` with the previous reading, forced past the cap). The outer stream holds the previous units it gets and commits a run of them as one new unit (design 7.1):
 
 - rule 1: a forced previous unit commits everything held (forced);
-- rule 2: the new reading, from the start of the held run, is closed at the end of the unit (unforced);
+- rule 2: the new reading, from the start of the held run, is closed at the end of the unit (unforced). It is asked only at the last unit a write brings (design 7.1, 12th edition): asking it at every unit read the held run again per line;
 - rule 3a: the held run is longer than the cap (forced);
 - rule 4: otherwise it keeps holding;
 - rule 3b, after the units of a write: held text plus the inner pending tail is longer than the cap, so the held run is committed at its end, the last previous boundary (forced).
@@ -115,7 +115,7 @@ Not modelled: the bounded value sets, PEM blocks, `preview`, the third argument 
 | `dropDisplayTrace` | (s2) is not added | `unitHidesLegacyDisplay` |
 | `dropEarlierExtra` | only the last held unit's fourth-argument positions are added | `unitHidesExtra` |
 
-### Record (2a)
+### Record (2a, design 12th edition: rule 2 once per write)
 
 ```
 $ quint test --main=unionStream sensitiveStreamUnion_test.qnt
@@ -124,6 +124,7 @@ $ quint test --main=unionStream sensitiveStreamUnion_test.qnt
     ok chainKeyHiddenPerOldUnitTest passed 1 test(s)
     ok displayChainHiddenPerOldUnitTest passed 1 test(s)
     ok extraRangePreservedAcrossHeldWritesTest passed 1 test(s)
+    ok ruleTwoAtTheEndOfAWriteTest passed 1 test(s)
     ok flushCommitsEverythingTest passed 1 test(s)
 $ quint run --main=unionStream --invariant=unionSafety --max-steps=10 --max-samples=20000 --seed=1 sensitiveStreamUnion_test.qnt
 [ok] No violation found

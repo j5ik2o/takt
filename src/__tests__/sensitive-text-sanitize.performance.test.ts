@@ -251,20 +251,25 @@ describe('the union with the previous redaction stays linear', () => {
 // numbers go to the marshal before the merge (design 6).
 describe('the second PR stream stays linear on A3 (write + flush, write + preview + flush)', () => {
   const median = (samples: number[]): number => [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)]!;
-  const a3 = (bytes: number): string[] => {
-    const text = "--password=''a'\n" + ('p'.repeat(99) + '\n').repeat(Math.ceil(bytes / 100));
-    return Array.from({ length: Math.ceil(text.length / 4096) }, (_, index) => text.slice(index * 4096, (index + 1) * 4096));
-  };
+  const chunked = (text: string): string[] =>
+    Array.from({ length: Math.ceil(text.length / 4096) }, (_, index) => text.slice(index * 4096, (index + 1) * 4096));
+  // A3, and A3 again every 10,000 characters (12th edition): each open key makes the outer hold read
+  // a 10,000 character run again, so the repeated shape is where asking rule 2 per previous unit
+  // instead of once per write showed (12.7 times the inner-only stream at 256 KiB).
+  const SHAPES: ReadonlyArray<readonly [name: string, text: (bytes: number) => string]> = [
+    ['A3', (bytes) => "--password=''a'\n" + ('p'.repeat(99) + '\n').repeat(Math.ceil(bytes / 100))],
+    ['A3 every 10,000 characters', (bytes) => ("--password=''a'\n" + ('p'.repeat(99) + '\n').repeat(99)).repeat(Math.ceil(bytes / 9_916))],
+  ];
   const streams: ReadonlyArray<readonly [name: string, create: SensitiveTextStreamRedactorFactory]> = [
     ['first PR (inner only)', createLegacySensitiveTextStreamRedactor],
     ['second PR', createSensitiveTextStreamRedactor],
   ];
-  it.each([
-    ['write + flush', false],
-    ['write + preview + flush', true],
-  ])('%s', (name, withPreview) => {
+  it.each(SHAPES.flatMap(([shape, text]) => [
+    [`${shape}, write + flush`, text, false],
+    [`${shape}, write + preview + flush`, text, true],
+  ] as const))('%s', (name, shapeText, withPreview) => {
     const run = (create: SensitiveTextStreamRedactorFactory, bytes: number): number => {
-      const chunks = a3(bytes);
+      const chunks = chunked(shapeText(bytes));
       const start = performance.now();
       const redactor = create();
       for (const chunk of chunks) {
@@ -283,6 +288,6 @@ describe('the second PR stream stays linear on A3 (write + flush, write + previe
       expect(median(pairs.map((pair) => pair.large / pair.small)), `${stream}: 256 KiB / 64 KiB`).toBeLessThan(6);
       expect(median(pairs.map((pair) => pair.large)), stream).toBeLessThan(scaledMs(20_000));
     }
-    console.info(`#151 2a stream, A3 ${name} (ms, median of 3):`, JSON.stringify(table));
+    console.info(`#151 2a stream, ${name} (ms, median of 3):`, JSON.stringify(table));
   }, scaledMs(300_000));
 });

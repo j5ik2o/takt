@@ -33,6 +33,12 @@ module unionStream {
     init.then(write([KN, N], 0)).then(write([V, N], -1))
       .expect(expectedExtra == Set(0) and nBoundaries == Set({ at: 4, forced: false }) and nHidden.contains(0) and unionSafety)
 
+  /// Rule 2 is asked at the last unit of a write: V N closes the new value, but the same write's KN N
+  /// opens another, so the whole run stays held (no cut inside the write, design 7.1, 12th edition).
+  run ruleTwoAtTheEndOfAWriteTest =
+    init.then(write([KN, N], -1)).then(write([V, N, KN, N], -1))
+      .expect(nBoundaries == Set() and held.length() == 3 and lBoundaries.contains({ at: 4, forced: false }) and unionSafety)
+
   /// flush commits the inner tail and the held units, forced.
   run flushCommitsEverythingTest =
     init.then(write([KN, N], -1)).then(write([KB, V], -1)).then(flush)

@@ -134,7 +134,7 @@ module sensitiveStreamUnion {
       })
 
   // ------------------------------------------------------------------------------------------
-  // The outer stream (design 7.1 rules 1, 2, 3a, 4 per unit, rule 3b after the units).
+  // The outer stream (design 7.1: rules 1, 3a, 4 per unit, rule 2 at the write's last unit, rule 3b after the units).
 
   type Outer = { held: List[Unit], nLen: int, nBoundaries: Set[Boundary], nHidden: Set[int] }
 
@@ -173,12 +173,15 @@ module sensitiveStreamUnion {
       legacyUnit(rest, nLen, u.extra.filter(p => p >= nLen), u.forced)
     }
 
-  pure def pushUnit(o: Outer, raw: Unit, text: List[Sym]): Outer =
+  /// `last`: the unit is the last one this write (or flush) brought. Rule 2 reads the held run from its
+  /// start, so it is asked once per write, at its last unit (design 7.1, 12th edition): asking it at every
+  /// unit made a run of short lines read the held run again per line (14 times the inner stream at 256 KiB).
+  pure def pushUnit(o: Outer, raw: Unit, text: List[Sym], last: bool): Outer =
     if (raw.end <= o.nLen) o
     else {
       val u = arriving(raw, text, o.nLen)
       val grown = { ...o, held: o.held.append(u) }
-      val newClosed = mutation == "noNewGuard" or not(open(text.slice(o.nLen, u.end), false, true))
+      val newClosed = mutation == "noNewGuard" or (last and not(open(text.slice(o.nLen, u.end), false, true)))
       if (u.forced) commit(grown, text, u.end, true)                                // rule 1
       else if (newClosed) commit(grown, text, u.end, false)                         // rule 2
       else if (heldLength(grown.held) > CAP) commit(grown, text, u.end, true)       // rule 3a
@@ -199,7 +202,7 @@ module sensitiveStreamUnion {
   pure def outerAfterWrite(o: Outer, units: List[Unit], text: List[Sym], restLength: int): Outer =
     if (mutation == "newGuardOnly") newOnlyCuts(o, text, false)
     else {
-      val pushed = units.foldl(o, (q, u) => pushUnit(q, u, text))
+      val pushed = range(0, units.length()).foldl(o, (q, i) => pushUnit(q, units[i], text, i == units.length() - 1))
       if (pushed.held.length() > 0 and heldLength(pushed.held) + restLength > CAP) {
         if (mutation == "cutAtWriteEnd") commit(pushed, text, text.length(), true)  // the current code's cut
         else commit(pushed, text, pushed.nLen + heldLength(pushed.held), true)      // rule 3b
@@ -244,7 +247,7 @@ module sensitiveStreamUnion {
     val o =
       if (mutation == "newGuardOnly") newOnlyCuts(outer, written, true)
       else {
-        val pushed = units.foldl(outer, (q, u) => pushUnit(q, u, written))
+        val pushed = units.foldl(outer, (q, u) => pushUnit(q, u, written, true))
         if (pushed.held.length() > 0) commit(pushed, written, pushed.nLen + heldLength(pushed.held), true) else pushed
       }
     all {
