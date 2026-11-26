@@ -154,7 +154,7 @@ _.path = ["{{env.HOME}}/local/takt-custom/bin"]
 `scripts/check-takt-runtime.sh` で、次の3つを確かめます。どれかが合わないと `NG:` の行を出し、終了コード 1 で終わります。
 
 1. `command -v takt` が、リンクを解決した後で `~/local/takt-custom/bin/takt` と同じファイルを指すこと。
-2. 共有 TAKT のビルドが、そのキーをプロジェクトの `.takt/config.yaml` のキーとして受け付けること。`dist/core/models/config-schemas.js` の `ProjectConfigSchema` を `node` で読んで調べます。`claude_cli_path` のように global の設定でしか使えないキーは `NG:` になります。キーは `--key` で指定し、繰り返して複数指定できます。省略すると `task_finish_hook` を調べます。
+2. 共有 TAKT のビルドが、そのキーをプロジェクトの `.takt/config.yaml` のキーとして受け付けること。`dist/core/models/config-schemas.js` の `ProjectConfigSchema` を `node` で読んで調べます。`claude_cli_path` のように global の設定でしか使えないキーは `NG:` になります。キーは `--key` で指定し、繰り返して複数指定できます。値は文字どおりに照合し、正規表現や glob としては扱いません。省略すると `task_finish_hook` を調べます。
 3. `DEPLOYED_FROM_COMMIT` が、版のディレクトリ名（`takt-custom-<短縮SHA>`）と合うこと。`--repo <フォークのチェックアウト> --contains <コミット>` を付けると、配置した版がそのコミットを含むことも確かめます。
 
 ```sh

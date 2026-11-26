@@ -91,6 +91,76 @@ describe.skipIf(process.platform === 'win32')('check-takt-runtime.sh', () => {
     expect(result.output).toContain('does not match directory');
   });
 
+  it.each(['task_.*', '*'])('fails for --key %s, which matches the build keys only as a pattern', (key) => {
+    writeFileSync(join(base, 'task_finish_hook'), '');
+
+    const result = spawnSync('/bin/sh', [script, '--root', link, '--key', key], {
+      cwd: base,
+      encoding: 'utf8',
+      env: { HOME: base, PATH: [join(link, 'bin'), dirname(process.execPath), '/usr/bin', '/bin'].join(delimiter) },
+    });
+
+    expect(result.status).toBe(1);
+    expect(`${result.stdout}${result.stderr}`).toContain(`does not accept project key ${key}`);
+  });
+
+  describe('--contains', () => {
+    let repo: string;
+    let deployed: string;
+    let ancestor: string;
+    let unrelated: string;
+
+    function git(...args: string[]): string {
+      const result = spawnSync('git', ['-C', repo, ...args], {
+        encoding: 'utf8',
+        env: {
+          HOME: base,
+          PATH: process.env.PATH,
+          GIT_CONFIG_NOSYSTEM: '1',
+          GIT_AUTHOR_NAME: 't',
+          GIT_AUTHOR_EMAIL: 't@example.com',
+          GIT_COMMITTER_NAME: 't',
+          GIT_COMMITTER_EMAIL: 't@example.com',
+        },
+      });
+      if (result.status !== 0) {
+        throw new Error(`git ${args.join(' ')} failed: ${result.stderr}`);
+      }
+      return result.stdout.trim();
+    }
+
+    beforeEach(() => {
+      repo = join(base, 'repo');
+      mkdirSync(repo);
+      git('init', '-q', '-b', 'main');
+      git('commit', '-q', '--allow-empty', '-m', 'ancestor');
+      ancestor = git('rev-parse', 'HEAD');
+      git('commit', '-q', '--allow-empty', '-m', 'deployed');
+      deployed = git('rev-parse', 'HEAD');
+      git('checkout', '-q', '--orphan', 'other');
+      git('commit', '-q', '--allow-empty', '-m', 'unrelated');
+      unrelated = git('rev-parse', 'HEAD');
+      const dir = join(base, `takt-custom-${deployed.slice(0, 7)}`);
+      install(`takt-custom-${deployed.slice(0, 7)}`, schemaModule(['task_finish_hook']), deployed);
+      rmSync(link);
+      symlinkSync(dir, link);
+    });
+
+    it('passes when the deployed commit contains the commit', () => {
+      const result = run([join(link, 'bin')], '--repo', repo, '--contains', ancestor);
+
+      expect(result.output).toContain(`ok: ${deployed} contains ${ancestor}`);
+      expect(result.status).toBe(0);
+    });
+
+    it('fails when the deployed commit does not contain the commit', () => {
+      const result = run([join(link, 'bin')], '--repo', repo, '--contains', unrelated);
+
+      expect(result.status).toBe(1);
+      expect(result.output).toContain(`NG: ${deployed} does not contain ${unrelated}`);
+    });
+  });
+
   it('rejects --contains without --repo as a usage error', () => {
     expect(run([join(link, 'bin')], '--contains', COMMIT).status).toBe(2);
   });

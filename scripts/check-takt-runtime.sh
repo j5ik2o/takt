@@ -24,14 +24,15 @@ usage() {
 while [ $# -gt 0 ]; do
   case "$1" in
     --root) [ $# -ge 2 ] || usage; root=$2; shift 2 ;;
-    --key) [ $# -ge 2 ] || usage; keys="$keys $2"; shift 2 ;;
+    --key) [ $# -ge 2 ] || usage; keys="$keys
+$2"; shift 2 ;;
     --repo) [ $# -ge 2 ] || usage; repo=$2; shift 2 ;;
     --contains) [ $# -ge 2 ] || usage; contains=$2; shift 2 ;;
     -h|--help) usage ;;
     *) echo "unknown argument: $1" >&2; usage ;;
   esac
 done
-[ -n "$keys" ] || keys=" task_finish_hook"
+[ -n "$keys" ] || keys="task_finish_hook"
 if [ -n "$contains" ] && [ -z "$repo" ]; then
   echo "--contains needs --repo" >&2
   usage
@@ -75,13 +76,17 @@ project_keys=$(node --input-type=module -e '
 if [ -z "$project_keys" ]; then
   ng "cannot read the project config keys from $schema"
 fi
-for key in $keys; do
-  if printf '%s\n' "$project_keys" | grep -qx "$key"; then
+# Keys are newline-separated and compared as fixed strings: never a regex, a glob, or a grep option.
+while IFS= read -r key; do
+  [ -n "$key" ] || continue
+  if printf '%s\n' "$project_keys" | grep -Fqx -- "$key"; then
     ok "$schema accepts project key $key"
   elif [ -n "$project_keys" ]; then
     ng "$schema does not accept project key $key"
   fi
-done
+done <<KEYS
+$keys
+KEYS
 
 # 3. The build was deployed from a known commit.
 deployed_file="$root_real/DEPLOYED_FROM_COMMIT"
