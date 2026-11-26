@@ -260,7 +260,7 @@ Dynamic parallel and `dynamic_facets` selectors use read-only mode with only `Re
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | Runtime prepare policy (builtin presets always allowed) |
 | `workflow_command_gates` | object | `{ custom_scripts: false }` | Workflow YAML command quality gate policy |
 | `workflow_system_commands` | object | `{ custom_scripts: false }` | Workflow system command input policy |
-| `workflow_overrides` | object | - | Workflow-level overrides: top-level / per-step / per-persona `quality_gates` (AI directives or `type: command` gates) and `quality_gates_edit_only` |
+| `workflow_overrides` | object | - | Workflow-level overrides: top-level / per-step / per-persona `quality_gates` (AI directives or `type: command` gates) and `quality_gates_edit_only`; per-step `max_visits` (`workflow_overrides.steps.<step>.max_visits`) replaces the step's YAML `max_visits` (positive integer) |
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | Sync conflict resolver policy |
 | `observability` | object | disabled | Opt-in OpenTelemetry foundation. `enabled` initializes the SDK, `monitor` writes workflow metrics to `.takt/runs/<run>/monitor.json`, `session_log_exporter` writes a shadow session log from spans, and `usage_events_phase` writes phase-level usage events to `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl`. With `enabled: true` and `OTEL_EXPORTER_OTLP_ENDPOINT`, TAKT also sends spans and metrics through OTLP using standard `OTEL_EXPORTER_OTLP_*` environment variables; TAKT does not add an OTLP config key. |
 
@@ -2185,7 +2185,7 @@ others_category_name: "Other Workflows"  # Name for uncategorized category
 - **Nested categories** — Add categories under another category name.
 - **Workflow descriptions** — Write `- name: description` under `workflows:` to show a description in the selection screen. Use the same description if a workflow appears in several categories.
 - **Others category** — collects workflows not listed under any category (disable with `show_others_category: false`)
-- **Builtin workflow filtering** — turn off all builtins with `enable_builtin_workflows: false`, or specific names with `disabled_builtins: [name1, name2]`
+- **Builtin workflow filtering** — turn off all builtins with `enable_builtin_workflows: false`, or specific names with `disabled_builtins: [name1, name2]`. This also applies to `workflow_call`: a call to an excluded builtin (for example `call: development-core`) fails. `takt workflow doctor` and the run error name the call, the searched paths, and the reason the builtin was excluded; copy the workflow (and, when `enable_builtin_workflows: false`, any dependent builtin workflows it calls recursively) into `.takt/workflows/`, or re-enable the builtin.
 
 ### Resetting Categories
 

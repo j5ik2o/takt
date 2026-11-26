@@ -260,7 +260,7 @@ dynamic parallel と `dynamic_facets` の selector は読み取り専用で、`R
 | `workflow_runtime_prepare` | object | `{ custom_scripts: false }` | ランタイム prepare ポリシー（ビルトインプリセットは常に許可） |
 | `workflow_command_gates` | object | `{ custom_scripts: false }` | workflow YAML command quality gate ポリシー |
 | `workflow_system_commands` | object | `{ custom_scripts: false }` | workflow の system command input を許可するポリシー |
-| `workflow_overrides` | object | - | workflow レベルの上書き。トップレベル / step 単位 / persona 単位の `quality_gates`（AI ディレクティブまたは `type: command` ゲート）と `quality_gates_edit_only` |
+| `workflow_overrides` | object | - | workflow レベルの上書き。トップレベル / step 単位 / persona 単位の `quality_gates`（AI ディレクティブまたは `type: command` ゲート）と `quality_gates_edit_only`。step 単位の `max_visits`（`workflow_overrides.steps.<step>.max_visits`）は step の YAML の `max_visits` を置き換える（正の整数） |
 | `sync_conflict_resolver` | object | `{ auto_approve_tools: false }` | sync conflict resolver ポリシー |
 | `observability` | object | 無効 | OpenTelemetry foundation の opt-in 設定。`enabled` で SDK を初期化し、`monitor` は workflow metric を `.takt/runs/<run>/monitor.json` に出力し、`session_log_exporter` は span 由来の shadow session log を出力します。`usage_events_phase` は phase 粒度の usage events を `.takt/runs/<run>/logs/<session>-usage-events.phase.jsonl` に出力します。`enabled: true` と `OTEL_EXPORTER_OTLP_ENDPOINT` が揃うと、TAKT は標準の `OTEL_EXPORTER_OTLP_*` 環境変数で span と metric も OTLP 送信します。TAKT 独自の OTLP config キーはありません。 |
 
@@ -2148,7 +2148,7 @@ others_category_name: "Other Workflows"  # 未分類カテゴリの名前
 - カテゴリ名の下にさらにカテゴリを置けます。
 - `workflows:` に `- 名前: 説明` と書くと選択画面に workflow の説明を表示できます。同じワークフローを複数カテゴリに置く場合は説明を揃えてください。
 - いずれのカテゴリにも列挙されていない workflow は「その他」カテゴリに自動収集されます。`show_others_category: false` で無効化できます。
-- `enable_builtin_workflows: false` ですべてのビルトイン workflow を無効化できます。`disabled_builtins: [name1, name2]` では名前を指定して無効化できます。
+- `enable_builtin_workflows: false` ですべてのビルトイン workflow を無効化できます。`disabled_builtins: [name1, name2]` では名前を指定して無効化できます。`workflow_call` にも効くため、外したビルトインを呼ぶ（例: `call: development-core`）と失敗します。`takt workflow doctor` と実行時のエラーは、呼び出し名・探したパス・ビルトインを外した理由を示します。対象 workflow（`enable_builtin_workflows: false` の場合は、それが呼び出す依存ビルトイン workflow も依存関係に沿って再帰的に）を `.takt/workflows/` へコピーするか、ビルトインを有効に戻してください。
 
 ### カテゴリのリセット
 

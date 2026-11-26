@@ -339,7 +339,7 @@ TAKT 支持 Normal、Parallel、Dynamic Parallel、Arpeggio、Team Leader、Work
 
 `fixed` 总是运行，selector 只能选择展开后的 pool step name。`replace`（默认）在新 round 替换上一轮 pool selection；`cumulative` 保留之前选中的 item。恢复运行不会恢复保存的 selection，而是针对当前 pool 再次调用 selector。
 
-`all()` 和 `any()` 只聚合当前 round 的 fixed 与 selected pool item。selector 输出无效或选择未知项时，在任何 agent 启动前失败；没有 all-pool fallback。缺失/空 pool、重复展开名称、非 agent 子 step、无效 selection mode、provider 未解析、严格 structured output 无效或 fixed 加 selected 为空都会在执行前失败。Selector 输入包括任务、Report Directory 路径、目标 report 名称、相对 `HEAD` 的变更文件路径、候选项 ID 及其 `description`（职责）和 `selection_hint`（若指定，则为选择标准）、`cumulative` 的上一轮 selection 以及是否首次进入/新 round。报告引用按当前 scope、resume snapshot 和父 scope 解析；读取工具只允许 `Read`、`Glob` 和 `Grep`。
+`all()` 和 `any()` 只聚合当前 round 的 fixed 与 selected pool item。selector 输出无效或选择未知项时，在任何 agent 启动前失败；没有 all-pool fallback。selector 输出违反选择 schema 时，失败原因会写明 selector 类型和 step 名称以及允许的候选项 ID；输出能按 JSON 读取时，还会写明返回的 `selected_ids`。缺失/空 pool、重复展开名称、非 agent 子 step、无效 selection mode、provider 未解析、严格 structured output 无效或 fixed 加 selected 为空都会在执行前失败。Selector 输入包括任务、Report Directory 路径、目标 report 名称、相对 `HEAD` 的变更文件路径、候选项 ID 及其 `description`（职责）和 `selection_hint`（若指定，则为选择标准）、`cumulative` 的上一轮 selection 以及是否首次进入/新 round。报告引用按当前 scope、resume snapshot 和父 scope 解析；读取工具只允许 `Read`、`Glob` 和 `Grep`。
 
 ### Dynamic Facet Selection（Facet Pool）
 
@@ -509,7 +509,7 @@ candidates:
 
 #### Selector 行为
 
-selector 使用新 session、只读权限和 `Read`/`Glob`/`Grep` 工具。输入包括用户请求、叶 workflow、workflow-call instance、step identity、round 信息、Report Directory 和 report 名称、调用时 `git diff HEAD` 对应的变更路径以及 candidate ID/description。candidate facet body 不会单独发送；selector 通过读取目标 prompt 和 report 获取所需上下文。输出必须是只含 `selected_ids` 和 `rationale` 的严格 JSON；未知/重复 ID、非数组和超出 `max_selected` 都会在主 agent 启动前失败，失败时没有 fallback。selector guidance 可以配置 `instruction`（必填）和 `persona`（可选）：
+selector 使用新 session、只读权限和 `Read`/`Glob`/`Grep` 工具。输入包括用户请求、叶 workflow、workflow-call instance、step identity、round 信息、Report Directory 和 report 名称、调用时 `git diff HEAD` 对应的变更路径以及 candidate ID/description。candidate facet body 不会单独发送；selector 通过读取目标 prompt 和 report 获取所需上下文。输出必须是只含 `selected_ids` 和 `rationale` 的严格 JSON；未知/重复 ID、非数组和超出 `max_selected` 都会在主 agent 启动前失败，失败时没有 fallback。selector 输出违反选择 schema 时，失败原因会写明 selector 类型和 step 名称以及允许的候选项 ID；输出能按 JSON 读取时，还会写明返回的 `selected_ids`。selector guidance 可以配置 `instruction`（必填）和 `persona`（可选）：
 
 ```yaml
 steps:
@@ -943,6 +943,26 @@ loop_monitors:
 ```
 
 `loop_monitors.judge` 不接受 provider、model 或 provider-options；使用 `provider.targets.internal_agents.loop-judge` 的 runtime target 或触发 step 的 fallback。judge 始终使用新 session，因此不接受 `session_key`。限流 fallback 也必须在 runtime 或旧版 config 中配置。
+
+### step 的 `max_visits` 与 `stop_on_repeated_verdict`
+
+两个 step 级设置，不调用 judge 即可停止没有进展的往返：
+
+```yaml
+steps:
+  - name: replan
+    max_visits: 4                  # 不开始第 5 次 visit，直接停止
+  - name: verify
+    stop_on_repeated_verdict: true # 连续两次返回相同判定时停止
+```
+
+- `max_visits` 为正整数（拒绝 `0`、负数和小数）。在一个 workflow engine 的运行中，统计以迁移结束的 visit 次数。同一 visit 的重试（`blocked` 后的用户输入、quality gate 失败、rate-limit fallback）不计数。每次子工作流调用单独计数，恢复（resume）的 run 从 0 开始计数。达到上限后再开始 visit 时，以 `Visit limit reached: step "replan" already completed 4 times (max_visits: 4); ...` 为理由中止 run。
+- `stop_on_repeated_verdict` 只比较匹配了哪条 rule，不比较输出中的理由。当 step 与上一次 visit 匹配同一条 rule 且该 rule 不是终止（包括回到同一 step 的迁移）时中止 run。终止结果（`COMPLETE`、`ABORT`、`return`）不参与比较。需要按理由判断时，请使用 `loop_monitors` 的 judge。
+- 中止理由以一行记录在 run 的中止原因中（`meta.json` 的 `reason` 与 `workflow_abort` 日志）。
+- 无需修改 workflow 即可更改 `max_visits`：`.takt/config.yaml`（项目）或 `~/.takt/config.yaml`（全局）中的 `workflow_overrides.steps.<step>.max_visits` 会替换 YAML 中的值，项目优先于全局。无法通过覆盖取消上限，请改为指定更大的数值。parallel 的 sub-step 不接受 `max_visits`。
+- 早于这些 key 的 TAKT 版本会忽略它们，用该版本重新保存 config 会丢失 `max_visits`。
+
+内置开发 workflow 在 `replan`、`fix-replan`、`verification-replan` 上设置了 `max_visits: 4`。`development-core` 的 `[replan, peer-review]` loop monitor 忽略 `implement` 并使用 `threshold: 1`（首次评审来自 `plan`，因此独立评审连续两次要求重新规划时达到 1 个周期）：此时 judge 比较最近两次评审结果，仅当相同的指摘在没有新差异的情况下重复出现时才停止。
 
 ### `subworkflow`
 

@@ -365,7 +365,7 @@ Sub-steps execute concurrently, and the parent aggregates sub-step matches via `
 - `replace` (the default) replaces a previous pool selection on a new round. `cumulative` retains every pool item selected in earlier rounds.
 - A process resume does not restore a saved selection; it invokes the selector again against the current pool.
 - `all()` and `any()` aggregate only the fixed and selected pool items of the current round. Dynamic parallel rejects position-dependent aggregate expressions.
-- Invalid selector output or an unknown selection fails before a fixed or pool agent starts; there is no all-pool fallback.
+- Invalid selector output or an unknown selection fails before a fixed or pool agent starts; there is no all-pool fallback. When the selector's output violates the selection schema, the failure reason names the selector and step and the allowed candidate IDs, plus the returned `selected_ids` when the output could be read as JSON.
 - Loading fails before execution when `pool` is missing or empty, a pool description is empty, a fragment cannot expand, an expanded name is duplicated, a fixed/pool item is not an agent sub-step, `selection.mode` is not `replace` or `cumulative`, or an aggregate label is not defined by every candidate. Selector execution also fails before reviewer startup when the provider is unresolved, its strict output is invalid, or fixed plus selected pool items is empty. Resume points containing the removed dynamic selection fields are not supported.
 - The selector input contains the task, the Report Directory path, the target report names (including names from `selection.reports`), the changed file paths against `HEAD`, candidate IDs with `description` (role) and `selection_hint` (selection criteria, when specified), the previous selection for `cumulative`, and whether this is an initial entry or a new round. The selector resolves report references through the current workflow scope, exact resume snapshot, and parent workflow scope before passing the resulting paths. It is configured with a tool allowlist of `Read`, `Glob`, and `Grep` for reading referenced files and reports; providers that honor the allowlist permit only those tools. Its output must be a completed JSON object with only `selected_ids` and `rationale`; non-arrays, non-string IDs, duplicate IDs, and extra properties are rejected.
 - The changed path list includes staged, unstaged, deleted, and untracked names against `HEAD`; `.takt/runs/` paths are excluded. Report references are resolved through the existing report-reference rules before they are passed as paths; report contents are read by the selector when needed.
@@ -562,7 +562,7 @@ The selector receives at least:
 - The changed file paths from the working tree at selector invocation time (equivalent to `git diff HEAD`)
 - Candidate IDs and descriptions
 
-Candidate facet bodies are not sent separately to the selector. The selector receives the target-agent prompt inline, resolves the referenced reports through the current workflow scope, exact resume snapshot, and parent workflow scope, and is configured with a tool allowlist of `Read`, `Glob`, and `Grep` for reading the referenced files and reports; providers that honor the allowlist permit only those tools. It returns only candidate IDs and a rationale against a strict structured output schema (`additionalProperties: false`, `selected_ids` as a unique array whose items are an `enum` of the pool's candidate IDs, plus a required `rationale` string). Pool-external IDs, duplicate IDs, and selections exceeding a specified `max_selected` are rejected. Selector failure stops the run before the main agent starts; there is no implicit fallback to all candidates or to an empty selection. The selector itself is not subject to dynamic facet selection or auto routing.
+Candidate facet bodies are not sent separately to the selector. The selector receives the target-agent prompt inline, resolves the referenced reports through the current workflow scope, exact resume snapshot, and parent workflow scope, and is configured with a tool allowlist of `Read`, `Glob`, and `Grep` for reading the referenced files and reports; providers that honor the allowlist permit only those tools. It returns only candidate IDs and a rationale against a strict structured output schema (`additionalProperties: false`, `selected_ids` as a unique array whose items are an `enum` of the pool's candidate IDs, plus a required `rationale` string). Pool-external IDs, duplicate IDs, and selections exceeding a specified `max_selected` are rejected. Selector failure stops the run before the main agent starts; there is no implicit fallback to all candidates or to an empty selection. When the selector's output violates the selection schema, the failure reason names the selector and step and the allowed candidate IDs, plus the returned `selected_ids` when the output could be read as JSON. The selector itself is not subject to dynamic facet selection or auto routing.
 
 The selector provider is resolved through #1136's `provider.targets.internal_agents.selector` in `runtime.yaml`. When left unspecified, the runtime's normal default is used.
 
@@ -1119,6 +1119,26 @@ Loop-monitor judges always use a fresh provider session. `session_key` is theref
 
 Rate-limit fallback is also configured in `runtime.yaml` (or the existing global/project
 `config.yaml` legacy mode), never in workflow YAML.
+
+### Step `max_visits` and `stop_on_repeated_verdict`
+
+Two step-level guards stop laps that make no progress, without asking a judge:
+
+```yaml
+steps:
+  - name: replan
+    max_visits: 4                  # stop instead of starting a 5th visit
+  - name: verify
+    stop_on_repeated_verdict: true # stop when it returns the same verdict twice in a row
+```
+
+- `max_visits` is a positive integer (`0`, negatives, and fractions are rejected). It counts visits of the step that ended in a transition, within one workflow engine run. Retrying the same visit (user input after `blocked`, a failed quality gate, a rate-limit fallback) does not count. Each subworkflow call has its own count, and a resumed run counts from zero. Starting a visit after the limit aborts the run with `Visit limit reached: step "replan" already completed 4 times (max_visits: 4); ...`.
+- `stop_on_repeated_verdict` compares only which rule matched, not the reason in the output. It aborts when the step matches the same rule as on its previous visit and that rule is not terminal (a transition back to the same step counts too). Terminal results (`COMPLETE`, `ABORT`, `return`) are never compared. When the reason matters, use a `loop_monitors` judge instead.
+- The stop reason is a single line in the run's abort reason (`meta.json` `reason` and the `workflow_abort` log entry).
+- `max_visits` can be changed without editing the workflow: `workflow_overrides.steps.<step>.max_visits` in `.takt/config.yaml` (project) or `~/.takt/config.yaml` (global) replaces the YAML value; project wins over global. An override cannot remove the limit; set a larger number instead. Parallel sub-steps do not take `max_visits`.
+- TAKT versions that predate these keys ignore them, and saving the config with such a version drops `max_visits`.
+
+The builtin development workflows set `max_visits: 4` on `replan`, `fix-replan`, and `verification-replan`. In `development-core`, the `[replan, peer-review]` loop monitor ignores `implement` and has `threshold: 1` (the first review comes from `plan`, so the second consecutive replan request completes 1 `[replan, peer-review]` cycle): when the independent review asks for a replan twice in a row, the judge compares the last two review results and stops only when the same findings repeat without a new diff. In a week of measured runs, successful runs entered a replan step at most 2 times per run and failed runs at most 4 times; every long failed run ended with the independent review returning BLOCKED twice in a row.
 
 ### `subworkflow`
 

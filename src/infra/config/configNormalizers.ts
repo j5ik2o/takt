@@ -51,6 +51,7 @@ type RawProviderRoutingEntry = string | {
 type RawQualityGate = NonNullable<z.output<typeof QualityGatesSchema>>[number];
 type RawWorkflowOverrides = z.output<typeof WorkflowOverridesSchema>;
 type SerializedQualityGateOverride = { quality_gates?: RawQualityGate[] };
+type SerializedStepOverride = SerializedQualityGateOverride & { max_visits?: number };
 
 export function denormalizeCacciaConfig(config: CacciaConfig | undefined): Record<string, unknown> | undefined {
   if (config === undefined) {
@@ -343,7 +344,10 @@ export function normalizeWorkflowOverrides(
       ? Object.fromEntries(
         Object.entries(raw.steps).map(([name, override]) => [
           name,
-          { qualityGates: normalizeQualityGates(override?.quality_gates) },
+          {
+            qualityGates: normalizeQualityGates(override?.quality_gates),
+            ...(override?.max_visits !== undefined ? { maxVisits: override.max_visits } : {}),
+          },
         ])
       )
       : undefined,
@@ -363,14 +367,14 @@ export function denormalizeWorkflowOverrides(
 ): {
   quality_gates?: RawQualityGate[];
   quality_gates_edit_only?: boolean;
-  steps?: Record<string, SerializedQualityGateOverride>;
+  steps?: Record<string, SerializedStepOverride>;
   personas?: Record<string, SerializedQualityGateOverride>;
 } | undefined {
   if (!overrides) return undefined;
   const result: {
     quality_gates?: RawQualityGate[];
     quality_gates_edit_only?: boolean;
-    steps?: Record<string, SerializedQualityGateOverride>;
+    steps?: Record<string, SerializedStepOverride>;
     personas?: Record<string, SerializedQualityGateOverride>;
   } = {};
   if (overrides.qualityGates !== undefined) {
@@ -382,9 +386,12 @@ export function denormalizeWorkflowOverrides(
   if (overrides.steps) {
     result.steps = Object.fromEntries(
       Object.entries(overrides.steps).map(([name, override]) => {
-        const stepOverride: SerializedQualityGateOverride = {};
+        const stepOverride: SerializedStepOverride = {};
         if (override.qualityGates !== undefined) {
           stepOverride.quality_gates = denormalizeQualityGates(override.qualityGates);
+        }
+        if (override.maxVisits !== undefined) {
+          stepOverride.max_visits = override.maxVisits;
         }
         return [name, stepOverride];
       })

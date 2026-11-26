@@ -419,3 +419,4 @@ GitHub Actions の CI（`ci.yml`）が実行する E2E は `test:e2e:mock` の�
   - 目的: `workflow_call` で切り出した子ワークフローが、親とステップ数の上限を共有したまま最後まで実行されることを確認する。
 - Workflow selection branches（`e2e/specs/workflow-selection-branches.e2e.ts`）
   - 目的: `--workflow` のファイルパス指定、ローカル名、repertoire `@scope` 名、未知名（fail fast）、省略時の各分岐を確認。
+  - 目的: `enable_builtin_workflows: false` のとき builtin への `workflow_call` が、探した候補と外した理由つきのエラーで失敗し、run の `meta.json` と logs が残ること、`takt workflow doctor` も同じ理由でエラーにすることを確認。

@@ -244,13 +244,6 @@ async function executeWorkflowInternal(
       options.workflowSystemCommandsPolicy,
     ),
   );
-  const preparedBundle = prepareWorkflowExecutionBundle({
-    rootWorkflow: workflowConfig,
-    workflowCallResolver: liveWorkflowCallResolver,
-    projectCwd: options.projectCwd,
-    lookupCwd: cwd,
-    centralExecution: options.runPathsDirectory !== undefined,
-  });
   const runLifecycle = createWorkflowRunLifecycle({
     cwd,
     ...(options.runPathsDirectory === undefined ? {} : { runPathsDirectory: options.runPathsDirectory }),
@@ -285,6 +278,14 @@ async function executeWorkflowInternal(
   let runtimeReportDiagnostics: ReturnType<typeof validateWorkflowReportReferences>;
   const bootstrapFailureOut = createOutputFns(undefined, options.outputMode);
   try {
+    // Prepared after beginRun so an unresolvable workflow_call still leaves run meta and logs.
+    const preparedBundle = prepareWorkflowExecutionBundle({
+      rootWorkflow: workflowConfig,
+      workflowCallResolver: liveWorkflowCallResolver,
+      projectCwd: options.projectCwd,
+      lookupCwd: cwd,
+      centralExecution: options.runPathsDirectory !== undefined,
+    });
     publishWorkflowExecutionBundle(activeRun.runPaths, preparedBundle);
     executionBundle = loadWorkflowExecutionBundle(activeRun.runPaths);
     const bundledWorkflowConfig = executionBundle.rootWorkflow;

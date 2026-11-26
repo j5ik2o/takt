@@ -106,6 +106,13 @@ interface WorkflowRunLoopDeps {
   applyRuntimeEnvironment: (stage: 'step') => void;
   loopDetectorCheck: (stepName: string) => { shouldWarn?: boolean; shouldAbort?: boolean; count: number; isLoop: boolean };
   cycleDetectorRecordAndCheck: (stepName: string, nextStep: string) => { triggered: boolean; monitor?: LoopMonitorConfig; cycleCount: number };
+  /** Returns the stop reason when the step already completed `max_visits` visits. */
+  stepVisitCheckEntry: (step: WorkflowStep) => string | undefined;
+  /**
+   * Counts a completed visit (retries of the same visit never get here). Returns the stop reason when a
+   * non-terminal verdict repeats the previous one (`stop_on_repeated_verdict`); pass undefined for terminal ones.
+   */
+  stepVisitRecordCompletion: (step: WorkflowStep, matchedRuleIndex: number | undefined) => string | undefined;
   resolveDoneTransition: (step: WorkflowStep, response: AgentResponse) => WorkflowRuleTransition;
   runLoopMonitorJudge: (
     monitor: LoopMonitorConfig,
@@ -903,6 +910,11 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
       abort = abortWorkflow(deps, 'loop_detected', ERROR_MESSAGES.LOOP_DETECTED(step.name, loopCheck.count));
       break;
     }
+    const visitLimitReason = deps.stepVisitCheckEntry(step);
+    if (visitLimitReason !== undefined) {
+      abort = abortWorkflow(deps, 'loop_detected', visitLimitReason);
+      break;
+    }
 
     if (consumesIterationBudget) {
       deps.state.iteration++;
@@ -1193,6 +1205,12 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
         break;
       }
 
+      const repeatedVerdictReason = deps.stepVisitRecordCompletion(step, response.matchedRuleIndex);
+      if (repeatedVerdictReason !== undefined) {
+        abort = abortWorkflow(deps, 'loop_detected', repeatedVerdictReason);
+        break;
+      }
+
       const cycleCheck = deps.cycleDetectorRecordAndCheck(step.name, nextStep);
       if (cycleCheck.triggered && cycleCheck.monitor) {
         log.info('Loop monitor cycle threshold reached', {
@@ -1302,8 +1320,13 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     });
   }
 
-  if (loopCheck.shouldAbort) {
-    const abort = abortWorkflow(deps, 'loop_detected', ERROR_MESSAGES.LOOP_DETECTED(step.name, loopCheck.count));
+  const visitLimitReason = loopCheck.shouldAbort ? undefined : deps.stepVisitCheckEntry(step);
+  if (loopCheck.shouldAbort || visitLimitReason !== undefined) {
+    const abort = abortWorkflow(
+      deps,
+      'loop_detected',
+      visitLimitReason ?? ERROR_MESSAGES.LOOP_DETECTED(step.name, loopCheck.count),
+    );
     return {
       response: {
         persona: step.persona ?? step.name,
@@ -1535,6 +1558,12 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
 
   const nextStep = requireNextStep(step, transition);
   const isComplete = nextStep === COMPLETE_STEP || nextStep === ABORT_STEP;
+
+  const repeatedVerdictReason = deps.stepVisitRecordCompletion(step, isComplete ? undefined : response.matchedRuleIndex);
+  if (repeatedVerdictReason !== undefined) {
+    const abort = abortWorkflow(deps, 'loop_detected', repeatedVerdictReason);
+    return { response, nextStep: ABORT_STEP, isComplete: true, loopDetected: loopCheck.isLoop, abort };
+  }
 
   if (!isComplete) {
     result.commitTransition?.({ kind: 'next_step', nextStep });

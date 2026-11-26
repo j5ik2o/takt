@@ -370,7 +370,7 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
 - `replace`（既定）は新しい round で以前の pool 選択を置き換えます。`cumulative` は過去の round で選んだ候補を維持します。
 - プロセスの resume は保存済みの選択を復元せず、現在の pool に対して selector を再実行します。
 - `all()` と `any()` は当該 round で実行する fixed と選択済み pool だけを集約します。固定位置に依存する aggregate 式は dynamic parallel では使えません。
-- 不正な selector 出力や pool 外の ID は fixed/pool agent の起動前に失敗します。全 pool を実行する fallback はありません。
+- 不正な selector 出力や pool 外の ID は fixed/pool agent の起動前に失敗します。全 pool を実行する fallback はありません。selector の出力が選択の schema に反したときの失敗理由には、selector の種類と step 名、許される候補 ID が載ります。出力を JSON として読めた場合は、返った `selected_ids` も載ります。
 - ロード時には`pool` の未指定・空配列、pool の空 `description`、fragment 展開失敗、展開後の名前重複、agent sub-step 以外の fixed/pool、無効な `selection.mode`、または全候補が定義しない aggregate 結果ラベルを検出して実行前に失敗します。selector の provider 未解決・strict 出力不正、fixed と選択済み pool を結合した実行対象の空集合も reviewer 起動前に失敗します。削除された dynamic selection fields を含む resume point はサポートしません。
 - selector にはタスク、Report Directory のパス、対象レポート名（`selection.reports` の指定を含む）、`HEAD` に対する変更ファイルのパス一覧、候補 ID と `description`（役目）および `selection_hint`（指定されていれば選ぶ基準）、`cumulative` の過去の選択、および初回か新しい round かを渡します。selector は既存の report-reference の探索順（現在の workflow scope、exact resume snapshot、親 workflow scope）でレポート参照を解決してからパスを受け取ります。参照先のファイルとレポートを読むために `Read`・`Glob`・`Grep` のツール許可リストが設定され、許可リストを尊重する provider ではそれらの tool のみが許可されます。出力は `selected_ids` と `rationale` だけを持つ完了済み JSON object でなければならず、非配列・非文字列 ID・重複 ID・追加プロパティは拒否します。
 - 変更パス一覧には `HEAD` に対する staged・unstaged・削除・未追跡のファイル名が含まれ、`.takt/runs/` 配下は除外します。レポート参照は既存の report-reference ルールで解決されたパスとして渡し、本文の読み取りは selector が必要に応じて行います。
@@ -567,7 +567,7 @@ selector には少なくとも次を渡します。
 - selector 呼び出し時点の working tree の変更（`git diff HEAD` 相当）を示す変更ファイルのパス一覧
 - 候補 ID と description
 
-候補 facet の本文は個別には selector に渡しません。対象 agent の prompt は本文で渡し、selector は既存の report-reference の探索順（現在の workflow scope、exact resume snapshot、親 workflow scope）でレポート参照を解決してから、参照先のファイルとレポートを読むための `Read`・`Glob`・`Grep` のツール許可リストを使います。許可リストを尊重する provider ではそれらの tool のみが許可されます。厳格な structured output schema（`additionalProperties: false`、`selected_ids` は pool の候補 ID を `enum` とする unique array、加えて必須の `rationale` 文字列）に対して候補 ID と理由だけを返します。pool 外 ID、重複 ID、指定した `max_selected` の超過は拒否します。selector 失敗時は main agent を起動せず fail-fast し、全候補や空選択への暗黙 fallback はありません。selector 自身を dynamic facet selection や auto routing の対象にしません。
+候補 facet の本文は個別には selector に渡しません。対象 agent の prompt は本文で渡し、selector は既存の report-reference の探索順（現在の workflow scope、exact resume snapshot、親 workflow scope）でレポート参照を解決してから、参照先のファイルとレポートを読むための `Read`・`Glob`・`Grep` のツール許可リストを使います。許可リストを尊重する provider ではそれらの tool のみが許可されます。厳格な structured output schema（`additionalProperties: false`、`selected_ids` は pool の候補 ID を `enum` とする unique array、加えて必須の `rationale` 文字列）に対して候補 ID と理由だけを返します。pool 外 ID、重複 ID、指定した `max_selected` の超過は拒否します。selector 失敗時は main agent を起動せず fail-fast し、全候補や空選択への暗黙 fallback はありません。selector の出力が選択の schema に反したときの失敗理由には、selector の種類と step 名、許される候補 ID が載ります。出力を JSON として読めた場合は、返った `selected_ids` も載ります。selector 自身を dynamic facet selection や auto routing の対象にしません。
 
 selector provider は #1136 の `runtime.yaml` の `provider.targets.internal_agents.selector` で解決します。未指定時は runtime の通常 default を使います。
 
@@ -1115,6 +1115,26 @@ loop_monitors:
 loop-monitor judge は常に新しい provider session で実行されます。そのため `loop_monitors.judge` では `session_key` を指定できません。
 
 rate-limit fallback も `runtime.yaml`（または既存の global/project `config.yaml` legacy mode）で設定します。workflow YAML には記述できません。
+
+### step の `max_visits` と `stop_on_repeated_verdict`
+
+進まない往復を、judge を呼ばずに止める step 単位の設定です。
+
+```yaml
+steps:
+  - name: replan
+    max_visits: 4                  # 5 回目の visit を始めずに止める
+  - name: verify
+    stop_on_repeated_verdict: true # 同じ判定を 2 回続けて返したら止める
+```
+
+- `max_visits` は正の整数です（`0`・負の数・小数は拒否します）。1 つの workflow engine の実行の中で、遷移まで終わった visit を数えます。同じ visit のやり直し（`blocked` のあとのユーザー入力、quality gate の失敗、rate-limit の fallback）は数えません。サブワークフローは呼び出しごとに、再開した run は 0 から数え直します。上限に達したあとで visit を始めようとすると、`Visit limit reached: step "replan" already completed 4 times (max_visits: 4); ...` を理由に run を止めます。
+- `stop_on_repeated_verdict` が比べるのは、どの rule に一致したかだけで、出力に書かれた理由は比べません。その step が前回と同じ rule に一致し、その rule が終端でない場合（同じ step へ戻る遷移も含む）に run を止めます。終端（`COMPLETE`・`ABORT`・`return`）は比べません。理由の中身で判断したいときは `loop_monitors` の judge を使ってください。
+- 止めた理由は 1 行で run の中断理由（`meta.json` の `reason` と `workflow_abort` ログ）に残ります。
+- `max_visits` は workflow を書き換えずに変えられます。`.takt/config.yaml`（プロジェクト）または `~/.takt/config.yaml`（グローバル）の `workflow_overrides.steps.<step>.max_visits` が YAML の値を置き換えます。プロジェクトがグローバルより優先です。上限を外すことはできないので、大きな数を指定してください。parallel の sub-step には `max_visits` を付けられません。
+- これらのキーより前の TAKT はキーを無視します。その版で config を保存し直すと `max_visits` が消えます。
+
+builtin の開発 workflow は `replan`・`fix-replan`・`verification-replan` に `max_visits: 4` を設定しています。`development-core` の `[replan, peer-review]` の loop monitor は `implement` を数えずに `threshold: 1` で動きます（初回は `plan` から来るため 0 周で、独立レビューが 2 回続けて再計画を求めた時点で 1 周に達します）。その時点で judge が直近 2 回のレビュー結果を比べ、同じ指摘が新しい差分なしに繰り返されているときだけ止めます。1 週間ぶんの実測では、成功した run が replan 系 step に入ったのは 1 run あたり最大 2 回、失敗した run は最大 4 回で、長引いた失敗 run はどれも独立レビューが BLOCKED を 2 回続けて返して終わっていました。
 
 ### `subworkflow`
 

@@ -565,6 +565,11 @@ export const StepQualityGatesOverrideSchema = z.object({
   quality_gates: QualityGatesSchema,
 }).optional();
 
+export const StepWorkflowOverrideSchema = z.object({
+  quality_gates: QualityGatesSchema,
+  max_visits: z.number().int().positive().safe().optional(),
+}).optional();
+
 export function hasProviderOptionsLeaf(
   providerOptions: Readonly<Record<string, unknown>>,
 ): boolean {
