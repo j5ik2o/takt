@@ -5,6 +5,9 @@
 //   src/core/workflow/engine/WorkflowRunLoop.ts
 //     - runWorkflowToCompletionCore (iteration-start checks + end-of-iteration nextStep check + loop monitor judge)
 //     - runSingleWorkflowIterationCore (iteration-start checks without max_steps)
+//     - workflow_call ABORT handling (ABORT -> ABORT / no rule / ABORT -> COMPLETE / ABORT -> nextStep)
+//   src/core/workflow/engine/WorkflowCallExecutor.ts
+//     - child engine inherits parent onIterationLimit and shares root max_steps budget
 //   src/core/workflow/engine/step-visit-guard.ts      StepLoopGuard (checkEntry / recordCompletion)
 //   src/core/workflow/engine/loop-detector.ts         LoopDetector (stateful consecutiveCount check)
 //   src/core/workflow/engine/LoopMonitorJudgeRunner.ts
@@ -13,7 +16,10 @@
 //   src/features/tasks/execute/iterationLimitHandler.ts
 //   src/features/tasks/execute/taskExecution.ts
 //     - onIterationLimit: in non-interactive takt run, sets exceededInfo and returns null (persisted as `exceeded`);
-//       in interactive mode, may return +N to extend maxSteps and `continue` to the top of the loop.
+//       via direct WorkflowEngine API, may return +N to extend maxSteps and `continue` to the top of the loop.
+//     - EXCEEDED_GUARD models workflowExecution.ts:661-662:
+//         false (#174 / 657f16ad6): exceeded = exceededInfo != null
+//         true  (#176 fix):         exceeded = finalState.status === 'aborted' && abortKind === 'iteration_limit' && exceededInfo != null
 //
 // ORDER selects the iteration-start check order:
 //   "before"             Current code (#174 / 657f16ad6):
@@ -31,6 +37,8 @@
 module iterationEntryOrder {
   const ORDER: str
   const MODE: str // "full" | "single"
+  const EXCEEDED_GUARD: bool
+  const ALLOW_INTERRUPT: bool
   const INITIAL_MAX_STEPS: int
   const STEP_A_MAX_VISITS: int // <= 0 means no max_visits
   const STEP_C_MAX_VISITS: int // <= 0 means no max_visits
@@ -54,6 +62,7 @@ module iterationEntryOrder {
     | AbortedLoopDetector
     | AbortedByJudge
   type JudgeChoice = JudgeContinue | JudgeRouteToC | JudgeAbort
+  type ChildAbortOutcome = ChildAbortPropagate | ChildAbortToComplete | ChildAbortToStepA
 
   pure val ALL_STEPS: Set[StepName] = Set(StepA, StepB, StepC, StepCall)
 
@@ -108,13 +117,15 @@ module iterationEntryOrder {
   var hasLastLoopStep: bool
   var lastLoopStep: StepName
   var consecutiveLoopCount: int
-  var exceededSaved: bool
+  var exceededInfoRecorded: bool // models eventBridge.state.exceededInfo != null
 
   // Ghost variables for verifying side effects and priority contracts.
   var onIterationLimitCalls: int
   var judgeCalls: int
   var loopDetectorChecks: int
-  var stepEntriesPassedToLoopDetector: int
+  var entryId: int // identifies each step entry; unchanged across onIterationLimit extension `continue`
+  var lastLoopCheckEntryId: int
+  var loopDetectorDoubleCounted: bool
   var naturalTransitionIntoLimit: bool
   var maxStepsFiredAtVisitLimit: bool
   var promptedLimitAtVisitLimit: bool
@@ -122,6 +133,12 @@ module iterationEntryOrder {
   var abortedLoopDetectorAtVisitLimit: bool
   var startedOverBudget: bool
   var extendedCount: int
+
+  // Models workflowExecution.ts:661-662 (computed when engine.run() completes).
+  val exceededSaved =
+    if (status == Running) false
+    else if (EXCEEDED_GUARD) (status == AbortedIterationLimit and exceededInfoRecorded)
+    else exceededInfoRecorded
 
   action initAt(s: StepName, initIter: int): bool = all {
     status' = Running,
@@ -136,11 +153,13 @@ module iterationEntryOrder {
     hasLastLoopStep' = false,
     lastLoopStep' = StepA,
     consecutiveLoopCount' = 0,
-    exceededSaved' = false,
+    exceededInfoRecorded' = false,
     onIterationLimitCalls' = 0,
     judgeCalls' = 0,
     loopDetectorChecks' = 0,
-    stepEntriesPassedToLoopDetector' = 0,
+    entryId' = 0,
+    lastLoopCheckEntryId' = -1,
+    loopDetectorDoubleCounted' = false,
     naturalTransitionIntoLimit' = false,
     maxStepsFiredAtVisitLimit' = false,
     promptedLimitAtVisitLimit' = false,
@@ -157,6 +176,7 @@ module iterationEntryOrder {
 
   // External SIGINT / AbortSignal arrives before an entry check.
   action requestInterrupt: bool = all {
+    ALLOW_INTERRUPT,
     status == Running,
     phase == Entering,
     not(interruptPending),
@@ -165,10 +185,11 @@ module iterationEntryOrder {
     iteration' = iteration, maxSteps' = maxSteps,
     completedVisits' = completedVisits, startedVisits' = startedVisits,
     hasLastLoopStep' = hasLastLoopStep, lastLoopStep' = lastLoopStep,
-    consecutiveLoopCount' = consecutiveLoopCount, exceededSaved' = exceededSaved,
+    consecutiveLoopCount' = consecutiveLoopCount, exceededInfoRecorded' = exceededInfoRecorded,
     onIterationLimitCalls' = onIterationLimitCalls, judgeCalls' = judgeCalls,
     loopDetectorChecks' = loopDetectorChecks,
-    stepEntriesPassedToLoopDetector' = stepEntriesPassedToLoopDetector,
+    entryId' = entryId, lastLoopCheckEntryId' = lastLoopCheckEntryId,
+    loopDetectorDoubleCounted' = loopDetectorDoubleCounted,
     naturalTransitionIntoLimit' = naturalTransitionIntoLimit,
     maxStepsFiredAtVisitLimit' = maxStepsFiredAtVisitLimit,
     promptedLimitAtVisitLimit' = promptedLimitAtVisitLimit,
@@ -192,6 +213,7 @@ module iterationEntryOrder {
       and iteration >= maxSteps
     val userInputInvalid = isUserInputInvalid(currentStep)
     val ld = nextLoopState(hasLastLoopStep, lastLoopStep, consecutiveLoopCount, currentStep)
+    val doubleCountOnLd = lastLoopCheckEntryId == entryId
 
     // 1. Interrupt always checked first in all versions.
     if (interruptPending) all {
@@ -207,11 +229,13 @@ module iterationEntryOrder {
       hasLastLoopStep' = hasLastLoopStep,
       lastLoopStep' = lastLoopStep,
       consecutiveLoopCount' = consecutiveLoopCount,
-      exceededSaved' = exceededSaved,
+      exceededInfoRecorded' = exceededInfoRecorded,
       onIterationLimitCalls' = onIterationLimitCalls,
       judgeCalls' = judgeCalls,
       loopDetectorChecks' = loopDetectorChecks,
-      stepEntriesPassedToLoopDetector' = stepEntriesPassedToLoopDetector,
+      entryId' = entryId,
+      lastLoopCheckEntryId' = lastLoopCheckEntryId,
+      loopDetectorDoubleCounted' = loopDetectorDoubleCounted,
       naturalTransitionIntoLimit' = naturalTransitionIntoLimit,
       maxStepsFiredAtVisitLimit' = maxStepsFiredAtVisitLimit,
       promptedLimitAtVisitLimit' = promptedLimitAtVisitLimit,
@@ -233,11 +257,13 @@ module iterationEntryOrder {
       hasLastLoopStep' = hasLastLoopStep,
       lastLoopStep' = lastLoopStep,
       consecutiveLoopCount' = consecutiveLoopCount,
-      exceededSaved' = exceededSaved,
+      exceededInfoRecorded' = exceededInfoRecorded,
       onIterationLimitCalls' = onIterationLimitCalls,
       judgeCalls' = judgeCalls,
       loopDetectorChecks' = loopDetectorChecks,
-      stepEntriesPassedToLoopDetector' = stepEntriesPassedToLoopDetector,
+      entryId' = entryId,
+      lastLoopCheckEntryId' = lastLoopCheckEntryId,
+      loopDetectorDoubleCounted' = loopDetectorDoubleCounted,
       naturalTransitionIntoLimit' = naturalTransitionIntoLimit,
       maxStepsFiredAtVisitLimit' = maxStepsFiredAtVisitLimit,
       promptedLimitAtVisitLimit' = promptedLimitAtVisitLimit,
@@ -259,11 +285,13 @@ module iterationEntryOrder {
       hasLastLoopStep' = true,
       lastLoopStep' = currentStep,
       consecutiveLoopCount' = ld.nextCount,
-      exceededSaved' = exceededSaved,
+      exceededInfoRecorded' = exceededInfoRecorded,
       onIterationLimitCalls' = onIterationLimitCalls,
       judgeCalls' = judgeCalls,
       loopDetectorChecks' = loopDetectorChecks + 1,
-      stepEntriesPassedToLoopDetector' = stepEntriesPassedToLoopDetector + 1,
+      entryId' = entryId,
+      lastLoopCheckEntryId' = entryId,
+      loopDetectorDoubleCounted' = (loopDetectorDoubleCounted or doubleCountOnLd),
       naturalTransitionIntoLimit' = naturalTransitionIntoLimit,
       maxStepsFiredAtVisitLimit' = maxStepsFiredAtVisitLimit,
       promptedLimitAtVisitLimit' = promptedLimitAtVisitLimit,
@@ -283,7 +311,9 @@ module iterationEntryOrder {
         lastLoopStep' = if (ldRanBefore) currentStep else lastLoopStep,
         consecutiveLoopCount' = if (ldRanBefore) ld.nextCount else consecutiveLoopCount,
         loopDetectorChecks' = if (ldRanBefore) loopDetectorChecks + 1 else loopDetectorChecks,
-        stepEntriesPassedToLoopDetector' = stepEntriesPassedToLoopDetector,
+        entryId' = entryId,
+        lastLoopCheckEntryId' = if (ldRanBefore) entryId else lastLoopCheckEntryId,
+        loopDetectorDoubleCounted' = (loopDetectorDoubleCounted or (ldRanBefore and doubleCountOnLd)),
         loopDetectorRanAtVisitLimit' = (loopDetectorRanAtVisitLimit or (ldRanBefore and atVisitLimit)),
         abortedLoopDetectorAtVisitLimit' = abortedLoopDetectorAtVisitLimit,
         currentStep' = currentStep,
@@ -296,18 +326,19 @@ module iterationEntryOrder {
         naturalTransitionIntoLimit' = naturalTransitionIntoLimit,
         startedOverBudget' = startedOverBudget,
         if (extendOnLimit) all {
-          // Interactive extension: updateMaxSteps(maxSteps + 1); continue; (stays in Entering)
+          // Extension via WorkflowEngine API: updateMaxSteps(maxSteps + 1); continue;
+          // Stays in Entering with the SAME entryId.
           status' = Running,
           phase' = Entering,
           maxSteps' = maxSteps + 1,
-          exceededSaved' = exceededSaved,
+          exceededInfoRecorded' = exceededInfoRecorded,
           extendedCount' = extendedCount + 1,
         } else all {
-          // Non-interactive takt run sets exceededInfo and returns null; interactive Stop returns null.
+          // Non-interactive takt run sets exceededInfo and returns null; Stop returns null.
           status' = AbortedIterationLimit,
           phase' = Entering,
           maxSteps' = maxSteps,
-          exceededSaved' = if (not(INTERACTIVE_EXTEND)) true else exceededSaved,
+          exceededInfoRecorded' = if (not(INTERACTIVE_EXTEND)) true else exceededInfoRecorded,
           extendedCount' = extendedCount,
         },
       }
@@ -327,11 +358,13 @@ module iterationEntryOrder {
         hasLastLoopStep' = if (ldRanBefore) true else hasLastLoopStep,
         lastLoopStep' = if (ldRanBefore) currentStep else lastLoopStep,
         consecutiveLoopCount' = if (ldRanBefore) ld.nextCount else consecutiveLoopCount,
-        exceededSaved' = exceededSaved,
+        exceededInfoRecorded' = exceededInfoRecorded,
         onIterationLimitCalls' = onIterationLimitCalls,
         judgeCalls' = judgeCalls,
         loopDetectorChecks' = if (ldRanBefore) loopDetectorChecks + 1 else loopDetectorChecks,
-        stepEntriesPassedToLoopDetector' = stepEntriesPassedToLoopDetector,
+        entryId' = entryId,
+        lastLoopCheckEntryId' = if (ldRanBefore) entryId else lastLoopCheckEntryId,
+        loopDetectorDoubleCounted' = (loopDetectorDoubleCounted or (ldRanBefore and doubleCountOnLd)),
         naturalTransitionIntoLimit' = naturalTransitionIntoLimit,
         maxStepsFiredAtVisitLimit' = maxStepsFiredAtVisitLimit,
         promptedLimitAtVisitLimit' = promptedLimitAtVisitLimit,
@@ -354,11 +387,13 @@ module iterationEntryOrder {
       hasLastLoopStep' = true,
       lastLoopStep' = currentStep,
       consecutiveLoopCount' = ld.nextCount,
-      exceededSaved' = exceededSaved,
+      exceededInfoRecorded' = exceededInfoRecorded,
       onIterationLimitCalls' = onIterationLimitCalls,
       judgeCalls' = judgeCalls,
       loopDetectorChecks' = loopDetectorChecks + 1,
-      stepEntriesPassedToLoopDetector' = stepEntriesPassedToLoopDetector + 1,
+      entryId' = entryId,
+      lastLoopCheckEntryId' = entryId,
+      loopDetectorDoubleCounted' = (loopDetectorDoubleCounted or doubleCountOnLd),
       naturalTransitionIntoLimit' = naturalTransitionIntoLimit,
       maxStepsFiredAtVisitLimit' = maxStepsFiredAtVisitLimit,
       promptedLimitAtVisitLimit' = promptedLimitAtVisitLimit,
@@ -380,11 +415,13 @@ module iterationEntryOrder {
       hasLastLoopStep' = true,
       lastLoopStep' = currentStep,
       consecutiveLoopCount' = ld.nextCount,
-      exceededSaved' = exceededSaved,
+      exceededInfoRecorded' = exceededInfoRecorded,
       onIterationLimitCalls' = onIterationLimitCalls,
       judgeCalls' = judgeCalls,
       loopDetectorChecks' = loopDetectorChecks + 1,
-      stepEntriesPassedToLoopDetector' = stepEntriesPassedToLoopDetector + 1,
+      entryId' = entryId,
+      lastLoopCheckEntryId' = entryId,
+      loopDetectorDoubleCounted' = (loopDetectorDoubleCounted or doubleCountOnLd),
       naturalTransitionIntoLimit' = naturalTransitionIntoLimit,
       maxStepsFiredAtVisitLimit' = maxStepsFiredAtVisitLimit,
       promptedLimitAtVisitLimit' = promptedLimitAtVisitLimit,
@@ -411,11 +448,13 @@ module iterationEntryOrder {
         hasLastLoopStep' = true,
         lastLoopStep' = currentStep,
         consecutiveLoopCount' = ld.nextCount,
-        exceededSaved' = exceededSaved,
+        exceededInfoRecorded' = exceededInfoRecorded,
         onIterationLimitCalls' = onIterationLimitCalls,
         judgeCalls' = judgeCalls,
         loopDetectorChecks' = loopDetectorChecks + 1,
-        stepEntriesPassedToLoopDetector' = stepEntriesPassedToLoopDetector + 1,
+        entryId' = entryId,
+        lastLoopCheckEntryId' = entryId,
+        loopDetectorDoubleCounted' = (loopDetectorDoubleCounted or doubleCountOnLd),
         naturalTransitionIntoLimit' = naturalTransitionIntoLimit,
         maxStepsFiredAtVisitLimit' = maxStepsFiredAtVisitLimit,
         promptedLimitAtVisitLimit' = promptedLimitAtVisitLimit,
@@ -428,8 +467,8 @@ module iterationEntryOrder {
   }
 
   // Same-visit retry (quality gate failure / blocked -> user input): continues before recordCompletion,
-  // re-entering the loop at the top for the same step. (rate_limited also decrements iteration,
-  // modelled by `refundIteration = true`).
+  // re-entering the loop at the top for the same step as a fresh entry (entryId + 1).
+  // (rate_limited also decrements iteration, modelled by `refundIteration = true`).
   action retryStep(refundIteration: bool): bool = all {
     status == Running,
     phase == InStep,
@@ -447,11 +486,13 @@ module iterationEntryOrder {
       hasLastLoopStep' = hasLastLoopStep,
       lastLoopStep' = lastLoopStep,
       consecutiveLoopCount' = consecutiveLoopCount,
-      exceededSaved' = exceededSaved,
+      exceededInfoRecorded' = exceededInfoRecorded,
       onIterationLimitCalls' = onIterationLimitCalls,
       judgeCalls' = judgeCalls,
       loopDetectorChecks' = loopDetectorChecks,
-      stepEntriesPassedToLoopDetector' = stepEntriesPassedToLoopDetector,
+      entryId' = entryId + 1,
+      lastLoopCheckEntryId' = lastLoopCheckEntryId,
+      loopDetectorDoubleCounted' = loopDetectorDoubleCounted,
       naturalTransitionIntoLimit' = naturalTransitionIntoLimit,
       maxStepsFiredAtVisitLimit' = maxStepsFiredAtVisitLimit,
       promptedLimitAtVisitLimit' = promptedLimitAtVisitLimit,
@@ -478,11 +519,13 @@ module iterationEntryOrder {
     hasLastLoopStep' = hasLastLoopStep,
     lastLoopStep' = lastLoopStep,
     consecutiveLoopCount' = consecutiveLoopCount,
-    exceededSaved' = exceededSaved,
+    exceededInfoRecorded' = exceededInfoRecorded,
     onIterationLimitCalls' = onIterationLimitCalls,
     judgeCalls' = judgeCalls,
     loopDetectorChecks' = loopDetectorChecks,
-    stepEntriesPassedToLoopDetector' = stepEntriesPassedToLoopDetector,
+    entryId' = entryId,
+    lastLoopCheckEntryId' = lastLoopCheckEntryId,
+    loopDetectorDoubleCounted' = loopDetectorDoubleCounted,
     naturalTransitionIntoLimit' = naturalTransitionIntoLimit,
     maxStepsFiredAtVisitLimit' = maxStepsFiredAtVisitLimit,
     promptedLimitAtVisitLimit' = promptedLimitAtVisitLimit,
@@ -490,6 +533,71 @@ module iterationEntryOrder {
     abortedLoopDetectorAtVisitLimit' = abortedLoopDetectorAtVisitLimit,
     startedOverBudget' = startedOverBudget,
     extendedCount' = extendedCount,
+  }
+
+  // Child workflow_call inside StepCall exhausts the shared root max_steps budget.
+  // Models WorkflowCallExecutor.ts:595-598 (child inherits parent onIterationLimit):
+  //   - In non-interactive takt run, child sets eventBridge.state.exceededInfo (exceededInfoRecorded' = true)
+  //     and aborts with abortKind = 'iteration_limit'.
+  //   - Parent handles child ABORT according to its workflow_call step rules:
+  //       ChildAbortPropagate  : ABORT -> ABORT or no rule (propagates iteration_limit -> AbortedIterationLimit)
+  //       ChildAbortToComplete : ABORT -> COMPLETE (finalState.status = Completed; design 中-2)
+  //       ChildAbortToStepA    : ABORT -> StepA (e.g. development-core implement ABORT -> replan; design 中-1)
+  action childWorkflowCallIterationLimit(outcome: ChildAbortOutcome): bool = all {
+    status == Running,
+    phase == InStep,
+    currentStep == StepCall,
+    MODE == "full",
+    not(IGNORE_ITERATION_LIMIT),
+    val nextIter = if (iteration < maxSteps) maxSteps else iteration
+    val nextExceededInfo = if (not(INTERACTIVE_EXTEND)) true else exceededInfoRecorded
+    val nextCompleted = completedVisits.set(StepCall, completedVisits.get(StepCall) + 1)
+    val naturalAtLimit = isAtVisitLimit(StepA, nextCompleted)
+    all {
+      inRetry' = false,
+      iteration' = nextIter,
+      maxSteps' = maxSteps,
+      interruptPending' = interruptPending,
+      startedVisits' = startedVisits,
+      hasLastLoopStep' = hasLastLoopStep,
+      lastLoopStep' = lastLoopStep,
+      consecutiveLoopCount' = consecutiveLoopCount,
+      exceededInfoRecorded' = nextExceededInfo,
+      onIterationLimitCalls' = onIterationLimitCalls + 1,
+      judgeCalls' = judgeCalls,
+      loopDetectorChecks' = loopDetectorChecks,
+      lastLoopCheckEntryId' = lastLoopCheckEntryId,
+      loopDetectorDoubleCounted' = loopDetectorDoubleCounted,
+      maxStepsFiredAtVisitLimit' = maxStepsFiredAtVisitLimit,
+      promptedLimitAtVisitLimit' = promptedLimitAtVisitLimit,
+      loopDetectorRanAtVisitLimit' = loopDetectorRanAtVisitLimit,
+      abortedLoopDetectorAtVisitLimit' = abortedLoopDetectorAtVisitLimit,
+      startedOverBudget' = startedOverBudget,
+      extendedCount' = extendedCount,
+      phase' = Entering,
+      if (outcome == ChildAbortPropagate) all {
+        status' = AbortedIterationLimit,
+        currentStep' = StepCall,
+        completedVisits' = completedVisits,
+        entryId' = entryId,
+        naturalTransitionIntoLimit' = naturalTransitionIntoLimit,
+      } else if (outcome == ChildAbortToComplete) all {
+        status' = Completed,
+        currentStep' = StepCall,
+        completedVisits' = completedVisits,
+        entryId' = entryId,
+        naturalTransitionIntoLimit' = naturalTransitionIntoLimit,
+      } else all {
+        // ChildAbortToStepA: non-terminal transition to StepA (e.g. development-core implement ABORT -> replan).
+        completedVisits' = nextCompleted,
+        currentStep' = StepA,
+        entryId' = entryId + 1,
+        naturalTransitionIntoLimit' = (naturalTransitionIntoLimit or naturalAtLimit),
+        status' =
+          if (ORDER == "abortAtTransition" and naturalAtLimit) AbortedVisitLimit
+          else Running,
+      },
+    },
   }
 
   // Non-terminal transition from currentStep to nextStep.
@@ -521,10 +629,12 @@ module iterationEntryOrder {
       hasLastLoopStep' = hasLastLoopStep,
       lastLoopStep' = lastLoopStep,
       consecutiveLoopCount' = consecutiveLoopCount,
-      exceededSaved' = exceededSaved,
+      exceededInfoRecorded' = exceededInfoRecorded,
       onIterationLimitCalls' = onIterationLimitCalls,
       loopDetectorChecks' = loopDetectorChecks,
-      stepEntriesPassedToLoopDetector' = stepEntriesPassedToLoopDetector,
+      entryId' = entryId + 1,
+      lastLoopCheckEntryId' = lastLoopCheckEntryId,
+      loopDetectorDoubleCounted' = loopDetectorDoubleCounted,
       naturalTransitionIntoLimit' = (naturalTransitionIntoLimit or naturalAtLimit),
       maxStepsFiredAtVisitLimit' = maxStepsFiredAtVisitLimit,
       promptedLimitAtVisitLimit' = promptedLimitAtVisitLimit,
@@ -568,10 +678,11 @@ module iterationEntryOrder {
     iteration' = iteration, maxSteps' = maxSteps, interruptPending' = interruptPending,
     completedVisits' = completedVisits, startedVisits' = startedVisits,
     hasLastLoopStep' = hasLastLoopStep, lastLoopStep' = lastLoopStep,
-    consecutiveLoopCount' = consecutiveLoopCount, exceededSaved' = exceededSaved,
+    consecutiveLoopCount' = consecutiveLoopCount, exceededInfoRecorded' = exceededInfoRecorded,
     onIterationLimitCalls' = onIterationLimitCalls, judgeCalls' = judgeCalls,
     loopDetectorChecks' = loopDetectorChecks,
-    stepEntriesPassedToLoopDetector' = stepEntriesPassedToLoopDetector,
+    entryId' = entryId, lastLoopCheckEntryId' = lastLoopCheckEntryId,
+    loopDetectorDoubleCounted' = loopDetectorDoubleCounted,
     naturalTransitionIntoLimit' = naturalTransitionIntoLimit,
     maxStepsFiredAtVisitLimit' = maxStepsFiredAtVisitLimit,
     promptedLimitAtVisitLimit' = promptedLimitAtVisitLimit,
@@ -588,6 +699,8 @@ module iterationEntryOrder {
     nondet refundIteration = oneOf(Set(false, true))
     retryStep(refundIteration),
     completeTerminal,
+    nondet childOutcome = oneOf(Set(ChildAbortPropagate, ChildAbortToComplete, ChildAbortToStepA))
+    childWorkflowCallIterationLimit(childOutcome),
     nondet nextStep = oneOf(ALL_STEPS)
     nondet judgeChoice = oneOf(Set(JudgeContinue, JudgeRouteToC, JudgeAbort))
     completeNonTerminal(nextStep, judgeChoice),
@@ -605,7 +718,8 @@ module iterationEntryOrder {
   val visitLimitBeatsMaxSteps = not(maxStepsFiredAtVisitLimit) and not(promptedLimitAtVisitLimit)
 
   // 3. Exceeded persistence contract: `exceeded` is saved ONLY on AbortedIterationLimit,
-  //    and NEVER when currentStep has already reached max_visits.
+  //    and NEVER when currentStep has already reached max_visits (even if a child workflow_call
+  //    recorded exceededInfo before parent ABORT -> replan or ABORT -> COMPLETE).
   val exceededOnlyOnIterationLimit =
     exceededSaved implies (status == AbortedIterationLimit and not(isAtVisitLimit(currentStep, completedVisits)))
 
@@ -621,9 +735,9 @@ module iterationEntryOrder {
   val visitLimitSkipsLoopDetector =
     not(loopDetectorRanAtVisitLimit) and not(abortedLoopDetectorAtVisitLimit)
 
-  // 6. LoopDetector is never double-counted when onIterationLimit extends maxSteps and continues.
-  val noLoopDetectorDoubleCount =
-    loopDetectorChecks == stepEntriesPassedToLoopDetector
+  // 6. LoopDetector is never double-counted on the same step entry (e.g., when onIterationLimit
+  //    extends maxSteps and `continue`s to the top of the loop).
+  val noLoopDetectorDoubleCount = not(loopDetectorDoubleCounted)
 
   // 7. Per-step max_visits bound always holds: completed <= started <= max_visits.
   val visitsBounded =
@@ -666,6 +780,12 @@ module iterationEntryOrder {
   val witnessExtended = extendedCount > 0
   val witnessJudgeRan = judgeCalls > 0
   val witnessCompleted = status == Completed
+  val witnessChildAbortToVisitLimitNoExceeded =
+    status == AbortedVisitLimit and exceededInfoRecorded and not(exceededSaved)
+  val witnessChildAbortToCompleteNoExceeded =
+    status == Completed and exceededInfoRecorded and not(exceededSaved)
+  val witnessChildAbortPropagatedExceeded =
+    status == AbortedIterationLimit and currentStep == StepCall and exceededSaved
 }
 
 // --- Concrete runnable instances ---
@@ -675,6 +795,8 @@ module fixedFullExceeded {
   import iterationEntryOrder(
     ORDER = "fixed",
     MODE = "full",
+    EXCEEDED_GUARD = true,
+    ALLOW_INTERRUPT = true,
     INITIAL_MAX_STEPS = 2,
     STEP_A_MAX_VISITS = 1,
     STEP_C_MAX_VISITS = 1,
@@ -688,11 +810,54 @@ module fixedFullExceeded {
   ).*
 }
 
-// Fixed full loop (interactive extension mode + invalid user-input step B).
+// Fixed full loop without interrupts: increases trace depth & witness density for simultaneous limits
+// and child workflow_call ABORT paths (review 低-5).
+module fixedFullExceededNoInterrupt {
+  import iterationEntryOrder(
+    ORDER = "fixed",
+    MODE = "full",
+    EXCEEDED_GUARD = true,
+    ALLOW_INTERRUPT = false,
+    INITIAL_MAX_STEPS = 2,
+    STEP_A_MAX_VISITS = 1,
+    STEP_C_MAX_VISITS = 1,
+    STEP_CALL_MAX_VISITS = 1,
+    LOOP_DETECTION_MAX = 2,
+    LOOP_DETECTION_ABORT = true,
+    INTERACTIVE_EXTEND = false,
+    IGNORE_ITERATION_LIMIT = false,
+    USER_INPUT_INVALID_ON_B = false,
+    ENABLE_LOOP_MONITOR = true
+  ).*
+}
+
+// Fixed full loop (WorkflowEngine API extension mode + invalid user-input step B).
 module fixedFullInteractive {
   import iterationEntryOrder(
     ORDER = "fixed",
     MODE = "full",
+    EXCEEDED_GUARD = true,
+    ALLOW_INTERRUPT = true,
+    INITIAL_MAX_STEPS = 2,
+    STEP_A_MAX_VISITS = 1,
+    STEP_C_MAX_VISITS = 1,
+    STEP_CALL_MAX_VISITS = 1,
+    LOOP_DETECTION_MAX = 1,
+    LOOP_DETECTION_ABORT = true,
+    INTERACTIVE_EXTEND = true,
+    IGNORE_ITERATION_LIMIT = false,
+    USER_INPUT_INVALID_ON_B = true,
+    ENABLE_LOOP_MONITOR = true
+  ).*
+}
+
+// Fixed full loop (API extension mode) without interrupts: dense witness coverage for extension `continue`.
+module fixedFullInteractiveNoInterrupt {
+  import iterationEntryOrder(
+    ORDER = "fixed",
+    MODE = "full",
+    EXCEEDED_GUARD = true,
+    ALLOW_INTERRUPT = false,
     INITIAL_MAX_STEPS = 2,
     STEP_A_MAX_VISITS = 1,
     STEP_C_MAX_VISITS = 1,
@@ -711,6 +876,8 @@ module fixedFullIgnoreLimit {
   import iterationEntryOrder(
     ORDER = "fixed",
     MODE = "full",
+    EXCEEDED_GUARD = true,
+    ALLOW_INTERRUPT = true,
     INITIAL_MAX_STEPS = 1,
     STEP_A_MAX_VISITS = 1,
     STEP_C_MAX_VISITS = 1,
@@ -729,6 +896,8 @@ module fixedSingleIteration {
   import iterationEntryOrder(
     ORDER = "fixed",
     MODE = "single",
+    EXCEEDED_GUARD = true,
+    ALLOW_INTERRUPT = true,
     INITIAL_MAX_STEPS = 2,
     STEP_A_MAX_VISITS = 1,
     STEP_C_MAX_VISITS = 1,
@@ -748,6 +917,30 @@ module beforeFullExceeded {
   import iterationEntryOrder(
     ORDER = "before",
     MODE = "full",
+    EXCEEDED_GUARD = false,
+    ALLOW_INTERRUPT = true,
+    INITIAL_MAX_STEPS = 2,
+    STEP_A_MAX_VISITS = 1,
+    STEP_C_MAX_VISITS = 1,
+    STEP_CALL_MAX_VISITS = 1,
+    LOOP_DETECTION_MAX = 2,
+    LOOP_DETECTION_ABORT = true,
+    INTERACTIVE_EXTEND = false,
+    IGNORE_ITERATION_LIMIT = false,
+    USER_INPUT_INVALID_ON_B = false,
+    ENABLE_LOOP_MONITOR = true
+  ).*
+}
+
+// Mutant with Approach A entry order ONLY (missing executeWorkflow iteration_limit guard):
+// must violate exceededOnlyOnIterationLimit when a child workflow_call hits max_steps and parent
+// routes ABORT -> StepA (at max_visits, like development-core implement ABORT -> replan) or ABORT -> COMPLETE.
+module fixedOrderWithoutGuard {
+  import iterationEntryOrder(
+    ORDER = "fixed",
+    MODE = "full",
+    EXCEEDED_GUARD = false,
+    ALLOW_INTERRUPT = false,
     INITIAL_MAX_STEPS = 2,
     STEP_A_MAX_VISITS = 1,
     STEP_C_MAX_VISITS = 1,
@@ -766,6 +959,8 @@ module beforeSingleIteration {
   import iterationEntryOrder(
     ORDER = "before",
     MODE = "single",
+    EXCEEDED_GUARD = false,
+    ALLOW_INTERRUPT = true,
     INITIAL_MAX_STEPS = 2,
     STEP_A_MAX_VISITS = 1,
     STEP_C_MAX_VISITS = 1,
@@ -785,6 +980,8 @@ module abortAtTransitionAlternative {
   import iterationEntryOrder(
     ORDER = "abortAtTransition",
     MODE = "full",
+    EXCEEDED_GUARD = true,
+    ALLOW_INTERRUPT = true,
     INITIAL_MAX_STEPS = 2,
     STEP_A_MAX_VISITS = 1,
     STEP_C_MAX_VISITS = 1,
@@ -799,11 +996,13 @@ module abortAtTransitionAlternative {
 }
 
 // Mutant moving stateful LoopDetector before MaxSteps: must violate noLoopDetectorDoubleCount
-// when interactive onIterationLimit extends maxSteps and continues.
+// ONLY when onIterationLimit extends maxSteps and `continue`s on the same entryId (review 低-1).
 module mutantLoopBeforeMaxSteps {
   import iterationEntryOrder(
     ORDER = "loopBeforeMaxSteps",
     MODE = "full",
+    EXCEEDED_GUARD = true,
+    ALLOW_INTERRUPT = false,
     INITIAL_MAX_STEPS = 1,
     STEP_A_MAX_VISITS = 2,
     STEP_C_MAX_VISITS = 2,

@@ -5,6 +5,8 @@ module fixedFullExceededTest {
   import iterationEntryOrder(
     ORDER = "fixed",
     MODE = "full",
+    EXCEEDED_GUARD = true,
+    ALLOW_INTERRUPT = true,
     INITIAL_MAX_STEPS = 2,
     STEP_A_MAX_VISITS = 1,
     STEP_C_MAX_VISITS = 1,
@@ -32,6 +34,50 @@ module fixedFullExceededTest {
         and onIterationLimitCalls == 0
         and judgeCalls == 0
         and not(exceededSaved)
+        and safety
+      )
+
+  // Review 中-1: development-core implement (workflow_call) ABORT -> replan (at max_visits).
+  // Child exhausts shared max_steps and records exceededInfo; parent routes ABORT -> StepA,
+  // hits VisitLimit on next entry, and executeWorkflow's iteration_limit guard prevents saving exceeded.
+  run childWorkflowCallAbortToVisitLimitDoesNotSaveExceededTest =
+    initAt(StepA, 0)
+      .then(enterStep(false)).then(completeNonTerminal(StepCall, JudgeContinue))
+      .then(enterStep(false)).then(childWorkflowCallIterationLimit(ChildAbortToStepA))
+      .then(enterStep(false))
+      .expect(
+        status == AbortedVisitLimit
+        and currentStep == StepA
+        and iteration == 2
+        and exceededInfoRecorded
+        and not(exceededSaved)
+        and safety
+      )
+
+  // Review 中-2: child workflow_call exhausts max_steps and parent rule maps ABORT -> COMPLETE.
+  // executeWorkflow's iteration_limit guard clears stale exceededInfo so the run completes cleanly.
+  run childWorkflowCallAbortToCompleteDoesNotSaveExceededTest =
+    initAt(StepA, 0)
+      .then(enterStep(false)).then(completeNonTerminal(StepCall, JudgeContinue))
+      .then(enterStep(false)).then(childWorkflowCallIterationLimit(ChildAbortToComplete))
+      .expect(
+        status == Completed
+        and exceededInfoRecorded
+        and not(exceededSaved)
+        and safety
+      )
+
+  // Review 中-1 reverse regression: child workflow_call exhausts max_steps and parent propagates ABORT
+  // (ABORT -> ABORT or no rule). Guard preserves exceededSaved = true because final kind is iteration_limit.
+  run childWorkflowCallAbortPropagatePreservesExceededTest =
+    initAt(StepA, 0)
+      .then(enterStep(false)).then(completeNonTerminal(StepCall, JudgeContinue))
+      .then(enterStep(false)).then(childWorkflowCallIterationLimit(ChildAbortPropagate))
+      .expect(
+        status == AbortedIterationLimit
+        and currentStep == StepCall
+        and exceededInfoRecorded
+        and exceededSaved
         and safety
       )
 
@@ -124,6 +170,8 @@ module fixedFullInteractiveTest {
   import iterationEntryOrder(
     ORDER = "fixed",
     MODE = "full",
+    EXCEEDED_GUARD = true,
+    ALLOW_INTERRUPT = true,
     INITIAL_MAX_STEPS = 1,
     STEP_A_MAX_VISITS = 2,
     STEP_C_MAX_VISITS = 1,
@@ -136,7 +184,7 @@ module fixedFullInteractiveTest {
     ENABLE_LOOP_MONITOR = false
   ).* from "./iterationEntryOrder"
 
-  // Interactive extension via onIterationLimit does not double-count LoopDetector.
+  // WorkflowEngine API extension via onIterationLimit does not double-count LoopDetector.
   run interactiveExtensionDoesNotDoubleCountLoopDetectorTest =
     initAt(StepA, 0)
       .then(enterStep(false)).then(completeNonTerminal(StepA, JudgeContinue))
@@ -157,6 +205,8 @@ module fixedSingleIterationTest {
   import iterationEntryOrder(
     ORDER = "fixed",
     MODE = "single",
+    EXCEEDED_GUARD = true,
+    ALLOW_INTERRUPT = true,
     INITIAL_MAX_STEPS = 2,
     STEP_A_MAX_VISITS = 1,
     STEP_C_MAX_VISITS = 1,
@@ -185,6 +235,8 @@ module beforeFullExceededTest {
   import iterationEntryOrder(
     ORDER = "before",
     MODE = "full",
+    EXCEEDED_GUARD = false,
+    ALLOW_INTERRUPT = true,
     INITIAL_MAX_STEPS = 2,
     STEP_A_MAX_VISITS = 1,
     STEP_C_MAX_VISITS = 1,
@@ -214,10 +266,57 @@ module beforeFullExceededTest {
       )
 }
 
+module fixedOrderWithoutGuardTest {
+  import iterationEntryOrder(
+    ORDER = "fixed",
+    MODE = "full",
+    EXCEEDED_GUARD = false,
+    ALLOW_INTERRUPT = false,
+    INITIAL_MAX_STEPS = 2,
+    STEP_A_MAX_VISITS = 1,
+    STEP_C_MAX_VISITS = 1,
+    STEP_CALL_MAX_VISITS = 1,
+    LOOP_DETECTION_MAX = 2,
+    LOOP_DETECTION_ABORT = true,
+    INTERACTIVE_EXTEND = false,
+    IGNORE_ITERATION_LIMIT = false,
+    USER_INPUT_INVALID_ON_B = false,
+    ENABLE_LOOP_MONITOR = true
+  ).* from "./iterationEntryOrder"
+
+  // Review 中-1: Approach A alone does NOT close #176 for development-core implement ABORT -> replan.
+  // Even though next entry aborts with VisitLimit, stale exceededInfo from the child saves exceeded.
+  run fixedOrderAloneStillSavesExceededAfterChildAbortToVisitLimitTest =
+    initAt(StepA, 0)
+      .then(enterStep(false)).then(completeNonTerminal(StepCall, JudgeContinue))
+      .then(enterStep(false)).then(childWorkflowCallIterationLimit(ChildAbortToStepA))
+      .then(enterStep(false))
+      .expect(
+        status == AbortedVisitLimit
+        and exceededInfoRecorded
+        and exceededSaved
+        and not(exceededOnlyOnIterationLimit)
+      )
+
+  // Review 中-2: Without the executeWorkflow guard, ABORT -> COMPLETE still saves exceeded.
+  run fixedOrderAloneStillSavesExceededAfterChildAbortToCompleteTest =
+    initAt(StepA, 0)
+      .then(enterStep(false)).then(completeNonTerminal(StepCall, JudgeContinue))
+      .then(enterStep(false)).then(childWorkflowCallIterationLimit(ChildAbortToComplete))
+      .expect(
+        status == Completed
+        and exceededInfoRecorded
+        and exceededSaved
+        and not(exceededOnlyOnIterationLimit)
+      )
+}
+
 module abortAtTransitionAlternativeTest {
   import iterationEntryOrder(
     ORDER = "abortAtTransition",
     MODE = "full",
+    EXCEEDED_GUARD = true,
+    ALLOW_INTERRUPT = true,
     INITIAL_MAX_STEPS = 2,
     STEP_A_MAX_VISITS = 1,
     STEP_C_MAX_VISITS = 1,
@@ -249,6 +348,8 @@ module mutantLoopBeforeMaxStepsTest {
   import iterationEntryOrder(
     ORDER = "loopBeforeMaxSteps",
     MODE = "full",
+    EXCEEDED_GUARD = true,
+    ALLOW_INTERRUPT = false,
     INITIAL_MAX_STEPS = 1,
     STEP_A_MAX_VISITS = 2,
     STEP_C_MAX_VISITS = 2,
@@ -261,20 +362,39 @@ module mutantLoopBeforeMaxStepsTest {
     ENABLE_LOOP_MONITOR = false
   ).* from "./iterationEntryOrder"
 
+  // Review 低-1: Without extension (aborting at max_steps), LoopDetector runs once for entryId = 1,
+  // so noLoopDetectorDoubleCount is NOT falsely violated.
+  run loopBeforeMaxStepsAbortWithoutExtensionDoesNotDoubleCountTest =
+    initAt(StepA, 0)
+      .then(enterStep(false)).then(completeNonTerminal(StepA, JudgeContinue))
+      .then(enterStep(false))
+      .expect(
+        status == AbortedIterationLimit
+        and extendedCount == 0
+        and consecutiveLoopCount == 2
+        and noLoopDetectorDoubleCount
+      )
+
   // Shows why stateful LoopDetector must not move ahead of MaxSteps:
-  // interactive extension executes `continue` and double-counts the same entry.
+  // extending maxSteps via onIterationLimit executes `continue` and double-counts the same entryId.
   run loopBeforeMaxStepsDoubleCountsOnExtensionTest =
     initAt(StepA, 0)
       .then(enterStep(false)).then(completeNonTerminal(StepA, JudgeContinue))
       .then(enterStep(true))
       .then(enterStep(false))
-      .expect(consecutiveLoopCount == 3 and not(noLoopDetectorDoubleCount))
+      .expect(
+        extendedCount == 1
+        and consecutiveLoopCount == 3
+        and not(noLoopDetectorDoubleCount)
+      )
 }
 
 module beforeSingleIterationWarnTest {
   import iterationEntryOrder(
     ORDER = "before",
     MODE = "single",
+    EXCEEDED_GUARD = false,
+    ALLOW_INTERRUPT = true,
     INITIAL_MAX_STEPS = 2,
     STEP_A_MAX_VISITS = 1,
     STEP_C_MAX_VISITS = 1,
