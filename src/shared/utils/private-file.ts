@@ -63,22 +63,11 @@ function fileStat(path: string): Stats | undefined {
 
 function sha256(content: string | Buffer): string { return createHash('sha256').update(content).digest('hex'); }
 
-// #169: hasMatchingIdentity compares only dev/ino, and a filesystem that reuses a
-// freed inode number for the replacement file (as Linux does) makes a file that was
-// replaced between stat and open look unchanged. Size and timestamps do not survive
-// a replacement, so compare them as part of the snapshot identity as well.
-function hasMatchingSnapshot(expected: Stats, actual: Stats): boolean {
-  return hasMatchingIdentity(expected, actual)
-    && expected.size === actual.size
-    && expected.mtimeMs === actual.mtimeMs
-    && expected.ctimeMs === actual.ctimeMs;
-}
-
 export function readRegularFileNoFollow(path: string, expected: Stats): Buffer {
   const descriptor = openSync(path, constants.O_RDONLY | NO_FOLLOW);
   try {
     const stat = fstatSync(descriptor);
-    if (!stat.isFile() || !hasMatchingSnapshot(expected, stat)) throw new PrivateArtifactPublicationConflictError(`Private file changed: ${path}`);
+    if (!stat.isFile() || !hasMatchingIdentity(expected, stat)) throw new PrivateArtifactPublicationConflictError(`Private file changed: ${path}`);
     return readFileSync(descriptor);
   } finally { closeSync(descriptor); }
 }
@@ -89,7 +78,7 @@ export function readPrivateFileState(path: string): PrivateFileReadSnapshot {
   if (stat === undefined) return { state: { path: absolute, exists: false } };
   const content = readRegularFileNoFollow(absolute, stat);
   const current = fileStat(absolute);
-  if (current === undefined || !hasMatchingSnapshot(stat, current)) throw new PrivateArtifactPublicationConflictError(`Private file changed: ${absolute}`);
+  if (current === undefined || !hasMatchingIdentity(stat, current)) throw new PrivateArtifactPublicationConflictError(`Private file changed: ${absolute}`);
   return { state: { path: absolute, exists: true, stat: current, contentSha256: sha256(content) }, content };
 }
 

@@ -78,31 +78,13 @@ function removeLockIfUnchanged(
   lockPath: string,
   expected: AcquiredPrivateFileLock,
 ): boolean {
-  let observed: AcquiredPrivateFileLock | undefined;
   for (let verification = 0; verification < 2; verification += 1) {
     const current = readPrivateFileState(lockPath);
     if (!current.state.exists
-      || !('content' in current)) {
+      || !('content' in current)
+      || !sameState(expected.state, current.state)
+      || current.content.toString('utf-8') !== expected.content) {
       return false;
-    }
-    const snapshot: AcquiredPrivateFileLock = {
-      state: current.state,
-      content: current.content.toString('utf-8'),
-    };
-    // #169: the two verification reads disagreeing with each other means the lock
-    // was replaced while release was reading it, which is a publication conflict.
-    // A lock that already differed before release started reads back consistently,
-    // so it still takes the plain ownership-changed path below.
-    if (observed !== undefined
-      && (!sameState(observed.state, snapshot.state) || observed.content !== snapshot.content)) {
-      throw new PrivateArtifactPublicationConflictError(
-        `Private file lock changed while it was being released: ${lockPath}`,
-      );
-    }
-    observed = snapshot;
-    if (!sameState(expected.state, snapshot.state)
-      || snapshot.content !== expected.content) {
-      if (verification === 1) return false;
     }
   }
   try {
