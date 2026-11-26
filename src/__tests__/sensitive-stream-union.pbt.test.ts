@@ -411,6 +411,20 @@ describe('#151 2a fixed examples (design 8)', () => {
     expectBufferProperties(runBuffer(writes(...chunks)));
   });
 
+  // Design 7.1 preview step 4: the new guard runs over the whole shown text, held units included,
+  // so a line inside a quote only the new reading keeps open is not shown before the quote closes.
+  it.each([
+    [["--password=''a'\n", 'Zq57Zq'], 'Zq57Zq'],
+    [["--password=''a'\n", 'Zq57Zq more\n'], 'Zq57Zq'],
+    [["?token=''\"\n", 'Zq59Zq x'], 'Zq59Zq'],
+  ])('A2 the preview hides a value only the new reading keeps open: %j', (chunks, secret) => {
+    const redactor = createSensitiveTextStreamRedactor();
+    for (const chunk of chunks) {
+      redactor.write(chunk, undefined);
+      expect(redactor.preview(undefined)).not.toContain(secret);
+    }
+  });
+
   it('A3 (i) the cap is crossed inside `token=Zq5Zq`: the new stream cuts at the last previous boundary', () => {
     const head = "--password=''a'\n" + ('p'.repeat(99) + '\n').repeat(100) + 'token=Zq';
     const run = runBuffer(writes(head, '5Zq\n'));

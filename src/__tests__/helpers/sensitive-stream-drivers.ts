@@ -107,7 +107,9 @@ export const TOOL_PATHS: ReadonlyArray<readonly [name: string, drive: (run: Tool
 ];
 
 /** How many times each marker appears in `text`. */
-export function markerCounts(text: string, pattern: RegExp = /Zq\d+Zq\d*/gu): Map<string, number> {
+// A marker is counted by its core `Zq<n>Zq`: a range that cuts the digits after it (`Zq28Zq|809`)
+// leaves the core visible, and that is the marker being visible, not another marker.
+export function markerCounts(text: string, pattern: RegExp = /Zq\d+Zq/gu): Map<string, number> {
   const counts = new Map<string, number>();
   for (const match of text.matchAll(pattern)) counts.set(match[0], (counts.get(match[0]) ?? 0) + 1);
   return counts;

@@ -129,7 +129,10 @@ function streamOutputs(
   const redactor = create();
   let source = '';
   for (const chunk of sourceChunks) source += redactor.write(chunk, undefined);
-  const preview = redactor.preview(undefined);
+  // What the screen shows at the preview: the output committed so far and the preview (design 3,
+  // "the view in between", R9-5). The second PR holds lines longer, so a preview alone holds what
+  // the previous stream had already committed.
+  const preview = source + redactor.preview(undefined);
   source += redactor.flush(undefined);
   let later = '';
   for (const chunk of laterChunks) later += redactor.write(chunk, undefined);
