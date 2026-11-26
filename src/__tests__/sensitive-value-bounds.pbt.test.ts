@@ -124,8 +124,22 @@ describe('bounded sensitive values: the legacy bound is the previous bound (#151
     copied.collect('password=Zq4Zq');
     copiedPrevious.collect('password=Zq4Zq');
     expect(copied.legacyExhausted).toBe(false);
-    expect(copied.newExhausted).toBe(true);
     expectSameLegacyBound(copied, copiedPrevious);
+  });
+
+  // Design 1.2 (N1), the review of #165: a full new bound in the source marks the copied values
+  // as untracked, but the target's new bound stops only at its own limits.
+  it('keeps tracking new values after copying a source whose new bound is full', () => {
+    const source = createBoundedSensitiveValues();
+    source.collect(newOnlyText(MAX_TRACKED_SENSITIVE_VALUES + 6, 'f'));
+    expect(source.newExhausted).toBe(true);
+    const target = createBoundedSensitiveValues();
+    target.collect({ password: [...source.newBound.values] });
+    target.collect(source);
+    expect(target.newExhausted).toBe(false);
+    expect(target.newBound.hasUntrackedValues).toBe(true);
+    target.collect(newOnlyText(1, 'later'));
+    expect(target.values.has('later0x')).toBe(true);
   });
 
   it('puts a string in the legacy bound when the legacy path brings it after the new bound kept it', () => {

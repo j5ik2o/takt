@@ -105,7 +105,7 @@ describe('#151 fixed examples: a header after a URL whose user or password is a 
   for (const [source, secret] of HEADER_AFTER_USERINFO) {
     for (const later of [`later output: ${secret} end`, `echoed ${secret}`, secret]) {
       it(`${JSON.stringify(source)} then ${JSON.stringify(later)}`, () => {
-        for (const [path, output] of Object.entries({ ...shownOnItsOwn(source), ...shownLater(source, later) })) {
+        for (const [path, output] of [...Object.entries(shownOnItsOwn(source)), ...Object.entries(shownLater(source, later))]) {
           expect(output, path).not.toContain(secret);
         }
       });
@@ -162,6 +162,22 @@ const KNOWN_STREAM_LEAKS: ReadonlyArray<{ input: string; later?: string; leaked:
   { input: PHASE1_COMPOSITION[0]!, leaked: ['Zq0Zq', 'Zq1Zq'] },
   { input: PHASE1_COMPOSITION[1]!, leaked: ['Zq0Zq', 'Zq1Zq'] },
 ];
+
+// Leaks since before #151 that the review of #165 found; the previous implementation shows them as
+// well, and follow-up PRs close them (then these examples turn into "hidden").
+describe('#151 known leaks (since before #151) found in review', () => {
+  it('a URL password with a `,` after an `@` shows its rest', () => {
+    const text = 'https://:Zq50Zq@,Zq51Zq@host';
+    expect(sanitizeSensitiveText(text)).not.toContain('Zq50Zq');
+    expect(sanitizeSensitiveText(text)).toContain('Zq51Zq');
+  });
+
+  it('a value between two keys inside one value is not tracked on its own', () => {
+    const source = 'token=first;password=Zq52Zq;token=last';
+    expect(sanitizeSensitiveText(source)).not.toContain('Zq52Zq');
+    expect(sanitizeSensitiveTextWithKnownValues('echoed Zq52Zq', source)).toContain('Zq52Zq');
+  });
+});
 
 describe('#151 known leaks of the stream paths in the first PR', () => {
   it('are exactly what the fixed examples show through the stream', () => {

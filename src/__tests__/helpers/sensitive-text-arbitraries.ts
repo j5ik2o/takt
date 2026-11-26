@@ -190,15 +190,19 @@ export const REVIEW_FORMS: readonly string[] = [
 
 /** Credential forms whose secret is well formed for the form; each must be hidden. */
 // A tail ending in `-u` would start a curl user option that reads the next line.
-const knownSecret = fc.tuple(fc.stringMatching(/^[A-Za-z0-9]{0,4}$/), marker, fc.stringMatching(/^[A-Za-z0-9._@,;~-]{0,6}$/))
-  .map(([head, mark, tail]) => head + mark + tail)
+// A second marker after the delimiters catches a reading that hides the first marker but shows the
+// rest of the secret.
+const knownSecret = fc.tuple(fc.stringMatching(/^[A-Za-z0-9]{0,4}$/), marker, fc.stringMatching(/^[A-Za-z0-9._@,;~-]{0,6}$/), fc.option(marker, { nil: '' }))
+  .map(([head, mark, tail, last]) => head + mark + tail + last)
   .filter((secret) => !/-u$/i.test(secret));
 const bareSecret = fc.tuple(marker, fc.stringMatching(/^[A-Za-z0-9._@:;&|/=-]{0,8}$/)).map(([mark, tail]) => mark + tail);
 
 export const credentialFragment: fc.Arbitrary<Fragment> = fc.oneof(
-  fc.tuple(scheme, fc.stringMatching(/^[a-z0-9,'"(){}<>[\]-]{0,5}$/), knownSecret, hostPart)
+  // Past an `@` in the password, a `,` ends the URL (to keep `"https://u:p@h","a@b"` readable), so
+  // the rest of such a password shows: a known leak since before #151, kept as its own fixed example.
+  fc.tuple(scheme, fc.stringMatching(/^[a-z0-9,'"(){}<>[\]-]{0,5}$/), knownSecret.filter((value) => !/@[^@]*,/u.test(value)), hostPart)
     .map(([s, user, password, host]) => ({ text: `${s}://${user}:${password}@${host}`, echoes: [password] })),
-  fc.tuple(scheme, knownSecret).map(([s, password]) => ({ text: `${s}://u:@${password}@host`, echoes: ['@' + password] })),
+  fc.tuple(scheme, knownSecret.filter((value) => !value.includes(','))).map(([s, password]) => ({ text: `${s}://u:@${password}@host`, echoes: ['@' + password] })),
   fc.tuple(scheme, longSecret).map(([s, password]) => ({ text: `${s}://u:${password}@host`, echoes: [password] })),
   fc.tuple(sensitiveKey, fc.constantFrom('=', ':', ' = ', ': '), bareSecret)
     .map(([key, separator, value]) => ({ text: key + separator + value, echoes: [value, value.split(/[;&|]/)[0]!] })),
@@ -211,7 +215,9 @@ export const credentialFragment: fc.Arbitrary<Fragment> = fc.oneof(
   fc.tuple(sensitiveKey, sensitiveKey, bareSecret.filter((value) => !/[;&|]/.test(value)))
     .map(([outer, inner, value]) => ({ text: `${outer}=a;${inner}=${value}`, echoes: [value] })),
   knownSecret.map((value) => ({ text: `Authorization: Bearer ${value}`, echoes: [value] })),
-  knownSecret.map((value) => ({ text: `Cookie: sid=${value}`, echoes: [value] })),
+  // After a `;` the rest is another cookie; a cookie without a name is the known leak of design 9.5,
+  // kept as its own fixed example (sensitive-text-fixed-examples.test.ts), not in L.
+  knownSecret.filter((value) => !value.includes(';')).map((value) => ({ text: `Cookie: sid=${value}`, echoes: [value] })),
   fc.tuple(fc.stringMatching(/^[a-z]{1,5}$/), knownSecret)
     .map(([user, password]) => ({ text: `curl -u ${user}:${password} https://example.test`, echoes: [password] })),
   fc.tuple(fc.stringMatching(/^[a-z]{1,5}$/), knownSecret)

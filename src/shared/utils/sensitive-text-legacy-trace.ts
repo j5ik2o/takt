@@ -141,7 +141,7 @@ export function legacySequentialRanges(
   for (const step of steps) {
     const edits = step(view);
     if (edits.length === 0) continue;
-    replacements = applyEdits(replacements, edits, hidden);
+    replacements = applyEdits(view, replacements, edits, hidden);
     view = render(text, replacements);
   }
   return { ranges: mergedRanges(hidden), view };
@@ -162,11 +162,14 @@ function render(text: string, replacements: readonly Replacement[]): string {
 const growth = (replacement: Replacement): number => replacement.text.length - (replacement.end - replacement.start);
 
 /**
- * Applies one step's edits (ordered, disjoint, in view positions) to the replacements, and adds
- * the original characters they hide to `hidden`. An edit that overlaps earlier replacements, or an
- * insertion that touches one, becomes one replacement with them, widened to both ends.
+ * Applies one step's edits (ordered, disjoint, in positions of `view`, the output of the step
+ * before) to the replacements, and adds the original characters they hide to `hidden`. An edit that
+ * overlaps earlier replacements, or an insertion that touches one, becomes one replacement with
+ * them, widened to both ends. Further edits of the same step that overlap the same replacements
+ * join it, all read in the coordinates of `view`.
  */
 function applyEdits(
+  view: string,
   replacements: readonly Replacement[],
   edits: readonly Edit[],
   hidden: SensitiveRange[],
@@ -175,7 +178,9 @@ function applyEdits(
   let index = 0;
   // View position minus original position, after the replacements before `index`.
   let shift = 0;
-  for (const edit of edits) {
+  let editIndex = 0;
+  while (editIndex < edits.length) {
+    const edit = edits[editIndex]!;
     const insertion = edit.start === edit.end;
     while (index < replacements.length) {
       const replacement = replacements[index]!;
@@ -186,15 +191,32 @@ function applyEdits(
       index += 1;
     }
     const shiftBefore = shift;
-    const group: Array<{ replacement: Replacement; viewStart: number }> = [];
-    while (index < replacements.length) {
-      const replacement = replacements[index]!;
-      const viewStart = replacement.start + shift;
-      if (insertion ? viewStart > edit.start : viewStart >= edit.end) break;
-      group.push({ replacement, viewStart });
-      shift += growth(replacement);
-      index += 1;
+    const group: GroupMember[] = [];
+    const take = (taken: Edit): void => {
+      const takenInsertion = taken.start === taken.end;
+      while (index < replacements.length) {
+        const replacement = replacements[index]!;
+        const viewStart = replacement.start + shift;
+        if (takenInsertion ? viewStart > taken.start : viewStart >= taken.end) break;
+        group.push({ replacement, viewStart, overlapped: !takenInsertion });
+        shift += growth(replacement);
+        index += 1;
+      }
+    };
+    take(edit);
+    const cluster: Edit[] = [edit];
+    for (;;) {
+      const last = group.at(-1);
+      const following = edits[editIndex + cluster.length];
+      if (last === undefined || following === undefined) break;
+      const lastViewEnd = last.viewStart + last.replacement.text.length;
+      const followingInsertion = following.start === following.end;
+      if (followingInsertion ? following.start > lastViewEnd : following.start >= lastViewEnd) break;
+      if (!followingInsertion) last.overlapped = true;
+      cluster.push(following);
+      take(following);
     }
+    editIndex += cluster.length;
     const first = group[0];
     const last = group.at(-1);
     if (first === undefined || last === undefined) {
@@ -202,32 +224,43 @@ function applyEdits(
       if (!insertion) hidden.push({ start: edit.hideFrom - shiftBefore, end: edit.end - shiftBefore });
       continue;
     }
+    const firstEdit = cluster[0]!;
+    const lastEdit = cluster.at(-1)!;
     const lastViewEnd = last.viewStart + last.replacement.text.length;
-    const startsInside = first.viewStart < edit.start;
-    const endsInside = lastViewEnd > edit.end;
-    const start = startsInside ? first.replacement.start : edit.start - shiftBefore;
-    const end = endsInside ? last.replacement.end : edit.end - shift;
-    const prefix = startsInside ? first.replacement.text.slice(0, edit.start - first.viewStart) : '';
-    const suffix = endsInside ? last.replacement.text.slice(edit.end - last.viewStart) : '';
-    next.push({ start, end, text: prefix + edit.text + suffix });
-    if (insertion) continue;
-    for (const { replacement } of group) hidden.push({ start: replacement.start, end: replacement.end });
-    hidden.push({ start: originalAtOrBefore(edit.hideFrom, group, shiftBefore), end });
+    const viewStart = Math.min(firstEdit.start, first.viewStart);
+    const viewEnd = Math.max(lastEdit.end, lastViewEnd);
+    const parts: string[] = [view.slice(viewStart, firstEdit.start)];
+    cluster.forEach((member, position) => {
+      parts.push(member.text, view.slice(member.end, cluster[position + 1]?.start ?? viewEnd));
+    });
+    const start = first.viewStart < firstEdit.start ? first.replacement.start : firstEdit.start - shiftBefore;
+    const end = lastViewEnd > lastEdit.end ? last.replacement.end : lastEdit.end - shift;
+    next.push({ start, end, text: parts.join('') });
+    for (const member of group) if (member.overlapped) hidden.push({ start: member.replacement.start, end: member.replacement.end });
+    for (const member of cluster) {
+      if (member.start === member.end) continue;
+      hidden.push({ start: originalAt(member.hideFrom, group, shiftBefore, false), end: originalAt(member.end, group, shiftBefore, true) });
+    }
   }
   while (index < replacements.length) next.push(replacements[index++]!);
   return next;
 }
 
-/** The original position of view position `position`, or the start of the replacement it lies in. */
-function originalAtOrBefore(
-  position: number,
-  group: ReadonlyArray<{ replacement: Replacement; viewStart: number }>,
-  shiftBefore: number,
-): number {
+interface GroupMember {
+  readonly replacement: Replacement;
+  readonly viewStart: number;
+  overlapped: boolean;
+}
+
+/**
+ * The original position of view position `position`. Inside a replacement it is the start of the
+ * replacement, or its end with `roundUp`.
+ */
+function originalAt(position: number, group: readonly GroupMember[], shiftBefore: number, roundUp: boolean): number {
   let shift = shiftBefore;
   for (const { replacement, viewStart } of group) {
-    if (position < viewStart) break;
-    if (position < viewStart + replacement.text.length) return replacement.start;
+    if (position <= viewStart) break;
+    if (position < viewStart + replacement.text.length) return roundUp ? replacement.end : replacement.start;
     shift += growth(replacement);
   }
   return position - shift;

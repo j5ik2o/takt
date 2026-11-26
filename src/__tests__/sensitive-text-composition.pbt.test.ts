@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto';
 import fc from 'fast-check';
 import { scaledMs } from '../../scripts/test-time-factor.mjs';
 import { afterAll, describe, expect, it } from 'vitest';
 import { sanitizeKnownSecrets } from '../infra/deepseek-harness/client.js';
+import { sanitizeOpenCodeToolInput } from '../infra/opencode/tool-input-sanitizer.js';
 import * as current from '../shared/utils/sensitive-text.js';
 import * as currentValue from '../shared/utils/sensitive-value.js';
 import * as legacy from './helpers/legacy-sensitive-text.js';
@@ -206,4 +208,12 @@ describe('composition counterexamples (#151)', () => {
     })));
     for (const marker of markersIn(text)) if (!previous.includes(marker)) expect(next).not.toContain(marker);
   });
+});
+
+// A tool content descriptor is masked with the known values, as the previous second masking did
+// (review of #165): a known value equal to the descriptor's sha256 stays hidden.
+it('masks a tool content descriptor with the known values', () => {
+  const sha256 = createHash('sha256').update('file body').digest('hex').slice(0, 12);
+  const masked = sanitizeOpenCodeToolInput({ content: 'file body' }, 'write', { source: { token: sha256 } });
+  expect(JSON.stringify(masked)).not.toContain(sha256);
 });

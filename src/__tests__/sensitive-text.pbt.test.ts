@@ -67,6 +67,14 @@ beforeAll(async () => {
   vi.resetModules();
 });
 
+/** The text events of a phase 1 report joined in order, so a marker split across fragments is seen whole. */
+function phase1Joined(report: string): string {
+  return report.split('\n').filter((line) => line !== '').map((line) => {
+    const entry = JSON.parse(line) as { kind?: string; event?: { type?: string; data?: { text?: string } } };
+    return entry.kind === 'provider_event' && entry.event?.type === 'text' ? entry.event.data?.text ?? '' : '';
+  }).join('');
+}
+
 function phase1Report(chunks: readonly string[], Log: ReportLog = Phase1ExecutionLog): string {
   const log = new Log();
   for (const text of chunks) log.recordEvent({ type: 'text', data: { text } });
@@ -143,10 +151,10 @@ describe('sensitive text redaction properties (#151)', () => {
       counts.inputs += 1;
       const display = sanitizeSensitiveText(text);
       const ranges = rangeOutput(text);
-      const report = phase1Report(fragments);
+      const report = phase1Joined(phase1Report(fragments));
       const legacyDisplay = legacy.sanitizeSensitiveText(text);
       const legacyRanges = legacyRangeOutput(text);
-      const legacyReport = phase1Report(fragments, LegacyPhase1ExecutionLog);
+      const legacyReport = phase1Joined(phase1Report(fragments, LegacyPhase1ExecutionLog));
       for (const marker of markersIn(text)) {
         counts.markers += 1;
         if (!legacyDisplay.includes(marker) || !legacyRanges.includes(marker)) {
@@ -268,7 +276,7 @@ describe('sensitive text redaction properties (#151)', () => {
 
   it('R: agrees with the reference scanner plus the previous ranges', () => {
     fc.assert(fc.property(referenceText, (text) => {
-      const expected = maskSensitiveRanges(text, [
+      const expected = legacy.maskSensitiveRanges(text, [
         ...referenceRanges(text),
         ...legacySequentialRanges(text, []).ranges,
         ...legacy.sensitiveTextRanges(text, new Set()),

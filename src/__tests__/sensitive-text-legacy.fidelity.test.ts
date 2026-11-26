@@ -2,7 +2,7 @@ import fc from 'fast-check';
 import { scaledMs } from '../../scripts/test-time-factor.mjs';
 import { describe, expect, it } from 'vitest';
 import * as frozen from '../shared/utils/sensitive-text-legacy.js';
-import { legacySequentialRanges } from '../shared/utils/sensitive-text-legacy-trace.js';
+import { legacySequentialRanges, legacyStageSteps, type LegacyStage } from '../shared/utils/sensitive-text-legacy-trace.js';
 import * as legacy from './helpers/legacy-sensitive-text.js';
 import { leakText, markersIn, stageCollisionText } from './helpers/sensitive-text-arbitraries.js';
 
@@ -63,6 +63,42 @@ describe('frozen copy and trace fidelity (#151)', () => {
       for (const marker of markersIn(text)) expect(masked.includes(marker), `${marker} in ${JSON.stringify(text)}`).toBe(composed.includes(marker));
     }), { numRuns: NUM_RUNS, ...seed });
   }, TIMEOUT);
+
+  // The general stage lists of the compositions (design 1.1): the trace's final string is what the
+  // previous functions, run one after the other, returned.
+  const runStages = (text: string, stages: readonly LegacyStage[]): string => stages.reduce((view, stage) => {
+    if (stage === 'display') return legacy.sanitizeSensitiveText(view);
+    if ('knownValues' in stage) return legacy.maskSensitiveRanges(view, frozen.knownValueRanges(view, stage.knownValues));
+    return legacy.maskSensitiveRanges(view, legacy.sensitiveTextRanges(view, stage.ranges));
+  }, text);
+  const stageCase = fc.tuple(fc.oneof(leakText, stageCollisionText), leakText).chain(([text, other]) => {
+    const own = new Set(collected(legacy.collectEmbeddedSensitiveValues, text));
+    const others = new Set(collected(legacy.collectEmbeddedSensitiveValues, other));
+    const stage = fc.constantFrom<LegacyStage>('display', { knownValues: own }, { knownValues: others }, { ranges: own }, { knownValues: new Set(['[RED', 'TED]', 'ACT']) });
+    return fc.tuple(fc.constant(text), fc.array(stage, { minLength: 1, maxLength: 5 }));
+  });
+
+  it('F4: the trace of a stage list ends with the previous functions run in that order', () => {
+    fc.assert(fc.property(stageCase, ([text, stages]) => {
+      expect(legacySequentialRanges(text, [], legacyStageSteps(stages)).view, JSON.stringify(text)).toBe(runStages(text, stages));
+    }), { numRuns: NUM_RUNS, ...seed });
+  }, TIMEOUT);
+
+  it('F4: two edits of one step inside the same earlier replacement (review of #165)', () => {
+    const stages: LegacyStage[] = [{ knownValues: new Set(['X']) }, { knownValues: new Set(['[RED', 'TED]']) }];
+    const trace = legacySequentialRanges('abc X def', [], legacyStageSteps(stages));
+    expect(trace.view).toBe(runStages('abc X def', stages));
+    expect(trace.view).toBe('abc [REDACTED]AC[REDACTED] def');
+    expect(trace.ranges).toEqual([{ start: 4, end: 5 }]);
+  });
+
+  it.each([
+    ['Authorization: Basic\t\tZq1Zq', [{ start: 22, end: 27 }]],
+    ['token=""--password=Zq2Zq', [{ start: 19, end: 24 }]],
+    ['x token=\'\' Bearer Zq3Zqabcdefgh1 y', [{ start: 18, end: 32 }]],
+  ])('F2 on %j: the exact original ranges', (text, ranges) => {
+    expect(legacySequentialRanges(text, []).ranges).toEqual(ranges);
+  });
 
   it.each([
     ['token=""--password=x'],

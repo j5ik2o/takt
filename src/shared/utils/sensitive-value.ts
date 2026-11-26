@@ -79,12 +79,16 @@ class SensitiveValueBound implements SensitiveValueBoundView {
     }
   }
 
-  /** Takes over another bound's values and marks, as the previous collect of a bounded source did. */
-  copy(source: SensitiveValueBound, kept: (value: string) => void, keptElsewhere?: (value: string) => boolean): void {
+  /**
+   * Takes over another bound's values and marks, as the previous collect of a bounded source did.
+   * `inheritFull` = false: a full source only marks values as untracked here; this bound stops at
+   * its own limits (the new bound, which has no previous behavior to keep).
+   */
+  copy(source: SensitiveValueBound, kept: (value: string) => void, keptElsewhere?: (value: string) => boolean, inheritFull = true): void {
     if (this.exhausted) return;
     if (source.hasUntrackedValues) this.inheritedUntrackedValues = true;
     this.add(source.values, kept, keptElsewhere);
-    if (source.exhausted) this.exhausted = true;
+    if (inheritFull && source.exhausted) this.exhausted = true;
   }
 
   reset(): void {
@@ -179,7 +183,7 @@ export class BoundedSensitiveValues implements TrackedSensitiveValues {
     if (source instanceof BoundedSensitiveValues) {
       // Each bound copies the same bound of the source; the either-bound marks are not copied.
       this.legacySide.copy(source.legacySide, this.keep);
-      this.newSide.copy(source.newSide, this.keep, (value) => this.legacySide.values.has(value));
+      this.newSide.copy(source.newSide, this.keep, (value) => this.legacySide.values.has(value), false);
       return;
     }
     if (this.legacySide.exhausted && this.newSide.exhausted) return;
@@ -297,7 +301,14 @@ export function sanitizeSensitiveValueWithStringReplacerAndKnownValues(
     all: new Set([...own.values, ...known.values]),
     legacy: new Set([...own.legacyValues, ...known.legacyValues]),
   };
-  return sanitizeValue(value, undefined, tracked, replacer, [
+  // A replacement (a tool content descriptor) is masked with the known values, as the second
+  // masking of the previous chain did.
+  const knownOnly = trackedValues(known);
+  const replaced: SensitiveStringReplacer = (text, key) => {
+    const replacement = replacer(text, key);
+    return replacement === undefined ? undefined : { value: sanitizeValue(replacement.value, undefined, knownOnly, undefined) };
+  };
+  return sanitizeValue(value, undefined, tracked, replaced, [
     { knownValues: own.legacyValues }, 'display', { knownValues: known.legacyValues }, 'display', 'display',
   ]);
 }
