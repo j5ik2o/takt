@@ -568,7 +568,10 @@ export function collectTrackedEmbeddedSensitiveValues(text: string, into: { lega
   collectNewEmbeddedValues(text, into.all);
 }
 
-function collectNewEmbeddedValues(text: string, values: Set<string>): void {
+// `visited` holds the texts already collected into `values`: collecting one again adds nothing,
+// and glued quoted assignments (`token="a"token="a"…`) repeat the same quoted value many times.
+function collectNewEmbeddedValues(text: string, values: Set<string>, visited = new Set<string>()): void {
+  visited.add(text);
   const matches = findSensitiveMatches(text);
   for (const { start, end } of matches.whole) addSensitiveValue(values, text.slice(start, end));
   matches.quoted.forEach(({ valueStart, valueEnd, gluedEnd }, index) => {
@@ -586,7 +589,8 @@ function collectNewEmbeddedValues(text: string, values: Set<string>): void {
     }
     // Everything inside the quotes is tracked as well: an embedded `token=…`, URL or header
     // can be printed again on its own.
-    collectNewEmbeddedValues(stripMatchingQuotes(quotedValue), values);
+    const inner = stripMatchingQuotes(quotedValue);
+    if (!visited.has(inner)) collectNewEmbeddedValues(inner, values, visited);
   });
   for (const value of outermostAndInnermost(matches.assignments)) {
     const assigned = text.slice(value.valueStart, value.valueEnd);
