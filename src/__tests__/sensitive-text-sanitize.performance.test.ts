@@ -1,11 +1,14 @@
+import { scaledMs } from '../../scripts/test-time-factor.mjs';
 import { describe, expect, it } from 'vitest';
 import { Phase1ExecutionLog } from '../core/workflow/phase1-execution-log.js';
+import { sanitizeTextWithValues } from '../shared/utils/sensitive-text.js';
 import {
   createSensitiveTextStreamRedactor,
   MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES,
   sanitizeSensitiveText,
   sanitizeSensitiveTextWithKnownValues,
 } from '../shared/utils/sensitiveText.js';
+import { trackedValuesOf } from './helpers/sensitive-text-tracked.js';
 
 describe('sanitizeSensitiveText performance', () => {
   it('sanitizes a 64KiB uniform alphanumeric run without quadratic blowup', () => {
@@ -161,4 +164,76 @@ describe('sensitive text stream redactor performance', () => {
     expect(elapsed(64 * 1024)).toBeLessThan(500);
     expect(elapsed(256 * 1024)).toBeLessThan(2000);
   });
+});
+
+describe('redaction of overlapping credential forms stays linear', () => {
+  // Every pattern restarts its scan at the start of the value it found, so keys inside values are
+  // found too. Each shape below packs such keys (or near-keys) into one long run; 4x the input
+  // must stay within a linear multiple of the time, and the whole pass within a fixed budget.
+  // `TOKEN=a;a;…` took 2.2s at 1MiB in #160, and `;--user=alice` took 3.4s at 256KiB before.
+  const median = (samples: number[]): number => [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)]!;
+  it.each([
+    ['TOKEN=a;a;…', 'TOKEN=a', ';a'],
+    ['colon-less --user= options', '', ';--user=alice'],
+    ['URLs whose user is a key', '', 'https://token:p@host;'],
+    ['assignments inside a value', '', 'token='],
+    ['assignments across lines', '', 'token:\n'],
+    ['-u options', '', '-u '],
+    ['@ in a URL password', 'https://u:p', '@'],
+    ['cookie assignments inside a value', '', 'cookie='],
+    ['query keys inside a value', '', '?token='],
+    ['option keys inside a value', '', '--password='],
+    ['nested quoted assignments', '', `token="a password='b \\"`],
+    ['escaped quotes in option values', '', '--password "x\\" '],
+    ['quoted values holding assignments', '', 'credentials="note token=x end" '],
+  ])('on %s', (_name, head, unit) => {
+    const run = (bytes: number): number => {
+      const text = head + unit.repeat(Math.ceil(bytes / unit.length));
+      const start = performance.now();
+      sanitizeTextWithValues(text, trackedValuesOf(text));
+      sanitizeSensitiveText(text);
+      return performance.now() - start;
+    };
+    run(4 * 1024); // warm up regexes and JIT
+    const small = median([run(256 * 1024), run(256 * 1024), run(256 * 1024)]);
+    const large = median([run(1024 * 1024), run(1024 * 1024), run(1024 * 1024)]);
+
+    expect(large).toBeLessThan(Math.max(8 * small, 50));
+    expect(large).toBeLessThan(5000);
+  });
+});
+
+// #151: every path also runs the frozen copy of the previous implementation and the trace of its
+// display (design 6). Each form is measured five times at 256 KiB and at 4 MiB (16 times larger);
+// a quadratic path would be 256 times slower, so 32 times still tells the two apart.
+describe('the union with the previous redaction stays linear', () => {
+  const median = (samples: number[]): number => [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)]!;
+  const fill = (unit: string, size: number): string => unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
+  it.each([
+    ['plain', 'lorem ipsum dolor '],
+    ['at', '@'],
+    ['schemes', 'http://'],
+    ['urlList', 'https://u:p@h,'],
+    ['tokenRun', 'token='],
+    ['curlUser', '--user=a;'],
+    ['cookieLines', 'Cookie: a=b; token:\n'],
+    ['mixed', "TOKEN=apikey: ?token=' 'Zq4Zq https://cookie:p@host Cookie: sid=x\n"],
+    ['l2', 'token :--password=\\" \\"Zq0Zq'],
+    ['token lines', 'token:\n'],
+    // Quoted assignments glued into one word share its end (review of #165, Devin).
+    ['glued quoted assignments', 'token="a"'],
+  ])('on %s', (name, unit) => {
+    const run = (bytes: number): number => {
+      const text = (name === 'at' ? 'https://u:' : '') + fill(unit, bytes);
+      const start = performance.now();
+      sanitizeTextWithValues(text, trackedValuesOf(text));
+      sanitizeSensitiveText(text);
+      return performance.now() - start;
+    };
+    run(16 * 1024);
+    const small = median(Array.from({ length: 5 }, () => run(256 * 1024)));
+    const large = median(Array.from({ length: 5 }, () => run(4 * 1024 * 1024)));
+    expect(large).toBeLessThan(Math.max(32 * small, 50));
+    expect(large).toBeLessThan(10_000);
+  }, scaledMs(300_000));
 });

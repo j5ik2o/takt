@@ -357,6 +357,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/selector-guidance-resolution.test.ts',
   'src/__tests__/selector-guidance-runtime-boundary.test.ts',
   'src/__tests__/selector-input.test.ts',
+  'src/__tests__/sensitive-text-legacy.hash.test.ts',
   'src/__tests__/session-reader.test.ts',
   'src/__tests__/sessionStore.test.ts',
   'src/__tests__/shared-takt-backup.test.ts',

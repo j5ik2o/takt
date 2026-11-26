@@ -11,7 +11,6 @@ import {
   type BoundedSensitiveValues,
   sanitizeSensitiveTextWithKnownValues,
   sanitizeSensitiveValue,
-  sanitizeSensitiveValueWithKnownValues,
 } from '../../shared/utils/sensitiveText.js';
 import { maskSensitiveTextChunks, SensitiveTextStreamBuffer, type SensitiveTextCommit } from '../../shared/utils/sensitive-stream.js';
 import {
@@ -429,9 +428,7 @@ export function emitToolUse(
   sensitiveSources: unknown,
 ): void {
   if (!onStream) return;
-  const maskedInput = sanitizeSensitiveValueWithKnownValues(
-    sanitizeOpenCodeToolInput(input, tool), sensitiveSources,
-  ) as Record<string, unknown>;
+  const maskedInput = sanitizeOpenCodeToolInput(input, tool, { source: sensitiveSources });
   onStream({ type: 'tool_use', data: { tool, input: maskedInput, id } });
 }
 
