@@ -37,6 +37,7 @@ module beginFirstTest {
         and not(runs.get(RUN_1).hasReports)
         and runs.get(RUN_1).logStartCount == 1
         and runs.get(RUN_1).logTerminalCount == 1
+        and runs.get(RUN_1).logTerminalKind == LogAbort
         and runs.get(RUN_1).finishCount == 1
         and runs.get(RUN_1).hasFailureRecord
         and runs.get(RUN_1).reasonHasLookup
@@ -92,6 +93,7 @@ module beginFirstTest {
       .then(createBootstrap)
       .expect(
         runs.get(RUN_1).phase == Bootstrapped
+        and runs.get(RUN_1).bootDone
         and runs.get(RUN_1).meta == MetaRunning
         and runs.get(RUN_1).metaPublishCount == 1
         and runs.get(RUN_1).logStartCount == 1
@@ -106,6 +108,7 @@ module beginFirstTest {
         and not(runs.get(RUN_1).reasonHasLookup)
         and runs.get(RUN_1).logStartCount == 1
         and runs.get(RUN_1).logTerminalCount == 1
+        and runs.get(RUN_1).logTerminalKind == LogComplete
         and runs.get(RUN_1).finishCount == 1
         and runs.get(RUN_1).stepsRun == 1
         and invariant
@@ -180,7 +183,51 @@ module beginFirstTest {
       .expect(
         runs.get(RUN_2).phase == Exited
         and runs.get(RUN_2).meta == MetaFailed
+        and not(runs.get(RUN_2).hasReports)
         and runs.get(RUN_2).recordedSource == FromRun(RUN_1)
+        and not(runs.get(RUN_2).reasonHasLookup)
+        and runs.get(RUN_2).logTerminalKind == LogAbort
+        and runs.get(RUN_2).stepsRun == 0
+        and persistedOf(runs.get(RUN_1)) == run1Snapshot
+        and invariant
+      )
+
+  // Resuming from a run that has reports/, where inheritResumeReportSnapshot succeeds
+  // and a subsequent pre-meta step (e.g. config resolution or initial publishRunMeta) fails:
+  // terminalizeBootstrapFailure does not delete the already-inherited reports/.
+  run resumedRunPostInheritBootstrapFailureKeepsReportsTest =
+    initWith(PrepOk, BootOk)
+      .then(beginRun)
+      .then(prepareInBootstrap)
+      .then(createBootstrap)
+      .then(runStep)
+      .then(finishExecutionFailure)
+      .then(startResumeRun(PrepOk, BootFailed, true))
+      .then(beginRun)
+      .then(prepareInBootstrap)
+      .then(inheritResumeReports)
+      .expect(
+        runs.get(RUN_2).phase == ReportsInherited
+        and runs.get(RUN_2).hasReports
+        and runs.get(RUN_2).meta == NoMeta
+        and not(runs.get(RUN_2).bootDone)
+        and invariant
+      )
+      .then(bootstrapPreMetaFail)
+      .expect(
+        runs.get(RUN_2).phase == BootstrapFailed
+        and runs.get(RUN_2).hasReports
+        and runs.get(RUN_2).meta == NoMeta
+        and invariant
+      )
+      .then(terminalizeBootstrapStart)
+      .then(terminalizeBootstrapFinish)
+      .expect(
+        runs.get(RUN_2).phase == Exited
+        and runs.get(RUN_2).meta == MetaFailed
+        and runs.get(RUN_2).hasReports
+        and runs.get(RUN_2).recordedSource == FromRun(RUN_1)
+        and runs.get(RUN_2).logTerminalKind == LogAbort
         and not(runs.get(RUN_2).reasonHasLookup)
         and runs.get(RUN_2).stepsRun == 0
         and persistedOf(runs.get(RUN_1)) == run1Snapshot
@@ -197,12 +244,26 @@ module beginFirstTest {
       .then(startResumeRun(PrepOk, BootOk, true))
       .then(beginRun)
       .then(prepareInBootstrap)
+      .then(inheritResumeReports)
+      .expect(
+        runs.get(RUN_2).phase == ReportsInherited
+        and runs.get(RUN_2).hasReports
+        and runs.get(RUN_2).meta == NoMeta
+        and invariant
+      )
       .then(createBootstrap)
+      .expect(
+        runs.get(RUN_2).phase == Bootstrapped
+        and runs.get(RUN_2).bootDone
+        and runs.get(RUN_2).hasReports
+        and invariant
+      )
       .then(runStep)
       .then(finishExecutionSuccess)
       .expect(
         runs.get(RUN_2).phase == Exited
         and runs.get(RUN_2).meta == MetaCompleted
+        and runs.get(RUN_2).logTerminalKind == LogComplete
         and runs.get(RUN_2).recordedSource == FromRun(RUN_1)
         and not(runs.get(RUN_2).hasFailureRecord)
         and persistedOf(runs.get(RUN_1)) == run1Snapshot

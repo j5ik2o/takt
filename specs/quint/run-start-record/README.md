@@ -18,9 +18,9 @@ resuming a failed run in a second attempt (both with and without available opera
 - `executeWorkflowInternal` (`src/features/tasks/execute/workflowExecution.ts`)
 - `beginRun` (`src/features/tasks/execute/workflowRunLifecycle.ts`): resolves a distinct run slug and reserves an empty run directory (`mkdirSync`); it does **not** write `meta.json` or create `logs/` or `reports/`.
 - `prepareWorkflowExecutionBundle` (`src/features/tasks/execute/workflowExecutionBundle.ts`): resolves `workflow_call` targets and checks central credential safety.
-- Post-preparation, pre-meta steps inside the bootstrap `try` (`workflowExecution.ts:288-319`, `workflowExecutionBootstrap.ts:438-468`, `resume-report-snapshot.ts:559-563`): bundle publish/load, `validateWorkflowReportReferences`, task/goal staging, and `inheritResumeReportSnapshot`. If a resumed run's source run never created `reports/`, `inheritResumeReportSnapshot` always fails and routes to `terminalizeBootstrapFailure`.
+- Post-preparation, pre-meta steps inside the bootstrap `try` (`workflowExecution.ts:288-319`, `workflowExecutionBootstrap.ts:438-534`, `resume-report-snapshot.ts:559-563`): bundle publish/load, `validateWorkflowReportReferences`, task/goal staging, and `inheritResumeReportSnapshot`. For resumed runs, `inheritResumeReports` is modelled as a separate transition before `publishRunMeta`: if the source run never created `reports/`, `inheritResumeReportSnapshot` fails (`bootstrapPreMetaFail` with `hasReports = false`); if inheritance succeeds (`ReportsInherited`, `hasReports = true`) and a later pre-meta step (such as config resolution or initial `publishRunMeta`) fails, `bootstrapPreMetaFail` and `terminalizeBootstrapFailure` preserve `hasReports = true`.
 - `resolveWorkflowExecutionResumeLineage` (`src/features/tasks/execute/workflowExecutionBootstrap.ts:284-346`): models `lineageAvailable` (`true` → `publishedResumeSource` is present and `meta.json` records `source_run_slug`; `false` → `OperationLineageUnavailableError` fallback starts a new operation journal with `publishedResumeSource = undefined` and omits `source_run_slug` from `meta.json`). Here `lineageAvailable = false` represents a legacy or corrupted source `meta.json` lacking operation lineage fields (runs created by the current code always persist `operation_journal_run_slug` and `operation_claim_token`).
-- `createWorkflowExecutionBootstrap` (`src/features/tasks/execute/workflowExecutionBootstrap.ts:515-544`): normal path after preparation and pre-meta checks; calls `publishRunMeta` (`status: running`) and `initNdjsonLog` (`workflow_start`).
+- `createWorkflowExecutionBootstrap` (`src/features/tasks/execute/workflowExecutionBootstrap.ts:515-544`): normal path after preparation and pre-meta checks (and `inheritResumeReports` when resuming); sets `bootDone = true` and calls `publishRunMeta` (`status: running`) and `initNdjsonLog` (`workflow_start`).
 - `WorkflowEngineSetup.ensureRunDirsExist` (`src/core/workflow/engine/WorkflowEngineSetup.ts:172-186`): creates `reports/` before executing steps (`hasReports = true`).
 - `terminalizeBootstrapFailure` (`src/features/tasks/execute/workflowExecution.ts:826-936`): error path after preparation or pre-meta bootstrap failure in two stages — (1) `publishRunMeta` (`status: running`) + `initNdjsonLog` (`workflow_start`), then (2) `activeRun.finish` (`finalizeFileRunMeta` to `status: failed` with reason + `workflow_abort`).
 - `activeRun.finish` (`src/features/tasks/execute/workflowRunLifecycle.ts`, `fileWorkflowRunTerminalPublisher.ts`): single-commit terminalization (`finished` guard) for both normal completion (`status: completed`, `workflow_complete`, no failure record) and failure (`status: failed`, `workflow_abort`).
@@ -44,42 +44,43 @@ resuming a failed run in a second attempt (both with and without available opera
 
 ## Invariants
 
-- `failureIsRecorded`: a run exiting after a preparation, pre-meta bootstrap, or execution failure leaves `meta.json` (`MetaFailed`), `workflow_start` (1), terminal log (1), `finishCount == 1`, and `hasFailureRecord`.
+- `failureIsRecorded`: a run exiting after a preparation, pre-meta bootstrap, or execution failure leaves `meta.json` (`MetaFailed`), `workflow_start` (1), terminal log count (1) with kind `LogAbort` (`workflow_abort`), `finishCount == 1`, and `hasFailureRecord`.
 - `unresolvedReasonExplains`: a run exiting after `CallUnresolved` records the lookup explanation (`reasonHasLookup`).
-- `noStepWithoutBundle`: no step runs unless the run directory was reserved, the bundle was prepared (`PrepOk`), and pre-meta bootstrap passed (`BootOk`).
+- `noStepWithoutBundle`: no step runs unless the run directory was reserved, the bundle was prepared (`PrepOk` and `prepDone`), and bootstrap actually completed (`BootOk` and `bootDone`).
 - `noRunningAfterExit`: `meta.json` is never left `MetaRunning` once the run has exited.
-- `beginRunLeavesNoRecordYet`: immediately after `beginRun` (and before bootstrap/terminalization), the directory is reserved while `meta.json`, logs, and `reports/` are not created yet.
-- `noFailureOnSuccess`: a run exiting with `ExecCompleted` has `MetaCompleted`, `not(hasFailureRecord)`, `not(reasonHasLookup)`, single start/terminal/finish counts, and `stepsRun > 0`.
+- `beginRunLeavesNoRecordYet`: immediately after `beginRun` (and before bootstrap/terminalization), the directory is reserved while `meta.json`, logs (`logTerminalKind == NoTerminalLog`), and `bootDone` are not created yet; `reports/` is absent in `DirReserved`/`PrepFailed` and in `BootstrapFailed` unless a resumed run already inherited `reports/` from a source run that had `reports/`.
+- `noFailureOnSuccess`: a run exiting with `ExecCompleted` has `MetaCompleted`, `not(hasFailureRecord)`, `not(reasonHasLookup)`, single start/terminal/finish counts with terminal log kind `LogComplete` (`workflow_complete`), and `stepsRun > 0`.
 - `noDuplicateRecords`: each run writes initial `meta.json`, `workflow_start`, terminal log, and `activeRun.finish` at most once (excluding the unmodelled post-`initNdjsonLog` failure path noted above).
 - `resumePreservesIntegrity`: a resumed run uses a distinct run ID (`src != id`), records `source_run_slug` if and only if operation lineage is available (`expectedRecordedSource`, including on preparation/bootstrap failure), and never mutates the source run's `meta.json` or logs (`run1Snapshot`). Note: `isSourceDistinct`, `isSourceExited`, and `run1Snapshot` preservation hold structurally in the clean model because `RUN_2` is distinct from `RUN_1` and actions update only `runs.get(activeRunId)`, while still catching mutations that corrupt `RUN_1` or drop `recordedSource`.
 - `noResumeCompletionWithoutSourceReports`: resuming from a source run with `hasReports == false` (such as a preparation-failed run) never executes steps or reaches `MetaCompleted`.
 
 ## Commands and results
 
-Max non-stutter depth for a 2-run resume trace in `BeginFirst` is 11 steps, so simulation uses `--max-steps 16`.
+Max non-stutter depth for a 2-run resume trace in `BeginFirst` is 12 steps, so simulation uses `--max-steps 16`.
 
 ```sh
 quint typecheck runStartRecord.qnt
 quint typecheck runStartRecord_test.qnt
-quint test runStartRecord_test.qnt --main beginFirstTest     # 8 passing
+quint test runStartRecord_test.qnt --main beginFirstTest     # 9 passing
 quint test runStartRecord_test.qnt --main prepareFirstTest   # 2 passing (shows old order drops records, reason & resume lineage)
 quint run beginFirst.qnt --main beginFirst \
   --invariant invariant \
   --witnesses witnessedUnresolvedCallFailure witnessedCredentialFailure witnessedPostPrepBootstrapFailure \
     witnessedCompletedRun witnessedExecFailure witnessedResumedPrepFailure \
-    witnessedResumedInheritFailure witnessedResumedLineageUnavailable witnessedResumedCompletion \
+    witnessedResumedInheritFailure witnessedResumedLineageUnavailable \
+    witnessedResumedPostInheritBootstrapFailure witnessedResumedCompletion \
   --max-steps 16 --max-samples 10000
-# Result: No violation found; all 9 witnesses reached (percentages vary by seed; e.g. --seed=0xea3c76d41854305d: 0.59% - 45.86%).
+# Result: No violation found; all 10 witnesses reached (percentages vary by seed; e.g. --seed=0x6a8ac4d9d65827b7: 0.58% - 45.88%).
 
 quint run prepareFirst.qnt --main prepareFirst --invariant failureIsRecorded --max-steps 16 --max-samples 10000          # Invariant violated (expected)
 quint run prepareFirst.qnt --main prepareFirst --invariant unresolvedReasonExplains --max-steps 16 --max-samples 10000   # Invariant violated (expected)
 quint run prepareFirst.qnt --main prepareFirst --invariant resumePreservesIntegrity --max-steps 16 --max-samples 10000   # Invariant violated (expected)
 ```
 
-Optional exhaustive bounded model check (takes several minutes; covers the 11-step maximum depth):
+Optional exhaustive bounded model check (takes several minutes; covers the 12-step maximum depth):
 
 ```sh
-quint verify beginFirst.qnt --main beginFirst --invariant invariant --max-steps 12
+quint verify beginFirst.qnt --main beginFirst --invariant invariant --max-steps 13
 ```
 
 ## When to update

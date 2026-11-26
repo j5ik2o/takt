@@ -24,6 +24,7 @@ module runStartRecord {
     | Entered
     | DirReserved
     | Prepared
+    | ReportsInherited
     | PrepFailed
     | BootstrapFailed
     | Bootstrapped
@@ -33,6 +34,8 @@ module runStartRecord {
 
   type MetaStatus = NoMeta | MetaRunning | MetaCompleted | MetaFailed
 
+  type TerminalLogKind = NoTerminalLog | LogComplete | LogAbort
+
   // Outcome of prepareWorkflowExecutionBundle:
   //   PrepOk            every workflow_call resolved and credentials are safe
   //   CallUnresolved    resolver returned null for some workflow_call
@@ -40,7 +43,8 @@ module runStartRecord {
   type PrepOutcome = PrepOk | CallUnresolved | CredentialUnsafe
 
   // Outcome of post-preparation, pre-meta steps inside the bootstrap try
-  // (publish/load bundle, validateWorkflowReportReferences, stageTaskSpec, etc.).
+  // (publish/load bundle, validateWorkflowReportReferences, stageTaskSpec,
+  //  config resolution / publishRunMeta after inheritResumeReportSnapshot, etc.).
   type BootstrapOutcome = BootOk | BootFailed
 
   type ExecOutcome = ExecPending | ExecCompleted | ExecFailed
@@ -54,6 +58,7 @@ module runStartRecord {
     prep: PrepOutcome,
     prepDone: bool,
     boot: BootstrapOutcome,
+    bootDone: bool,
     execOutcome: ExecOutcome,
     sourceRun: SourceRef,
     // Whether resolveWorkflowExecutionResumeLineage obtained operation lineage (publishedResumeSource).
@@ -64,6 +69,7 @@ module runStartRecord {
     metaPublishCount: int,
     logStartCount: int,
     logTerminalCount: int,
+    logTerminalKind: TerminalLogKind,
     finishCount: int,
     hasFailureRecord: bool,
     reasonHasLookup: bool,
@@ -79,6 +85,7 @@ module runStartRecord {
     metaPublishCount: int,
     logStartCount: int,
     logTerminalCount: int,
+    logTerminalKind: TerminalLogKind,
     finishCount: int,
     hasFailureRecord: bool,
     reasonHasLookup: bool,
@@ -98,6 +105,7 @@ module runStartRecord {
     prep: PrepOk,
     prepDone: false,
     boot: BootOk,
+    bootDone: false,
     execOutcome: ExecPending,
     sourceRun: NoSource,
     lineageAvailable: false,
@@ -106,6 +114,7 @@ module runStartRecord {
     metaPublishCount: 0,
     logStartCount: 0,
     logTerminalCount: 0,
+    logTerminalKind: NoTerminalLog,
     finishCount: 0,
     hasFailureRecord: false,
     reasonHasLookup: false,
@@ -134,6 +143,7 @@ module runStartRecord {
     metaPublishCount: r.metaPublishCount,
     logStartCount: r.logStartCount,
     logTerminalCount: r.logTerminalCount,
+    logTerminalKind: r.logTerminalKind,
     finishCount: r.finishCount,
     hasFailureRecord: r.hasFailureRecord,
     reasonHasLookup: r.reasonHasLookup,
@@ -170,11 +180,18 @@ module runStartRecord {
     phase: if (r.prep == PrepOk) Prepared else PrepFailed,
   }
 
-  // Normal path: inheritResumeReportSnapshot (if resumed) + publishRunMeta(running) + initNdjsonLog.
+  // Resume step inside bootstrap before publishRunMeta: inheritResumeReportSnapshot publishes reports/.
+  pure def applyInheritResumeReports(r: RunRecord): RunRecord = {
+    ...r,
+    phase: ReportsInherited,
+    hasReports: true,
+  }
+
+  // Normal path: publishRunMeta(running) + initNdjsonLog (after inheritResumeReportSnapshot if resumed).
   pure def applyCreateBootstrap(r: RunRecord): RunRecord = {
     ...r,
     phase: Bootstrapped,
-    hasReports: r.hasReports or r.sourceRun != NoSource,
+    bootDone: true,
     meta: MetaRunning,
     recordedSource: expectedRecordedSource(r),
     metaPublishCount: r.metaPublishCount + 1,
@@ -182,7 +199,8 @@ module runStartRecord {
   }
 
   // Post-preparation, pre-meta failure inside the bootstrap try
-  // (e.g. inheritResumeReportSnapshot missing source reports/, validateWorkflowReportReferences error).
+  // (e.g. inheritResumeReportSnapshot missing source reports/, validateWorkflowReportReferences error,
+  //  or post-inheritance config resolution / publishRunMeta failure which preserves inherited reports/).
   pure def applyBootstrapPreMetaFail(r: RunRecord): RunRecord = {
     ...r,
     phase: BootstrapFailed,
@@ -204,6 +222,7 @@ module runStartRecord {
     phase: Exited,
     meta: MetaFailed,
     logTerminalCount: r.logTerminalCount + 1,
+    logTerminalKind: LogAbort,
     finishCount: r.finishCount + 1,
     hasFailureRecord: true,
     reasonHasLookup: r.prep == CallUnresolved,
@@ -224,6 +243,7 @@ module runStartRecord {
     execOutcome: ExecCompleted,
     meta: MetaCompleted,
     logTerminalCount: r.logTerminalCount + 1,
+    logTerminalKind: LogComplete,
     finishCount: r.finishCount + 1,
     hasFailureRecord: false,
     reasonHasLookup: false,
@@ -237,6 +257,7 @@ module runStartRecord {
     execOutcome: ExecFailed,
     meta: MetaFailed,
     logTerminalCount: r.logTerminalCount + 1,
+    logTerminalKind: LogAbort,
     finishCount: r.finishCount + 1,
     hasFailureRecord: true,
     reasonHasLookup: false,
@@ -317,13 +338,34 @@ module runStartRecord {
     }
   }
 
-  // createWorkflowExecutionBootstrap succeeds only when post-prep checks pass and
-  // (for resumed runs) the source run has a reports/ directory to inherit.
-  action createBootstrap: bool = {
+  // Resumed run publishes inherited reports/ before publishRunMeta.
+  action inheritResumeReports: bool = {
     val r = activeRun
     val ready =
       if (ORDER == "BeginFirst") r.phase == Prepared
       else (r.phase == DirReserved and r.prepDone)
+    all {
+      ready,
+      r.dirReserved,
+      r.sourceRun != NoSource,
+      sourceHasReports(r.sourceRun),
+      runs' = runs.put(activeRunId, applyInheritResumeReports(r)),
+      activeRunId' = activeRunId,
+      run1SnapshotTaken' = run1SnapshotTaken,
+      run1Snapshot' = run1Snapshot,
+    }
+  }
+
+  // createWorkflowExecutionBootstrap succeeds only when post-prep checks pass and
+  // (for resumed runs) the source run's reports/ have been inherited.
+  action createBootstrap: bool = {
+    val r = activeRun
+    val readyNonResume =
+      if (ORDER == "BeginFirst") r.phase == Prepared
+      else (r.phase == DirReserved and r.prepDone)
+    val ready =
+      if (r.sourceRun == NoSource) readyNonResume
+      else r.phase == ReportsInherited
     all {
       ready,
       r.dirReserved,
@@ -336,17 +378,25 @@ module runStartRecord {
     }
   }
 
-  // Post-prep, pre-meta failure inside bootstrap try (including inheritResumeReportSnapshot
-  // failing because the source run never created reports/).
+  // Post-prep, pre-meta failure inside bootstrap try:
+  //   - non-resumed pre-meta failure (hasReports remains false)
+  //   - resumed inheritResumeReportSnapshot failure when source has no reports/ (hasReports remains false)
+  //   - resumed post-inheritance pre-meta failure (hasReports remains true)
   action bootstrapPreMetaFail: bool = {
     val r = activeRun
-    val ready =
+    val readyBeforeInherit =
       if (ORDER == "BeginFirst") r.phase == Prepared
       else (r.phase == DirReserved and r.prepDone)
+    val failBeforeInherit =
+      readyBeforeInherit and (
+        (r.sourceRun == NoSource and r.boot == BootFailed)
+        or (r.sourceRun != NoSource and not(sourceHasReports(r.sourceRun)))
+      )
+    val failAfterInherit =
+      r.phase == ReportsInherited and r.boot == BootFailed
     all {
-      ready,
+      failBeforeInherit or failAfterInherit,
       r.dirReserved,
-      r.boot == BootFailed or not(sourceHasReports(r.sourceRun)),
       runs' = runs.put(activeRunId, applyBootstrapPreMetaFail(r)),
       activeRunId' = activeRunId,
       run1SnapshotTaken' = run1SnapshotTaken,
@@ -448,6 +498,7 @@ module runStartRecord {
       prepareBeforeBegin,
       beginRun,
       prepareInBootstrap,
+      inheritResumeReports,
       createBootstrap,
       bootstrapPreMetaFail,
       terminalizeBootstrapStart,
@@ -462,7 +513,7 @@ module runStartRecord {
 
   // --- Safety invariants ---
 
-  // 1. Any run exiting after preparation, pre-meta bootstrap, or execution failure leaves meta.json (failed) and logs.
+  // 1. Any run exiting after preparation, pre-meta bootstrap, or execution failure leaves meta.json (failed) and workflow_abort logs.
   val failureIsRecorded: bool =
     RUN_IDS.forall(id => {
       val r = runs.get(id)
@@ -471,6 +522,7 @@ module runStartRecord {
           r.meta == MetaFailed,
           r.logStartCount == 1,
           r.logTerminalCount == 1,
+          r.logTerminalKind == LogAbort,
           r.finishCount == 1,
           r.hasFailureRecord,
         },
@@ -478,6 +530,7 @@ module runStartRecord {
           r.meta == MetaFailed,
           r.logStartCount == 1,
           r.logTerminalCount == 1,
+          r.logTerminalKind == LogAbort,
           r.finishCount == 1,
           r.hasFailureRecord,
           not(r.reasonHasLookup),
@@ -487,6 +540,7 @@ module runStartRecord {
           r.meta == MetaFailed,
           r.logStartCount == 1,
           r.logTerminalCount == 1,
+          r.logTerminalKind == LogAbort,
           r.finishCount == 1,
           r.hasFailureRecord,
           not(r.reasonHasLookup),
@@ -501,11 +555,11 @@ module runStartRecord {
       (r.phase == Exited and r.prep == CallUnresolved) implies r.reasonHasLookup
     })
 
-  // 3. No step runs unless the run directory was reserved, the bundle was prepared, and bootstrap succeeded.
+  // 3. No step runs unless the run directory was reserved, the bundle was prepared, and bootstrap completed.
   val noStepWithoutBundle: bool =
     RUN_IDS.forall(id => {
       val r = runs.get(id)
-      r.stepsRun > 0 implies (r.prep == PrepOk and r.prepDone and r.boot == BootOk and r.dirReserved)
+      r.stepsRun > 0 implies (r.prep == PrepOk and r.prepDone and r.boot == BootOk and r.bootDone and r.dirReserved)
     })
 
   // 4. meta.json is never left as running once a run has exited.
@@ -515,22 +569,50 @@ module runStartRecord {
       r.phase == Exited implies r.meta != MetaRunning
     })
 
-  // 5. beginRun only reserves an empty directory; meta.json, logs, and reports/ are not created yet.
+  // 5. beginRun only reserves an empty directory; meta.json and logs are not created before bootstrap/terminalization,
+  //    and reports/ only exists pre-meta after a resumed run inherits reports/ from a source run that had reports/.
   val beginRunLeavesNoRecordYet: bool =
     RUN_IDS.forall(id => {
       val r = runs.get(id)
-      (r.phase == DirReserved or r.phase == PrepFailed or r.phase == BootstrapFailed) implies and {
-        r.dirReserved,
-        not(r.hasReports),
-        r.meta == NoMeta,
-        r.metaPublishCount == 0,
-        r.logStartCount == 0,
-        r.logTerminalCount == 0,
-        r.finishCount == 0,
+      and {
+        (r.phase == DirReserved or r.phase == PrepFailed) implies and {
+          r.dirReserved,
+          not(r.hasReports),
+          not(r.bootDone),
+          r.meta == NoMeta,
+          r.metaPublishCount == 0,
+          r.logStartCount == 0,
+          r.logTerminalCount == 0,
+          r.logTerminalKind == NoTerminalLog,
+          r.finishCount == 0,
+        },
+        (r.phase == ReportsInherited) implies and {
+          r.dirReserved,
+          r.hasReports,
+          r.sourceRun != NoSource,
+          not(r.bootDone),
+          r.meta == NoMeta,
+          r.metaPublishCount == 0,
+          r.logStartCount == 0,
+          r.logTerminalCount == 0,
+          r.logTerminalKind == NoTerminalLog,
+          r.finishCount == 0,
+        },
+        (r.phase == BootstrapFailed) implies and {
+          r.dirReserved,
+          (r.sourceRun == NoSource or not(sourceHasReports(r.sourceRun))) implies not(r.hasReports),
+          not(r.bootDone),
+          r.meta == NoMeta,
+          r.metaPublishCount == 0,
+          r.logStartCount == 0,
+          r.logTerminalCount == 0,
+          r.logTerminalKind == NoTerminalLog,
+          r.finishCount == 0,
+        },
       }
     })
 
-  // 6. A completed run records MetaCompleted with no failure marker or lookup error reason.
+  // 6. A completed run records MetaCompleted and workflow_complete with no failure marker or lookup error reason.
   val noFailureOnSuccess: bool =
     RUN_IDS.forall(id => {
       val r = runs.get(id)
@@ -540,6 +622,7 @@ module runStartRecord {
         not(r.reasonHasLookup),
         r.logStartCount == 1,
         r.logTerminalCount == 1,
+        r.logTerminalKind == LogComplete,
         r.finishCount == 1,
         r.stepsRun > 0,
       }
@@ -650,9 +733,21 @@ module runStartRecord {
     and runs.get(RUN_2).meta != NoMeta
     and runs.get(RUN_2).recordedSource == NoSource
 
+  val witnessedResumedPostInheritBootstrapFailure: bool =
+    runs.get(RUN_2).phase == Exited
+    and runs.get(RUN_2).sourceRun == FromRun(RUN_1)
+    and runs.get(RUN_1).hasReports
+    and runs.get(RUN_2).hasReports
+    and runs.get(RUN_2).prep == PrepOk
+    and runs.get(RUN_2).boot == BootFailed
+    and runs.get(RUN_2).meta == MetaFailed
+    and runs.get(RUN_2).logTerminalKind == LogAbort
+    and runs.get(RUN_2).stepsRun == 0
+
   val witnessedResumedCompletion: bool =
     runs.get(RUN_2).phase == Exited
     and runs.get(RUN_2).sourceRun == FromRun(RUN_1)
     and runs.get(RUN_1).hasReports
     and runs.get(RUN_2).meta == MetaCompleted
+    and runs.get(RUN_2).logTerminalKind == LogComplete
 }

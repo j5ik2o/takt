@@ -39,12 +39,12 @@ PR: [j5ik2o/takt#167](https://github.com/j5ik2o/takt/pull/167)（マージ済み
 
 `specs/quint/run-start-record/`（`runStartRecord.qnt`・`beginFirst.qnt`・`prepareFirst.qnt`・`runStartRecord_test.qnt`・`README.md`）。
 
-- 実コードに合わせて `beginRun` は空ディレクトリ予約のみとし、準備後の pre-meta bootstrap 失敗（`validateWorkflowReportReferences` や `inheritResumeReportSnapshot` での `reports/` 欠如を含む）・正常系 `createWorkflowExecutionBootstrap`・異常系 `terminalizeBootstrapFailure`（`publishRunMeta` + `initNdjsonLog` → `activeRun.finish` の 2 段階）をモデル化した。
-- 成功終了（`MetaCompleted`）・実行失敗（`ExecFailed`）・失敗 run からの 2 試行目 resume（`RUN_1` → `RUN_2`、lineage 取得可否 `lineageAvailable` の分岐と再開元 `hasReports` による `inheritResumeReportSnapshot` 成否を含む）を表現し、9 つの不変条件（`failureIsRecorded`, `unresolvedReasonExplains`, `noStepWithoutBundle`, `noRunningAfterExit`, `beginRunLeavesNoRecordYet`, `noFailureOnSuccess`, `noDuplicateRecords`, `resumePreservesIntegrity`, `noResumeCompletionWithoutSourceReports`）と 9 つの到達性 witness を定義した。
-- 2 試行 resume の最長非 stutter 経路が 11 ステップのため `--max-steps 16` で検査した。
-  - `quint test runStartRecord_test.qnt --main beginFirstTest`: 8 passing
+- 実コードに合わせて `beginRun` は空ディレクトリ予約のみとし、準備後の再開元 `reports/` 継承（`inheritResumeReports`）・pre-meta bootstrap 失敗（`inheritResumeReportSnapshot` での `reports/` 欠如や継承後の `publishRunMeta` 前失敗を含む）・正常系 `createWorkflowExecutionBootstrap`（`bootDone` 設定）・異常系 `terminalizeBootstrapFailure`（`publishRunMeta` + `initNdjsonLog` → `activeRun.finish` の 2 段階）をモデル化した。
+- 成功終了（`MetaCompleted`・`LogComplete`）・実行失敗（`ExecFailed`・`LogAbort`）・失敗 run からの 2 試行目 resume（`RUN_1` → `RUN_2`、lineage 取得可否 `lineageAvailable` の分岐と再開元 `hasReports` による `inheritResumeReportSnapshot` 成否および継承後の pre-meta 失敗時の `hasReports` 保持を含む）を表現し、9 つの不変条件（`failureIsRecorded`, `unresolvedReasonExplains`, `noStepWithoutBundle`, `noRunningAfterExit`, `beginRunLeavesNoRecordYet`, `noFailureOnSuccess`, `noDuplicateRecords`, `resumePreservesIntegrity`, `noResumeCompletionWithoutSourceReports`）と 10 個の到達性 witness を定義した。
+- 2 試行 resume の最長非 stutter 経路が 12 ステップのため `--max-steps 16` で検査した。
+  - `quint test runStartRecord_test.qnt --main beginFirstTest`: 9 passing
   - `quint test runStartRecord_test.qnt --main prepareFirstTest`: 2 passing
-  - `quint run beginFirst.qnt --main beginFirst --invariant invariant --witnesses ... --max-steps 16 --max-samples 10000`: 違反なし。全 9 witness が到達（到達割合は seed 依存。例: `--seed=0xea3c76d41854305d` で 0.59%〜45.86%）。
+  - `quint run beginFirst.qnt --main beginFirst --invariant invariant --witnesses ... --max-steps 16 --max-samples 10000`: 違反なし。全 10 witness が到達（到達割合は seed 依存。例: `--seed=0x6a8ac4d9d65827b7` で 0.58%〜45.88%）。
   - `quint run prepareFirst.qnt --main prepareFirst`: `failureIsRecorded`・`unresolvedReasonExplains`・`resumePreservesIntegrity` の 3 つが期待どおり違反。
 - モデル対象外（`README.md` に明記）: `beginRun` 前の `resolveAvailableSourceLineage` での `OperationRecoveryError`、`beginRun` 自体の失敗（`resolveRunSlug` の同 slug 例外を含む）、`terminalizeBootstrapFailure` の 2 段階書き込み途中の I/O 失敗／強制停止、`createWorkflowExecutionBootstrap` 内で `initNdjsonLog` 実行後に失敗した際の `workflow_start` 二重追記、`createWorkflowExecutionBootstrap` 成功後・`WorkflowEngine` が `reports/` を作る前の実行失敗、利用者の中断（Ctrl+C・入力キャンセルによる `meta.json` の `status: aborted`）、operation journal の系譜共有追記、並行 run の slug 競合（実装では `mkdirSync` + `EEXIST` リトライ）。
 
@@ -69,7 +69,7 @@ PR: [j5ik2o/takt#167](https://github.com/j5ik2o/takt/pull/167)（マージ済み
 ## 影響
 
 - 上流（nrslib/takt）: 該当しない（フォークの `integration/takt-mcp` にだけ出す）。
-- 保存済みデータ: 新しい形式は足さない。`prepareWorkflowExecutionBundle` 失敗（および central 実行の資格情報拒否）時にも既存形式の run 記録（`.takt/runs/<slug>/meta.json`、`logs/<sessionId>.jsonl` の `workflow_start` + `workflow_abort`、`trace.md`、worktree 実行時は `projectCwd/.takt/runs/<slug>/interventions.jsonl` の `terminal: failed`）が生成されるようになり、`.takt/runs/` に失敗 run が増える。`takt-dash` と Web UI は `status: "failed"`, `iterations: 0`, `workflow-bundle` なしの既存形式として安全に読める。
+- 保存済みデータ: 新しい形式は足さない。`prepareWorkflowExecutionBundle` 失敗（および central 実行の資格情報拒否）時にも既存形式の確定済み run 記録（`.takt/runs/<slug>/meta.json`、`logs/<sessionId>.jsonl` の `workflow_start` + `workflow_abort`）が生成され、`.takt/runs/` に失敗 run が増える。`trace.md` は `fileWorkflowRunTerminalPublisher` が `meta.json` の確定と `workflow_abort` 追記の後に別途生成する付随ファイルであり、生成や書き込みに失敗した場合は `RunProjectionError` が記録されて `trace.md` が残らないことがある（確定済みの `meta.json` とログは残る）。worktree 実行時は付随記録として `projectCwd/.takt/runs/<slug>/interventions.jsonl` に `terminal: failed` も記録される。`takt-dash` と Web UI は `status: "failed"`, `iterations: 0`, `workflow-bundle` なしの既存形式として安全に読める。
 - 公開の設定・API: 設定キーは変えない。CLI のエラー文言が長くなり、doctor が以前 OK と出していた workflow をエラーにする（実行は以前から失敗していた）。
 - `task_finish_hook`（`src/features/tasks/execute/taskFinishHook.ts`）: 発火回数（1 回）と `TAKT_FINISH_STATUS=failed` は変わらないが、次の 2 点が変わる。
   1. `TAKT_FINISH_RUN_DIR`: 以前は `prepareWorkflowExecutionBundle` 失敗時に `.takt/runs/<runSlug>` が存在せず未設定だったが、[j5ik2o/takt#167](https://github.com/j5ik2o/takt/pull/167) 後はディレクトリが作られるため設定されるようになる。
