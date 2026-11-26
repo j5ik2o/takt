@@ -3,7 +3,7 @@
 // initWith(initialized, hasTurn, stallAt, holdsHandle, closeFails)
 // initWithGroup(initialized, hasTurn, stallAt, holdsHandle, closeFails, desc, groupLeader)
 module beforeTest {
-  import turnProcessExitDeadline(DESIGN = "Before", GROUP_SIGNAL = "None", ABORTS_ON_SHUTDOWN = true).* from "./turnProcessExitDeadline"
+  import turnProcessExitDeadline(DESIGN = "Before", GROUP_SIGNAL = "None", SWEEP_ZOMBIE_EPERM = "Throw", ABORTS_ON_SHUTDOWN = true).* from "./turnProcessExitDeadline"
 
   // Before #141: abort-ignoring turn with an open handle stays running past GRACE after disconnect.
   run disconnectHangsPastDeadlineTest =
@@ -45,7 +45,7 @@ module beforeTest {
 }
 
 module unrefTimerTest {
-  import turnProcessExitDeadline(DESIGN = "UnrefTimer", GROUP_SIGNAL = "None", ABORTS_ON_SHUTDOWN = true).* from "./turnProcessExitDeadline"
+  import turnProcessExitDeadline(DESIGN = "UnrefTimer", GROUP_SIGNAL = "None", SWEEP_ZOMBIE_EPERM = "Throw", ABORTS_ON_SHUTDOWN = true).* from "./turnProcessExitDeadline"
 
   // Calling .unref() on the deadline timer still allows exit 0 when no other handle is held.
   run unrefTimerStillExitsZeroTest =
@@ -57,7 +57,7 @@ module unrefTimerTest {
 
 // #177: the code as of #141. The deadline ends the turn process, but its group is never signalled.
 module noGroupSignalTest {
-  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "None", ABORTS_ON_SHUTDOWN = true).* from "./turnProcessExitDeadline"
+  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "None", SWEEP_ZOMBIE_EPERM = "Throw", ABORTS_ON_SHUTDOWN = true).* from "./turnProcessExitDeadline"
 
   // Parent crashes, the turn ignores abort, the deadline exits 1: the descendant gets nothing.
   run orphanDescendantLeftAfterTimeoutTest =
@@ -97,7 +97,7 @@ module noGroupSignalTest {
 
 // #177 as proposed in the issue: only the deadline timer signals the group.
 module timeoutOnlyGroupSignalTest {
-  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "TimeoutOnly", ABORTS_ON_SHUTDOWN = true).* from "./turnProcessExitDeadline"
+  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "TimeoutOnly", SWEEP_ZOMBIE_EPERM = "Throw", ABORTS_ON_SHUTDOWN = true).* from "./turnProcessExitDeadline"
 
   run timeoutSignalsGroupTest =
     initWithGroup(true, true, StallTurn, true, false, DescHonorsTerm, true)
@@ -118,8 +118,36 @@ module timeoutOnlyGroupSignalTest {
       .expect(s.status == ExitedOne and not(s.timedOutMsg) and s.descAlive and not(orphanedGroupSignalled))
 }
 
+// Pre-review #177 design (06c8b3f1f): signals on every exit, but spawn.ts still throws on macOS
+// zombie-only group EPERM during the parent's post-exit managed.terminate() sweep.
+module everyExitWithoutEpermFixTest {
+  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "EveryExit", SWEEP_ZOMBIE_EPERM = "Throw", ABORTS_ON_SHUTDOWN = true).* from "./turnProcessExitDeadline"
+
+  // Clean exit signals the group; the descendant exits to zombie before the live parent's
+  // managed.terminate() runs. On macOS, kill(-pid, SIGTERM) returns EPERM and surfaces to onError.
+  run zombieOnlyGroupThrowsEpermOnCleanExitTest =
+    initWithGroup(true, true, StallNone, false, false, DescHonorsTerm, true)
+      .then(receiveShutdownMsg)
+      .then(cleanupResolve)
+      .then(descendantExitOnTerm)
+      .expect(not(s.descAlive) and s.descZombie)
+      .then(parentSweepAfterExit)
+      .expect(s.parentSweepError and not(noSpuriousParentSweepError))
+
+  // Same race after a child deadline timeout while the parent is still alive.
+  run zombieOnlyGroupThrowsEpermOnTimeoutTest =
+    initWithGroup(true, true, StallTurn, true, false, DescHonorsTerm, true)
+      .then(receiveSigterm)
+      .then(tick)
+      .then(tick)
+      .then(childDeadlineFire)
+      .then(descendantExitOnTerm)
+      .then(parentSweepAfterExit)
+      .expect(s.parentSweepError and not(noSpuriousParentSweepError))
+}
+
 module fixedTest {
-  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "EveryExit", ABORTS_ON_SHUTDOWN = true).* from "./turnProcessExitDeadline"
+  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "EveryExit", SWEEP_ZOMBIE_EPERM = "WaitReap", ABORTS_ON_SHUTDOWN = true).* from "./turnProcessExitDeadline"
 
   // Constants sanity check (GRACE > 0 and MAX_CLOCK > GRACE).
   run constantsSanityTest = all {
@@ -306,10 +334,36 @@ module fixedTest {
       .then(tick)
       .then(childDeadlineFire)
       .expect(s.groupSignalled and s.descAlive and not(s.descTermed) and safety)
+
+  // #177 / macOS (review M3): descendant exits to zombie before parent's managed.terminate() runs.
+  // spawn.ts waits through macOS EPERM until launchd reaps the zombie and ESRCH confirms exit.
+  run parentSweepWaitsForZombieReapTest =
+    initWithGroup(true, true, StallNone, false, false, DescHonorsTerm, true)
+      .then(receiveShutdownMsg)
+      .then(cleanupResolve)
+      .then(descendantExitOnTerm)
+      .then(parentSweepAfterExit)
+      .expect(s.sweep == SweepWaitingReap and not(s.parentSweepError) and not(canParentSweepFinishAfterReap(s)) and safety)
+      .then(descendantReaped)
+      .then(parentSweepFinishAfterReap)
+      .expect(s.sweep == SweepDone and not(s.parentSweepError) and not(s.descZombie) and safety)
+
+  // #177 (review L4): IPC disconnects while parent is alive, then parent crashes before child exits.
+  run disconnectThenParentCrashSignalsGroupTest =
+    initWithGroup(true, true, StallTurn, true, false, DescHonorsTerm, true)
+      .then(ipcDisconnectWhileParentAlive)
+      .then(parentCrashAfterDisconnect)
+      .then(tick)
+      .then(tick)
+      .then(childDeadlineFire)
+      .expect(s.status == ExitedOne and s.timedOutMsg and s.descTermed and safety)
+      .then(descendantExitOnTerm)
+      .then(descendantReaped)
+      .expect(not(s.descAlive) and not(s.descZombie) and safety)
 }
 
 module noAbortTest {
-  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "EveryExit", ABORTS_ON_SHUTDOWN = false).* from "./turnProcessExitDeadline"
+  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "EveryExit", SWEEP_ZOMBIE_EPERM = "WaitReap", ABORTS_ON_SHUTDOWN = false).* from "./turnProcessExitDeadline"
 
   // Mutant: shutdown() does not abort. A cooperative turn then cannot finish, so cleanup never
   // settles and only the deadline ends the process (exit 1 instead of a clean exit 0).
