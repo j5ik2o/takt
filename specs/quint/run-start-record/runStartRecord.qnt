@@ -1,99 +1,537 @@
 // -*- mode: Bluespec; -*-
-// Run start: from executeWorkflowInternal entering to the run record (meta.json + logs) on disk.
+// Run start and terminal record lifecycle: from entering executeWorkflowInternal to
+// disk records (run directory, meta.json, logs) across a run and an optional resume run.
 //
 // Sources modelled:
-//   src/features/tasks/execute/workflowExecution.ts      executeWorkflowInternal
-//   src/features/tasks/execute/workflowRunLifecycle.ts   beginRun (writes meta.json status=running, opens logs)
-//   src/features/tasks/execute/workflowExecutionBundle.ts prepareWorkflowExecutionBundle (resolves every workflow_call)
-//   terminalizeBootstrapFailure                           (rewrites meta.json status=failed with the reason)
+//   src/features/tasks/execute/workflowExecution.ts           executeWorkflowInternal, terminalizeBootstrapFailure
+//   src/features/tasks/execute/workflowRunLifecycle.ts        beginRun (reserves empty run directory only; finish guard)
+//   src/features/tasks/execute/workflowExecutionBundle.ts     prepareWorkflowExecutionBundle
+//   src/features/tasks/execute/workflowExecutionBootstrap.ts  createWorkflowExecutionBootstrap (publishRunMeta + initNdjsonLog)
+//   src/features/tasks/execute/fileWorkflowRunTerminalPublisher.ts  finish (finalizeFileRunMeta + terminal NDJSON line)
 //
-// ORDER (a string) is where bundle preparation sits:
-//   PrepareFirst  prepare before beginRun (before the fix)
-//   BeginFirst    prepare inside the bootstrap try after beginRun (the fix)
+// ORDER (a string) chooses where bundle preparation sits:
+//   PrepareFirst  prepare before beginRun (before PR #167)
+//   BeginFirst    prepare inside the bootstrap try after beginRun (PR #167)
 module runStartRecord {
   const ORDER: str
 
-  type Phase = Entered | Begun | Prepared | Executing | Exited
-  type Meta = NoMeta | MetaRunning | MetaFailed
-  // Outcome of preparing the bundle. CallUnresolved: the resolver returned null for some call.
-  // CredentialUnsafe: central execution rejected a legacy MCP credential literal.
-  type Prep = PrepOk | CallUnresolved | CredentialUnsafe
+  type RunId = int
 
-  var phase: Phase
-  var meta: Meta
-  var logs: bool
-  var prep: Prep
-  var prepDone: bool
-  var reasonHasLookup: bool   // the failure reason carries call, cwd, searched and excluded candidates
-  var stepsRun: int
+  type Phase =
+    | Idle
+    | Entered
+    | DirReserved
+    | Prepared
+    | PrepFailed
+    | Bootstrapped
+    | Terminalizing
+    | Executing
+    | Exited
 
-  val PREPS = Set(PrepOk, CallUnresolved, CredentialUnsafe)
+  type MetaStatus = NoMeta | MetaRunning | MetaCompleted | MetaFailed
 
-  action initWith(p: Prep): bool = all {
-    phase' = Entered, meta' = NoMeta, logs' = false, prep' = p, prepDone' = false,
-    reasonHasLookup' = false, stepsRun' = 0,
+  // Outcome of prepareWorkflowExecutionBundle:
+  //   PrepOk            every workflow_call resolved and credentials are safe
+  //   CallUnresolved    resolver returned null for some workflow_call
+  //   CredentialUnsafe  central execution rejected a legacy MCP credential literal
+  type PrepOutcome = PrepOk | CallUnresolved | CredentialUnsafe
+
+  type ExecOutcome = ExecPending | ExecCompleted | ExecFailed
+
+  type SourceRef = NoSource | FromRun(RunId)
+
+  type RunRecord = {
+    phase: Phase,
+    dirReserved: bool,
+    prep: PrepOutcome,
+    prepDone: bool,
+    execOutcome: ExecOutcome,
+    sourceRun: SourceRef,
+    recordedSource: SourceRef,
+    meta: MetaStatus,
+    metaPublishCount: int,
+    logStartCount: int,
+    logTerminalCount: int,
+    finishCount: int,
+    hasFailureRecord: bool,
+    reasonHasLookup: bool,
+    stepsRun: int,
   }
 
-  action init = {
+  type PersistedRecord = {
+    dirReserved: bool,
+    meta: MetaStatus,
+    recordedSource: SourceRef,
+    metaPublishCount: int,
+    logStartCount: int,
+    logTerminalCount: int,
+    finishCount: int,
+    hasFailureRecord: bool,
+    reasonHasLookup: bool,
+  }
+
+  pure val RUN_1: RunId = 1
+  pure val RUN_2: RunId = 2
+  pure val RUN_IDS: Set[RunId] = Set(RUN_1, RUN_2)
+  pure val PREPS: Set[PrepOutcome] = Set(PrepOk, CallUnresolved, CredentialUnsafe)
+
+  pure val IDLE_RUN: RunRecord = {
+    phase: Idle,
+    dirReserved: false,
+    prep: PrepOk,
+    prepDone: false,
+    execOutcome: ExecPending,
+    sourceRun: NoSource,
+    recordedSource: NoSource,
+    meta: NoMeta,
+    metaPublishCount: 0,
+    logStartCount: 0,
+    logTerminalCount: 0,
+    finishCount: 0,
+    hasFailureRecord: false,
+    reasonHasLookup: false,
+    stepsRun: 0,
+  }
+
+  pure def enteredRun(p: PrepOutcome, src: SourceRef): RunRecord = {
+    ...IDLE_RUN,
+    phase: Entered,
+    prep: p,
+    sourceRun: src,
+  }
+
+  pure def persistedOf(r: RunRecord): PersistedRecord = {
+    dirReserved: r.dirReserved,
+    meta: r.meta,
+    recordedSource: r.recordedSource,
+    metaPublishCount: r.metaPublishCount,
+    logStartCount: r.logStartCount,
+    logTerminalCount: r.logTerminalCount,
+    finishCount: r.finishCount,
+    hasFailureRecord: r.hasFailureRecord,
+    reasonHasLookup: r.reasonHasLookup,
+  }
+
+  pure val EMPTY_PERSISTED: PersistedRecord = persistedOf(IDLE_RUN)
+
+  pure def isSourceDistinct(id: RunId, src: SourceRef): bool =
+    match src {
+      | NoSource => true
+      | FromRun(s) => s != id
+    }
+
+  pure def applyPrepareBeforeBegin(r: RunRecord): RunRecord = {
+    ...r,
+    prepDone: true,
+    phase: if (r.prep == PrepOk) Prepared else Exited,
+  }
+
+  // Real beginRun (workflowRunLifecycle.ts): resolves slug and reserves an empty run directory.
+  // It does NOT write meta.json and does NOT create logs/.
+  pure def applyBeginRun(r: RunRecord): RunRecord = {
+    ...r,
+    phase: DirReserved,
+    dirReserved: true,
+  }
+
+  pure def applyPrepareInBootstrap(r: RunRecord): RunRecord = {
+    ...r,
+    prepDone: true,
+    phase: if (r.prep == PrepOk) Prepared else PrepFailed,
+  }
+
+  // Normal path: createWorkflowExecutionBootstrap writes meta.json (running) and workflow_start log.
+  pure def applyCreateBootstrap(r: RunRecord): RunRecord = {
+    ...r,
+    phase: Bootstrapped,
+    meta: MetaRunning,
+    recordedSource: r.sourceRun,
+    metaPublishCount: r.metaPublishCount + 1,
+    logStartCount: r.logStartCount + 1,
+  }
+
+  // Error path stage 1: terminalizeBootstrapFailure calls publishRunMeta (running) + initNdjsonLog.
+  pure def applyTerminalizeStart(r: RunRecord): RunRecord = {
+    ...r,
+    phase: Terminalizing,
+    meta: MetaRunning,
+    recordedSource: r.sourceRun,
+    metaPublishCount: r.metaPublishCount + 1,
+    logStartCount: r.logStartCount + 1,
+  }
+
+  // Error path stage 2: terminalizeBootstrapFailure calls activeRun.finish (meta=failed + workflow_abort).
+  pure def applyTerminalizeFinish(r: RunRecord): RunRecord = {
+    ...r,
+    phase: Exited,
+    meta: MetaFailed,
+    logTerminalCount: r.logTerminalCount + 1,
+    finishCount: r.finishCount + 1,
+    hasFailureRecord: true,
+    reasonHasLookup: r.prep == CallUnresolved,
+  }
+
+  pure def applyRunStep(r: RunRecord): RunRecord = {
+    ...r,
+    phase: Executing,
+    stepsRun: r.stepsRun + 1,
+  }
+
+  // Normal completion in finally: activeRun.finish writes status=completed with no failure record.
+  pure def applyFinishSuccess(r: RunRecord): RunRecord = {
+    ...r,
+    phase: Exited,
+    execOutcome: ExecCompleted,
+    meta: MetaCompleted,
+    logTerminalCount: r.logTerminalCount + 1,
+    finishCount: r.finishCount + 1,
+    hasFailureRecord: false,
+    reasonHasLookup: false,
+  }
+
+  // Execution failure/abort in finally: activeRun.finish writes status=failed + workflow_abort.
+  pure def applyFinishFailure(r: RunRecord): RunRecord = {
+    ...r,
+    phase: Exited,
+    execOutcome: ExecFailed,
+    meta: MetaFailed,
+    logTerminalCount: r.logTerminalCount + 1,
+    finishCount: r.finishCount + 1,
+    hasFailureRecord: true,
+    reasonHasLookup: false,
+  }
+
+  var activeRunId: RunId
+  var runs: RunId -> RunRecord
+  var run1SnapshotTaken: bool
+  var run1Snapshot: PersistedRecord
+
+  def activeRun: RunRecord = runs.get(activeRunId)
+
+  def isSourceExited(src: SourceRef): bool =
+    match src {
+      | NoSource => true
+      | FromRun(s) => runs.get(s).phase == Exited
+    }
+
+  action initWith(p: PrepOutcome): bool = all {
+    activeRunId' = RUN_1,
+    runs' = Map(RUN_1 -> enteredRun(p, NoSource), RUN_2 -> IDLE_RUN),
+    run1SnapshotTaken' = false,
+    run1Snapshot' = EMPTY_PERSISTED,
+  }
+
+  action init: bool = {
     nondet p = PREPS.oneOf()
     initWith(p)
   }
 
-  // Preparing before beginRun: a failure throws out of executeWorkflowInternal with nothing on disk.
-  action prepareBeforeBegin = all {
-    ORDER == "PrepareFirst", phase == Entered, not(prepDone),
-    prepDone' = true,
-    phase' = if (prep == PrepOk) Entered else Exited,
-    reasonHasLookup' = false,
-    meta' = meta, logs' = logs, prep' = prep, stepsRun' = stepsRun,
+  // Old order only: prepareWorkflowExecutionBundle runs before beginRun.
+  // A failure exits executeWorkflowInternal without creating a run directory, meta.json, or logs.
+  action prepareBeforeBegin: bool = {
+    val r = activeRun
+    val updated = applyPrepareBeforeBegin(r)
+    all {
+      ORDER == "PrepareFirst",
+      r.phase == Entered,
+      not(r.prepDone),
+      runs' = runs.put(activeRunId, updated),
+      activeRunId' = activeRunId,
+      run1SnapshotTaken' = if (activeRunId == RUN_1 and updated.phase == Exited) true else run1SnapshotTaken,
+      run1Snapshot' = if (activeRunId == RUN_1 and updated.phase == Exited) persistedOf(updated) else run1Snapshot,
+    }
   }
 
-  action beginRun = all {
-    phase == Entered, ORDER == "BeginFirst" or prepDone,
-    phase' = Begun, meta' = MetaRunning, logs' = true,
-    prep' = prep, prepDone' = prepDone, reasonHasLookup' = reasonHasLookup, stepsRun' = stepsRun,
+  action beginRun: bool = {
+    val r = activeRun
+    val canBegin = if (ORDER == "BeginFirst") r.phase == Entered else r.phase == Prepared
+    all {
+      canBegin,
+      isSourceDistinct(activeRunId, r.sourceRun),
+      runs' = runs.put(activeRunId, applyBeginRun(r)),
+      activeRunId' = activeRunId,
+      run1SnapshotTaken' = run1SnapshotTaken,
+      run1Snapshot' = run1Snapshot,
+    }
   }
 
-  // Inside the bootstrap try: prepare (BeginFirst only), publish, load, bootstrap.
-  // A failure goes to terminalizeBootstrapFailure, which writes meta status=failed with the reason.
-  pure def bootstrapFails(order: str, p: Prep): bool = order == "BeginFirst" and p != PrepOk
-
-  action bootstrap = all {
-    phase == Begun,
-    phase' = if (bootstrapFails(ORDER, prep)) Exited else Prepared,
-    meta' = if (bootstrapFails(ORDER, prep)) MetaFailed else meta,
-    reasonHasLookup' = (bootstrapFails(ORDER, prep) and prep == CallUnresolved),
-    prepDone' = true,
-    logs' = logs, prep' = prep, stepsRun' = stepsRun,
+  // Fixed order only: prepareWorkflowExecutionBundle runs inside the bootstrap try after beginRun.
+  action prepareInBootstrap: bool = {
+    val r = activeRun
+    all {
+      ORDER == "BeginFirst",
+      r.phase == DirReserved,
+      not(r.prepDone),
+      runs' = runs.put(activeRunId, applyPrepareInBootstrap(r)),
+      activeRunId' = activeRunId,
+      run1SnapshotTaken' = run1SnapshotTaken,
+      run1Snapshot' = run1Snapshot,
+    }
   }
 
-  action runSteps = all {
-    phase == Prepared,
-    phase' = Executing, stepsRun' = stepsRun + 1,
-    meta' = meta, logs' = logs, prep' = prep, prepDone' = prepDone, reasonHasLookup' = reasonHasLookup,
+  // createWorkflowExecutionBootstrap: normal path after bundle preparation succeeds.
+  action createBootstrap: bool = {
+    val r = activeRun
+    val ready =
+      if (ORDER == "BeginFirst") r.phase == Prepared
+      else (r.phase == DirReserved and r.prepDone)
+    all {
+      ready,
+      r.dirReserved,
+      runs' = runs.put(activeRunId, applyCreateBootstrap(r)),
+      activeRunId' = activeRunId,
+      run1SnapshotTaken' = run1SnapshotTaken,
+      run1Snapshot' = run1Snapshot,
+    }
   }
 
-  action stutter = all {
-    phase == Exited or phase == Executing,
-    phase' = phase, meta' = meta, logs' = logs, prep' = prep, prepDone' = prepDone,
-    reasonHasLookup' = reasonHasLookup, stepsRun' = stepsRun,
+  // terminalizeBootstrapFailure stage 1: publishRunMeta(running) + initNdjsonLog(workflow_start).
+  action terminalizeBootstrapStart: bool = {
+    val r = activeRun
+    all {
+      r.phase == PrepFailed,
+      r.dirReserved,
+      runs' = runs.put(activeRunId, applyTerminalizeStart(r)),
+      activeRunId' = activeRunId,
+      run1SnapshotTaken' = run1SnapshotTaken,
+      run1Snapshot' = run1Snapshot,
+    }
   }
 
-  action step = any { prepareBeforeBegin, beginRun, bootstrap, runSteps, stutter }
+  // terminalizeBootstrapFailure stage 2: activeRun.finish(failed, reason).
+  action terminalizeBootstrapFinish: bool = {
+    val r = activeRun
+    val updated = applyTerminalizeFinish(r)
+    all {
+      r.phase == Terminalizing,
+      r.finishCount == 0,
+      runs' = runs.put(activeRunId, updated),
+      activeRunId' = activeRunId,
+      run1SnapshotTaken' = if (activeRunId == RUN_1) true else run1SnapshotTaken,
+      run1Snapshot' = if (activeRunId == RUN_1) persistedOf(updated) else run1Snapshot,
+    }
+  }
 
-  // A failed preparation always leaves meta.json (failed) and logs.
-  val failureIsRecorded =
-    (phase == Exited and prep != PrepOk) implies (meta == MetaFailed and logs)
+  action runStep: bool = {
+    val r = activeRun
+    all {
+      r.phase == Bootstrapped,
+      runs' = runs.put(activeRunId, applyRunStep(r)),
+      activeRunId' = activeRunId,
+      run1SnapshotTaken' = run1SnapshotTaken,
+      run1Snapshot' = run1Snapshot,
+    }
+  }
 
-  // An unresolved call's recorded reason names where the lookup looked and what it excluded.
-  val unresolvedReasonExplains =
-    (phase == Exited and prep == CallUnresolved) implies reasonHasLookup
+  action finishExecutionSuccess: bool = {
+    val r = activeRun
+    val updated = applyFinishSuccess(r)
+    all {
+      r.phase == Executing,
+      r.finishCount == 0,
+      runs' = runs.put(activeRunId, updated),
+      activeRunId' = activeRunId,
+      run1SnapshotTaken' = if (activeRunId == RUN_1) true else run1SnapshotTaken,
+      run1Snapshot' = if (activeRunId == RUN_1) persistedOf(updated) else run1Snapshot,
+    }
+  }
 
-  // No step runs unless every call resolved and the bundle was prepared.
-  val noStepWithoutBundle = stepsRun > 0 implies (prep == PrepOk and prepDone)
+  action finishExecutionFailure: bool = {
+    val r = activeRun
+    val updated = applyFinishFailure(r)
+    all {
+      r.phase == Executing,
+      r.finishCount == 0,
+      runs' = runs.put(activeRunId, updated),
+      activeRunId' = activeRunId,
+      run1SnapshotTaken' = if (activeRunId == RUN_1) true else run1SnapshotTaken,
+      run1Snapshot' = if (activeRunId == RUN_1) persistedOf(updated) else run1Snapshot,
+    }
+  }
 
-  // meta.json is never left as running once the run has exited.
-  val noRunningAfterExit = phase == Exited implies meta != MetaRunning
+  // Start a resume run (RUN_2) referencing a failed RUN_1 as source_run_slug.
+  action startResumeRun(nextPrep: PrepOutcome): bool = all {
+    activeRunId == RUN_1,
+    runs.get(RUN_1).phase == Exited,
+    runs.get(RUN_1).meta == MetaFailed,
+    runs.get(RUN_2).phase == Idle,
+    activeRunId' = RUN_2,
+    runs' = runs.put(RUN_2, enteredRun(nextPrep, FromRun(RUN_1))),
+    run1SnapshotTaken' = run1SnapshotTaken,
+    run1Snapshot' = run1Snapshot,
+  }
 
-  val invariant = failureIsRecorded and unresolvedReasonExplains and noStepWithoutBundle and noRunningAfterExit
+  // Terminal stutter only once the active run has exited.
+  action stutter: bool = all {
+    activeRun.phase == Exited,
+    activeRunId' = activeRunId,
+    runs' = runs,
+    run1SnapshotTaken' = run1SnapshotTaken,
+    run1Snapshot' = run1Snapshot,
+  }
+
+  action step: bool = {
+    nondet nextPrep = PREPS.oneOf()
+    any {
+      prepareBeforeBegin,
+      beginRun,
+      prepareInBootstrap,
+      createBootstrap,
+      terminalizeBootstrapStart,
+      terminalizeBootstrapFinish,
+      runStep,
+      finishExecutionSuccess,
+      finishExecutionFailure,
+      startResumeRun(nextPrep),
+      stutter,
+    }
+  }
+
+  // --- Safety invariants ---
+
+  // 1. A run that exits after a preparation or execution failure always leaves meta.json (failed) and logs.
+  val failureIsRecorded: bool =
+    RUN_IDS.forall(id => {
+      val r = runs.get(id)
+      and {
+        (r.phase == Exited and r.prep != PrepOk) implies and {
+          r.meta == MetaFailed,
+          r.logStartCount == 1,
+          r.logTerminalCount == 1,
+          r.finishCount == 1,
+          r.hasFailureRecord,
+        },
+        (r.phase == Exited and r.execOutcome == ExecFailed) implies and {
+          r.meta == MetaFailed,
+          r.logStartCount == 1,
+          r.logTerminalCount == 1,
+          r.finishCount == 1,
+          r.hasFailureRecord,
+          not(r.reasonHasLookup),
+        },
+      }
+    })
+
+  // 2. An unresolved call's recorded reason carries the lookup explanation.
+  val unresolvedReasonExplains: bool =
+    RUN_IDS.forall(id => {
+      val r = runs.get(id)
+      (r.phase == Exited and r.prep == CallUnresolved) implies r.reasonHasLookup
+    })
+
+  // 3. No step runs unless the run directory was reserved and the bundle was prepared.
+  val noStepWithoutBundle: bool =
+    RUN_IDS.forall(id => {
+      val r = runs.get(id)
+      r.stepsRun > 0 implies (r.prep == PrepOk and r.prepDone and r.dirReserved)
+    })
+
+  // 4. meta.json is never left as running once a run has exited.
+  val noRunningAfterExit: bool =
+    RUN_IDS.forall(id => {
+      val r = runs.get(id)
+      r.phase == Exited implies r.meta != MetaRunning
+    })
+
+  // 5. beginRun only reserves an empty directory; meta.json and logs are not created yet.
+  val beginRunLeavesNoRecordYet: bool =
+    RUN_IDS.forall(id => {
+      val r = runs.get(id)
+      (r.phase == DirReserved or r.phase == PrepFailed) implies and {
+        r.dirReserved,
+        r.meta == NoMeta,
+        r.metaPublishCount == 0,
+        r.logStartCount == 0,
+        r.logTerminalCount == 0,
+        r.finishCount == 0,
+      }
+    })
+
+  // 6. A completed run records MetaCompleted with no failure marker or lookup error reason.
+  val noFailureOnSuccess: bool =
+    RUN_IDS.forall(id => {
+      val r = runs.get(id)
+      (r.phase == Exited and r.execOutcome == ExecCompleted) implies and {
+        r.meta == MetaCompleted,
+        not(r.hasFailureRecord),
+        not(r.reasonHasLookup),
+        r.logStartCount == 1,
+        r.logTerminalCount == 1,
+        r.finishCount == 1,
+        r.stepsRun > 0,
+      }
+    })
+
+  // 7. No run publishes initial meta, workflow_start, terminal log, or finish more than once.
+  val noDuplicateRecords: bool =
+    RUN_IDS.forall(id => {
+      val r = runs.get(id)
+      and {
+        r.metaPublishCount <= 1,
+        r.logStartCount <= 1,
+        r.logTerminalCount <= 1,
+        r.finishCount <= 1,
+      }
+    })
+
+  // 8. Resuming uses a distinct run slug, records source_run_slug on exit (even on prep failure),
+  //    and never modifies the source run's persisted record.
+  val resumePreservesIntegrity: bool = and {
+    RUN_IDS.forall(id => {
+      val r = runs.get(id)
+      and {
+        isSourceDistinct(id, r.sourceRun),
+        r.meta != NoMeta implies r.recordedSource == r.sourceRun,
+        (r.phase == Exited and r.sourceRun != NoSource) implies and {
+          r.meta != NoMeta,
+          r.recordedSource == r.sourceRun,
+          isSourceExited(r.sourceRun),
+        },
+      }
+    }),
+    run1SnapshotTaken implies persistedOf(runs.get(RUN_1)) == run1Snapshot,
+  }
+
+  val invariant: bool = and {
+    failureIsRecorded,
+    unresolvedReasonExplains,
+    noStepWithoutBundle,
+    noRunningAfterExit,
+    beginRunLeavesNoRecordYet,
+    noFailureOnSuccess,
+    noDuplicateRecords,
+    resumePreservesIntegrity,
+  }
+
+  // --- Reachability witnesses (checked via quint run --witnesses) ---
+
+  val witnessedUnresolvedCallFailure: bool =
+    runs.get(RUN_1).phase == Exited
+    and runs.get(RUN_1).prep == CallUnresolved
+    and runs.get(RUN_1).meta == MetaFailed
+
+  val witnessedCredentialFailure: bool =
+    runs.get(RUN_1).phase == Exited
+    and runs.get(RUN_1).prep == CredentialUnsafe
+    and runs.get(RUN_1).meta == MetaFailed
+
+  val witnessedCompletedRun: bool =
+    runs.get(RUN_1).phase == Exited
+    and runs.get(RUN_1).meta == MetaCompleted
+
+  val witnessedExecFailure: bool =
+    runs.get(RUN_1).phase == Exited
+    and runs.get(RUN_1).execOutcome == ExecFailed
+    and runs.get(RUN_1).meta == MetaFailed
+
+  val witnessedResumedPrepFailure: bool =
+    runs.get(RUN_2).phase == Exited
+    and runs.get(RUN_2).sourceRun == FromRun(RUN_1)
+    and runs.get(RUN_2).prep == CallUnresolved
+    and runs.get(RUN_2).meta == MetaFailed
+
+  val witnessedResumedCompletion: bool =
+    runs.get(RUN_2).phase == Exited
+    and runs.get(RUN_2).sourceRun == FromRun(RUN_1)
+    and runs.get(RUN_2).meta == MetaCompleted
 }
