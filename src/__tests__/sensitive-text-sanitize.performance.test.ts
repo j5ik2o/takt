@@ -236,7 +236,6 @@ describe('the union with the previous redaction stays linear', () => {
     const pairs = Array.from({ length: 5 }, () => ({ small: run(1024 * 1024), large: run(4 * 1024 * 1024) }));
     const large = median(pairs.map((pair) => pair.large));
     const ratio = median(pairs.map((pair) => pair.large / pair.small));
-    console.log(`[union-linear] ${name}: 1MiB=${median(pairs.map((pair) => pair.small)).toFixed(0)}ms 4MiB=${large.toFixed(0)}ms ratio=${ratio.toFixed(2)}`);
     expect(ratio).toBeLessThan(6);
     expect(large).toBeLessThan(25_000);
   }, scaledMs(300_000));
