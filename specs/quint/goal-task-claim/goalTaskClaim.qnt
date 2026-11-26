@@ -13,10 +13,19 @@
 //   "ForkP1" — 337062193 (PR #50): the claim reports its own setup failures through onSetupFailed,
 //              inside the same call that saved them; no second read. A failed manager-event write in
 //              the callback escapes the claim.
-//   "Fixed"  — ForkP1, plus: a failed manager-event write in the callback is logged and does not
-//              escape; a goal-execution.lock timeout is a retryable claim failure.
+//   "Fixed"  — ForkP1, plus: nothing thrown in the callback escapes the claim (the callback catches a
+//              failed manager-event write and warns; claimNextTasks catches anything else per call
+//              and warns); a goal-execution.lock timeout before the write is a retryable claim
+//              failure.
+//
+// POST_WRITE adds an exception thrown after the tasks.yaml write and before claimNextTasks returns
+// (a lock release that fails). "None": no such exception (the main instances). "Stops": it is an
+// unclassified error, so claiming stops (the code after this fix; the claim itself is the separate
+// issue). "Retried": it is wrongly classified as a retryable claim failure (what a timeout
+// conversion around the write would do).
 module goalTaskClaim {
   const DESIGN: str
+  const POST_WRITE: str
 
   type Proc = str
   type TaskId = str
@@ -116,13 +125,14 @@ module goalTaskClaim {
     lastAction' = match kind { | TasksLockTransient => "claimFailsTransient" | GoalLockTimeout => "claimFailsGoalLock" },
   }
 
-  // claimNextTasks() saves the claim in one tasks.yaml write under both locks. `publishFails`: the
-  // manager completion write (saveManagerEvent) throws for the setup failures of this claim.
-  action claimSaved(p: Proc, publishFails: bool): bool = {
+  // claimNextTasks() saves the claim in one tasks.yaml write under both locks. `callbackFails`:
+  // something in onSetupFailed throws for the setup failures of this claim — the manager completion
+  // write (saveManagerEvent), or anything after the name is recorded (warn() on a closed stdout).
+  action claimSaved(p: Proc, callbackFails: bool): bool = {
     val pend = pendingIn(tasks)
     val claimed = pend.exclude(SETUP_BROKEN)
     val failed = pend.intersect(SETUP_BROKEN)
-    val publishThrows = publishFails and failed != Set()
+    val publishThrows = callbackFails and failed != Set()
     all {
       procs.get(p).phase == Snapped,
       tasks' = applyClaim(tasks, p),
@@ -139,13 +149,30 @@ module goalTaskClaim {
         hooks' = hooks, events' = events, publishLogged' = publishLogged,
         lastAction' = "claimSavedPublishEscaped",
       } else all {
-        // onSetupFailed: record the name (finish hook) and write the event, or log its failure.
+        // onSetupFailed: record the name (finish hook) first, then write the event. A throw is
+        // caught (in the callback, or at the per-call boundary in claimNextTasks) and warned.
         procs' = procs.setBy(p, l => { ...l, phase: Idle, queue: l.queue.union(claimed), retrying: false, attempted: true }),
         hooks' = inc(hooks, failed),
         events' = if (publishThrows) events else inc(events, failed),
         publishLogged' = if (publishThrows) inc(publishLogged, failed) else publishLogged,
         lastAction' = if (publishThrows) "claimSavedPublishLogged" else "claimSaved",
       },
+    }
+  }
+
+  // The tasks.yaml write succeeds, then an exception leaves claimNextTasks before it returns or
+  // calls onSetupFailed (POST_WRITE).
+  action claimSavedThenThrows(p: Proc): bool = {
+    val failed = pendingIn(tasks).intersect(SETUP_BROKEN)
+    all {
+      POST_WRITE != "None",
+      procs.get(p).phase == Snapped,
+      tasks' = applyClaim(tasks, p),
+      setupFailedBy' = setupFailedBy.keys().mapBy(t => if (failed.contains(t)) p else setupFailedBy.get(t)),
+      procs' = procs.setBy(p, l =>
+        if (POST_WRITE == "Retried") { ...l, phase: Idle, retrying: true } else { ...l, phase: Stopped }),
+      hooks' = hooks, events' = events, publishLogged' = publishLogged,
+      lastAction' = "claimSavedThenThrows",
     }
   }
 
@@ -201,12 +228,13 @@ module goalTaskClaim {
     nondet p = PROCS.oneOf()
     nondet t = TASKS.oneOf()
     nondet kind = Set(TasksLockTransient, GoalLockTimeout).oneOf()
-    nondet publishFails = Set(true, false).oneOf()
+    nondet callbackFails = Set(true, false).oneOf()
     any {
       addTask(t),
       snapshot(p),
       claimFails(p, kind),
-      claimSaved(p, publishFails),
+      claimSaved(p, callbackFails),
+      claimSavedThenThrows(p),
       rereadOk(p),
       rereadFails(p),
       runTask(p, t),
@@ -262,9 +290,14 @@ module goalTaskClaim {
   val wTransientRetried: bool = lastAction == "claimFailsTransient"
   val wRunEnded: bool = PROCS.exists(p => procs.get(p).phase == Ended)
   val wRunEndedAfterWork: bool = lastAction == "endRun" and tasks.get("t1").status == Done
+  val wPostWriteThrew: bool = lastAction == "claimSavedThenThrows"
   val wOtherProcReported: bool = TASKS.exists(t => setupFailedBy.get(t) == "B") and TASKS.exists(t => setupFailedBy.get(t) == "A")
 }
 
-module merged { import goalTaskClaim(DESIGN = "Merged").* from "./goalTaskClaim" }
-module forkP1 { import goalTaskClaim(DESIGN = "ForkP1").* from "./goalTaskClaim" }
-module fixed { import goalTaskClaim(DESIGN = "Fixed").* from "./goalTaskClaim" }
+module merged { import goalTaskClaim(DESIGN = "Merged", POST_WRITE = "None").* from "./goalTaskClaim" }
+module forkP1 { import goalTaskClaim(DESIGN = "ForkP1", POST_WRITE = "None").* from "./goalTaskClaim" }
+module fixed { import goalTaskClaim(DESIGN = "Fixed", POST_WRITE = "None").* from "./goalTaskClaim" }
+// The fix with a lock release that fails after the write (left to the separate issue).
+module fixedReleaseFails { import goalTaskClaim(DESIGN = "Fixed", POST_WRITE = "Stops").* from "./goalTaskClaim" }
+// The fix if the timeout conversion also covered the code after the write (rejected).
+module fixedPostWriteRetried { import goalTaskClaim(DESIGN = "Fixed", POST_WRITE = "Retried").* from "./goalTaskClaim" }

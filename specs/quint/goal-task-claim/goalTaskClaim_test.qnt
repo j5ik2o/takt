@@ -3,12 +3,14 @@
 //   quint test goalTaskClaim_test.qnt --main mergedTest
 //   quint test goalTaskClaim_test.qnt --main forkP1Test
 //   quint test goalTaskClaim_test.qnt --main fixedTest
+//   quint test goalTaskClaim_test.qnt --main fixedReleaseFailsTest
+//   quint test goalTaskClaim_test.qnt --main fixedPostWriteRetriedTest
 // t1 is a runnable goal task, t2 and t3 are goal tasks whose runtime_assignment cannot be selected;
 // t3 does not exist until addTask("t3").
 
 // d2bd16a30: each review finding as a concrete trace.
 module mergedTest {
-  import goalTaskClaim(DESIGN = "Merged").* from "./goalTaskClaim"
+  import goalTaskClaim(DESIGN = "Merged", POST_WRITE = "None").* from "./goalTaskClaim"
 
   // Critical: afterClaim times out after t1 was saved as running; t1 is in no queue, and the setup
   // failure of t2 is never reported.
@@ -62,7 +64,7 @@ module mergedTest {
 
 // 337062193 (PR #50) as it was: the races are gone, one gap remains.
 module forkP1Test {
-  import goalTaskClaim(DESIGN = "ForkP1").* from "./goalTaskClaim"
+  import goalTaskClaim(DESIGN = "ForkP1", POST_WRITE = "None").* from "./goalTaskClaim"
 
   run reportsOwnSetupFailureOnceTest =
     init.then(snapshot("A")).then(snapshot("B")).then(claimSaved("B", false)).then(claimSaved("A", false))
@@ -81,7 +83,7 @@ module forkP1Test {
 
 // The fix.
 module fixedTest {
-  import goalTaskClaim(DESIGN = "Fixed").* from "./goalTaskClaim"
+  import goalTaskClaim(DESIGN = "Fixed", POST_WRITE = "None").* from "./goalTaskClaim"
 
   run claimQueuesAndReportsTest =
     init.then(snapshot("A")).then(claimSaved("A", false))
@@ -127,4 +129,37 @@ module fixedTest {
   run transientTimeoutRetriesTest =
     init.then(snapshot("A")).then(claimFails("A", TasksLockTransient)).then(snapshot("A")).then(claimSaved("A", false))
       .expect(procs.get("A").queue == Set("t1") and safety)
+}
+
+// A lock release that fails after the write, with the fix: the error is not classified as a retry,
+// so the run stops as a failure (not a normal end). The orphan is the separate issue.
+module fixedReleaseFailsTest {
+  import goalTaskClaim(DESIGN = "Fixed", POST_WRITE = "Stops").* from "./goalTaskClaim"
+
+  run releaseFailureStopsWithoutCleanEndTest =
+    init.then(snapshot("A")).then(claimSavedThenThrows("A"))
+      .expect(and {
+        procs.get("A").phase == Stopped,
+        tasks.get("t1") == { status: Running, owner: "A" },
+        not(noOrphanRunning), not(claimingNeverStops), not(noMissedSetupReport),
+        noFalseCleanEnd,
+      })
+
+  run stoppedRunCannotEndNormallyTest =
+    init.then(snapshot("A")).then(claimSavedThenThrows("A")).then(endRun("A")).fail()
+}
+
+// If the timeout conversion covered the code after the write, an exception there would be retried:
+// the next tick claims nothing and `takt run` ends normally with t1 running (the Critical again).
+module fixedPostWriteRetriedTest {
+  import goalTaskClaim(DESIGN = "Fixed", POST_WRITE = "Retried").* from "./goalTaskClaim"
+
+  run postWriteRetryEndsRunAsCleanTest =
+    init.then(snapshot("A")).then(claimSavedThenThrows("A"))
+      .then(snapshot("A")).then(claimSaved("A", false)).then(endRun("A"))
+      .expect(and {
+        procs.get("A").phase == Ended,
+        tasks.get("t1") == { status: Running, owner: "A" },
+        not(noFalseCleanEnd),
+      })
 }
