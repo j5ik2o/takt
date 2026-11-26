@@ -53,3 +53,4 @@ eval/.results/
 eval/**/.manager-filter-*.yaml
 .tmp/
 eval/scenarios/phase-awareness/.phase-awareness-*.json
+_apalache-out/
