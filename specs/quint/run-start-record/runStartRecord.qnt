@@ -1,12 +1,14 @@
 // -*- mode: Bluespec; -*-
 // Run start and terminal record lifecycle: from entering executeWorkflowInternal to
-// disk records (run directory, meta.json, logs) across a run and an optional resume run.
+// disk records (run directory, reports/, meta.json, logs) across a run and an optional resume run.
 //
 // Sources modelled:
-//   src/features/tasks/execute/workflowExecution.ts           executeWorkflowInternal, terminalizeBootstrapFailure
-//   src/features/tasks/execute/workflowRunLifecycle.ts        beginRun (reserves empty run directory only; finish guard)
-//   src/features/tasks/execute/workflowExecutionBundle.ts     prepareWorkflowExecutionBundle
-//   src/features/tasks/execute/workflowExecutionBootstrap.ts  createWorkflowExecutionBootstrap (publishRunMeta + initNdjsonLog)
+//   src/features/tasks/execute/workflowExecution.ts              executeWorkflowInternal, terminalizeBootstrapFailure
+//   src/features/tasks/execute/workflowRunLifecycle.ts           beginRun (reserves empty run directory only; finish guard)
+//   src/features/tasks/execute/workflowExecutionBundle.ts        prepareWorkflowExecutionBundle
+//   src/features/tasks/execute/workflowExecutionBootstrap.ts     resolveWorkflowExecutionResumeLineage, createWorkflowExecutionBootstrap
+//   src/core/workflow/run/resume-report-snapshot.ts              inheritResumeReportSnapshot (requires source reports/)
+//   src/core/workflow/engine/WorkflowEngineSetup.ts              ensureRunDirsExist (creates reports/)
 //   src/features/tasks/execute/fileWorkflowRunTerminalPublisher.ts  finish (finalizeFileRunMeta + terminal NDJSON line)
 //
 // ORDER (a string) chooses where bundle preparation sits:
@@ -23,6 +25,7 @@ module runStartRecord {
     | DirReserved
     | Prepared
     | PrepFailed
+    | BootstrapFailed
     | Bootstrapped
     | Terminalizing
     | Executing
@@ -36,6 +39,10 @@ module runStartRecord {
   //   CredentialUnsafe  central execution rejected a legacy MCP credential literal
   type PrepOutcome = PrepOk | CallUnresolved | CredentialUnsafe
 
+  // Outcome of post-preparation, pre-meta steps inside the bootstrap try
+  // (publish/load bundle, validateWorkflowReportReferences, stageTaskSpec, etc.).
+  type BootstrapOutcome = BootOk | BootFailed
+
   type ExecOutcome = ExecPending | ExecCompleted | ExecFailed
 
   type SourceRef = NoSource | FromRun(RunId)
@@ -43,10 +50,15 @@ module runStartRecord {
   type RunRecord = {
     phase: Phase,
     dirReserved: bool,
+    hasReports: bool,
     prep: PrepOutcome,
     prepDone: bool,
+    boot: BootstrapOutcome,
     execOutcome: ExecOutcome,
     sourceRun: SourceRef,
+    // Whether resolveWorkflowExecutionResumeLineage obtained operation lineage (publishedResumeSource).
+    // When false (OperationLineageUnavailableError fallback), meta.json omits source_run_slug.
+    lineageAvailable: bool,
     recordedSource: SourceRef,
     meta: MetaStatus,
     metaPublishCount: int,
@@ -58,8 +70,10 @@ module runStartRecord {
     stepsRun: int,
   }
 
+  // Subset of disk state owned exclusively by a run's meta.json and logs (operation journal is shared across lineage).
   type PersistedRecord = {
     dirReserved: bool,
+    hasReports: bool,
     meta: MetaStatus,
     recordedSource: SourceRef,
     metaPublishCount: int,
@@ -74,14 +88,19 @@ module runStartRecord {
   pure val RUN_2: RunId = 2
   pure val RUN_IDS: Set[RunId] = Set(RUN_1, RUN_2)
   pure val PREPS: Set[PrepOutcome] = Set(PrepOk, CallUnresolved, CredentialUnsafe)
+  pure val BOOTS: Set[BootstrapOutcome] = Set(BootOk, BootFailed)
+  pure val BOOLS: Set[bool] = Set(true, false)
 
   pure val IDLE_RUN: RunRecord = {
     phase: Idle,
     dirReserved: false,
+    hasReports: false,
     prep: PrepOk,
     prepDone: false,
+    boot: BootOk,
     execOutcome: ExecPending,
     sourceRun: NoSource,
+    lineageAvailable: false,
     recordedSource: NoSource,
     meta: NoMeta,
     metaPublishCount: 0,
@@ -93,15 +112,23 @@ module runStartRecord {
     stepsRun: 0,
   }
 
-  pure def enteredRun(p: PrepOutcome, src: SourceRef): RunRecord = {
+  pure def enteredRun(
+    p: PrepOutcome,
+    b: BootstrapOutcome,
+    src: SourceRef,
+    lineageOk: bool,
+  ): RunRecord = {
     ...IDLE_RUN,
     phase: Entered,
     prep: p,
+    boot: b,
     sourceRun: src,
+    lineageAvailable: lineageOk,
   }
 
   pure def persistedOf(r: RunRecord): PersistedRecord = {
     dirReserved: r.dirReserved,
+    hasReports: r.hasReports,
     meta: r.meta,
     recordedSource: r.recordedSource,
     metaPublishCount: r.metaPublishCount,
@@ -120,6 +147,9 @@ module runStartRecord {
       | FromRun(s) => s != id
     }
 
+  pure def expectedRecordedSource(r: RunRecord): SourceRef =
+    if (r.sourceRun != NoSource and r.lineageAvailable) r.sourceRun else NoSource
+
   pure def applyPrepareBeforeBegin(r: RunRecord): RunRecord = {
     ...r,
     prepDone: true,
@@ -127,7 +157,7 @@ module runStartRecord {
   }
 
   // Real beginRun (workflowRunLifecycle.ts): resolves slug and reserves an empty run directory.
-  // It does NOT write meta.json and does NOT create logs/.
+  // It does NOT write meta.json and does NOT create logs/ or reports/.
   pure def applyBeginRun(r: RunRecord): RunRecord = {
     ...r,
     phase: DirReserved,
@@ -140,27 +170,35 @@ module runStartRecord {
     phase: if (r.prep == PrepOk) Prepared else PrepFailed,
   }
 
-  // Normal path: createWorkflowExecutionBootstrap writes meta.json (running) and workflow_start log.
+  // Normal path: inheritResumeReportSnapshot (if resumed) + publishRunMeta(running) + initNdjsonLog.
   pure def applyCreateBootstrap(r: RunRecord): RunRecord = {
     ...r,
     phase: Bootstrapped,
+    hasReports: r.hasReports or r.sourceRun != NoSource,
     meta: MetaRunning,
-    recordedSource: r.sourceRun,
+    recordedSource: expectedRecordedSource(r),
     metaPublishCount: r.metaPublishCount + 1,
     logStartCount: r.logStartCount + 1,
   }
 
-  // Error path stage 1: terminalizeBootstrapFailure calls publishRunMeta (running) + initNdjsonLog.
+  // Post-preparation, pre-meta failure inside the bootstrap try
+  // (e.g. inheritResumeReportSnapshot missing source reports/, validateWorkflowReportReferences error).
+  pure def applyBootstrapPreMetaFail(r: RunRecord): RunRecord = {
+    ...r,
+    phase: BootstrapFailed,
+  }
+
+  // Error path stage 1: terminalizeBootstrapFailure calls publishRunMeta(running) + initNdjsonLog.
   pure def applyTerminalizeStart(r: RunRecord): RunRecord = {
     ...r,
     phase: Terminalizing,
     meta: MetaRunning,
-    recordedSource: r.sourceRun,
+    recordedSource: expectedRecordedSource(r),
     metaPublishCount: r.metaPublishCount + 1,
     logStartCount: r.logStartCount + 1,
   }
 
-  // Error path stage 2: terminalizeBootstrapFailure calls activeRun.finish (meta=failed + workflow_abort).
+  // Error path stage 2: terminalizeBootstrapFailure calls activeRun.finish(failed, reason).
   pure def applyTerminalizeFinish(r: RunRecord): RunRecord = {
     ...r,
     phase: Exited,
@@ -171,9 +209,11 @@ module runStartRecord {
     reasonHasLookup: r.prep == CallUnresolved,
   }
 
+  // WorkflowEngineSetup.ensureRunDirsExist creates reports/ before executing steps.
   pure def applyRunStep(r: RunRecord): RunRecord = {
     ...r,
     phase: Executing,
+    hasReports: true,
     stepsRun: r.stepsRun + 1,
   }
 
@@ -214,16 +254,23 @@ module runStartRecord {
       | FromRun(s) => runs.get(s).phase == Exited
     }
 
-  action initWith(p: PrepOutcome): bool = all {
+  def sourceHasReports(src: SourceRef): bool =
+    match src {
+      | NoSource => true
+      | FromRun(s) => runs.get(s).hasReports
+    }
+
+  action initWith(p: PrepOutcome, b: BootstrapOutcome): bool = all {
     activeRunId' = RUN_1,
-    runs' = Map(RUN_1 -> enteredRun(p, NoSource), RUN_2 -> IDLE_RUN),
+    runs' = Map(RUN_1 -> enteredRun(p, b, NoSource, false), RUN_2 -> IDLE_RUN),
     run1SnapshotTaken' = false,
     run1Snapshot' = EMPTY_PERSISTED,
   }
 
   action init: bool = {
     nondet p = PREPS.oneOf()
-    initWith(p)
+    nondet b = BOOTS.oneOf()
+    initWith(p, b)
   }
 
   // Old order only: prepareWorkflowExecutionBundle runs before beginRun.
@@ -269,7 +316,8 @@ module runStartRecord {
     }
   }
 
-  // createWorkflowExecutionBootstrap: normal path after bundle preparation succeeds.
+  // createWorkflowExecutionBootstrap succeeds only when post-prep checks pass and
+  // (for resumed runs) the source run has a reports/ directory to inherit.
   action createBootstrap: bool = {
     val r = activeRun
     val ready =
@@ -278,7 +326,27 @@ module runStartRecord {
     all {
       ready,
       r.dirReserved,
+      r.boot == BootOk,
+      sourceHasReports(r.sourceRun),
       runs' = runs.put(activeRunId, applyCreateBootstrap(r)),
+      activeRunId' = activeRunId,
+      run1SnapshotTaken' = run1SnapshotTaken,
+      run1Snapshot' = run1Snapshot,
+    }
+  }
+
+  // Post-prep, pre-meta failure inside bootstrap try (including inheritResumeReportSnapshot
+  // failing because the source run never created reports/).
+  action bootstrapPreMetaFail: bool = {
+    val r = activeRun
+    val ready =
+      if (ORDER == "BeginFirst") r.phase == Prepared
+      else (r.phase == DirReserved and r.prepDone)
+    all {
+      ready,
+      r.dirReserved,
+      r.boot == BootFailed or not(sourceHasReports(r.sourceRun)),
+      runs' = runs.put(activeRunId, applyBootstrapPreMetaFail(r)),
       activeRunId' = activeRunId,
       run1SnapshotTaken' = run1SnapshotTaken,
       run1Snapshot' = run1Snapshot,
@@ -289,7 +357,7 @@ module runStartRecord {
   action terminalizeBootstrapStart: bool = {
     val r = activeRun
     all {
-      r.phase == PrepFailed,
+      r.phase == PrepFailed or r.phase == BootstrapFailed,
       r.dirReserved,
       runs' = runs.put(activeRunId, applyTerminalizeStart(r)),
       activeRunId' = activeRunId,
@@ -349,14 +417,15 @@ module runStartRecord {
     }
   }
 
-  // Start a resume run (RUN_2) referencing a failed RUN_1 as source_run_slug.
-  action startResumeRun(nextPrep: PrepOutcome): bool = all {
+  // Start a resume run (RUN_2) referencing a failed RUN_1.
+  // lineageOk models whether resolveWorkflowExecutionResumeLineage obtained publishedResumeSource.
+  action startResumeRun(nextPrep: PrepOutcome, nextBoot: BootstrapOutcome, lineageOk: bool): bool = all {
     activeRunId == RUN_1,
     runs.get(RUN_1).phase == Exited,
     runs.get(RUN_1).meta == MetaFailed,
     runs.get(RUN_2).phase == Idle,
     activeRunId' = RUN_2,
-    runs' = runs.put(RUN_2, enteredRun(nextPrep, FromRun(RUN_1))),
+    runs' = runs.put(RUN_2, enteredRun(nextPrep, nextBoot, FromRun(RUN_1), lineageOk)),
     run1SnapshotTaken' = run1SnapshotTaken,
     run1Snapshot' = run1Snapshot,
   }
@@ -372,24 +441,27 @@ module runStartRecord {
 
   action step: bool = {
     nondet nextPrep = PREPS.oneOf()
+    nondet nextBoot = BOOTS.oneOf()
+    nondet lineageOk = BOOLS.oneOf()
     any {
       prepareBeforeBegin,
       beginRun,
       prepareInBootstrap,
       createBootstrap,
+      bootstrapPreMetaFail,
       terminalizeBootstrapStart,
       terminalizeBootstrapFinish,
       runStep,
       finishExecutionSuccess,
       finishExecutionFailure,
-      startResumeRun(nextPrep),
+      startResumeRun(nextPrep, nextBoot, lineageOk),
       stutter,
     }
   }
 
   // --- Safety invariants ---
 
-  // 1. A run that exits after a preparation or execution failure always leaves meta.json (failed) and logs.
+  // 1. Any run exiting after preparation, pre-meta bootstrap, or execution failure leaves meta.json (failed) and logs.
   val failureIsRecorded: bool =
     RUN_IDS.forall(id => {
       val r = runs.get(id)
@@ -400,6 +472,15 @@ module runStartRecord {
           r.logTerminalCount == 1,
           r.finishCount == 1,
           r.hasFailureRecord,
+        },
+        (r.phase == Exited and r.prep == PrepOk and r.execOutcome == ExecPending) implies and {
+          r.meta == MetaFailed,
+          r.logStartCount == 1,
+          r.logTerminalCount == 1,
+          r.finishCount == 1,
+          r.hasFailureRecord,
+          not(r.reasonHasLookup),
+          r.stepsRun == 0,
         },
         (r.phase == Exited and r.execOutcome == ExecFailed) implies and {
           r.meta == MetaFailed,
@@ -419,11 +500,11 @@ module runStartRecord {
       (r.phase == Exited and r.prep == CallUnresolved) implies r.reasonHasLookup
     })
 
-  // 3. No step runs unless the run directory was reserved and the bundle was prepared.
+  // 3. No step runs unless the run directory was reserved, the bundle was prepared, and bootstrap succeeded.
   val noStepWithoutBundle: bool =
     RUN_IDS.forall(id => {
       val r = runs.get(id)
-      r.stepsRun > 0 implies (r.prep == PrepOk and r.prepDone and r.dirReserved)
+      r.stepsRun > 0 implies (r.prep == PrepOk and r.prepDone and r.boot == BootOk and r.dirReserved)
     })
 
   // 4. meta.json is never left as running once a run has exited.
@@ -437,7 +518,7 @@ module runStartRecord {
   val beginRunLeavesNoRecordYet: bool =
     RUN_IDS.forall(id => {
       val r = runs.get(id)
-      (r.phase == DirReserved or r.phase == PrepFailed) implies and {
+      (r.phase == DirReserved or r.phase == PrepFailed or r.phase == BootstrapFailed) implies and {
         r.dirReserved,
         r.meta == NoMeta,
         r.metaPublishCount == 0,
@@ -474,23 +555,34 @@ module runStartRecord {
       }
     })
 
-  // 8. Resuming uses a distinct run slug, records source_run_slug on exit (even on prep failure),
-  //    and never modifies the source run's persisted record.
+  // 8. Resuming uses a distinct run slug, persists source_run_slug iff operation lineage is available
+  //    (even on preparation or bootstrap failure), and never mutates the source run's meta.json / logs.
   val resumePreservesIntegrity: bool = and {
     RUN_IDS.forall(id => {
       val r = runs.get(id)
       and {
         isSourceDistinct(id, r.sourceRun),
-        r.meta != NoMeta implies r.recordedSource == r.sourceRun,
+        r.meta != NoMeta implies r.recordedSource == expectedRecordedSource(r),
         (r.phase == Exited and r.sourceRun != NoSource) implies and {
           r.meta != NoMeta,
-          r.recordedSource == r.sourceRun,
+          r.recordedSource == expectedRecordedSource(r),
           isSourceExited(r.sourceRun),
         },
       }
     }),
     run1SnapshotTaken implies persistedOf(runs.get(RUN_1)) == run1Snapshot,
   }
+
+  // 9. Resuming from a source run that never created reports/ cannot execute steps or complete
+  //    (inheritResumeReportSnapshot fails during bootstrap).
+  val noResumeCompletionWithoutSourceReports: bool =
+    RUN_IDS.forall(id => {
+      val r = runs.get(id)
+      (r.sourceRun != NoSource and not(sourceHasReports(r.sourceRun))) implies and {
+        r.stepsRun == 0,
+        r.meta != MetaCompleted,
+      }
+    })
 
   val invariant: bool = and {
     failureIsRecorded,
@@ -501,6 +593,7 @@ module runStartRecord {
     noFailureOnSuccess,
     noDuplicateRecords,
     resumePreservesIntegrity,
+    noResumeCompletionWithoutSourceReports,
   }
 
   // --- Reachability witnesses (checked via quint run --witnesses) ---
@@ -515,6 +608,13 @@ module runStartRecord {
     and runs.get(RUN_1).prep == CredentialUnsafe
     and runs.get(RUN_1).meta == MetaFailed
 
+  val witnessedPostPrepBootstrapFailure: bool =
+    runs.get(RUN_1).phase == Exited
+    and runs.get(RUN_1).prep == PrepOk
+    and runs.get(RUN_1).boot == BootFailed
+    and runs.get(RUN_1).meta == MetaFailed
+    and runs.get(RUN_1).stepsRun == 0
+
   val witnessedCompletedRun: bool =
     runs.get(RUN_1).phase == Exited
     and runs.get(RUN_1).meta == MetaCompleted
@@ -527,11 +627,30 @@ module runStartRecord {
   val witnessedResumedPrepFailure: bool =
     runs.get(RUN_2).phase == Exited
     and runs.get(RUN_2).sourceRun == FromRun(RUN_1)
+    and runs.get(RUN_2).lineageAvailable
+    and runs.get(RUN_2).recordedSource == FromRun(RUN_1)
     and runs.get(RUN_2).prep == CallUnresolved
     and runs.get(RUN_2).meta == MetaFailed
+
+  val witnessedResumedInheritFailure: bool =
+    runs.get(RUN_2).phase == Exited
+    and runs.get(RUN_2).sourceRun == FromRun(RUN_1)
+    and not(runs.get(RUN_1).hasReports)
+    and runs.get(RUN_2).prep == PrepOk
+    and runs.get(RUN_2).boot == BootOk
+    and runs.get(RUN_2).meta == MetaFailed
+    and runs.get(RUN_2).stepsRun == 0
+
+  val witnessedResumedLineageUnavailable: bool =
+    runs.get(RUN_2).phase == Exited
+    and runs.get(RUN_2).sourceRun == FromRun(RUN_1)
+    and not(runs.get(RUN_2).lineageAvailable)
+    and runs.get(RUN_2).meta != NoMeta
+    and runs.get(RUN_2).recordedSource == NoSource
 
   val witnessedResumedCompletion: bool =
     runs.get(RUN_2).phase == Exited
     and runs.get(RUN_2).sourceRun == FromRun(RUN_1)
+    and runs.get(RUN_1).hasReports
     and runs.get(RUN_2).meta == MetaCompleted
 }

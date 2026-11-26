@@ -6,7 +6,7 @@ module beginFirstTest {
   import runStartRecord(ORDER = "BeginFirst").* from "./runStartRecord"
 
   run unresolvedCallIsRecordedTest =
-    initWith(CallUnresolved)
+    initWith(CallUnresolved, BootOk)
       .then(beginRun)
       .expect(
         runs.get(RUN_1).phase == DirReserved
@@ -34,6 +34,7 @@ module beginFirstTest {
       .expect(
         runs.get(RUN_1).phase == Exited
         and runs.get(RUN_1).meta == MetaFailed
+        and not(runs.get(RUN_1).hasReports)
         and runs.get(RUN_1).logStartCount == 1
         and runs.get(RUN_1).logTerminalCount == 1
         and runs.get(RUN_1).finishCount == 1
@@ -44,7 +45,7 @@ module beginFirstTest {
       )
 
   run credentialUnsafeIsRecordedTest =
-    initWith(CredentialUnsafe)
+    initWith(CredentialUnsafe, BootOk)
       .then(beginRun)
       .then(prepareInBootstrap)
       .then(terminalizeBootstrapStart)
@@ -61,8 +62,30 @@ module beginFirstTest {
         and invariant
       )
 
+  run postPrepBootstrapFailureIsRecordedTest =
+    initWith(PrepOk, BootFailed)
+      .then(beginRun)
+      .then(prepareInBootstrap)
+      .then(bootstrapPreMetaFail)
+      .expect(
+        runs.get(RUN_1).phase == BootstrapFailed
+        and runs.get(RUN_1).meta == NoMeta
+        and invariant
+      )
+      .then(terminalizeBootstrapStart)
+      .then(terminalizeBootstrapFinish)
+      .expect(
+        runs.get(RUN_1).phase == Exited
+        and runs.get(RUN_1).meta == MetaFailed
+        and not(runs.get(RUN_1).hasReports)
+        and runs.get(RUN_1).hasFailureRecord
+        and not(runs.get(RUN_1).reasonHasLookup)
+        and runs.get(RUN_1).stepsRun == 0
+        and invariant
+      )
+
   run completedRunHasNoFailureRecordTest =
-    initWith(PrepOk)
+    initWith(PrepOk, BootOk)
       .then(beginRun)
       .expect(runs.get(RUN_1).meta == NoMeta and runs.get(RUN_1).logStartCount == 0)
       .then(prepareInBootstrap)
@@ -78,6 +101,7 @@ module beginFirstTest {
       .expect(
         runs.get(RUN_1).phase == Exited
         and runs.get(RUN_1).meta == MetaCompleted
+        and runs.get(RUN_1).hasReports
         and not(runs.get(RUN_1).hasFailureRecord)
         and not(runs.get(RUN_1).reasonHasLookup)
         and runs.get(RUN_1).logStartCount == 1
@@ -88,14 +112,19 @@ module beginFirstTest {
       )
 
   run resumedRunPrepFailurePreservesSourceTest =
-    initWith(PrepOk)
+    initWith(PrepOk, BootOk)
       .then(beginRun)
       .then(prepareInBootstrap)
       .then(createBootstrap)
       .then(runStep)
       .then(finishExecutionFailure)
-      .expect(runs.get(RUN_1).phase == Exited and runs.get(RUN_1).meta == MetaFailed and run1SnapshotTaken)
-      .then(startResumeRun(CallUnresolved))
+      .expect(
+        runs.get(RUN_1).phase == Exited
+        and runs.get(RUN_1).meta == MetaFailed
+        and runs.get(RUN_1).hasReports
+        and run1SnapshotTaken
+      )
+      .then(startResumeRun(CallUnresolved, BootOk, true))
       .then(beginRun)
       .then(prepareInBootstrap)
       .then(terminalizeBootstrapStart)
@@ -110,14 +139,62 @@ module beginFirstTest {
         and invariant
       )
 
-  run resumedRunCompletionPreservesSourceTest =
-    initWith(PrepOk)
+  // When operation lineage is unavailable (OperationLineageUnavailableError fallback),
+  // publishedResumeSource is undefined, so meta.json omits source_run_slug.
+  run resumedRunLineageUnavailableOmitsSourceSlugTest =
+    initWith(PrepOk, BootOk)
       .then(beginRun)
       .then(prepareInBootstrap)
       .then(createBootstrap)
       .then(runStep)
       .then(finishExecutionFailure)
-      .then(startResumeRun(PrepOk))
+      .then(startResumeRun(CallUnresolved, BootOk, false))
+      .then(beginRun)
+      .then(prepareInBootstrap)
+      .then(terminalizeBootstrapStart)
+      .then(terminalizeBootstrapFinish)
+      .expect(
+        runs.get(RUN_2).phase == Exited
+        and runs.get(RUN_2).meta == MetaFailed
+        and runs.get(RUN_2).recordedSource == NoSource
+        and runs.get(RUN_2).reasonHasLookup
+        and persistedOf(runs.get(RUN_1)) == run1Snapshot
+        and invariant
+      )
+
+  // Resuming from a run that failed during preparation (no reports/ directory) cannot
+  // enter createBootstrap; inheritResumeReportSnapshot fails in bootstrapPreMetaFail.
+  run resumedFromPrepFailedRunFailsReportInheritanceTest =
+    initWith(CallUnresolved, BootOk)
+      .then(beginRun)
+      .then(prepareInBootstrap)
+      .then(terminalizeBootstrapStart)
+      .then(terminalizeBootstrapFinish)
+      .expect(not(runs.get(RUN_1).hasReports))
+      .then(startResumeRun(PrepOk, BootOk, true))
+      .then(beginRun)
+      .then(prepareInBootstrap)
+      .then(bootstrapPreMetaFail)
+      .then(terminalizeBootstrapStart)
+      .then(terminalizeBootstrapFinish)
+      .expect(
+        runs.get(RUN_2).phase == Exited
+        and runs.get(RUN_2).meta == MetaFailed
+        and runs.get(RUN_2).recordedSource == FromRun(RUN_1)
+        and not(runs.get(RUN_2).reasonHasLookup)
+        and runs.get(RUN_2).stepsRun == 0
+        and persistedOf(runs.get(RUN_1)) == run1Snapshot
+        and invariant
+      )
+
+  run resumedRunCompletionPreservesSourceTest =
+    initWith(PrepOk, BootOk)
+      .then(beginRun)
+      .then(prepareInBootstrap)
+      .then(createBootstrap)
+      .then(runStep)
+      .then(finishExecutionFailure)
+      .then(startResumeRun(PrepOk, BootOk, true))
       .then(beginRun)
       .then(prepareInBootstrap)
       .then(createBootstrap)
@@ -138,7 +215,7 @@ module prepareFirstTest {
 
   // Before the fix: a preparation failure exits with no directory, no meta.json, and no logs.
   run unresolvedCallLeavesNothingTest =
-    initWith(CallUnresolved)
+    initWith(CallUnresolved, BootOk)
       .then(prepareBeforeBegin)
       .expect(
         runs.get(RUN_1).phase == Exited
@@ -146,23 +223,25 @@ module prepareFirstTest {
         and runs.get(RUN_1).meta == NoMeta
         and runs.get(RUN_1).logStartCount == 0
         and not(failureIsRecorded)
+        and not(unresolvedReasonExplains)
       )
 
   // Before the fix: a resumed run whose preparation fails loses its source_run_slug lineage too.
   run resumedUnresolvedCallLosesLineageTest =
-    initWith(PrepOk)
+    initWith(PrepOk, BootOk)
       .then(prepareBeforeBegin)
       .then(beginRun)
       .then(createBootstrap)
       .then(runStep)
       .then(finishExecutionFailure)
-      .then(startResumeRun(CallUnresolved))
+      .then(startResumeRun(CallUnresolved, BootOk, true))
       .then(prepareBeforeBegin)
       .expect(
         runs.get(RUN_2).phase == Exited
         and runs.get(RUN_2).meta == NoMeta
         and runs.get(RUN_2).recordedSource == NoSource
         and not(failureIsRecorded)
+        and not(unresolvedReasonExplains)
         and not(resumePreservesIntegrity)
       )
 }
