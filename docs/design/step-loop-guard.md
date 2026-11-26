@@ -2,7 +2,7 @@
 
 [j5ik2o/takt#164](https://github.com/j5ik2o/takt/pull/164) の、出来上がった時点の設計。仕様は `specs/quint/step-loop-guard/`。
 
-この節から「影響」までは #164 のマージ時点の記述で、追いの PR で変わる所には **（追いの PR で変更）** と書き添え、新しい記述の場所を示した。今の設計は「追いの PR」の節が正しい。
+この節から「影響」までは #164 のマージ時点の記述で、追いの PR（#174）で変わる所には **（追いの PR で変更）** と書き添え、新しい記述の場所を示した。さらに [j5ik2o/takt#176](https://github.com/j5ik2o/takt/issues/176)（反復先頭の優先順位と `exceeded` 保存）の設計を末尾の節に足した。今の設計は末尾の節まで含めて読む。
 
 ## 変えたこと
 
@@ -248,3 +248,151 @@
 - ずれるのは、指摘 2 で飛ばす遷移と、`stop_on_repeated_verdict` で止まる遷移の 2 つだけ。どちらでも run はその場で止まり、ずれた数を後で読むことは無い。
 - まとめると、`CycleDetector` の公開の呼び出しが `StepLoopGuard` の数に頼るようになる。`CycleDetector` は今、自分の履歴だけで閉じている。2 つの guard の順序（`recordCompletion` が先）も、呼び出しの契約に入ってしまう。
 - 代わりに、`completedCounts` を増やすのは `recordAndCheck` だけで、`reset()` では減らないことを unit で固定する（「PBT の性質と除外（追加分）」）。
+
+---
+
+## #176：`max_steps` と `max_visits` が同時に上限へ達したときの優先順位と `exceeded` 保存
+
+[j5ik2o/takt#176](https://github.com/j5ik2o/takt/issues/176) の事前設計。[j5ik2o/takt#174](https://github.com/j5ik2o/takt/pull/174)（マージ済み `657f16ad6`）の Devin Review 指摘（`src/core/workflow/engine/WorkflowRunLoop.ts:1214`）から切り出した。
+
+上流 `nrslib/takt` の `main`（`bba6f2315`）には `max_visits` / `step-visit-guard` 自体が存在せず、開いている PR にも該当する修正が無いことを確認済み。
+
+### 現状と問題
+
+`657f16ad6` 時点の反復先頭チェック順は次のとおり。
+
+- `runWorkflowToCompletionCore`（`src/core/workflow/engine/WorkflowRunLoop.ts:856-917`）：
+  1. `workflowInterruptRequested`（`interrupt`）
+  2. `max_steps`（`iteration_limit` / `iteration:limit` 発火 / `onIterationLimit`）
+  3. `validateUserInputRuntime`（`user_input_required`）
+  4. `applyRuntimeEnvironment('step')` + `loopDetectorCheck`（`step:loop_detected` / `loop_detected`）
+  5. `stepVisitCheckEntry`（`loop_detected`、`Visit limit reached`）
+- `runSingleWorkflowIterationCore`（`src/core/workflow/engine/WorkflowRunLoop.ts:1296-1344`）：
+  1. `workflowInterruptRequested`
+  2. `validateUserInputRuntime`
+  3. `applyRuntimeEnvironment('step')` + `loopDetectorCheck`
+  4. `stepVisitCheckEntry`（`loopCheck.shouldAbort` が偽のときだけ）
+
+この順序により次の不具合が起きる。
+
+1. `max_steps: 2`・step `a` に `max_visits: 1` の workflow で `a → b → a` と遷移すると、`b` 完了時点で `state.iteration === 2 === max_steps` かつ遷移先 `a` が `max_visits: 1` 到達済みになる。次反復先頭で `max_steps` が先に評価されるため、`Visit limit reached`（`loop_detected`）ではなく `Max steps reached`（`iteration_limit`）になる。
+2. `takt run`（`src/features/tasks/execute/workflowExecution.ts:395-419`・`src/features/tasks/execute/taskExecution.ts:341-355`）では `onIterationLimit` が `eventBridge.state.exceededInfo` を記録し、タスクが通常の失敗（`failed`）ではなく実行枠延長可能な `exceeded` として `.takt/tasks.yaml` に保存される。再開時は新しい `WorkflowEngine` で `StepLoopGuard` が 0 から数え直すため、実質的に `max_visits` の上限がすり抜ける。
+3. 対話モードの `onIterationLimit` では追加イテレーション数を入力させて `continue` した直後の次反復で即座に `Visit limit reached` で停止し、延長操作が無駄になる。
+4. `loop_monitors` がある場合、line 1214 で「遷移先 `nextStep` が `max_visits` 到達済みなので judge を飛ばして `Visit limit reached` で止める」と判断したのに、次反復で `Max steps reached` にすり替わる。
+5. `loopDetectorCheck` が `stepVisitCheckEntry` より先にあるため、上限到達済みで停止する入口でも `applyRuntimeEnvironment('step')`・`LoopDetector` の状態更新・`step:loop_detected` 警告が不要に走り、`action: 'abort'` の自己ループ同時到達では `LoopDetector` が `Visit limit reached` を覆い隠す。
+
+### 何をどう変えるか
+
+#### 採用方針（案 A：両ループの反復先頭で `stepVisitCheckEntry` を `workflowInterruptRequested` 直後へ移す）
+
+1. **`runWorkflowToCompletionCore`（`src/core/workflow/engine/WorkflowRunLoop.ts`）の反復先頭チェック順**を次へ変更する：
+   1. `workflowInterruptRequested(deps)` → `abortInterruptedWorkflow`（`interrupt`）
+   2. `stepVisitCheckEntry(step)` → `abortWorkflow(deps, 'loop_detected', visitLimitReason)`
+   3. `max_steps`（`consumesIterationBudget && deps.options.ignoreIterationLimit !== true && typeof maxSteps === 'number' && deps.state.iteration >= maxSteps`）→ `iteration:limit` / `onIterationLimit` / `abortWorkflow(deps, 'iteration_limit', ERROR_MESSAGES.MAX_STEPS_REACHED)`
+   4. `validateUserInputRuntime(deps, step)` → `user_input_required`
+   5. `applyRuntimeEnvironment('step')` + `loopDetectorCheck(step.name)` → warn / metric / `loop_detected`
+2. **`runSingleWorkflowIterationCore`（`src/core/workflow/engine/WorkflowRunLoop.ts`）の反復先頭チェック順**も同じ相対順へ揃える：
+   1. `workflowInterruptRequested(deps)` → `buildInterruptedIterationResult`（`interrupt`）
+   2. `stepVisitCheckEntry(step)` → `abortWorkflow(deps, 'loop_detected', visitLimitReason)`（`nextStep: ABORT_STEP`, `isComplete: true`, `loopDetected: true`）
+   3. （`max_steps` は単一反復 API の責務外として従来どおり検査しない）
+   4. `validateUserInputRuntime(deps, step)` → `user_input_required`
+   5. `applyRuntimeEnvironment('step')` + `loopDetectorCheck(step.name)` → warn / metric / `loop_detected`
+3. **`executeWorkflow`（`src/features/tasks/execute/workflowExecution.ts:661-662`）の防御的ガード**：
+   - `exceeded` / `exceededInfo` を結果へ載せる条件を `finalState.status === 'aborted' && eventBridge.state.abortKind === 'iteration_limit' && eventBridge.state.exceededInfo != null` に締める。これにより、万が一並列 `workflow_call` の別ブランチや割り込みで別種の abort が確定した場合でも、非 `iteration_limit` の停止が `exceeded` として保存されない。
+4. **docs / CHANGELOG（実装 PR 時）**：
+   - `docs/workflows.md`・`docs/workflows.ja.md`・`docs/workflows.zh-CN.md` の `max_visits` の節と `CHANGELOG.md`・`docs/CHANGELOG.ja.md` に、「反復先頭では割り込み（`SIGINT` / `AbortSignal`）を最優先とし、次に `max_visits` が `max_steps`（`exceeded` 保存・延長確認）および `loop_detection` より優先して `Visit limit reached`（`loop_detected`）で終了する」ことを追記する。
+
+#### 代替案を採らない理由
+
+- **不採用案 B（Devin Review 提案：line 1214 の遷移先チェック分岐で即時 `abortWorkflow` する）**：
+  1. 自然遷移先 `nextStep` が `max_visits` 未満のため judge が起動し、judge が `state.iteration++`（`LoopMonitorJudgeRunner.ts:79`）で `max_steps` に達したうえで**すでに `max_visits` 到達済みの別 step（例：`StepC`）へ振り向けた場合**、line 1214 の分岐を通らないため次反復先頭で再び `max_steps` が勝って `exceeded` が保存される（Quint `abortAtTransitionAlternative` で反例を確認済み）。
+  2. `runSingleWorkflowIterationCore` は遷移確定後に `{ nextStep, isComplete: false }` を返して次呼び出し先頭で `stepVisitCheckEntry` を評価するため、line 1214 で即時中断すると `runWorkflowToCompletionCore` と停止時点が食い違う。
+  3. 案 A なら `commitTransition`・`advanceActiveStep`（`state.currentStep` と `activeResumePoint` の更新）・割り込み最優先の単一入口を保ったまま、通常遷移・judge 経由遷移・`workflow_call` 子 engine・`runSingleWorkflowIterationCore` を一貫して閉じられる。
+- **`loopDetectorCheck` を `max_steps` より前へ移さない理由**：
+  - `LoopDetector.check(step.name)` は `consecutiveCount` を加算し警告イベント・メトリクスを出す**副作用あり**の検査。対話モードで `onIterationLimit` が正の追加枠を返して `continue` するとループ先頭へ戻るため、`loopDetectorCheck` を `max_steps` より前へ置くと同一 step 入口を二重カウントする（Quint `mutantLoopBeforeMaxSteps` で反例を確認済み）。
+  - 一方 `stepVisitCheckEntry` は読み取り専用・冪等で副作用がなく、`max_steps` の前へ置いても `continue` 時の二重計上は起きない。
+  - また `max_visits` を使わない既存 workflow の `max_steps → validateUserInputRuntime → loopDetectorCheck` の順序（および上流 `nrslib/takt` との一致）を保てる。
+- **`validateUserInputRuntime` より前に `stepVisitCheckEntry` を置く理由**：
+  - `options.interactive` と `options.onUserInput` は 1 つの `WorkflowEngine` の間不変であり、`max_visits` は正の整数（`>= 1`）。`validateUserInputRuntime` で弾かれる step は 1 回も完了できないため、実運用で `completedVisits >= max_visits` と同時に真になることはない。また `validateUserInputRuntime` を `max_steps` の前に動かすと `max_visits` を使わない既存 workflow の `max_steps → validateUserInputRuntime` 契約を壊す。
+
+#### 変えないこと・範囲の外
+
+- `max_visits` 未設定または未到達の step における `workflowInterruptRequested → max_steps → validateUserInputRuntime → loopDetectorCheck` の既存順序。
+- `runSingleWorkflowIterationCore` が `max_steps` を検査しない既存契約（呼び出し側が反復回数を制御する設計）。
+- `StepLoopGuard` の `completedVisits` を永続化しない方針（再開した run は新 engine で 0 から数え直す）。
+- `LoopDetector.check()` の API（peek/commit 分離）および `max_visits` 無し時の `max_steps` と `loopDetectorCheck` の優先順位。
+- `LoopMonitorJudgeRunner` が `state.iteration++` を行う既存仕様。
+- 既出の別件（parallel sub-step への `workflow_overrides.steps.<subName>.max_visits` 付着除去、終端遷移カウントの単一反復との統一など）。
+
+### 追加・更新する不変条件（#176）
+
+12. **割り込み最優先**：反復先頭で `workflowInterruptRequested` が真なら、上限や入力検証の成否にかかわらず必ず `interrupt` で停止し、`onIterationLimit` も `exceeded` 保存も走らない。
+13. **`max_visits` は `max_steps` より強い**：`currentStep` がすでに `max_visits` 到達済み（かつ割り込み無し）なら、通常遷移・judge 経由遷移・`workflow_call` 子 engine のいずれでも、`iteration:limit` 発火・`onIterationLimit` 呼び出し・延長プロンプト・`exceeded` 保存は起きず、必ず `loop_detected`（`Visit limit reached`）で停止する。
+14. **`exceeded` 保存の一貫性**：`executeWorkflow` が `exceeded: true` / `exceededInfo` を返すのは `finalState.status === 'aborted'` かつ `abortKind === 'iteration_limit'` のときだけであり、`currentStep` が `max_visits` 到達済みの状態で `exceeded` を保存しない。
+15. **PR #174 契約の完結**：`nextStep` が `max_visits` 到達済みで loop monitor judge を飛ばした遷移は、割り込みが無い限り必ず `Visit limit reached`（`loop_detected`）で終わる（次反復の `max_steps` や `loopDetectorCheck` に奪われない）。
+16. **`max_visits` は `loopDetectorCheck` より先（両ループ一貫）**：`runWorkflowToCompletionCore` と `runSingleWorkflowIterationCore` のどちらも、`currentStep` が `max_visits` 到達済みなら `applyRuntimeEnvironment('step')`・`loopDetectorCheck`・`step:loop_detected` 通知を実行せずに `Visit limit reached` で停止する。
+17. **延長 `continue` で二重計上しない**：対話モードの `onIterationLimit` が追加イテレーションを返して `continue` しても、`LoopDetector` の連続回数や `StepLoopGuard` の完了回数は増えない。
+18. **既存契約の保存**：`currentStep` が `max_visits` 未設定または未到達（同一 visit のやり直し、新規・再開時の `initialIteration >= maxSteps` を含む）では、`max_steps → validateUserInputRuntime → loopDetectorCheck` の挙動は変わらない。
+
+### PBT の性質と除外（#176 追加分）
+
+`WorkflowRunLoop` の反復先頭チェック順序（`runWorkflowToCompletion` / `runSingleWorkflowIteration`）を対象とした PBT（例：`src/__tests__/workflow-run-loop-entry-order.pbt.test.ts`。実装時は `tsconfig.tests.json` と `scripts/test-classification.mjs` にも登録）を追加する。
+
+- **入力空間（除外なし）**：
+  - `mode`: `'full' | 'single'`
+  - `interruptRequested`: `boolean`
+  - `stepKind`: `'normal' | 'workflow_call'`
+  - `maxVisits`: `undefined | 1..4`、`completedVisits`: `0..maxVisits`
+  - `maxSteps`: `'infinite' | 0..5`、`iteration`: `0..6`、`ignoreIterationLimit`: `boolean`、`onIterationLimitBehavior`: `'none' | 'null_exceeded' | 'extend_1'`
+  - `requiresUserInputInvalid`: `boolean`
+  - `loopDetection`: `{ isLoop: boolean, shouldWarn: boolean, shouldAbort: boolean }`
+- **検証する性質**：
+  1. **優先順位の完全決定性**：`interruptRequested` → `stepVisitCheckEntry` → （`mode === 'full'` かつ `stepKind !== 'workflow_call'` かつ `!ignoreIterationLimit` かつ `typeof maxSteps === 'number'` かつ `iteration >= maxSteps` のとき `max_steps`）→ `validateUserInputRuntime` → `loopDetectorCheck(shouldAbort)` の順で最初に成立した条件が唯一の停止種別（`abort.kind`）と理由（`abort.reason`）になる。
+  2. **上限到達時の無副作用**：`!interruptRequested` かつ `stepVisitCheckEntry` が理由を返す任意の組では、`iteration:limit` 発火 0 回、`onIterationLimit` 呼び出し 0 回、`exceededInfo` 未設定、`applyRuntimeEnvironment` 呼び出し 0 回、`loopDetectorCheck` 呼び出し 0 回、`runStep` 呼び出し 0 回。
+  3. **延長 `continue` の無二重計上**：`!interruptRequested` かつ `!atVisitLimit` で `onIterationLimit` が `+1` を返して `continue` する任意の組では、`loopDetectorCheck` は最大 1 回しか呼ばれない。
+  4. **両ループの一貫性**：`max_steps` が非発火の任意の組では、`mode === 'full'` と `mode === 'single'` が同一の停止種別（`abort?.kind`）・停止理由（`abort?.reason`）・`loopDetectorCheck` 呼び出し有無になる。
+- **除外**：なし。全組み合わせをモデルオラクルと照合する。
+
+### Quint の仕様と不変条件（#176 追加分）
+
+`specs/quint/step-loop-guard/` に `iterationEntryOrder.qnt` と `iterationEntryOrder_test.qnt` を追加し、`specs/quint/step-loop-guard/README.md` に結果を記録した（Quint `0.32.0`）。
+
+- **モデル化する範囲**：`runWorkflowToCompletionCore`（`MODE = "full"`）と `runSingleWorkflowIterationCore`（`MODE = "single"`）の反復先頭ガード評価、`StepLoopGuard`、`LoopDetector`、`LoopMonitorJudgeRunner`（`iteration++` と `max_visits` 到達済み step へのルーティングを含む）、`workflow_call`（`consumesBudget = false`）、同一 visit のやり直し（`retryStep`）、`onIterationLimit`（非対話 `exceeded` 保存と対話延長 `continue`）、外部割り込み（`requestInterrupt`）。
+- **不変条件（`safety`）**：`interruptWins`・`visitLimitBeatsMaxSteps`・`exceededOnlyOnIterationLimit`・`visitLimitOutcomePreserved`・`visitLimitSkipsLoopDetector`・`noLoopDetectorDoubleCount`・`visitsBounded`・`visitLimitAbortHasExactVisits`・`budgetRespected`。
+- **検証結果**：
+  - シナリオテスト（`iterationEntryOrder_test.qnt`）：7 モジュール計 14 テスト全通過。
+  - ランダムシミュレーション（修正後 4 モデル `fixedFullExceeded`・`fixedFullInteractive`・`fixedFullIgnoreLimit`・`fixedSingleIteration`）：各 20,000 samples で `safety` 違反 0 件、同時上限到達 `witnessBothLimitsSimultaneous`・延長 `witnessExtended`・`witnessExceededSaved` を含む全 witness 到達。
+  - 修正前モデル・代替案・変異での反例確認：
+    - `beforeFullExceeded`（`657f16ad6`）：`visitLimitBeatsMaxSteps`・`exceededOnlyOnIterationLimit`・`visitLimitOutcomePreserved` で反例（`a → b → a` で `exceededSaved = true`）。
+    - `beforeSingleIteration`（`657f16ad6`）：`visitLimitSkipsLoopDetector` で反例（`warn` モードでも `LoopDetector` が先に走る）。
+    - `abortAtTransitionAlternative`（案 B）：`visitLimitBeatsMaxSteps` で反例（judge が `iteration++` して `StepC` へ遷移した次反復で `max_steps` が勝つ）。
+    - `mutantLoopBeforeMaxSteps`：`noLoopDetectorDoubleCount` で反例（延長 `continue` で `LoopDetector` が二重計上）。
+
+### 壊しうる入力の一覧（#176 追加分）
+
+| 入力 | 期待する扱い | 検証手段 |
+|---|---|---|
+| `max_steps: 2`・`a.max_visits: 1` の `a → b → a`（`loop_monitors` あり・なし両方） | `judge` も `onIterationLimit` も呼ばず `Visit limit reached`（`loop_detected`）。`takt run` では `exceeded` ではなく `failed` として保存 | Quint・回帰テスト（`WorkflowRunLoop`・`WorkflowEngine`・`executeWorkflow` / `taskExecution`） |
+| `max_steps: 1`・`a.max_visits: 1`・`loopDetection: { maxConsecutiveSameStep: 1, action: 'abort' \| 'warn' }` の自己ループ `a → a` | 両ループ（full / single）とも `LoopDetector` を呼ばず `Visit limit reached`（`loop_detected`）で停止 | Quint・PBT・単体テスト |
+| 自然遷移先 `nextStep` は上限未満で judge が起動し、`iteration++` で `max_steps` に達したうえで `max_visits` 到達済みの別 step へ遷移 | 次反復先頭で `Visit limit reached`（`loop_detected`）が勝ち、`onIterationLimit` も `exceeded` 保存も起きない | Quint・回帰テスト |
+| `workflow_call` 子 workflow 内の step が子内 `max_visits` と親共有 `max_steps` に同時到達 | 子 engine の反復先頭で `Visit limit reached` が勝ち、親へ `loop_detected` として伝播、`exceeded` にならない | 結合テスト |
+| `workflow_call` step 自体に `max_visits: 1` があり `iteration >= max_steps` で再突入 | `consumesIterationBudget === false` かつ `stepVisitCheckEntry` で `Visit limit reached`（`loop_detected`）停止 | Quint・PBT |
+| 同一 visit のやり直し（`blocked` 後のユーザー入力、quality gate 失敗、rate-limit fallback、`requiresUserInput`）で `iteration >= max_steps` | `completedVisits < max_visits` なので `stepVisitCheckEntry` は通り、従来どおり `max_steps` が発火する | Quint・単体テスト |
+| `max_visits` と `max_steps` 同時到達時に `SIGINT` / 外部 `AbortSignal` あり | `interrupt` が最優先。`onIterationLimit` も `exceeded` 保存も起きない | Quint・PBT・単体テスト |
+| 保存済み `exceeded` タスクの再開（`exceeded_max_steps`・`exceeded_current_iteration`）、または `initialIteration >= maxSteps` での新規・再開 | 新 engine は `completedVisits === 0 < max_visits` のため `stepVisitCheckEntry` を通り、従来どおり `max_steps` が即座に発火 | Quint・既存 `exceeded-requeue.test.ts` |
+| `ignoreIterationLimit: true` または `max_steps: 'infinite'` | `max_steps` は無効のまま `max_visits` は通常どおり停止 | Quint・PBT |
+| `requiresUserInput: true`（非対話）+ `max_steps` 到達（`max_visits` 未設定） | `max_steps` が `validateUserInputRuntime` に勝つ既存挙動を維持 | Quint・PBT |
+| 対話モード `onIterationLimit` が `+N` を返して `continue` | `stepVisitCheckEntry` は読み取り専用のため無副作用、`LoopDetector` も 1 回だけ評価（二重計上なし） | Quint・PBT |
+| step 名に Unicode・空白・引用符・区切り文字を含む場合 | `Map` の鍵照合をそのまま行い、1 行の `Visit limit reached` 理由（改行なし）を返す | 既存 PBT・単体テスト |
+| parallel 内の複数 `workflow_call` ブランチで `iteration_limit` と `loop_detected` / `interrupt` が競合 | `executeWorkflow` の `abortKind === 'iteration_limit'` ガードにより、最終結果が非 `iteration_limit` なら `exceeded: false` | 単体テスト（`workflowExecution`） |
+
+### 影響（#176）
+
+- **上流**：なし。`nrslib/takt` の `main` および開いている PR に同等の実装・修正は無い。上流へは出さない。
+- **保存済みのデータ（`exceeded` の保存と再開）**：
+  - `.takt/tasks.yaml` のスキーマ（`exceeded_max_steps`・`exceeded_current_iteration`・`resume_point`）および `meta.json` の形式は変えない。
+  - 最終実行枠で `max_visits` 到達済みの step へ遷移したタスクは、`status: 'exceeded'`（`persistExceededTaskResult`）ではなく `status: 'failed'`（`persistTaskResult`、`failure.error` に `Visit limit reached: ...`）として保存されるようになる。これにより、`exceeded` の再投入で `StepLoopGuard` が 0 に初期化されて訪問上限をすり抜ける問題が閉じる。
+  - すでに `.takt/tasks.yaml` に保存済みの `exceeded` タスクの再開互換性は壊さない（新 engine は `completedVisits = 0` で始まるため、`maxStepsOverride` / `initialIterationOverride` を使った再開は従来どおり動く）。
+  - `commitTransition` と `advanceActiveStep` のあとに次反復先頭で中断するため、`failure.step`・`state.currentStep`・`resume_point` は上限に達した遷移先 step を指し、既存の `Visit limit reached`（`max_steps` 未到達時）と一致する。
+- **公開 API / YAML 設定**：新しいキーや型変更はなし。反復先頭の優先順位契約（`interrupt` → `max_visits` → `max_steps` → `requiresUserInput` → `loop_detection`、`runSingleWorkflowIteration` は `max_steps` を除いた同じ順）を docs・CHANGELOG に明記する。`max_visits` は未リリースのため、リリース済み版の利用者への破壊的影響はない。
+- **守りの仕組み**：秘密・権限・伏せ字には触れない。`max_visits` による停止が `max_steps` の `exceeded` 延長経路で迂回される抜け道を閉じ、`executeWorkflow` 側でも `abortKind === 'iteration_limit'` の整合を防御的に保証する。

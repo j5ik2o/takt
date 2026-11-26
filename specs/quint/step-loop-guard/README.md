@@ -1,8 +1,9 @@
-# Step loop guard (j5ik2o/takt#164 and follow-up)
+# Step loop guard (j5ik2o/takt#164, #174, and #176)
 
 Quint models for:
 1. Single-step `StepLoopGuard` (`max_visits` and `stop_on_repeated_verdict`), including non-terminal rule-less transitions (`system` step `wait.on_timeout`).
 2. Multi-step interaction between `development-core` (all three loop monitors), `CycleDetector` (`ignore_steps`, `threshold`, `min_trigger_visits`), `StepLoopGuard`, and `LoopMonitorJudgeRunner`.
+3. Iteration-start check ordering (`workflowInterruptRequested`, `stepVisitCheckEntry`, `max_steps`, `validateUserInputRuntime`, `loopDetectorCheck`), `exceeded` persistence, interactive `onIterationLimit` extension (`continue`), and consistency between `runWorkflowToCompletionCore` and `runSingleWorkflowIterationCore` ([j5ik2o/takt#176](https://github.com/j5ik2o/takt/issues/176)).
 
 | File | Content |
 |---|---|
@@ -10,16 +11,20 @@ Quint models for:
 | `stepLoopGuard_test.qnt` | Scenario tests for `stepLoopGuard.qnt`. |
 | `replanMonitor.qnt` | `development-core` graph + `CycleDetector` + `StepLoopGuard` + `LoopMonitorJudge`. `fixedMonitor` / `fixedMonitorMax1` / `fixedMonitorMax3` / `fixedMonitorWithEscape` are the follow-up fix; `beforeFollowup` / `beforeFollowupFromPlan` / `beforeFollowupMax3` are merged #164; `judgeBeforeLimitWithEscape` is option (a) of design 中-1 (judge runs at the limit and may escape); `mutantMinTrigger1` / `mutantMinTrigger3` are mutants that `safety` must reject. |
 | `replanMonitor_test.qnt` | Scenario tests for `replanMonitor.qnt`. |
+| `iterationEntryOrder.qnt` | Iteration-start guard priority and `exceeded` persistence across `runWorkflowToCompletionCore` (`MODE = "full"`) and `runSingleWorkflowIterationCore` (`MODE = "single"`). `fixedFullExceeded` / `fixedFullInteractive` / `fixedFullIgnoreLimit` / `fixedSingleIteration` are the #176 fix; `beforeFullExceeded` / `beforeSingleIteration` are merged #174 (`657f16ad6`); `abortAtTransitionAlternative` is Devin's line-1214 alternative (Approach B); `mutantLoopBeforeMaxSteps` moves stateful `LoopDetector` ahead of `max_steps`. |
+| `iterationEntryOrder_test.qnt` | Scenario tests for `iterationEntryOrder.qnt`. |
 
 ## What is modelled
 
 - `StepLoopGuard` (`src/core/workflow/engine/step-visit-guard.ts`): `checkEntry` before a step starts, and `recordCompletion` once a non-terminal transition is chosen; `matchedRuleIndex === undefined` (e.g., `system` step `wait.on_timeout`) counts as a completed visit and clears `lastRuleIndex`.
 - `CycleDetector` (`src/core/workflow/engine/cycle-detector.ts`): `history`, the three `development-core` monitors in YAML order (`[plan, write_tests]` and `[replan, implement]` with `threshold: 3`; `[replan, peer-review]` with `ignore_steps: [implement]`, `threshold: 1`, `min_trigger_visits: 2` checked against engine-wide `completedCounts`), first triggered monitor wins, and `reset()` after any judge (clears the shared `history`, preserves `completedCounts`).
 - `WorkflowRunLoop.ts` (`runWorkflowToCompletionCore`): retries (`blocked`, quality gate failure, rate-limit fallback, `requiresUserInput`) `continue` before `recordCompletion` and `CycleDetector`; natural terminals (`COMPLETE`, `ABORT`) end the run before both; when `nextStep` has already reached `max_visits`, `CycleDetector` and `LoopMonitorJudgeRunner` are skipped for every monitor so the next iteration aborts with `Visit limit reached` (`loop_detected`).
-- `LoopMonitorJudgeRunner.ts`: the judge picks continue (the cycle head), `ABORT`, or, in a custom workflow (`JUDGE_HAS_ESCAPE = true`), an escape route that completes the run.
+- `WorkflowRunLoop.ts` (`runWorkflowToCompletionCore` and `runSingleWorkflowIterationCore`): iteration-start precedence (`workflowInterruptRequested`, `stepVisitCheckEntry`, `max_steps` / `onIterationLimit`, `validateUserInputRuntime`, `loopDetectorCheck`), `workflow_call` steps not consuming iteration budget, interactive extension `continue`, and non-interactive `exceeded` persistence (`workflowExecution.ts` / `iterationLimitHandler.ts` / `taskExecution.ts`).
+- `LoopDetector` (`src/core/workflow/engine/loop-detector.ts`): stateful `consecutiveCount` tracking and `warn` vs `abort` action.
+- `LoopMonitorJudgeRunner.ts`: `state.iteration++` during a judge run, and the judge picking continue (the cycle head), `ABORT`, an escape route (`JUDGE_HAS_ESCAPE = true`), or routing to another step already at `max_visits` (`JudgeRouteToC` in `iterationEntryOrder.qnt`).
 - `development-core.yaml`: all 5 steps (`plan`, `write_tests`, `implement`, `peer-review`, `replan`), all non-terminal and terminal edges, and a start or resume at any of the 5 steps (`ALLOW_RESUME`).
 
-Not modelled: the LLM decision logic inside the judge (modelled as a nondeterministic choice), `max_visits` on steps other than `replan`, `runSingleWorkflowIteration`, parallel sub-steps, `workflow_call` child engine internals, `max_steps` / `LoopDetector` interaction, and config load-time override precedence.
+Not modelled: the LLM decision logic inside the judge (modelled as a nondeterministic choice), parallel sub-steps, parallel `workflow_call` branch races, `workflow_call` child engine internals beyond `consumesBudget = false`, and config load-time override precedence.
 
 ## Invariants
 
@@ -43,6 +48,20 @@ Not modelled: the LLM decision logic inside the judge (modelled as a nondetermin
 | `judgeFiresWhenDue` | Every `peer-review -> replan` below the limit whose filtered history ends with `[replan, peer-review]`, from the 2nd `peer-review` completion on, asks the `[replan, peer-review]` judge (no under-firing; the threshold 2 is written as a literal, not `MIN_TRIGGER_VISITS`). |
 | `replanVisitsBounded` | `replanCompleted <= replanStarted and replanStarted <= MAX_VISITS`. |
 | `limitAbortHasExactVisits` | Stopping with `AbortedAtVisitLimit` implies `replanCompleted == MAX_VISITS`. |
+
+### `iterationEntryOrder.qnt`
+
+| Name | Meaning |
+|---|---|
+| `interruptWins` | If `interruptPending` is true when a run stops at entry, the status is `AbortedInterrupt` and `exceededSaved` is `false`. |
+| `visitLimitBeatsMaxSteps` | `max_steps` never fires (neither aborts nor calls `onIterationLimit` to prompt/extend) when `currentStep` has already reached `max_visits`. |
+| `exceededOnlyOnIterationLimit` | `exceededSaved` holds only when `status == AbortedIterationLimit` and `currentStep` is not at `max_visits`. |
+| `visitLimitOutcomePreserved` | A natural non-terminal transition into a step at `max_visits` (which skipped loop monitors) ends only in `AbortedVisitLimit` (or `AbortedInterrupt`), never `AbortedIterationLimit` or `AbortedLoopDetector`. |
+| `visitLimitSkipsLoopDetector` | When `currentStep` is already at `max_visits`, `LoopDetector.check` does not run (neither mutates/warns nor aborts), consistently across `full` and `single` modes. |
+| `noLoopDetectorDoubleCount` | `loopDetectorChecks == stepEntriesPassedToLoopDetector`: interactive `onIterationLimit` extension (`continue`) never double-counts `LoopDetector`. |
+| `visitsBounded` | For every step, `completedVisits <= startedVisits` and (when `max_visits > 0`) `startedVisits <= max_visits`. |
+| `visitLimitAbortHasExactVisits` | Stopping with `AbortedVisitLimit` implies `completedVisits[currentStep] == max_visits` (retries do not consume visits). |
+| `budgetRespected` | In `full` mode without `ignoreIterationLimit`, no budget-consuming step starts execution when `iteration >= maxSteps`. |
 
 ## Record
 
@@ -76,6 +95,20 @@ $ quint test --main=fixedMonitorWithEscapeTest replanMonitor_test.qnt
 $ quint test --main=judgeBeforeLimitWithEscapeTest replanMonitor_test.qnt
   1 passing
 $ quint test --main=mutantMinTrigger3Test replanMonitor_test.qnt
+  1 passing
+$ quint test --main=fixedFullExceededTest iterationEntryOrder_test.qnt
+  7 passing
+$ quint test --main=fixedFullInteractiveTest iterationEntryOrder_test.qnt
+  2 passing
+$ quint test --main=fixedSingleIterationTest iterationEntryOrder_test.qnt
+  1 passing
+$ quint test --main=beforeFullExceededTest iterationEntryOrder_test.qnt
+  1 passing
+$ quint test --main=beforeSingleIterationWarnTest iterationEntryOrder_test.qnt
+  1 passing
+$ quint test --main=abortAtTransitionAlternativeTest iterationEntryOrder_test.qnt
+  1 passing
+$ quint test --main=mutantLoopBeforeMaxStepsTest iterationEntryOrder_test.qnt
   1 passing
 ```
 
@@ -118,6 +151,45 @@ $ quint run --main=fixedMonitorWithEscape --invariant=safety --witnesses witness
   witnessJudgeEscaped: 273 / 20000 (1.36%)
   witnessAbortedAtLimit: 1466 / 20000 (7.33%)
   witnessJudgeFired: 312 / 20000 (1.56%)
+
+$ quint run --verbosity=1 --main=fixedFullExceeded --invariant=safety --witnesses witnessAbortedVisitLimit witnessAbortedIterationLimit witnessExceededSaved witnessAbortedInterrupt witnessAbortedLoopDetector witnessBothLimitsSimultaneous witnessJudgeRan witnessCompleted --max-samples=20000 --max-steps=25 --seed=0x1 iterationEntryOrder.qnt
+[ok] No violation found.
+  witnessAbortedVisitLimit: 385 / 20000 (1.93%)
+  witnessAbortedIterationLimit: 569 / 20000 (2.84%)
+  witnessExceededSaved: 569 / 20000 (2.84%)
+  witnessAbortedInterrupt: 14027 / 20000 (70.14%)
+  witnessAbortedLoopDetector: 232 / 20000 (1.16%)
+  witnessBothLimitsSimultaneous: 182 / 20000 (0.91%)
+  witnessJudgeRan: 1385 / 20000 (6.93%)
+  witnessCompleted: 4314 / 20000 (21.57%)
+
+$ quint run --verbosity=1 --main=fixedFullInteractive --invariant=safety --witnesses witnessAbortedVisitLimit witnessAbortedIterationLimit witnessAbortedInterrupt witnessAbortedUserInput witnessAbortedLoopDetector witnessBothLimitsSimultaneous witnessExtended witnessJudgeRan witnessCompleted --max-samples=20000 --max-steps=25 --seed=0x1 iterationEntryOrder.qnt
+[ok] No violation found.
+  witnessAbortedVisitLimit: 316 / 20000 (1.58%)
+  witnessAbortedIterationLimit: 57 / 20000 (0.29%)
+  witnessAbortedInterrupt: 12254 / 20000 (61.27%)
+  witnessAbortedUserInput: 3502 / 20000 (17.51%)
+  witnessAbortedLoopDetector: 1164 / 20000 (5.82%)
+  witnessBothLimitsSimultaneous: 143 / 20000 (0.71%)
+  witnessExtended: 77 / 20000 (0.39%)
+  witnessJudgeRan: 567 / 20000 (2.83%)
+  witnessCompleted: 2518 / 20000 (12.59%)
+
+$ quint run --verbosity=1 --main=fixedFullIgnoreLimit --invariant=safety --witnesses witnessAbortedVisitLimit witnessAbortedInterrupt witnessAbortedLoopDetector witnessJudgeRan witnessCompleted --max-samples=20000 --max-steps=25 --seed=0x1 iterationEntryOrder.qnt
+[ok] No violation found.
+  witnessAbortedVisitLimit: 418 / 20000 (2.09%)
+  witnessAbortedInterrupt: 14242 / 20000 (71.21%)
+  witnessAbortedLoopDetector: 372 / 20000 (1.86%)
+  witnessJudgeRan: 1423 / 20000 (7.12%)
+  witnessCompleted: 4480 / 20000 (22.40%)
+
+$ quint run --verbosity=1 --main=fixedSingleIteration --invariant=safety --witnesses witnessAbortedVisitLimit witnessAbortedInterrupt witnessAbortedUserInput witnessAbortedLoopDetector witnessCompleted --max-samples=20000 --max-steps=25 --seed=0x1 iterationEntryOrder.qnt
+[ok] No violation found.
+  witnessAbortedVisitLimit: 204 / 20000 (1.02%)
+  witnessAbortedInterrupt: 12383 / 20000 (61.91%)
+  witnessAbortedUserInput: 3749 / 20000 (18.75%)
+  witnessAbortedLoopDetector: 1176 / 20000 (5.88%)
+  witnessCompleted: 2488 / 20000 (12.44%)
 ```
 
 ### Counterexamples on pre-fix models, option (a), and mutants
@@ -152,6 +224,24 @@ $ quint run --main=mutantMinTrigger3 --invariant=judgeFiresWhenDue --max-samples
 
 $ quint run --main=mutantMinTrigger3 --invariant=noJudgeOnFirstPeerReview --max-samples=20000 --max-steps=45 --seed=0x1 replanMonitor.qnt
 [ok] No violation found (10965ms at 1824 traces/second).  # the over-firing invariant alone misses it
+
+$ quint run --verbosity=1 --main=beforeFullExceeded --invariant=visitLimitBeatsMaxSteps --max-samples=10000 --max-steps=25 --seed=0x1 iterationEntryOrder.qnt
+[violation] Found an issue (42ms).  # #174 order: max_steps beats max_visits at simultaneous limit
+
+$ quint run --verbosity=1 --main=beforeFullExceeded --invariant=exceededOnlyOnIterationLimit --max-samples=10000 --max-steps=25 --seed=0x1 iterationEntryOrder.qnt
+[violation] Found an issue (65ms).  # #174 order: saves exceeded for a step already at max_visits
+
+$ quint run --verbosity=1 --main=beforeFullExceeded --invariant=visitLimitOutcomePreserved --max-samples=10000 --max-steps=25 --seed=0x1 iterationEntryOrder.qnt
+[violation] Found an issue (55ms).  # #174 order: judge skipped for max_visits yet ends in Max steps reached
+
+$ quint run --verbosity=1 --main=beforeSingleIteration --invariant=visitLimitSkipsLoopDetector --max-samples=10000 --max-steps=25 --seed=0x1 iterationEntryOrder.qnt
+[violation] Found an issue (55ms).  # #174 single-iteration order: LoopDetector runs before VisitLimit
+
+$ quint run --verbosity=1 --main=abortAtTransitionAlternative --invariant=visitLimitBeatsMaxSteps --max-samples=10000 --max-steps=25 --seed=0x1 iterationEntryOrder.qnt
+[violation] Found an issue (125ms). # Approach B: judge increments iteration and routes to StepC at max_visits
+
+$ quint run --verbosity=1 --main=mutantLoopBeforeMaxSteps --invariant=noLoopDetectorDoubleCount --max-samples=10000 --max-steps=25 --seed=0x1 iterationEntryOrder.qnt
+[violation] Found an issue (48ms).  # moving stateful LoopDetector before max_steps double-counts on extension continue
 ```
 
 Note on writing the model: in Quint, `x' = a or b` parses as `(x' = a) or b`. Ghost-variable updates in `replanMonitor.qnt` are parenthesized (`x' = (a or b)`) for that reason.
