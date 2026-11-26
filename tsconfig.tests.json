@@ -751,6 +751,7 @@
     "src/__tests__/sensitive-stream-equality.pbt.test.ts",
     "src/__tests__/sensitive-text-composition.pbt.test.ts",
     "src/__tests__/sensitive-text-fixed-examples.test.ts",
+    "src/__tests__/sensitive-text-known-leaks.pbt.test.ts",
     "src/__tests__/sensitive-text-legacy.fidelity.test.ts",
     "src/__tests__/sensitive-text-legacy.hash.test.ts",
     "src/__tests__/sensitive-text-sanitize.performance.test.ts",

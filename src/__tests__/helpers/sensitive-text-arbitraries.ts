@@ -399,3 +399,94 @@ export function chunksOf(text: string): fc.Arbitrary<string[]> {
     return chunks;
   });
 }
+
+// #175 (takt-175 DESIGN.md): the four families of leaks since before #151. Each fragment is one
+// line; `echoes` are the values a later output may print on their own. Nothing is filtered out.
+
+const familySecret = fc.tuple(marker, fc.stringMatching(/^[A-Za-z0-9._~-]{0,4}$/)).map(([mark, tail]) => mark + tail);
+
+/** A line of the URL family with the output every path shows for it alone. */
+export interface ExpectedFragment extends Fragment {
+  readonly expected: string;
+}
+
+/**
+ * 1. A URL password with a `,` right after an `@`: between that `@` and the `,` there is no letter
+ * or digit, so nothing there can be a host and the `,` does not end the URL.
+ */
+export const urlCommaAfterAtFragment: fc.Arbitrary<ExpectedFragment> = fc
+  .tuple(
+    scheme,
+    fc.stringMatching(/^[a-z0-9]{0,4}$/),
+    familySecret,
+    fc.option(fc.stringMatching(/^@[a-z0-9]{1,3}$/), { nil: '' }),
+    fc.array(fc.tuple(fc.constantFrom(',', ',,', '-,', '.,', '_,', '~,'), familySecret), { minLength: 1, maxLength: 3 }),
+    hostPart,
+  )
+  .map(([s, user, head, middle, rest, host]) => {
+    const password = head + middle + rest.map(([glue, secret]) => `@${glue}${secret}`).join('');
+    return { text: `${s}://${user}:${password}@${host}`, echoes: [password], expected: `${s}://[REDACTED]@${host}` };
+  });
+
+/** Over-masking bound of family 1: a `,` after a host still ends the URL, and the address after it stays. */
+export const urlCommaAfterHostFragment: fc.Arbitrary<ExpectedFragment> = fc
+  .tuple(scheme, fc.stringMatching(/^[a-z0-9]{0,4}$/), familySecret, fc.option(fc.stringMatching(/^@[a-z0-9]{1,3}$/), { nil: '' }), hostPart)
+  .map(([s, user, head, middle, host]) => ({
+    text: `${s}://${user}:${head}${middle}@${host},admin@example.test`,
+    echoes: [head + middle],
+    expected: `${s}://[REDACTED]@${host},admin@example.test`,
+  }));
+
+/**
+ * 2. Keys inside one value, joined by shell separators: `token=a;password=secret;token=z`. Every
+ * value between two keys is printed on its own later.
+ */
+export const keysInsideOneValueFragment: fc.Arbitrary<Fragment> = fc
+  .tuple(
+    fc.array(fc.tuple(fc.constantFrom('', '--'), sensitiveKey, fc.constantFrom('=', ':'), familySecret), { minLength: 3, maxLength: 6 }),
+    fc.array(fc.constantFrom(';', '&', '|', '&&', '||'), { minLength: 5, maxLength: 5 }),
+  )
+  .map(([pairs, separators]) => ({
+    text: pairs.map(([dashes, key, separator, value], index) => (index === 0 ? '' : separators[index - 1]) + dashes + key + separator + value).join(''),
+    echoes: pairs.map(([, , , value]) => value),
+  }));
+
+/**
+ * 3. A capital `Bearer` right after a word character: glued to other text, or after an escaped
+ * line break or tab in serialized JSON (`\nBearer`).
+ */
+export const gluedBearerFragment: fc.Arbitrary<Fragment> = fc
+  .tuple(
+    fc.oneof(fc.stringMatching(/^[A-Za-z0-9_]{1,6}$/), marker, fc.constantFrom('\\n', '\\t', '\\r\\n', '401\\n')),
+    fc.tuple(marker, fc.stringMatching(/^[A-Za-z0-9._~+/-]{3,8}$/)).map(([mark, tail]) => mark + tail),
+    fc.constantFrom('', ' rejected', '"}'),
+  )
+  .map(([glue, value, after]) => ({ text: `${glue}Bearer ${value}${after}`, echoes: [value] }));
+
+/** 4. A cookie value without a name, before the first `;` of a cookie header. */
+export const unnamedCookieFragment: fc.Arbitrary<Fragment> = fc
+  .tuple(
+    fc.constantFrom('', 'https://cookie:a@host '),
+    fc.constantFrom('Cookie:', 'Set-Cookie:', 'cookie:', 'set-cookie:', 'COOKIE:'),
+    fc.constantFrom(' ', ''),
+    fc.tuple(marker, fc.stringMatching(/^[A-Za-z0-9._~+/-]{0,6}$/)).map(([mark, tail]) => mark + tail),
+    fc.constantFrom('', ' '),
+    fc.constantFrom('path=/', 'Path=/; HttpOnly', 'Secure', 'Max-Age=60; SameSite=Lax', 'a=b'),
+  )
+  .map(([before, header, space, value, gap, attributes]) => ({ text: `${before}${header}${space}${value};${gap}${attributes}`, echoes: [value] }));
+
+/** The four families of #175, each one line. */
+export const KNOWN_LEAK_FAMILIES: ReadonlyArray<readonly [name: string, fragment: fc.Arbitrary<Fragment>]> = [
+  ['1. a URL password with a `,` right after an `@`', urlCommaAfterAtFragment],
+  ['2. keys inside one value', keysInsideOneValueFragment],
+  ['3. a capital `Bearer` right after a word character', gluedBearerFragment],
+  ['4. a cookie value without a name', unnamedCookieFragment],
+];
+
+/** Lines of one family among plain lines. */
+export function knownLeakDocument(fragment: fc.Arbitrary<Fragment>): fc.Arbitrary<Array<Fragment & { plain: boolean }>> {
+  return fc.array(
+    fc.oneof(fragment.map((line) => ({ ...line, plain: false })), plainLine.map((text) => ({ text, echoes: [] as string[], plain: true }))),
+    { minLength: 1, maxLength: 6 },
+  );
+}
