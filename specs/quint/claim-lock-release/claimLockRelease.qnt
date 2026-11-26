@@ -29,9 +29,15 @@
 //                   that cannot read its own lock file still returns silently (not recorded), and
 //                   the finish hooks of setup failures and invalidations re-read tasks.yaml under
 //                   tasks.yaml.lock (runTaskFinishHooks).
-//   "Fixed"       — FirstDesign, plus the release throws (and records) when its own lock file is
-//                   there but cannot be read, and the finish hooks get the saved task states
-//                   instead of re-reading tasks.yaml.
+//   "SecondDesign" — the design after the first review (b82a56d2a): FirstDesign, plus the release
+//                   throws (and records) when its own lock file is there but cannot be read, and the
+//                   finish hooks get the saved task states instead of re-reading tasks.yaml. Its
+//                   recovery of a recorded file throws when the first read cannot read it, and
+//                   removes it with unlinkSnapshot, which returns silently when its own re-read
+//                   fails; the record is then dropped as if removed.
+//   "Fixed"       — SecondDesign, plus the recovery of a recorded file keeps the record and goes on
+//                   waiting (the rule for an unreadable lock: stale after STALE_MS) when either read
+//                   fails, and reports "removed" only when unlinkSync succeeded.
 module claimLockRelease {
   const DESIGN: str
 
@@ -48,7 +54,8 @@ module claimLockRelease {
 
   // Why a process stopped. Unlink: a lock file could not be removed, so nothing can be written.
   // ReleaseError: an unclassified error from a lock release after the write.
-  type StopReason = NoStop | Unlink | ReleaseError
+  // ReadStop: the recovery of a recorded own lock file could not read it and threw (SecondDesign).
+  type StopReason = NoStop | Unlink | ReleaseError | ReadStop
 
   type Local = {
     phase: Phase,
@@ -71,7 +78,16 @@ module claimLockRelease {
 
   // What an acquisition sees. Timeout: the lock names a live owner for the whole wait. UnlinkFails:
   // removing a lock file that may be removed (dead owner, or a recorded own one) fails.
-  type Acquire = Acquired | Timeout | UnlinkFails
+  // UnreadableWait: a recorded own lock file could not be read at recovery; the record is kept and
+  // the acquisition waits under the rule for an unreadable lock (removed once older than STALE_MS),
+  // so the wait is bounded. RecordLost: the recovery dropped the record without removing the file;
+  // the file now names this live process with no record, so the acquisition waits on itself.
+  // ReadFailed: the recovery threw the read error, an unclassified error.
+  type Acquire = Acquired | Timeout | UnlinkFails | UnreadableWait | RecordLost | ReadFailed
+
+  // A transient read failure during the recovery of a recorded own lock file: in recoverStaleLock's
+  // first read, or in the re-read just before the unlink. The next read succeeds.
+  type Glitch = NoGlitch | FirstReadFails | SecondReadFails
 
   pure val NONE: Actor = ""
   pure val DEAD: Actor = "D"  // the owner of an interrupted run; never alive
@@ -82,6 +98,12 @@ module claimLockRelease {
   // t2: a goal task whose runtime_assignment cannot be selected; the claim saves it as failed.
   pure val SETUP_BROKEN: Set[TaskId] = Set("t2")
   pure val RELEASES: Set[ReleaseOutcome] = Set(Ok, Gone, Stuck, StuckForGood, Unseen)
+  pure val GLITCHES: Set[Glitch] = Set(NoGlitch, FirstReadFails, SecondReadFails)
+
+  // Which designs record a lock file whose release threw, and which also report an unreadable own
+  // lock file at release and pass saved states to the finish hooks.
+  pure val recordsReleases: bool = DESIGN == "FirstDesign" or DESIGN == "SecondDesign" or DESIGN == "Fixed"
+  pure val afterFirstReview: bool = DESIGN == "SecondDesign" or DESIGN == "Fixed"
 
   var tasks: TaskId -> TaskRec
   var procs: Actor -> Local
@@ -108,17 +130,22 @@ module claimLockRelease {
 
   // The acquisition by `a` of the lock pair, given a lock file left behind (`o`, `forGood`,
   // `recorded`).
-  def acquireAt(a: Actor, o: Actor, forGood: bool, recorded: bool): Acquire =
+  def acquireAt(a: Actor, o: Actor, forGood: bool, recorded: bool, g: Glitch): Acquire =
     if (o == NONE) Acquired
     else if (o == a) {
-      if (recorded) { if (forGood) UnlinkFails else Acquired }
-      else Timeout  // the file names this live process and nothing marks it as left behind
+      if (not(recorded)) Timeout  // the file names this live process and nothing marks it as left behind
+      else if (g == NoGlitch) { if (forGood) UnlinkFails else Acquired }
+      else if (DESIGN == "Fixed") UnreadableWait
+      else if (DESIGN == "SecondDesign" and g == FirstReadFails) ReadFailed
+      // FirstDesign: an unreadable file does not match the record, which is dropped. SecondDesign's
+      // unlinkSnapshot returns silently on a failed re-read, and the record is dropped as removed.
+      else RecordLost
     }
     else if (alive(o)) Timeout
     else if (forGood) UnlinkFails  // dead-owner recovery; its unlink fails
     else Acquired
 
-  def acquire(a: Actor): Acquire = acquireAt(a, orphanOf, orphanForGood, orphanRecorded)
+  def acquire(a: Actor, g: Glitch): Acquire = acquireAt(a, orphanOf, orphanForGood, orphanRecorded, g)
 
   pure def leavesFile(r: ReleaseOutcome): bool = r == Stuck or r == StuckForGood or r == Unseen
   pure def orphanAfter(r: ReleaseOutcome, a: Actor): Actor = if (leavesFile(r)) a else NONE
@@ -127,11 +154,11 @@ module claimLockRelease {
   // The release throws to the operation. Before Fixed, an unreadable own lock file is skipped
   // silently (file-lock.ts unlinkSnapshot sees `content !== expected.content` and returns).
   pure def throws(r: ReleaseOutcome): bool =
-    r == Gone or r == Stuck or r == StuckForGood or (r == Unseen and DESIGN == "Fixed")
+    r == Gone or r == Stuck or r == StuckForGood or (r == Unseen and afterFirstReview)
 
   // The process records the lock file it left (FirstDesign and Fixed record what throws).
   pure def recordedAfter(r: ReleaseOutcome): bool =
-    leavesFile(r) and throws(r) and (DESIGN == "FirstDesign" or DESIGN == "Fixed")
+    leavesFile(r) and throws(r) and recordsReleases
 
   // After the write, the operation keeps its result: the release did not throw, or the design
   // keeps results across a release error.
@@ -141,12 +168,12 @@ module claimLockRelease {
   // tasks.yaml (runTaskFinishHooks -> listTaskStateItems -> TaskStore.read) under tasks.yaml.lock;
   // a failed re-read is only logged (log.error), so the hooks are lost.
   def hooksRun(a: Actor, r: ReleaseOutcome): bool =
-    keeps(r) and (DESIGN == "Fixed"
-      or acquireAt(a, orphanAfter(r, a), forGoodAfter(r), recordedAfter(r)) == Acquired)
+    keeps(r) and (afterFirstReview
+      or acquireAt(a, orphanAfter(r, a), forGoodAfter(r), recordedAfter(r), NoGlitch) == Acquired)
 
   // The re-read for the hooks may itself remove the recorded own lock file (FirstDesign).
   def orphanAfterHooks(a: Actor, r: ReleaseOutcome, rereads: bool): Actor =
-    if (rereads and DESIGN != "Fixed" and keeps(r) and orphanAfter(r, a) == a and recordedAfter(r)
+    if (rereads and not(afterFirstReview) and keeps(r) and orphanAfter(r, a) == a and recordedAfter(r)
       and not(forGoodAfter(r))) NONE
     else orphanAfter(r, a)
 
@@ -183,15 +210,19 @@ module claimLockRelease {
 
   // An acquisition that did not get the lock: nothing is written.
   action notAcquired(a: Actor, how: Acquire, name: str): bool = all {
-    if (how == Timeout and PROCS.contains(a))
+    if (PROCS.contains(a) and (how == Timeout or how == UnreadableWait or how == RecordLost))
       // Classified as retryable: claimRetryAt is set and the run keeps waiting.
       procs' = procs.setBy(a, l => { ...l, retrying: true })
-    else if (how == UnlinkFails and PROCS.contains(a))
+    else if (PROCS.contains(a) and how == UnlinkFails)
       // An unclassified error: claiming stops; queued tasks are left for interrupted recovery.
       procs' = procs.setBy(a, l => { ...l, phase: Stopped, stopReason: Unlink, queue: Set() })
+    else if (PROCS.contains(a) and how == ReadFailed)
+      procs' = procs.setBy(a, l => { ...l, phase: Stopped, stopReason: ReadStop, queue: Set() })
     else procs' = procs,  // M: the error goes to the caller (MCP tool, daemon turn)
-    waitingOnSelf' = waitingOnSelf.set(a, how == Timeout and orphanOf == a),
-    tasks' = tasks, orphanOf' = orphanOf, orphanForGood' = orphanForGood, orphanRecorded' = orphanRecorded,
+    // Waiting on an unreadable recorded file is bounded (STALE_MS) and is not a self-wait.
+    waitingOnSelf' = waitingOnSelf.set(a, (how == Timeout and orphanOf == a) or how == RecordLost),
+    orphanRecorded' = if (how == RecordLost) false else orphanRecorded,
+    tasks' = tasks, orphanOf' = orphanOf, orphanForGood' = orphanForGood,
     needHook' = needHook, needEvent' = needEvent, hooks' = hooks, events' = events,
     releaseFailures' = releaseFailures, releaseReported' = releaseReported,
     lastAction' = name,
@@ -212,15 +243,16 @@ module claimLockRelease {
   // claimNextTasks(): one write saves the runnable pending tasks as running (owner p) and the
   // setup-broken ones as failed, then releases the locks (outcome r). Each setup failure gets a
   // finish hook (claimAvailableTasks) and a manager event (onSetupFailed).
-  action claim(p: Actor, r: ReleaseOutcome): bool = {
-    val how = acquire(p)
+  action claim(p: Actor, r: ReleaseOutcome, g: Glitch): bool = {
+    val how = acquire(p, g)
     val pend = TASKS.filter(t => tasks.get(t).status == Pending)
     val claimed = pend.exclude(SETUP_BROKEN)
     val failed = pend.intersect(SETUP_BROKEN)
     all {
       PROCS.contains(p),
       procs.get(p).phase == Idle,
-      if (how != Acquired) notAcquired(p, how, if (how == Timeout) "claimTimeout" else "claimUnlinkFails")
+      if (how != Acquired) notAcquired(p, how, if (how == Timeout) "claimTimeout" else if (how == UnreadableWait) "claimWaitsUnreadable"
+        else if (how == RecordLost) "claimRecordLost" else if (how == ReadFailed) "claimReadFailed" else "claimUnlinkFails")
       else all {
         tasks' = tasks.keys().mapBy(t =>
           if (claimed.contains(t)) { status: Running, owner: p }
@@ -244,8 +276,8 @@ module claimLockRelease {
   // failInterruptedRunningTasks() at the start of a run or watch (a in PROCS), or reconcileLostRun()
   // in the daemon (a = M): running tasks whose owner is dead become failed, then each gets a manager
   // event. (failInterruptedRunningTasks takes tasks.yaml.lock only; the model's lock pair covers it.)
-  action recover(a: Actor, r: ReleaseOutcome): bool = {
-    val how = acquire(a)
+  action recover(a: Actor, r: ReleaseOutcome, g: Glitch): bool = {
+    val how = acquire(a, g)
     val lost = TASKS.filter(t => tasks.get(t).status == Running and not(alive(tasks.get(t).owner)))
     all {
       alive(a),
@@ -267,8 +299,8 @@ module claimLockRelease {
 
   // invalidatePendingGoalTasks() for an aborted goal (MCP / manager, a = M): pending goal tasks become
   // failed, then the finish hook runs for each.
-  action invalidate(r: ReleaseOutcome): bool = {
-    val how = acquire(M)
+  action invalidate(r: ReleaseOutcome, g: Glitch): bool = {
+    val how = acquire(M, g)
     val pend = TASKS.filter(t => tasks.get(t).status == Pending)
     all {
       pend != Set(),
@@ -318,10 +350,11 @@ module claimLockRelease {
     nondet a = ACTORS.oneOf()
     nondet t = TASKS.oneOf()
     nondet r = RELEASES.oneOf()
+    nondet g = GLITCHES.oneOf()
     any {
-      claim(p, r),
-      recover(a, r),
-      invalidate(r),
+      claim(p, r, g),
+      recover(a, r, g),
+      invalidate(r, g),
       runTask(p, t),
       endRun(p),
     }
@@ -350,10 +383,12 @@ module claimLockRelease {
   // thrown to the caller.
   val releaseFailureReported: bool = ACTORS.forall(a => releaseReported.get(a) == releaseFailures.get(a))
 
-  // No process waits on a lock file it left behind itself.
+  // No process waits on a lock file it left behind itself, except while that file cannot be read
+  // (bounded by STALE_MS; see UnreadableWait).
   val noSelfWait: bool = ACTORS.forall(a => not(waitingOnSelf.get(a)))
 
-  // Claiming stops only when a lock file cannot be removed (for writes; see README for reads).
+  // Claiming stops only when a lock file cannot be removed (for writes; see README for reads). A read
+  // that fails once does not stop it.
   val stopsOnlyWhenUnlinkFails: bool = PROCS.forall(p =>
     procs.get(p).phase == Stopped implies procs.get(p).stopReason == Unlink)
 
@@ -378,6 +413,7 @@ module claimLockRelease {
   val wHookAfterStuckForGood: bool = orphanForGood and hooks.get("t1") + hooks.get("t2") > 0
   val wUnseenReported: bool = orphanOf != NONE and orphanRecorded and not(orphanForGood)
     and releaseReported.get("A") + releaseReported.get("B") + releaseReported.get(M) > 0
+  val wWaitedOnUnreadableOwn: bool = lastAction == "claimWaitsUnreadable"
   val wRunEnded: bool = PROCS.exists(p => procs.get(p).phase == Ended)
   val wRunEndedAfterReleaseFailure: bool = lastAction == "endRun" and releaseFailures.get("A") + releaseFailures.get("B") > 0
 }
@@ -385,4 +421,5 @@ module claimLockRelease {
 module current { import claimLockRelease(DESIGN = "Current").* from "./claimLockRelease" }
 module returnOnly { import claimLockRelease(DESIGN = "ReturnOnly").* from "./claimLockRelease" }
 module firstDesign { import claimLockRelease(DESIGN = "FirstDesign").* from "./claimLockRelease" }
+module secondDesign { import claimLockRelease(DESIGN = "SecondDesign").* from "./claimLockRelease" }
 module fixed { import claimLockRelease(DESIGN = "Fixed").* from "./claimLockRelease" }
