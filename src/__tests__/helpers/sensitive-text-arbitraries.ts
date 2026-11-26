@@ -343,7 +343,7 @@ export const referenceText: fc.Arbitrary<string> = fc
   .array(
     fc.tuple(
       fc.oneof(
-        fc.tuple(fc.oneof(fc.stringMatching(/^[a-d]{0,3}$/), fc.constant('token')), fc.stringMatching(/^[a-d0-9@,:]{1,6}$/), fc.stringMatching(/^[a-d.]{1,4}$/))
+        fc.tuple(fc.oneof(fc.stringMatching(/^[a-d]{0,3}$/), fc.constant('token')), fc.stringMatching(/^[a-d0-9@,:]{1,6}$/), fc.oneof({ weight: 10, arbitrary: fc.stringMatching(/^[a-d.]{1,4}$/) }, { weight: 1, arbitrary: fc.constantFrom('𠀀', '例え') }))
           .map(([user, password, host]) => `https://${user}:${password}@${host}`),
         fc.tuple(fc.constantFrom('token', 'password', 'apikey', 'secret', 'name', 'user', 'x.token'), fc.constantFrom('=', ':', ' = ', ':\n'), fc.stringMatching(/^[a-d0-9@,:]{0,6}$/))
           .map(([key, separator, value]) => key + separator + value),

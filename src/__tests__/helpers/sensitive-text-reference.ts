@@ -20,7 +20,8 @@ function lastAtInTail(text: string, from: number): number {
   let hostChar = false;
   let passedComma = false;
   for (let index = from; !endsTail(text[index]); index++) {
-    const char = text[index]!;
+    const codePoint = text.codePointAt(index)!;
+    const char = String.fromCodePoint(codePoint);
     if (char === '@') {
       last = index;
       hostChar = false;
@@ -31,6 +32,7 @@ function lastAtInTail(text: string, from: number): number {
     } else if (/^[\p{L}\p{N}]$/u.test(char)) {
       hostChar = true;
     }
+    if (char.length > 1) index += 1;
   }
   return last;
 }
