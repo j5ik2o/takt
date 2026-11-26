@@ -35,6 +35,16 @@ export interface SensitiveTextCommit {
   readonly ranges: readonly SensitiveRange[];
 }
 
+/** #151 2a (design 7.1): what the inner-only stream and the stream with the outer hold share. */
+export interface SensitiveTextStreamBufferLike {
+  readonly sensitiveValues: BoundedSensitiveValues;
+  write(text: string, source: unknown, substringValues?: readonly string[], extraRanges?: readonly SensitiveRange[]): SensitiveTextCommit;
+  flush(source: unknown, substringValues?: readonly string[]): SensitiveTextCommit;
+  preview(source: unknown): string;
+}
+
+export type SensitiveTextStreamRedactorFactory = () => SensitiveTextStreamRedactor;
+
 function pendingSensitiveValueRanges(text: string): SensitiveRange[] {
   // ストリーム用にキーや区切りの検出規則を複製しない。'@' は、まだ '@' が届いていない URL の認証情報を保留するため。
   return ['', '"', "'", '\\"', '@'].flatMap((quote) =>
@@ -73,12 +83,13 @@ function longestValuePrefixAtEnd(text: string, value: string): number {
 }
 
 /** Complete value-bearing lines and closed PEM blocks become append-only output. */
-export class SensitiveTextStreamBuffer {
+export class SensitiveTextStreamBuffer implements SensitiveTextStreamBufferLike {
   readonly sensitiveValues = createBoundedSensitiveValues();
   private pending = '';
   private pemLabel: string | undefined;
 
-  write(text: string, source: unknown, substringValues: readonly string[] = []): SensitiveTextCommit {
+  write(text: string, source: unknown, substringValues: readonly string[] = [], extraRanges: readonly SensitiveRange[] = []): SensitiveTextCommit {
+    if (extraRanges.length > 0) throw new Error('not implemented');
     this.sensitiveValues.collect(source);
     this.pending += text;
     let committed = '';
@@ -190,4 +201,14 @@ export function createSensitiveTextStreamRedactor(): SensitiveTextStreamRedactor
     flush: (source) => mask(buffer.flush(source)),
     preview: (source) => buffer.preview(source),
   };
+}
+
+/** #151 2a (design 7.1): the inner-only stream, the first PR's stream. */
+export function createLegacySensitiveTextStreamBuffer(): SensitiveTextStreamBufferLike {
+  throw new Error('not implemented');
+}
+
+/** #151 2a (design 7.1): a redactor over the inner-only stream. */
+export function createLegacySensitiveTextStreamRedactor(): SensitiveTextStreamRedactor {
+  throw new Error('not implemented');
 }

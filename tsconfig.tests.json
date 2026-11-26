@@ -749,6 +749,7 @@
     "src/__tests__/selector-guidance-resolution.test.ts",
     "src/__tests__/selector-provider-resolution.test.ts",
     "src/__tests__/sensitive-stream-equality.pbt.test.ts",
+    "src/__tests__/sensitive-stream-union.pbt.test.ts",
     "src/__tests__/sensitive-text-composition.pbt.test.ts",
     "src/__tests__/sensitive-text-fixed-examples.test.ts",
     "src/__tests__/sensitive-text-legacy.fidelity.test.ts",

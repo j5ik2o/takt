@@ -5,6 +5,7 @@ import type { ToolActivityEntry, ToolActivityTurnState } from '../../shared/tool
 import type { PortOutput } from '../manager/conversationPort.js';
 import {
   createBoundedSensitiveValues, createSensitiveTextStreamRedactor, sanitizeSensitiveValueWithKnownValues, type SensitiveTextStreamRedactor,
+  type SensitiveTextStreamRedactorFactory,
 } from '../../shared/utils/sensitiveText.js';
 import { sanitizeNormalizedToolResultText, toolResultSensitiveValues } from '../../shared/tool-activity/sanitize.js';
 import { TerminalTextStream } from '../../shared/utils/terminal-text-stream.js';
@@ -23,7 +24,9 @@ export class ToolTurn {
   private readonly completed: ToolActivityEntry[] = [];
   private readonly values = createBoundedSensitiveValues();
 
-  constructor(private readonly turn: TurnIdentity) {}
+  constructor(private readonly turn: TurnIdentity, createRedactor?: SensitiveTextStreamRedactorFactory) {
+    if (createRedactor !== undefined) throw new Error('not implemented');
+  }
 
   apply(message: ConversationToolEvent): PortOutput[] {
     const event = message.event;

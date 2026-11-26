@@ -8,7 +8,9 @@ import { CI_RESULT_BYTES, CI_RESULT_LINES, COMPACT_RESULT_BYTES, COMPACT_RESULT_
 import type { ToolActivityDisplayMode, ToolActivityEntry, ToolActivityGroup, ToolActivityProjection } from '../tool-activity/types.js';
 import { RETAINED_TOOL_OUTPUT_BYTES } from '../tool-activity/outputLimit.js';
 import { truncateUtf8 } from '../utils/utf8.js';
-import { createBoundedSensitiveValues, createSensitiveTextStreamRedactor, type SensitiveTextStreamRedactor } from '../utils/sensitiveText.js';
+import {
+  createBoundedSensitiveValues, createSensitiveTextStreamRedactor, type SensitiveTextStreamRedactor, type SensitiveTextStreamRedactorFactory,
+} from '../utils/sensitiveText.js';
 import { REDACTED_VALUE } from '../utils/sensitive-text.js';
 import { truncate } from './LogManager.js';
 
@@ -60,7 +62,10 @@ export class ToolActivityDisplay {
     private readonly writeLine: (text: string) => void,
     private readonly showCompactStarts: boolean,
     private readonly committedOutput = false,
-  ) {}
+    createRedactor?: SensitiveTextStreamRedactorFactory,
+  ) {
+    if (createRedactor !== undefined) throw new Error('not implemented');
+  }
 
   handle(event: StreamEvent): ToolActivityEntry[] {
     const entries = this.history.apply(event);

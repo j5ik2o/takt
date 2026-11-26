@@ -3,6 +3,7 @@ import { Phase1ExecutionLog } from '../core/workflow/phase1-execution-log.js';
 import { createSensitiveTextStreamRedactor } from '../shared/utils/sensitive-stream.js';
 import { maskSensitiveRanges, sanitizeSensitiveText, sensitiveTextRanges } from '../shared/utils/sensitive-text.js';
 import { sanitizeSensitiveTextWithKnownValues } from '../shared/utils/sensitive-value.js';
+import { TOOL_PATHS } from './helpers/sensitive-stream-drivers.js';
 
 // Fixed examples of #151 (design sections 3 and 5, FINDING5-REREAD.md). Inputs are copied
 // character for character. This file only uses functions that existed before #151, so it also
@@ -22,8 +23,9 @@ function streamed(...texts: string[]): string[] {
   return texts.map((text) => redactor.write(text, undefined) + redactor.flush(undefined));
 }
 
-// The stream is the previous stream in the first PR of #151 (design 11): its outputs are checked
-// in the "known leaks (stream, first PR)" table below, and the second PR moves them back here.
+// The stream paths (design 3 "L-stream", 11): every fixed example below also runs through the
+// redactor and through the tool paths (daemon toolTurn, ToolActivityDisplay, runningResult) in the
+// "stream paths" test at the end of this file.
 
 /** Every path that shows `text` on its own. */
 function shownOnItsOwn(text: string): Record<string, string> {
@@ -46,6 +48,15 @@ function shownLater(source: string, later: string): Record<string, string> {
 /** The stream's output for `text` alone, and for `later` after `source`. */
 const streamedAlone = (text: string): string => streamed(text)[0]!;
 const streamedLater = (source: string, later: string): string => streamed(source + '\n', later)[1]!;
+
+/** Every stream path, each returning everything it showed (committed output and previews). */
+const STREAM_PATHS: ReadonlyArray<readonly [name: string, shown: (chunks: readonly string[]) => string]> = [
+  ['redactor', (chunks) => (chunks.length === 1 ? streamedAlone(chunks[0]!) : streamedLater(chunks[0]!.slice(0, -1), chunks[1]!))],
+  ...TOOL_PATHS.map(([name, drive]) => [name, (chunks: readonly string[]) => {
+    const shown = drive({ input: {}, chunks, previews: chunks.map(() => true) });
+    return [shown.committed, ...shown.moments].join('\n');
+  }] as const),
+];
 
 // FINDING5-REREAD.md 2.1: what the previous range path hid only by reading `token:` past the URL.
 // 2.4: the same, glued to the host without a space. Answer A keeps both hidden on every path.
@@ -152,16 +163,22 @@ describe('#151 known leak (since before #151): a cookie value without a name', (
   });
 });
 
-// Known leaks of the stream paths in the first PR of #151 (design 11, 8th edition R7-6): the
-// stream is the previous stream, so what the previous stream showed it still shows. This table is
-// what every fixed example above shows through the stream; the test runs them all and compares,
-// so the table cannot drift. The second PR closes these and turns this table empty.
-const KNOWN_STREAM_LEAKS: ReadonlyArray<{ input: string; later?: string; leaked: readonly string[] }> = [
-  { input: "TOKEN=apikey: ?token=' 'Zq4Zq", leaked: ['Zq4Zq'] },
-  { input: 'token:token :--password=\\" \\"Zq0Zq', leaked: ['Zq0Zq'] },
-  { input: PHASE1_COMPOSITION[0]!, leaked: ['Zq0Zq', 'Zq1Zq'] },
-  { input: PHASE1_COMPOSITION[1]!, leaked: ['Zq0Zq', 'Zq1Zq'] },
+// Design 9.5 and 11 (R9-8): `Bearer` right after a word character is not read as a bearer token
+// by the previous display, the previous range path, the new display, phase 1 or the stream, so
+// `Zq1Zq` leaks on every path. This leak predates #151; a follow-up PR (with #175) fixes it and
+// turns these examples into "hidden". The stream-only leaks of the first PR (`Zq4Zq`, `Zq0Zq`) are
+// closed by the second PR, so the stream paths leak exactly these.
+const KNOWN_LEAKS_ON_EVERY_PATH: ReadonlyArray<{ input: string; later?: string; leaked: readonly string[] }> = [
+  { input: PHASE1_COMPOSITION[0]!, leaked: ['Zq1Zq'] },
+  { input: PHASE1_COMPOSITION[1]!, leaked: ['Zq1Zq'] },
 ];
+
+describe('#151 known leak (since before #151): `Bearer` right after a word character', () => {
+  it.each(PHASE1_COMPOSITION.map((input) => [input]))('%j shows Zq1Zq on every path', (input) => {
+    for (const [path, output] of Object.entries(shownOnItsOwn(input))) expect(output, path).toContain('Zq1Zq');
+    for (const [path, shown] of STREAM_PATHS) expect(shown([input]), path).toContain('Zq1Zq');
+  });
+});
 
 // Leaks since before #151 that the review of #165 found; the previous implementation shows them as
 // well, and follow-up PRs close them (then these examples turn into "hidden").
@@ -179,25 +196,27 @@ describe('#151 known leaks (since before #151) found in review', () => {
   });
 });
 
-describe('#151 known leaks of the stream paths in the first PR', () => {
-  it('are exactly what the fixed examples show through the stream', () => {
-    const alone = [
-      ...RANGE_PATH_LEAKS.map(({ input, secrets }) => ({ input, secrets: secrets ?? markersIn(input) })),
-      ...[...LEAK_2, ...PHASE1_COMPOSITION, UNNAMED_COOKIE, NAMED_COOKIE].map((input) => ({ input, secrets: markersIn(input) })),
-      ...HEADER_AFTER_USERINFO.map(([input, secret]) => ({ input, secrets: [secret] })),
-    ];
-    const later = [
-      ...HEADER_AFTER_USERINFO.flatMap(([input, secret]) =>
-        [`later output: ${secret} end`, `echoed ${secret}`, secret].map((text) => ({ input, later: text, secrets: [secret] }))),
-      { input: UNNAMED_COOKIE, later: 'echoed Zq34Zq', secrets: ['Zq34Zq'] },
-      { input: NAMED_COOKIE, later: 'echoed Zq36Zq', secrets: ['Zq36Zq'] },
-    ];
-    const leaks = [
-      ...alone.map(({ input, secrets }) => ({ input, leaked: secrets.filter((secret) => streamedAlone(input).includes(secret)) })),
-      ...later.map(({ input, later: text, secrets }) => ({ input, later: text, leaked: secrets.filter((secret) => streamedLater(input, text).includes(secret)) })),
-    ].filter((leak) => leak.leaked.length > 0);
-    expect(leaks).toEqual(KNOWN_STREAM_LEAKS);
-  });
+describe('#151 the stream paths (L-stream): the fixed examples leak only the known leaks on every path', () => {
+  for (const [path, shown] of STREAM_PATHS) {
+    it(path, () => {
+      const alone = [
+        ...RANGE_PATH_LEAKS.map(({ input, secrets }) => ({ input, secrets: secrets ?? markersIn(input) })),
+        ...[...LEAK_2, ...PHASE1_COMPOSITION, UNNAMED_COOKIE, NAMED_COOKIE].map((input) => ({ input, secrets: markersIn(input) })),
+        ...HEADER_AFTER_USERINFO.map(([input, secret]) => ({ input, secrets: [secret] })),
+      ];
+      const later = [
+        ...HEADER_AFTER_USERINFO.flatMap(([input, secret]) =>
+          [`later output: ${secret} end`, `echoed ${secret}`, secret].map((text) => ({ input, later: text, secrets: [secret] }))),
+        { input: UNNAMED_COOKIE, later: 'echoed Zq34Zq', secrets: ['Zq34Zq'] },
+        { input: NAMED_COOKIE, later: 'echoed Zq36Zq', secrets: ['Zq36Zq'] },
+      ];
+      const leaks = [
+        ...alone.map(({ input, secrets }) => ({ input, leaked: secrets.filter((secret) => shown([input]).includes(secret)) })),
+        ...later.map(({ input, later: text, secrets }) => ({ input, later: text, leaked: secrets.filter((secret) => shown([input + '\n', text]).includes(secret)) })),
+      ].filter((leak) => leak.leaked.length > 0);
+      expect(leaks).toEqual(KNOWN_LEAKS_ON_EVERY_PATH);
+    });
+  }
 });
 
 describe('#151 4.3: a quoted option value is one shell word, up to a shell operator', () => {

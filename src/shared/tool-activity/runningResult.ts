@@ -1,4 +1,4 @@
-import { createSensitiveTextStreamRedactor } from '../utils/sensitiveText.js';
+import { createSensitiveTextStreamRedactor, type SensitiveTextStreamRedactorFactory } from '../utils/sensitiveText.js';
 import type { ToolActivityResultView } from './presentation.js';
 import { classifyToolResult } from './result.js';
 import { normalizeToolResultText, toolResultSensitiveValues } from './sanitize.js';
@@ -9,6 +9,10 @@ export class RunningToolResult {
   private readonly redactor = createSensitiveTextStreamRedactor();
   private consumed = 0;
   private text = '';
+
+  constructor(createRedactor?: SensitiveTextStreamRedactorFactory) {
+    if (createRedactor !== undefined) throw new Error('not implemented');
+  }
 
   read(entry: ToolActivityEntry): void {
     const source = toolResultSensitiveValues(entry.input);

@@ -9,6 +9,7 @@ import {
   sanitizeSensitiveTextWithKnownValues,
 } from '../shared/utils/sensitiveText.js';
 import { trackedValuesOf } from './helpers/sensitive-text-tracked.js';
+import { createLegacySensitiveTextStreamRedactor, type SensitiveTextStreamRedactorFactory } from '../shared/utils/sensitive-stream.js';
 
 describe('sanitizeSensitiveText performance', () => {
   it('sanitizes a 64KiB uniform alphanumeric run without quadratic blowup', () => {
@@ -239,5 +240,49 @@ describe('the union with the previous redaction stays linear', () => {
     const ratio = median(pairs.map((pair) => pair.large / pair.small));
     expect(ratio).toBeLessThan(6);
     expect(large).toBeLessThan(scaledMs(25_000));
+  }, scaledMs(300_000));
+});
+
+// #151 2a (design 6 "the second PR's stream", R9-2, R9-7): A3's shape, a line only the new reading
+// keeps open followed by long plain lines, written in 4 KiB chunks. The new stream reads its outer
+// hold again at each previous boundary (at most 10,000 characters, five times), so it is slower than
+// the inner-only stream by a constant, not by the input length. The tool paths read a preview after
+// every write. The table goes to the PR body; past 4 times the inner-only stream at 256 KiB, the
+// numbers go to the marshal before the merge (design 6).
+describe('the second PR stream stays linear on A3 (write + flush, write + preview + flush)', () => {
+  const median = (samples: number[]): number => [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)]!;
+  const a3 = (bytes: number): string[] => {
+    const text = "--password=''a'\n" + ('p'.repeat(99) + '\n').repeat(Math.ceil(bytes / 100));
+    return Array.from({ length: Math.ceil(text.length / 4096) }, (_, index) => text.slice(index * 4096, (index + 1) * 4096));
+  };
+  const streams: ReadonlyArray<readonly [name: string, create: SensitiveTextStreamRedactorFactory]> = [
+    ['first PR (inner only)', createLegacySensitiveTextStreamRedactor],
+    ['second PR', createSensitiveTextStreamRedactor],
+  ];
+  it.each([
+    ['write + flush', false],
+    ['write + preview + flush', true],
+  ])('%s', (name, withPreview) => {
+    const run = (create: SensitiveTextStreamRedactorFactory, bytes: number): number => {
+      const chunks = a3(bytes);
+      const start = performance.now();
+      const redactor = create();
+      for (const chunk of chunks) {
+        redactor.write(chunk, undefined);
+        if (withPreview) redactor.preview(undefined);
+      }
+      redactor.flush(undefined);
+      return performance.now() - start;
+    };
+    const table: Record<string, Record<string, number>> = {};
+    for (const [stream, create] of streams) {
+      run(create, 16 * 1024);
+      const sizes = { '16 KiB': 16 * 1024, '64 KiB': 64 * 1024, '256 KiB': 256 * 1024 };
+      table[stream] = Object.fromEntries(Object.entries(sizes).map(([size, bytes]) => [size, Math.round(median([1, 2, 3].map(() => run(create, bytes))))]));
+      const pairs = Array.from({ length: 5 }, () => ({ small: run(create, 64 * 1024), large: run(create, 256 * 1024) }));
+      expect(median(pairs.map((pair) => pair.large / pair.small)), `${stream}: 256 KiB / 64 KiB`).toBeLessThan(6);
+      expect(median(pairs.map((pair) => pair.large)), stream).toBeLessThan(scaledMs(20_000));
+    }
+    console.info(`#151 2a stream, A3 ${name} (ms, median of 3):`, JSON.stringify(table));
   }, scaledMs(300_000));
 });
