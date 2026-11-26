@@ -1,6 +1,8 @@
 import fc from 'fast-check';
 import { ToolTurn } from '../../features/daemon/toolTurn.js';
+import { classifyToolResult } from '../../shared/tool-activity/result.js';
 import { RunningToolResult } from '../../shared/tool-activity/runningResult.js';
+import { normalizeToolResultText, toolResultSensitiveValues } from '../../shared/tool-activity/sanitize.js';
 import type { ToolActivityEntry } from '../../shared/tool-activity/types.js';
 import { ToolActivityDisplay } from '../../shared/ui/ToolActivityDisplay.js';
 import type { SensitiveTextStreamRedactorFactory } from '../../shared/utils/sensitive-stream.js';
@@ -25,6 +27,44 @@ export interface StreamObservation {
   readonly moments: readonly string[];
   /** The stream's tracked values, where the path exposes them. */
   readonly sensitiveValues?: BoundedSensitiveValues;
+  /**
+   * `streamed[t]` is everything the stream returned up to time `t` for what the tool printed (every
+   * write, preview and flush), with no display in between (`streamedForDisplay`): ToolActivityDisplay's
+   * line cap and prefix alignment are not redaction (design 3, 12th edition).
+   */
+  readonly streamed?: readonly string[];
+}
+
+/**
+ * What the stream returns for what the tool printed, with no display in between: the tool's output
+ * so far, normalized as the display normalizes it, written to one stream of `create`, a preview read
+ * where the display reads one, and a flush at the end. `streamed[t]` is everything it returned up to
+ * time `t`. The display stops writing to its stream once its line cap is reached, so what the display
+ * itself took from the stream is not the reference.
+ */
+function streamedForDisplay(run: ToolRun, create: SensitiveTextStreamRedactorFactory, flushAtEnd: boolean): string[] {
+  const redactor = create();
+  const source = toolResultSensitiveValues(run.input);
+  const outputs: string[] = [];
+  const streamed: string[] = [];
+  let output = '';
+  let consumed = 0;
+  run.chunks.forEach((chunk, index) => {
+    output += chunk;
+    const result = classifyToolResult(output);
+    if (result.kind === 'text') {
+      const text = normalizeToolResultText(result.text);
+      outputs.push(redactor.write(text.slice(consumed), source));
+      consumed = text.length;
+      if (run.previews[index] === true) outputs.push(redactor.preview(source));
+    }
+    streamed.push(outputs.join('\n'));
+  });
+  if (flushAtEnd) {
+    outputs.push(redactor.flush(source));
+    streamed.push(outputs.join('\n'));
+  }
+  return streamed;
 }
 
 const TURN = { conversationId: 'conversation', operationId: 'operation', generation: 1 };
@@ -64,6 +104,7 @@ export function driveToolActivityDisplay(
     : new ToolActivityDisplay(mode, false, writeLine, false, false, createRedactor);
   const shown = (): string => printed.filter((line) => line.startsWith('  │ ')).map((line) => line.slice(4)).join('\n');
   const moments: string[] = [];
+  const streamed = createRedactor === undefined ? undefined : streamedForDisplay(run, createRedactor, mode === 'compact');
   display.handle({ type: 'tool_use', data: { id: 'tool', tool: 'Bash', input: run.input } });
   run.chunks.forEach((chunk, index) => {
     display.handle({ type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: chunk } });
@@ -72,10 +113,10 @@ export function driveToolActivityDisplay(
   });
   // In expanded mode the stream shows only the running output; the completed result is printed
   // from the result view (sanitizeToolResultText), which is not a stream path.
-  if (mode === 'expanded') return { committed: moments.at(-1) ?? '', moments };
+  if (mode === 'expanded') return { committed: moments.at(-1) ?? '', moments, ...(streamed === undefined ? {} : { streamed }) };
   display.handle({ type: 'tool_result', data: { id: 'tool', content: '', isError: false } });
   moments.push(shown());
-  return { committed: shown(), moments };
+  return { committed: shown(), moments, ...(streamed === undefined ? {} : { streamed }) };
 }
 
 function runningEntry(input: Record<string, unknown>, output: string): ToolActivityEntry {
@@ -113,6 +154,12 @@ export function markerCounts(text: string, pattern: RegExp = /Zq\d+Zq/gu): Map<s
   const counts = new Map<string, number>();
   for (const match of text.matchAll(pattern)) counts.set(match[0], (counts.get(match[0]) ?? 0) + 1);
   return counts;
+}
+
+/** The kinds of markers (by core) `next` shows that `previous` never shows: `markers(next) \ markers(previous)`. */
+export function unseenMarkers(next: string, previous: string): string[] {
+  const before = markerCounts(previous);
+  return [...markerCounts(next).keys()].filter((marker) => !before.has(marker));
 }
 
 /** Markers `next` shows more often than `previous` (empty when `next` shows nothing more). */

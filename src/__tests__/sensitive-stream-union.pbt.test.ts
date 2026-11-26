@@ -11,7 +11,7 @@ import * as legacyStream from './helpers/legacy-sensitive-stream.js';
 import * as legacyValue from './helpers/legacy-sensitive-value.js';
 import { leakText, markersIn } from './helpers/sensitive-text-arbitraries.js';
 import {
-  driveRunningResult, laterOutputs, legacyUnitBoundaries, moreMarkers, NEW_ONLY_OPEN_LINES, streamCuts, TOOL_PATHS, type ToolRun,
+  driveRunningResult, driveToolActivityDisplay, laterOutputs, unseenMarkers, legacyUnitBoundaries, moreMarkers, NEW_ONLY_OPEN_LINES, streamCuts, TOOL_PATHS, type ToolRun,
 } from './helpers/sensitive-stream-drivers.js';
 
 // #151 2a (design 3 "stream paths, second PR", 7.1, 8): the new stream hides at least what the
@@ -323,8 +323,40 @@ function expectNoMoreMarkers(name: string, run: ToolRun, drive: (run: ToolRun, c
   if (next.sensitiveValues !== undefined && inner.sensitiveValues !== undefined) expectSameLegacyBound(next.sensitiveValues, inner.sensitiveValues);
 }
 
+// ToolActivityDisplay (design 3, 12th edition; the marshal's decision, 2026-11-27). At each time t:
+//
+//   markers(what the new display printed up to t) ⊆ markers(what the inner-only stream returned up to t
+//                                                            for what the tool printed up to t)
+//
+// where `markers` is the set of marker kinds (cores, not counts) and the inner-only stream gets the
+// tool's output normalized as the display normalizes it, a preview where the display reads one, and
+// a flush at the end, with no display in between. Narrowed, by name: (a) a marker the previous
+// display did not print only because its line or byte cap stopped it is not counted as hidden, and
+// (b) printing an occurrence again (the prefix alignment `unprinted` parting midway) is not counted.
+// The cap and the alignment are not redaction and are not monotone in what the stream hides. A new
+// display that shows a marker the previous stream hid still fails: a stream that applies only the
+// last held unit's ranges, or a preview that leaves the held part unhidden, fails all four tests.
+function expectDisplayShowsOnlyWhatTheInnerStreamShowed(name: string, run: ToolRun, mode: 'compact' | 'expanded'): void {
+  const next = driveToolActivityDisplay(run, mode);
+  const inner = driveToolActivityDisplay(run, mode, createLegacySensitiveTextStreamRedactor);
+  expect(next.moments.length, name).toBe(inner.moments.length);
+  next.moments.forEach((shown, at) => expect(unseenMarkers(shown, inner.streamed![at]!), `${name} at ${at}`).toEqual([]));
+}
+
 describe('#151 2a: the tool paths show no marker more than the inner-only stream (D2-stream, D3-stream, D4)', () => {
-  for (const [name, drive] of TOOL_PATHS) {
+  for (const mode of ['compact', 'expanded'] as const) {
+    const name = `ToolActivityDisplay (${mode})`;
+    it(`${name}: D2-stream`, () => {
+      fc.assert(fc.property(d2Runs, (run) => expectDisplayShowsOnlyWhatTheInnerStreamShowed(name, run, mode)), runs);
+    }, TIMEOUT);
+
+    it(`${name}: D3-stream (the source, then a later output)`, () => {
+      fc.assert(fc.property(d3Runs, (run) => expectDisplayShowsOnlyWhatTheInnerStreamShowed(name, run, mode)), runs);
+    }, TIMEOUT);
+  }
+
+  // toolTurn and runningResult have no cap and no alignment: compared after the path, by count, at each time.
+  for (const [name, drive] of TOOL_PATHS.filter(([path]) => !path.startsWith('ToolActivityDisplay'))) {
     it(`${name}: D2-stream`, () => {
       fc.assert(fc.property(d2Runs, (run) => expectNoMoreMarkers(name, run, drive)), runs);
     }, TIMEOUT);
