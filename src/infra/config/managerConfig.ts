@@ -16,8 +16,8 @@ export function resolveManagerConfig(cwd: string, provider?: ProviderType): {
   permission: ManagerPermission;
   autoRun: boolean; preserveGoalWorktree: boolean; verifyOnRegister: boolean; mainMerge: 'auto' | 'approve';
   workflows?: ManagerWorkflowsConfig;
-  runtimeAssignments?: ManagerRuntimeAssignmentsConfig;
   refreshIntervalMs: number;
+  runtimeAssignments?: ManagerRuntimeAssignmentsConfig;
   notifications: Record<ManagerNotificationKind, boolean>;
 } {
   const project = loadProjectConfig(cwd).manager;

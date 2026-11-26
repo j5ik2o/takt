@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createIsolatedEnv, updateIsolatedConfig, type IsolatedEnv } from '../helpers/isolated-env';
-import { createOfflineTestRepo, type TestRepo } from '../helpers/test-repo';
-import { runTakt } from '../helpers/takt-runner';
+import { createIsolatedEnv, updateIsolatedConfig, type IsolatedEnv } from '../helpers/isolated-env.js';
+import { createOfflineTestRepo, type TestRepo } from '../helpers/test-repo.js';
+import { runTakt } from '../helpers/takt-runner.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -156,4 +156,71 @@ describe('E2E: Workflow selection branch coverage', () => {
     expect(result.exitCode).toBe(0);
   }, 240_000);
 
+  describe('workflow_call to a builtin while builtin workflows are disabled', () => {
+    function writeBuiltinCaller(): void {
+      const workflowPath = join(testRepo.path, '.takt', 'workflows', 'builtin-caller.yaml');
+      mkdirSync(dirname(workflowPath), { recursive: true });
+      writeFileSync(
+        workflowPath,
+        [
+          'name: builtin-caller',
+          'initial_step: develop',
+          'max_steps: 3',
+          'steps:',
+          '  - name: develop',
+          '    kind: workflow_call',
+          '    call: development-core',
+          '    rules:',
+          '      - condition: COMPLETE',
+          '        next: COMPLETE',
+          '      - condition: ABORT',
+          '        next: ABORT',
+          '',
+        ].join('\n'),
+        'utf-8',
+      );
+    }
+
+    it('fails with the lookup reason and still records the run', () => {
+      writeBuiltinCaller();
+
+      const result = runTaskWithSelection({
+        workflow: 'builtin-caller',
+        cwd: testRepo.path,
+        env: isolatedEnv.env,
+      });
+      const output = `${result.stdout}\n${result.stderr}`;
+
+      expect(output).toContain('Workflow bundle could not resolve call "builtin-caller/develop"');
+      expect(output).toContain('call: development-core');
+      expect(output).toContain(join(testRepo.path, '.takt', 'workflows', 'development-core.yaml'));
+      expect(output).toContain('excluded because enable_builtin_workflows is false');
+
+      const runsDir = join(testRepo.path, '.takt', 'runs');
+      expect(existsSync(runsDir)).toBe(true);
+      const runSlugs = readdirSync(runsDir);
+      expect(runSlugs).toHaveLength(1);
+      const runDir = join(runsDir, runSlugs[0]!);
+      const meta = JSON.parse(readFileSync(join(runDir, 'meta.json'), 'utf-8')) as { status?: string };
+      expect(meta.status).toBe('failed');
+      expect(readdirSync(join(runDir, 'logs')).length).toBeGreaterThan(0);
+    }, 240_000);
+
+    it('makes workflow doctor report the unresolved call instead of OK', () => {
+      writeBuiltinCaller();
+
+      const result = runTakt({
+        args: ['workflow', 'doctor', 'builtin-caller'],
+        cwd: testRepo.path,
+        env: isolatedEnv.env,
+        timeout: 240_000,
+      });
+      const output = `${result.stdout}\n${result.stderr}`;
+
+      expect(result.exitCode).not.toBe(0);
+      expect(output).not.toContain('Workflow OK');
+      expect(output).toContain('call: development-core');
+      expect(output).toContain('excluded because enable_builtin_workflows is false');
+    }, 240_000);
+  });
 });

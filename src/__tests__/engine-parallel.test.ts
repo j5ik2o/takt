@@ -1833,7 +1833,7 @@ describe('WorkflowEngine Integration: Parallel Step Aggregation', () => {
 
     expect(() => validateSelectorResponse(
       response,
-      contract.validationSchema,
+      contract,
       'reviewers',
       (text) => text,
       { label: 'Dynamic parallel' },

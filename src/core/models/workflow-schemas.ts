@@ -485,10 +485,16 @@ function validateCompletionRetryOptIn(
 
 const WorkflowReportInputEntryRawSchema = z.object({
   from_step: WorkflowStepNameSchema,
+  fallback_from_step: WorkflowStepNameSchema.optional(),
   reports: z.union([z.literal('all'), z.array(z.string().min(1)).min(1)]),
   optional_if_unrun: z.literal(true).optional(),
+  previous_only: z.literal(true).optional(),
   history: z.object({ previous: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) }).strict().optional(),
-}).strict();
+}).strict().superRefine((input, ctx) => {
+  if (input.previous_only && (input.fallback_from_step || input.optional_if_unrun || input.reports === 'all')) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'previous_only requires explicit reports and cannot use a fallback or optional_if_unrun' });
+  }
+});
 
 export const WorkflowReportInputRawSchema = z.union([
   WorkflowReportInputEntryRawSchema,
@@ -506,6 +512,8 @@ const AgentParallelSubStepRawObjectSchema = z.object({
   args: z.never().optional(),
   overrides: z.never().optional(),
   session_key: z.string().trim().min(1).optional(),
+  max_visits: z.never().optional(),
+  stop_on_repeated_verdict: z.never().optional(),
   session: z.enum(WORKFLOW_SESSION_MODES).optional(),
   persona: WorkflowPersonaRefOrParamSchema.optional(),
   persona_name: z.string().optional(),
@@ -579,6 +587,8 @@ const WorkflowCallParallelSubStepRawSchema = z.object({
   description: z.string().optional(),
   selection_hint: z.never().optional(),
   session_key: z.never().optional(),
+  max_visits: z.never().optional(),
+  stop_on_repeated_verdict: z.never().optional(),
   session: z.never().optional(),
   persona: z.never().optional(),
   persona_name: z.never().optional(),
@@ -697,6 +707,8 @@ function createWorkflowStepRawSchema(options?: { relaxWorkflowCallConditions?: b
     overrides: removedWorkflowRuntimeField(WORKFLOW_RUNTIME_PROVIDER_MESSAGE),
     args: WorkflowCallArgsRawSchema.optional(),
     vars: WorkflowCallVarsRawSchema.optional(),
+    max_visits: z.number().int().positive().safe().optional(),
+    stop_on_repeated_verdict: z.boolean().optional(),
     session: z.enum(WORKFLOW_SESSION_MODES).optional(),
     persona: WorkflowPersonaRefOrParamSchema.optional(),
     persona_name: z.string().optional(),

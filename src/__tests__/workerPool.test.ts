@@ -256,6 +256,32 @@ describe('runWithWorkerPool', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('names the goal execution lock when its timeout delays a claim, and resumes', async () => {
+    vi.useFakeTimers();
+    const task = createTask('pending');
+    const runner = createRunner();
+    runner.listTaskStateItems.mockReturnValue([{
+      name: task.name, status: 'pending', goalId: undefined,
+    }] as never);
+    const message = 'Timed out waiting for private file lock: /project/.takt/goal-execution.lock';
+    runner.claimNextTasks
+      .mockImplementationOnce(() => {
+        throw new TaskClaimLockUnavailableError(message, 'TIMEOUT', { cause: new Error(message), lock: 'goal-execution' });
+      })
+      .mockReturnValueOnce([task])
+      .mockReturnValue([]);
+    const output = vi.mocked(console.log);
+    const pool = runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 100, 'run');
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(pool).resolves.toEqual({ success: 1, fail: 0, executedTaskNames: ['pending'] });
+    const lines = output.mock.calls.map(([line]) => String(line));
+    expect(lines.filter((line) => line.includes('Cannot claim pending tasks because the goal execution lock is held'))).toHaveLength(1);
+    expect(lines.filter((line) => line.includes('task store lock'))).toHaveLength(0);
+    expect(lines.filter((line) => line.includes('resumed after the goal execution lock became available'))).toHaveLength(1);
+  });
+
   it('retries a task-store lock timeout during poll preflight', async () => {
     vi.useFakeTimers();
     const runner = createRunner([[createTask('pending-after-preflight')]]);

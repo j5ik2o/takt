@@ -125,6 +125,7 @@ steps:
       - condition: No project-local action can advance required work, with evidence identifying the necessary external action or incompatible requirements
         next: ABORT
   - name: fix-replan
+    max_visits: 4
     uses: peer-review-fix-plan
     with:
       plan_policy:
@@ -143,6 +144,7 @@ steps:
       - condition: No project-local action can advance required work, with evidence identifying the necessary external action or incompatible requirements
         next: ABORT
   - name: verification-replan
+    max_visits: 4
     uses: peer-review-fix-plan
     with:
       plan_policy:

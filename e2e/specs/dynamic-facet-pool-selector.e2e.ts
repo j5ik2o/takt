@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createIsolatedEnv, type IsolatedEnv, updateIsolatedConfig } from '../helpers/isolated-env';
-import { runTakt } from '../helpers/takt-runner';
-import { createTestRepo, type TestRepo } from '../helpers/test-repo';
-import { readSessionRecords } from '../helpers/session-log';
+import { createIsolatedEnv, type IsolatedEnv, updateIsolatedConfig } from '../helpers/isolated-env.js';
+import { runTakt } from '../helpers/takt-runner.js';
+import { createTestRepo, type TestRepo } from '../helpers/test-repo.js';
+import { readSessionRecords } from '../helpers/session-log.js';
 
 const FIXTURE_POOL_BODY = `policies:
   transaction-correctness: ./facets/policies/transaction-correctness.md
@@ -463,7 +463,11 @@ describe('E2E: dynamic facet pool selector (mock)', () => {
       injectProvider: false,
     });
 
-    expect(result.exitCode, `${result.stdout}\n${result.stderr}`).not.toBe(0);
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.exitCode, output).not.toBe(0);
+    expect(output).toContain('Dynamic facet selector for "fix" returned invalid structured output');
+    expect(output).toContain('returned selected_ids: ["unknown-id"]');
+    expect(output).toContain('allowed candidate ids: ["transaction","backward-compatibility"]');
     // The fix agent must never have started.
     const providerStarts = readJsonl(mockCallLogPath)
       .filter((record) => record.event === 'start');

@@ -36,7 +36,14 @@ vi.mock('../core/workflow/instruction/report-reference.js', async (importOrigina
   };
 });
 
+vi.mock('../agents/agent-usecases.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../agents/agent-usecases.js')>()),
+  executeAgent: vi.fn(),
+}));
+
 import { executeStructuredAgent, type StructuredAgentResponse } from '../agents/structured-caller/transport.js';
+import { executeAgent } from '../agents/agent-usecases.js';
+import { normalizeClaudeTerminalResponse } from '../infra/claude-terminal/response-normalizer.js';
 
 const mockedExecuteAgent = vi.mocked(executeStructuredAgent);
 
@@ -309,6 +316,60 @@ describe('DynamicParallelSelectorCoordinator', () => {
       permissionMode: 'full',
       permissionModeSource: 'explicit',
     }));
+  });
+
+  it('names the returned and allowed ids when the selector selects an id outside the pool', async () => {
+    const transport = await vi.importActual<typeof import('../agents/structured-caller/transport.js')>(
+      '../agents/structured-caller/transport.js',
+    );
+    mockedExecuteAgent.mockImplementationOnce(transport.executeStructuredAgent);
+    vi.mocked(executeAgent).mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: ['security'], rationale: 'x' },
+    });
+    const coordinator = new DynamicParallelSelectorCoordinator(dependencies());
+
+    const failure = await coordinator
+      .selectParticipants(dynamicParallelStep(), workflowState(), 'review changes')
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    const reason = (failure as Error).message;
+    expect(reason).toContain('Dynamic parallel selector for "reviewers"');
+    expect(reason).toContain('returned selected_ids: ["security"]');
+    expect(reason).toContain('allowed candidate ids: ["frontend","backend"]');
+  });
+
+  it('names the returned and allowed ids when Claude Terminal rejects an id outside the pool against the schema', async () => {
+    const transport = await vi.importActual<typeof import('../agents/structured-caller/transport.js')>(
+      '../agents/structured-caller/transport.js',
+    );
+    mockedExecuteAgent.mockImplementationOnce(transport.executeStructuredAgent);
+    vi.mocked(executeAgent).mockImplementationOnce(async (_persona, _instruction, options) => normalizeClaudeTerminalResponse({
+      agentName: 'selector',
+      sessionId: 'terminal-session',
+      assistantText: '{"selected_ids":["security"],"rationale":"x"}',
+      lastAssistantText: '{"selected_ids":["security"],"rationale":"x"}',
+      outputSchema: options.outputSchema,
+    }));
+    const coordinator = new DynamicParallelSelectorCoordinator(dependencies({
+      provider: 'claude-terminal',
+      model: undefined,
+      providerOptions: {},
+    }));
+
+    const failure = await coordinator
+      .selectParticipants(dynamicParallelStep(), workflowState(), 'review changes')
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    const reason = (failure as Error).message;
+    expect(reason).toContain('Dynamic parallel selector for "reviewers"');
+    expect(reason).toContain('returned selected_ids: ["security"]');
+    expect(reason).toContain('allowed candidate ids: ["frontend","backend"]');
   });
 
   it('should run the selector when run-local state has no resume selection', async () => {

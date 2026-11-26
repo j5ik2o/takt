@@ -187,6 +187,12 @@ export interface StepQualityGatesOverride {
   qualityGates?: QualityGate[];
 }
 
+/** Step-specific workflow overrides */
+export interface StepWorkflowOverride extends StepQualityGatesOverride {
+  /** Replaces the step's YAML `max_visits` */
+  maxVisits?: number;
+}
+
 /** Workflow-level overrides (quality_gates, etc.) */
 export interface WorkflowOverrides {
   /** Global quality gates applied to all steps */
@@ -194,7 +200,7 @@ export interface WorkflowOverrides {
   /** Whether to apply quality_gates only to edit: true steps */
   qualityGatesEditOnly?: boolean;
   /** Step-specific quality gates overrides */
-  steps?: Record<string, StepQualityGatesOverride>;
+  steps?: Record<string, StepWorkflowOverride>;
   /** Persona-specific quality gates overrides */
   personas?: Record<string, StepQualityGatesOverride>;
 }

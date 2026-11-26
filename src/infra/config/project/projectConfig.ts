@@ -64,7 +64,7 @@ import {
 import { loadProjectConfigTrace, type ConfigTrace } from '../traced/tracedConfigLoader.js';
 import { PROVIDER_OPTIONS_FILE_PREFERRED_ENV_PATHS } from '../providerOptionsContract.js';
 import { getCachedProjectConfigTrace, setCachedProjectConfigTrace } from '../resolutionCache.js';
-import { assertValidProjectConfig } from './projectConfigValidation.js';
+import { assertValidConfig } from '../configValidation.js';
 import { getProjectConfigSnapshot } from '../configSnapshot.js';
 import { normalizeTaskFinishHook } from '../../../core/models/task-finish-hook.js';
 import {
@@ -95,8 +95,8 @@ export function loadProjectConfig(projectDir: string): ProjectConfig {
   const rawConfig = rawWithoutLegacy.config;
   const { trace } = loadedTrace;
   setCachedProjectConfigTrace(projectDir, trace);
-  assertValidProjectConfig(parsedConfig, configPath, true);
-  assertValidProjectConfig(rawConfig, configPath);
+  assertValidConfig(ProjectConfigSchema, parsedConfig, configPath, true);
+  assertValidConfig(ProjectConfigSchema, rawConfig, configPath);
   const parsedConfigResult = ProjectConfigSchema.parse(rawConfig);
 
   const {
