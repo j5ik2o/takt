@@ -67,7 +67,7 @@ function readSnapshot(lockPath: string): LockSnapshot | undefined {
     descriptor = openSync(lockPath, 'r');
   } catch (error) {
     if (hasCode(error, 'ENOENT')) return undefined;
-    if (!hasCode(error, 'EACCES') && !hasCode(error, 'EPERM')) throw error;
+    if (!hasCode(error, 'EACCES') && !hasCode(error, 'EPERM') && !hasCode(error, 'EIO')) throw error;
     const stat = statSync(lockPath, { throwIfNoEntry: false });
     return stat === undefined ? undefined : { stat, content: undefined, readError: error };
   }
