@@ -12,7 +12,9 @@ import {
   URL_USERINFO_CREDENTIALS_REGEX,
   curlUserMatches,
   httpHeaderValues,
+  knownValueRanges,
   mergedRanges,
+  sensitiveTextRanges,
   type SensitiveRange,
 } from './sensitive-text-legacy.js';
 
@@ -99,6 +101,29 @@ export const LEGACY_STEPS: readonly Step[] = [
   valueGroup(SENSITIVE_QUERY_VALUE_REGEX, [1], 2),
   wholeMatch(KNOWN_TOKEN_REGEX),
 ];
+
+/**
+ * One redaction the previous implementation ran over the output of the one before: its display,
+ * its known-value masking (`maskSensitiveRanges(text, knownValueRanges(text, values))`), or its
+ * range path (`maskSensitiveRanges(text, sensitiveTextRanges(text, values))`).
+ */
+export type LegacyStage =
+  | 'display'
+  | { readonly knownValues: ReadonlySet<string> }
+  | { readonly ranges: ReadonlySet<string> };
+
+/** Replaces each merged range by REDACTED_VALUE, as maskSensitiveRanges did. */
+const maskStep = (find: (view: string) => SensitiveRange[]): Step => (view) =>
+  mergedRanges(find(view)).map(({ start, end }) => redact(start, end));
+
+/** The steps of a chain of previous redactions, each run over the output of the one before. */
+export function legacyStageSteps(stages: readonly LegacyStage[]): Step[] {
+  return stages.flatMap((stage): readonly Step[] => {
+    if (stage === 'display') return LEGACY_STEPS;
+    if ('knownValues' in stage) return [maskStep((view) => knownValueRanges(view, stage.knownValues))];
+    return [maskStep((view) => sensitiveTextRanges(view, stage.ranges))];
+  });
+}
 
 /**
  * What the previous `sanitizeSensitiveText` hid, as ranges on `text`. `initial` is hidden first,

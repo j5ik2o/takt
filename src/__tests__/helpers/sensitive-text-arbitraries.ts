@@ -269,7 +269,8 @@ export const CURL_USER_AT_LINE_END = 'curl -u';
 
 /** The next line after `curl -u`, as every path prints it: a first word holding `:` is hidden. */
 export function afterCurlUserAtLineEnd(line: string): string {
-  return line.replace(/^[^\s:"'+]*:\S*/u, '[REDACTED]');
+  // curl's bare value: the first character is not a quote or `+`, a `:` comes before whitespace.
+  return line.replace(/^(?![+"']|\\")[^\s:]*:\S*/u, '[REDACTED]');
 }
 
 /** Lines of text without any credential, including forms that look close to one. */

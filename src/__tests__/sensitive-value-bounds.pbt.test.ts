@@ -139,11 +139,8 @@ describe('bounded sensitive values: the legacy bound is the previous bound (#151
     expectSameLegacyBound(current, previous);
   });
 
-  // The union holds back more of a line than the previous stream did (design 7), so with newlines
-  // the two streams commit different units and track different values. Without a newline both
-  // commit the whole text as one unit on flush, and the repacked legacy values must be the same.
   it('repacks the stream values by origin', () => {
-    fc.assert(fc.property(leakText.chain((text) => chunksOf(text.replace(/[\r\n]/gu, ' '))), (chunks) => {
+    fc.assert(fc.property(leakText.chain((text) => chunksOf(text)), (chunks) => {
       const current = new SensitiveTextStreamBuffer();
       const previous = new legacyStream.SensitiveTextStreamBuffer();
       for (const chunk of chunks) {

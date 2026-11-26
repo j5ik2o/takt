@@ -136,22 +136,23 @@ function legacyToolResultValues(source: unknown): legacyValue.BoundedSensitiveVa
 }
 
 describe('sensitive text redaction properties (#151)', () => {
+  // The phase 1 log gets the text in 1 to 4 stream fragments (6th review, R6-2).
   it('D1, D2: hides on screen, in ranges and in the phase 1 log what the previous display or range path hid', () => {
-    fc.assert(fc.property(leakText, (text) => {
+    fc.assert(fc.property(leakText.chain((text) => fc.tuple(fc.constant(text), chunksOf(text))), ([text, fragments]) => {
       counts.inputs += 1;
       const display = sanitizeSensitiveText(text);
       const ranges = rangeOutput(text);
-      const report = phase1Report([text]);
+      const report = phase1Report(fragments);
       const legacyDisplay = legacy.sanitizeSensitiveText(text);
       const legacyRanges = legacyRangeOutput(text);
-      const legacyReport = phase1Report([text], LegacyPhase1ExecutionLog);
+      const legacyReport = phase1Report(fragments, LegacyPhase1ExecutionLog);
       for (const marker of markersIn(text)) {
         counts.markers += 1;
         if (!legacyDisplay.includes(marker) || !legacyRanges.includes(marker)) {
           expect(display, `display of ${JSON.stringify(text)}`).not.toContain(marker);
         }
         if (!legacyRanges.includes(marker)) expect(ranges, `ranges of ${JSON.stringify(text)}`).not.toContain(marker);
-        if (!legacyReport.includes(marker)) expect(report, `phase 1 of ${JSON.stringify(text)}`).not.toContain(marker);
+        if (!legacyReport.includes(marker)) expect(report, `phase 1 of ${JSON.stringify(fragments)}`).not.toContain(marker);
       }
     }), runs);
   }, TIMEOUT);
@@ -214,26 +215,20 @@ describe('sensitive text redaction properties (#151)', () => {
     }), runs);
   }, TIMEOUT);
 
-  it('L: never leaks a well-formed credential, on screen, in the phase 1 log, in later output or in a stream', () => {
+  // The stream paths are the previous stream in the first PR (design 11); their L is in the second.
+  it('L: never leaks a well-formed credential, on screen, in the phase 1 log or in later output', () => {
     fc.assert(fc.property(contextDocument, fc.constantFrom('\n', '\r\n'), (lines, newline) => {
       const text = lines.map((line) => line.text).join(newline);
       const markers = markersIn(text);
-      const redactor = createSensitiveTextStreamRedactor();
-      const streamed = redactor.write(text, undefined) + redactor.flush(undefined);
-      for (const output of [sanitizeSensitiveText(text), rangeOutput(text), phase1Report([text]), streamed]) {
+      for (const output of [sanitizeSensitiveText(text), rangeOutput(text), phase1Report([text])]) {
         for (const marker of markers) expect(output, JSON.stringify(text)).not.toContain(marker);
       }
       for (const echo of lines.flatMap((line) => line.echoes)) {
         for (const later of [`echoed ${echo}`, echo, `later output: ${echo} end`]) {
-          const stream = createSensitiveTextStreamRedactor();
-          stream.write(text + '\n', undefined);
-          stream.flush(undefined);
-          const laterStreamed = stream.write(later + '\n', undefined) + stream.flush(undefined);
           for (const output of [
             sanitizeSensitiveTextWithKnownValues(later, { command: text }),
             sanitizeTextWithValues(later, trackedValuesOf(text)),
             phase1Report([text + '\n', later]),
-            laterStreamed,
           ]) {
             for (const marker of markersIn(echo)) expect(output, `${JSON.stringify(later)} after ${JSON.stringify(text)}`).not.toContain(marker);
           }

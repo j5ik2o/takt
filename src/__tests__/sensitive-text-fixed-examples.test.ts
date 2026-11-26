@@ -22,13 +22,15 @@ function streamed(...texts: string[]): string[] {
   return texts.map((text) => redactor.write(text, undefined) + redactor.flush(undefined));
 }
 
+// The stream is the previous stream in the first PR of #151 (design 11): its outputs are checked
+// in the "known leaks (stream, first PR)" table below, and the second PR moves them back here.
+
 /** Every path that shows `text` on its own. */
 function shownOnItsOwn(text: string): Record<string, string> {
   return {
     display: sanitizeSensitiveText(text),
     ranges: maskSensitiveRanges(text, sensitiveTextRanges(text, new Set())),
     phase1: phase1([text]),
-    stream: streamed(text)[0]!,
   };
 }
 
@@ -38,9 +40,12 @@ function shownLater(source: string, later: string): Record<string, string> {
     known: sanitizeSensitiveTextWithKnownValues(later, source),
     knownCommand: sanitizeSensitiveTextWithKnownValues(later, { command: source }),
     phase1: phase1([source + '\n', later]),
-    stream: streamed(source + '\n', later)[1]!,
   };
 }
+
+/** The stream's output for `text` alone, and for `later` after `source`. */
+const streamedAlone = (text: string): string => streamed(text)[0]!;
+const streamedLater = (source: string, later: string): string => streamed(source + '\n', later)[1]!;
 
 // FINDING5-REREAD.md 2.1: what the previous range path hid only by reading `token:` past the URL.
 // 2.4: the same, glued to the host without a space. Answer A keeps both hidden on every path.
@@ -108,11 +113,16 @@ describe('#151 fixed examples: a header after a URL whose user or password is a 
   }
 });
 
+const LEAK_2: readonly string[] = ["TOKEN=apikey: ?token=' 'Zq4Zq", 'token:token :--password=\\" \\"Zq0Zq'];
+const PHASE1_COMPOSITION: readonly string[] = [
+  "TOKEN=apikey: ?token=' 'Zq0Zqtoken: ,Zq0ZqBearer Zq1Zqabcdefgh12",
+  "TOKEN=apikey: ?token=' 'Zq0Zqtoken: ,Zq0ZqBearer Zq1Zqabcdefgh12\nhttps://user:pa,Zq900Zq@host",
+];
+const UNNAMED_COOKIE = 'https://cookie:a@host Cookie: Zq34Zq; path=/';
+const NAMED_COOKIE = 'https://cookie:a@host Cookie: sid=Zq36Zq; path=/';
+
 describe('#151 fixed examples: leak 2 and the phase 1 composition', () => {
-  it.each([
-    ["TOKEN=apikey: ?token=' 'Zq4Zq"],
-    ['token:token :--password=\\" \\"Zq0Zq'],
-  ])('%j', (input) => {
+  it.each(LEAK_2.map((input) => [input]))('%j', (input) => {
     for (const [path, output] of Object.entries(shownOnItsOwn(input))) {
       for (const marker of markersIn(input)) expect(output, path).not.toContain(marker);
     }
@@ -121,10 +131,7 @@ describe('#151 fixed examples: leak 2 and the phase 1 composition', () => {
   // The phase 1 composition (design 1.1, 9.2, 6th edition): the previous log hid the second
   // Zq0Zq, because its display ran over its masked text and the query pattern chained across a
   // masked value. The previous display alone shows it, so only the log is checked here.
-  it.each([
-    ["TOKEN=apikey: ?token=' 'Zq0Zqtoken: ,Zq0ZqBearer Zq1Zqabcdefgh12"],
-    ["TOKEN=apikey: ?token=' 'Zq0Zqtoken: ,Zq0ZqBearer Zq1Zqabcdefgh12\nhttps://user:pa,Zq900Zq@host"],
-  ])('phase 1 log of %j', (input) => {
+  it.each(PHASE1_COMPOSITION.map((input) => [input]))('phase 1 log of %j', (input) => {
     expect(phase1([input])).not.toContain('Zq0Zq');
   });
 });
@@ -134,13 +141,45 @@ describe('#151 fixed examples: leak 2 and the phase 1 composition', () => {
 // shows it as well) and is fixed by a follow-up PR, which turns this example into "hidden".
 describe('#151 known leak (since before #151): a cookie value without a name', () => {
   it('shows the secret in later output (known leak, design 9.5)', () => {
-    const source = 'https://cookie:a@host Cookie: Zq34Zq; path=/';
+    const source = UNNAMED_COOKIE;
     expect(sanitizeSensitiveTextWithKnownValues('echoed Zq34Zq', source)).toContain('Zq34Zq');
     for (const output of Object.values(shownOnItsOwn(source))) expect(output).not.toContain('Zq34Zq');
   });
 
   it('hides a named cookie value in the same place', () => {
-    const source = 'https://cookie:a@host Cookie: sid=Zq36Zq; path=/';
+    const source = NAMED_COOKIE;
     for (const output of Object.values(shownLater(source, 'echoed Zq36Zq'))) expect(output).not.toContain('Zq36Zq');
+  });
+});
+
+// Known leaks of the stream paths in the first PR of #151 (design 11, 8th edition R7-6): the
+// stream is the previous stream, so what the previous stream showed it still shows. This table is
+// what every fixed example above shows through the stream; the test runs them all and compares,
+// so the table cannot drift. The second PR closes these and turns this table empty.
+const KNOWN_STREAM_LEAKS: ReadonlyArray<{ input: string; later?: string; leaked: readonly string[] }> = [
+  { input: "TOKEN=apikey: ?token=' 'Zq4Zq", leaked: ['Zq4Zq'] },
+  { input: 'token:token :--password=\\" \\"Zq0Zq', leaked: ['Zq0Zq'] },
+  { input: PHASE1_COMPOSITION[0]!, leaked: ['Zq0Zq', 'Zq1Zq'] },
+  { input: PHASE1_COMPOSITION[1]!, leaked: ['Zq0Zq', 'Zq1Zq'] },
+];
+
+describe('#151 known leaks of the stream paths in the first PR', () => {
+  it('are exactly what the fixed examples show through the stream', () => {
+    const alone = [
+      ...RANGE_PATH_LEAKS.map(({ input, secrets }) => ({ input, secrets: secrets ?? markersIn(input) })),
+      ...[...LEAK_2, ...PHASE1_COMPOSITION, UNNAMED_COOKIE, NAMED_COOKIE].map((input) => ({ input, secrets: markersIn(input) })),
+      ...HEADER_AFTER_USERINFO.map(([input, secret]) => ({ input, secrets: [secret] })),
+    ];
+    const later = [
+      ...HEADER_AFTER_USERINFO.flatMap(([input, secret]) =>
+        [`later output: ${secret} end`, `echoed ${secret}`, secret].map((text) => ({ input, later: text, secrets: [secret] }))),
+      { input: UNNAMED_COOKIE, later: 'echoed Zq34Zq', secrets: ['Zq34Zq'] },
+      { input: NAMED_COOKIE, later: 'echoed Zq36Zq', secrets: ['Zq36Zq'] },
+    ];
+    const leaks = [
+      ...alone.map(({ input, secrets }) => ({ input, leaked: secrets.filter((secret) => streamedAlone(input).includes(secret)) })),
+      ...later.map(({ input, later: text, secrets }) => ({ input, later: text, leaked: secrets.filter((secret) => streamedLater(input, text).includes(secret)) })),
+    ].filter((leak) => leak.leaked.length > 0);
+    expect(leaks).toEqual(KNOWN_STREAM_LEAKS);
   });
 });

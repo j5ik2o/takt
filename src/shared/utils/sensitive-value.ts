@@ -4,6 +4,7 @@ import {
   collectTrackedEmbeddedSensitiveValues,
   isSensitiveKeyName,
   sanitizeTextWithValues,
+  type LegacyStage,
   type TrackedSensitiveValues,
 } from './sensitive-text.js';
 
@@ -259,11 +260,34 @@ export function sanitizeSensitiveTextWithKnownValues(text: string, source: unkno
   return sanitizeTextWithValues(text, trackedValues(sensitiveValues));
 }
 
+/**
+ * What `sanitizeSensitiveValueWithKnownValues(sanitizeSensitiveValueWithStringReplacer(value,
+ * replacer), source)` hid, in one pass over the original strings, for output that the display
+ * redaction runs over once more (the phase 1 log). The previous implementation chained the two
+ * maskings and the display; what that hid is hidden as well (#151).
+ */
+export function sanitizeSensitiveValueWithStringReplacerAndKnownValues(
+  value: unknown,
+  replacer: SensitiveStringReplacer,
+  source: unknown,
+): unknown {
+  const own = collectSensitiveStringValues(value);
+  const known = collectSensitiveStringValues(source);
+  const tracked: TrackedSensitiveValues = {
+    all: new Set([...own.values, ...known.values]),
+    legacy: new Set([...own.legacyValues, ...known.legacyValues]),
+  };
+  return sanitizeValue(value, undefined, tracked, replacer, [
+    { knownValues: own.legacyValues }, 'display', { knownValues: known.legacyValues }, 'display', 'display',
+  ]);
+}
+
 function sanitizeValue(
   value: unknown,
   key: string | undefined,
   knownValues: TrackedSensitiveValues,
   stringReplacer: SensitiveStringReplacer | undefined,
+  previous?: readonly LegacyStage[],
 ): unknown {
   const holder: Record<string, unknown> = {};
   const work: SanitizeWorkItem[] = [{ value, key, target: holder, targetKey: 'value' }];
@@ -282,7 +306,7 @@ function sanitizeValue(
         item.targetKey,
         replacement !== undefined
           ? replacement.value
-          : sanitizeTextWithValues(item.value, knownValues),
+          : sanitizeTextWithValues(item.value, knownValues, previous),
       );
       continue;
     }

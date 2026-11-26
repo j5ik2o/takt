@@ -1,7 +1,12 @@
+// #151, first PR (design 11): the stream is the previous stream. It runs the previous processing
+// (hold-back guard, per-unit ranges, repacking, prefix matching) with the frozen copy's functions
+// and matches the values the previous implementation tracked (`legacyValues`), so its output is
+// what 337062193 printed. The values themselves are still collected in both bounds, and other
+// callers read `all` from `sensitiveValues`. The second PR makes the stream a union per unit.
 import {
-  collectTrackedEmbeddedSensitiveValues, maskSensitiveRanges, sensitiveTextRanges, substringSensitiveRanges, REDACTED_VALUE,
+  collectEmbeddedSensitiveValues, maskSensitiveRanges, sensitiveTextRanges, substringSensitiveRanges, REDACTED_VALUE,
   type SensitiveRange,
-} from './sensitive-text.js';
+} from './sensitive-text-legacy.js';
 import { createBoundedSensitiveValues, type BoundedSensitiveValues } from './sensitive-value.js';
 import { sliceUtf8 } from './utf8.js';
 
@@ -10,13 +15,10 @@ const SENSITIVE_PREVIEW_BYTES = 8 * 1024;
 const MAX_PENDING_SENSITIVE_LINE_LENGTH = 10_000;
 
 function maskingRanges(text: string, values: BoundedSensitiveValues): SensitiveRange[] {
-  const found = { legacy: new Set<string>(), all: new Set<string>() };
-  collectTrackedEmbeddedSensitiveValues(text, found);
-  // Repacked values keep their origin: what the previous collection found goes through `collect`
-  // as before, what only the new reading found is tracked in the new bound only.
-  values.collect({ token: [...found.legacy] });
-  values.collectNewOnly({ token: [...found.all].filter((value) => !found.legacy.has(value)) });
-  return sensitiveTextRanges(text, values.values);
+  const found = new Set<string>();
+  collectEmbeddedSensitiveValues(text, found);
+  values.collect({ token: [...found] });
+  return sensitiveTextRanges(text, values.legacyValues);
 }
 
 export interface SensitiveTextStreamRedactor {
@@ -129,7 +131,7 @@ export class SensitiveTextStreamBuffer {
     const ranges = [
       ...maskingRanges(text, values),
       ...pendingSensitiveValueRanges(text),
-      ...knownValuePrefixSuffixRanges(text, values.values),
+      ...knownValuePrefixSuffixRanges(text, values.legacyValues),
     ];
     return sliceUtf8(maskSensitiveRanges(text, ranges), 0, SENSITIVE_PREVIEW_BYTES, true).content;
   }
@@ -143,7 +145,7 @@ export class SensitiveTextStreamBuffer {
       ranges: [
         ...maskingRanges(text, this.sensitiveValues),
         ...substringSensitiveRanges(text, substringValues),
-        ...knownValuePrefixSuffixRanges(text, this.sensitiveValues.values),
+        ...knownValuePrefixSuffixRanges(text, this.sensitiveValues.legacyValues),
       ],
     };
   }

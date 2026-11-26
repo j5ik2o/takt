@@ -1,5 +1,7 @@
 import * as legacy from './sensitive-text-legacy.js';
-import { legacySequentialRanges } from './sensitive-text-legacy-trace.js';
+import { legacySequentialRanges, legacyStageSteps, type LegacyStage } from './sensitive-text-legacy-trace.js';
+
+export type { LegacyStage } from './sensitive-text-legacy-trace.js';
 
 export const REDACTED_VALUE = '[REDACTED]';
 
@@ -140,6 +142,8 @@ interface KeyedValue {
   readonly end: number;
   readonly valueStart: number;
   readonly valueEnd: number;
+  /** End of the characters glued to a quoted value (`token=""secret`); `valueEnd` if none. */
+  readonly gluedEnd?: number;
 }
 
 interface CurlUserValue {
@@ -212,12 +216,45 @@ function wholeMatches(text: string, pattern: RegExp): SensitiveRange[] {
   return [...text.matchAll(pattern)].map((match) => ({ start: match.index, end: match.index + match[0].length }));
 }
 
+// A shell joins a quoted part and what follows it into one word: in `token=""secret`,
+// `token=''"secret"` and `--password=''secret` the value is `secret`. The part after the closing
+// quote runs over further quoted parts, up to whitespace or a character that ends an assignment
+// value.
+const GLUED_VALUE_STOP_REGEX = /["'[{,\s}\];&|]/;
+
+/** End of the word glued to a quoted value that closes at `from`. */
+function gluedWordEnd(text: string): (from: number) => number {
+  const stopAt = forwardFinder(text, GLUED_VALUE_STOP_REGEX);
+  const doubleQuote = forwardFinder(text, /"/);
+  const singleQuote = forwardFinder(text, /'/);
+  // A later quoted assignment can close inside a word already read; it belongs to that word.
+  let readFrom = -1;
+  let readTo = -1;
+  return (from) => {
+    if (from > readFrom && from < readTo) return readTo;
+    let cursor = from;
+    for (;;) {
+      cursor = stopAt(cursor);
+      const quote = text[cursor];
+      if (quote !== '"' && quote !== "'") break;
+      const close = (quote === '"' ? doubleQuote : singleQuote)(cursor + 1);
+      if (close >= text.length) break;
+      cursor = close + 1;
+    }
+    readFrom = from;
+    readTo = cursor;
+    return cursor;
+  };
+}
+
 function quotedAssignments(text: string): KeyedValue[] {
+  const gluedEnd = gluedWordEnd(text);
   return [...text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX)].map((match) => {
     const valueStart = match.index + match[1]!.length;
     const valueEnd = match.index + match[0].length;
     const quoteWidth = match[2]!.startsWith('\\"') ? 2 : 1;
-    return { keyStart: match.index, start: valueStart + quoteWidth, end: valueEnd - quoteWidth, valueStart, valueEnd };
+    const glued = gluedEnd(valueEnd);
+    return { keyStart: match.index, start: valueStart + quoteWidth, end: glued > valueEnd ? glued : valueEnd - quoteWidth, valueStart, valueEnd, gluedEnd: glued };
   });
 }
 
@@ -294,7 +331,9 @@ function* optionValues(text: string): Generator<KeyedValue> {
     const start = match.index + match[0].length;
     quotedValue.lastIndex = start;
     const quoted = quotedValue.exec(text);
-    const end = quoted === null ? whitespaceAt(start) : start + quoted[0].length;
+    const afterQuote = quoted === null ? start : start + quoted[0].length;
+    // `--password=''secret` is one shell word: the value runs on past the quotes.
+    const end = quoted === null || (afterQuote < text.length && !/\s/u.test(text[afterQuote]!)) ? whitespaceAt(afterQuote) : afterQuote;
     if (end === start) {
       prefixes.lastIndex = match.index + 1;
       continue;
@@ -471,8 +510,8 @@ function displayRanges(text: string, trace: SensitiveRange[]): SensitiveRange[] 
 }
 
 /** The previous range path (c), for callers that rebuild the previous masking themselves. */
-export function previousSensitiveTextRanges(text: string): SensitiveRange[] {
-  return legacy.sensitiveTextRanges(text, NO_VALUES);
+export function previousSensitiveTextRanges(text: string, values: ReadonlySet<string> = NO_VALUES): SensitiveRange[] {
+  return legacy.sensitiveTextRanges(text, values);
 }
 
 /** What the previous display hid when it ran over `text` with `masked` already replaced. */
@@ -529,9 +568,14 @@ export function collectTrackedEmbeddedSensitiveValues(text: string, into: { lega
 function collectNewEmbeddedValues(text: string, values: Set<string>): void {
   const matches = findSensitiveMatches(text);
   for (const { start, end } of matches.whole) addSensitiveValue(values, text.slice(start, end));
-  for (const { valueStart, valueEnd } of matches.quoted) {
+  for (const { valueStart, valueEnd, gluedEnd } of matches.quoted) {
     const quotedValue = text.slice(valueStart, valueEnd);
     addSensitiveValue(values, quotedValue);
+    if (gluedEnd !== undefined && gluedEnd > valueEnd) {
+      const glued = text.slice(valueEnd, gluedEnd);
+      addSensitiveValue(values, glued);
+      addSensitiveValue(values, stripMatchingQuotes(quotedValue) + glued.replace(/\\"|["']/gu, ''));
+    }
     // Everything inside the quotes is tracked as well: an embedded `token=…`, URL or header
     // can be printed again on its own.
     collectNewEmbeddedValues(stripMatchingQuotes(quotedValue), values);
@@ -548,6 +592,9 @@ function collectNewEmbeddedValues(text: string, values: Set<string>): void {
     const option = text.slice(value.valueStart, value.valueEnd);
     addSensitiveValue(values, option);
     addShellStatementValue(values, option);
+    // The word a shell makes of `''secret` or `"a"b`.
+    const unquoted = option.replace(/\\"|["']/gu, '');
+    if (unquoted !== option) addSensitiveValue(values, unquoted);
   }
   for (const value of outermostAndInnermost(matches.queries)) {
     addSensitiveValue(values, text.slice(value.valueStart, value.valueEnd));
@@ -631,19 +678,30 @@ export interface TrackedSensitiveValues {
   readonly legacy: ReadonlySet<string>;
 }
 
+const DISPLAYED_TWICE = legacyStageSteps(['display', 'display']);
+
 /**
  * Hides what `sanitizeSensitiveText` hides and every known value. It also hides what the previous
  * implementation hid: it replaced the known values first and then ran its patterns, which can
  * chain a pattern across a replaced value (d). That composition starts from `legacy` only: a value
  * that only the new collection tracks can hide a key and break the previous chain.
+ *
+ * The output is often shown through `sanitizeSensitiveText` once more (the phase 1 log, a debug
+ * log line), and the previous implementation's display over its own output could chain further.
+ * So (d) runs the previous display twice: a display over this output never shows what the
+ * previous chain hid (#151, design 1.1). `previous` names a longer chain of previous redactions.
  */
-export function sanitizeTextWithValues(text: string, values: TrackedSensitiveValues): string {
+export function sanitizeTextWithValues(text: string, values: TrackedSensitiveValues, previous?: readonly LegacyStage[]): string {
   if (!text) return text;
   const occurrences = knownValueOccurrences(text, values.all);
   const display = legacySequentialRanges(text, []).ranges;
-  const legacyKnown = occurrences.filter((occurrence) => values.legacy.has(occurrence.value)).flatMap((occurrence) => occurrence.ranges);
-  // Without a legacy value in the text, the composition is the display trace.
-  const composed = legacyKnown.length === 0 ? [] : legacySequentialRanges(text, legacyKnown).ranges;
+  let composed: SensitiveRange[];
+  if (previous === undefined) {
+    const legacyKnown = occurrences.filter((occurrence) => values.legacy.has(occurrence.value)).flatMap((occurrence) => occurrence.ranges);
+    composed = legacySequentialRanges(text, legacyKnown, DISPLAYED_TWICE).ranges;
+  } else {
+    composed = legacySequentialRanges(text, [], legacyStageSteps(previous)).ranges;
+  }
   return maskSensitiveRanges(text, [
     ...displayRanges(text, display),
     ...occurrences.flatMap((occurrence) => occurrence.ranges),

@@ -33,7 +33,14 @@ import {
 } from '../../shared/utils/sensitiveText.js';
 import { maskSensitiveTextChunks, SensitiveTextStreamBuffer, type SensitiveTextCommit } from '../../shared/utils/sensitive-stream.js';
 import { sanitizeSensitiveValueWithStringReplacer } from '../../shared/utils/sensitive-value.js';
-import { maskSensitiveRanges, sensitiveTextRanges, substringSensitiveRanges } from '../../shared/utils/sensitive-text.js';
+import {
+  maskSensitiveRanges,
+  previousDisplayRanges,
+  previousSensitiveTextRanges,
+  sensitiveTextRanges,
+  substringSensitiveRanges,
+  type TrackedSensitiveValues,
+} from '../../shared/utils/sensitive-text.js';
 import type {
   DeepSeekHarnessProviderOptions,
   DeepSeekReasoningEffort,
@@ -519,16 +526,22 @@ function processKey(
   });
 }
 
-/** Configured credentials retain DeepSeek's substring contract; input candidates retain the shared rules. */
-function sanitizeKnownSecrets(text: string, knownSecrets: Record<string, string>, values?: ReadonlySet<string>): string {
+/**
+ * Configured credentials retain DeepSeek's substring contract; input candidates retain the shared rules.
+ * The output is shown through the display redaction again (the phase 1 log), so what the previous
+ * implementation hid by running its display over its own masking is hidden as well (#151).
+ */
+function sanitizeKnownSecrets(text: string, knownSecrets: Record<string, string>, values?: TrackedSensitiveValues): string {
   if (values === undefined) {
     const configured = createBoundedSensitiveValues();
     configured.collect({ token: Object.values(knownSecrets) });
-    values = configured.values;
+    values = configured;
   }
+  const secrets = substringSensitiveRanges(text, Object.values(knownSecrets));
   return maskSensitiveRanges(text, [
-    ...sensitiveTextRanges(text, values),
-    ...substringSensitiveRanges(text, Object.values(knownSecrets)),
+    ...sensitiveTextRanges(text, values.all),
+    ...secrets,
+    ...previousDisplayRanges(text, [...previousSensitiveTextRanges(text, values.legacy), ...secrets]),
   ]);
 }
 
@@ -538,7 +551,7 @@ function safeMessage(value: unknown, knownSecrets: Record<string, string>, toolI
   known.collect({ token: Object.values(knownSecrets) });
   known.collect(toolInputValues);
   const sanitized = sanitizeTerminalText(
-    sanitizeKnownSecrets(getErrorMessage(value), knownSecrets, known.values),
+    sanitizeKnownSecrets(getErrorMessage(value), knownSecrets, known),
   );
   if (Buffer.byteLength(sanitized, 'utf8') <= DEEPSEEK_HARNESS_MAX_ERROR_BYTES) {
     return sanitized;
@@ -581,6 +594,39 @@ function knownContinuationRanges(boundary: string, text: string, values: Readonl
   return { ranges, complete };
 }
 
+/**
+ * The ranges of `text` to hide because of what precedes it across a tool call (`boundaryText`), and
+ * whether a known value split by the boundary is complete.
+ *
+ * #151, first PR (design 11): this is part of the stream, which stays the previous stream: the
+ * previous range path and the values the previous implementation tracked (`legacyValues`). The
+ * second PR makes it a union with the new reading.
+ */
+export function responseBoundaryRanges(
+  boundaryText: string,
+  text: string,
+  trackedValues: ReadonlySet<string>,
+  knownSecrets: Record<string, string>,
+): { ranges: Array<{ start: number; end: number }>; complete: boolean } {
+  const combined = boundaryText + text;
+  const boundary = boundaryText.length;
+  const values = new Set(Object.values(knownSecrets));
+  for (const value of trackedValues) values.add(value);
+  const knownRanges = substringSensitiveRanges(combined, values);
+  // Do not join a capitalized natural-language sentence to the earlier assignment. Short credential
+  // fragments still need the generic pattern check, including when the next chunk completes them.
+  const startsNaturalLanguage = /^[A-Z]/u.test(text) && /\s/u.test(text);
+  const candidateRanges = startsNaturalLanguage ? [] : previousSensitiveTextRanges(combined);
+  const boundaryRanges = [...knownRanges, ...candidateRanges]
+    .filter((range) => range.end > boundary)
+    .map((range) => ({
+      start: Math.max(0, range.start - boundary),
+      end: Math.min(text.length, range.end - boundary),
+    }));
+  const continuation = knownContinuationRanges(boundaryText, text, values);
+  return { ranges: [...boundaryRanges, ...continuation.ranges], complete: continuation.complete };
+}
+
 /** Buffer text so credentials split across notifications remain redacted. */
 function writeResponseRedactedChunks(
   context: ResponseRedactionContext,
@@ -590,24 +636,9 @@ function writeResponseRedactedChunks(
 ): ResponseTextChunk[] {
   if (field === 'text' && context.toolBoundaryText.length > 0 && text.length > 0) {
     const combined = context.toolBoundaryText + text;
-    const boundary = context.toolBoundaryText.length;
-    const values = new Set(Object.values(knownSecrets));
-    for (const value of context.buffer.sensitiveValues.values) values.add(value);
-    const knownRanges = substringSensitiveRanges(combined, values);
-    // Do not join a capitalized natural-language sentence to the earlier assignment. Short credential
-    // fragments still need the generic pattern check, including when the next chunk completes them.
-    const startsNaturalLanguage = /^[A-Z]/u.test(text) && /\s/u.test(text);
-    const candidateRanges = startsNaturalLanguage ? [] : sensitiveTextRanges(combined, new Set());
-    const boundaryRanges = [...knownRanges, ...candidateRanges]
-      .filter((range) => range.end > boundary)
-      .map((range) => ({
-        start: Math.max(0, range.start - boundary),
-        end: Math.min(text.length, range.end - boundary),
-      }));
-    const continuation = knownContinuationRanges(context.toolBoundaryText, text, values);
-    const ranges = [...boundaryRanges, ...continuation.ranges];
-    text = maskSensitiveRanges(text, ranges);
-    context.toolBoundaryText = continuation.complete || /\s/u.test(text) ? '' : combined.slice(-4096);
+    const boundary = responseBoundaryRanges(context.toolBoundaryText, text, context.buffer.sensitiveValues.legacyValues, knownSecrets);
+    text = maskSensitiveRanges(text, boundary.ranges);
+    context.toolBoundaryText = boundary.complete || /\s/u.test(text) ? '' : combined.slice(-4096);
   }
   const previous = context.pendingChunks.at(-1);
   if (previous?.field === field) {
@@ -650,7 +681,7 @@ function invokeStream(
   if (responseRedactionContext !== undefined) known.collect(responseRedactionContext.toolInputValues);
   known.collect(event);
   const sanitized = { ...event, data: sanitizeSensitiveValueWithStringReplacer(event.data,
-    (text) => ({ value: sanitizeKnownSecrets(text, knownSecrets, known.values) })) } as StreamEvent;
+    (text) => ({ value: sanitizeKnownSecrets(text, knownSecrets, known) })) } as StreamEvent;
   if (preserveValidatedField === undefined) {
     onStream?.(sanitized);
     return;
@@ -690,7 +721,7 @@ function redactFinalResponse(
   known.collect({ token: Object.values(knownSecrets) });
   known.collect(context.buffer.sensitiveValues);
   known.collect(value);
-  return sanitizeKnownSecrets(value, knownSecrets, known.values);
+  return sanitizeKnownSecrets(value, knownSecrets, known);
 }
 
 /** Require an SDK event data object before reading type-specific fields. */
