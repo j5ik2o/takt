@@ -531,7 +531,7 @@ function processKey(
  * The output is shown through the display redaction again (the phase 1 log), so what the previous
  * implementation hid by running its display over its own masking is hidden as well (#151).
  */
-function sanitizeKnownSecrets(text: string, knownSecrets: Record<string, string>, values?: TrackedSensitiveValues): string {
+export function sanitizeKnownSecrets(text: string, knownSecrets: Record<string, string>, values?: TrackedSensitiveValues): string {
   if (values === undefined) {
     const configured = createBoundedSensitiveValues();
     configured.collect({ token: Object.values(knownSecrets) });

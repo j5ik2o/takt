@@ -331,3 +331,14 @@ describe('sensitive text redaction counterexamples', () => {
     }
   });
 });
+
+// The design review's counterexample for the start of (d) (DESIGN-REVIEW.md): the new collection
+// tracks `Zq911ZqSet-Cookie:`; hiding it first stops the previous composition's header step, and
+// Zq79Zq shows. (d) starts from the legacy values only.
+it('(d) starts from the values the previous implementation tracked', () => {
+  const text = "Cookie: a=b; token:\npassword: Zq911ZqSet-Cookie: session=Zq226Zq4g@@@@@@@@@ ; Path=/ [--secret v9'@Zq701Zqt4ku< [x1://:>55ja8?#Zq79Zqs@,xb0@h:5432/db\n";
+  const previous = legacyValue.sanitizeSensitiveTextWithKnownValues(text, text);
+  expect(previous).not.toContain('Zq79Zq');
+  const next = sanitizeTextWithValues(text, trackedValuesOf(text));
+  for (const marker of markersIn(text)) if (!previous.includes(marker)) expect(next).not.toContain(marker);
+});

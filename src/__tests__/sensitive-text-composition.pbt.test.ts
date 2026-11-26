@@ -1,5 +1,6 @@
 import fc from 'fast-check';
 import { afterAll, describe, expect, it } from 'vitest';
+import { sanitizeKnownSecrets } from '../infra/deepseek-harness/client.js';
 import * as current from '../shared/utils/sensitive-text.js';
 import * as currentValue from '../shared/utils/sensitive-value.js';
 import * as legacy from './helpers/legacy-sensitive-text.js';
@@ -110,18 +111,18 @@ describe('compositions of two redactions stay at least as strong as before (#151
         const known = lib.createBoundedSensitiveValues();
         known.collect({ token: Object.values(knownSecrets) });
         known.collect(event);
-        // client.ts sanitizeKnownSecrets: now also the previous display over the previous masking.
-        return lib.sanitizeSensitiveValueWithStringReplacer(event, (value) => {
-          const secrets = lib.substringSensitiveRanges(value, Object.values(knownSecrets));
+        // client.ts: the current side calls sanitizeKnownSecrets itself; the previous side is its
+        // 337062193 body (ranges with the known values and the configured secrets).
+        if (lib === CURRENT) {
           const tracked = known as unknown as current.TrackedSensitiveValues;
-          return {
-            value: lib.maskSensitiveRanges(value, [
-              ...lib.sensitiveTextRanges(value, known.values),
-              ...secrets,
-              ...(lib === CURRENT ? current.previousDisplayRanges(value, [...current.previousSensitiveTextRanges(value, tracked.legacy), ...secrets]) : []),
-            ]),
-          };
-        });
+          return lib.sanitizeSensitiveValueWithStringReplacer(event, (value) => ({ value: sanitizeKnownSecrets(value, knownSecrets, tracked) }));
+        }
+        return lib.sanitizeSensitiveValueWithStringReplacer(event, (value) => ({
+          value: lib.maskSensitiveRanges(value, [
+            ...lib.sensitiveTextRanges(value, known.values),
+            ...lib.substringSensitiveRanges(value, Object.values(knownSecrets)),
+          ]),
+        }));
       };
       const previous = run(PREVIOUS);
       const next = run(CURRENT);
@@ -142,6 +143,9 @@ describe('composition counterexamples (#151)', () => {
     ["--password=''Zq0Zq"],
     ["--password='a'Zq0Zq"],
     ["TOKEN=apikey: --password=''04grl7b@@00Zq0Zq["],
+    // The option read with a space: only the option glue closes it (the `=` forms are also quoted assignments).
+    ["--password ''Zq0Zq"],
+    ['--token "a"Zq0Zq'],
     ['token=""Zq3Zq x'],
     ["token=''Zq2Zq"],
     ["token :--password=''Zq0Zq"],
@@ -189,21 +193,16 @@ describe('composition counterexamples (#151)', () => {
     [{ command: "https://token:p@host;sk-Zq0Zqabcdefgh&x1://u:@lh691Zq0Zq(?rs527r0@host'[" }, "https://user:pa,Zq900Zq@hostTOKEN=apikey: ?token=' 'Zq0Zqhttps://cookie:a@host Cookie: 0'Zq0Zqghp_Zq0Zqabcdefgh\nhttps://token:p@host;sk-Zq0Zqabcdefgh&x1://u:@lh691Zq0Zq(?rs527r0@host'["],
   ])('DeepSeek event %j, then the phase 1 log', (input, text) => {
     const event = { text, input };
-    const mask = (lib: Library, withPrevious: boolean): unknown => {
-      const known = lib.createBoundedSensitiveValues();
-      known.collect(event);
-      return lib.sanitizeSensitiveValueWithStringReplacer(event, (value) => {
-        const tracked = known as unknown as current.TrackedSensitiveValues;
-        return {
-          value: lib.maskSensitiveRanges(value, [
-            ...lib.sensitiveTextRanges(value, known.values),
-            ...(withPrevious ? current.previousDisplayRanges(value, current.previousSensitiveTextRanges(value, tracked.legacy)) : []),
-          ]),
-        };
-      });
-    };
-    const previous = logged(PREVIOUS, mask(PREVIOUS, false));
-    const next = logged(CURRENT, mask(CURRENT, true));
+    const previousKnown = legacyValue.createBoundedSensitiveValues();
+    previousKnown.collect(event);
+    const previous = logged(PREVIOUS, legacyValue.sanitizeSensitiveValueWithStringReplacer(event, (value) => ({
+      value: legacy.maskSensitiveRanges(value, legacy.sensitiveTextRanges(value, previousKnown.values)),
+    })));
+    const currentKnown = currentValue.createBoundedSensitiveValues();
+    currentKnown.collect(event);
+    const next = logged(CURRENT, currentValue.sanitizeSensitiveValueWithStringReplacer(event, (value) => ({
+      value: sanitizeKnownSecrets(value, {}, currentKnown),
+    })));
     for (const marker of markersIn(text)) if (!previous.includes(marker)) expect(next).not.toContain(marker);
   });
 });
