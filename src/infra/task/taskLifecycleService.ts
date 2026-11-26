@@ -18,6 +18,9 @@ import { findActiveTaskTargetConflict } from './activeTaskTarget.js';
 import { TASK_RESTART_POINT_KEY } from './taskExecutionSchemas.js';
 import { randomUUID } from 'node:crypto';
 import { getErrorMessage } from '../../shared/utils/error.js';
+import { createLogger } from '../../shared/utils/debug.js';
+
+const log = createLogger('task-lifecycle');
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { parseGitHubPullRequestTarget } from '../github/pull-request-target.js';
 import type { Goal } from '../goals/schema.js';
@@ -280,6 +283,7 @@ export class TaskLifecycleService {
       return failed;
     };
     let writeStarted = false;
+    let written = false;
 
     try {
       withGoalExecutionLock(this.projectDir, () => this.store.update((current) => {
@@ -328,6 +332,7 @@ export class TaskLifecycleService {
         });
         return { tasks };
       }, {
+        onWritten: () => { written = true; },
         onAcquisitionError: (error) => {
           if (error instanceof Error && 'code' in error && error.code === 'ENOSPC') {
             throw new TaskClaimLockAcquisitionError(error.message, 'ENOSPC', { cause: error });
@@ -339,12 +344,16 @@ export class TaskLifecycleService {
         },
       }));
     } catch (error) {
-      // Nothing is written before the update callback starts, so only then is a goal-execution.lock
-      // timeout safe to retry. After that, an error never becomes a retry: the claim may be saved.
-      if (!writeStarted && error instanceof PrivateFileLockTimeoutError) {
+      if (written) {
+        // The claim is saved; a lock release failure after the write must not lose it (#169).
+        this.warnLockReleaseAfterWrite(error);
+      } else if (!writeStarted && error instanceof PrivateFileLockTimeoutError) {
+        // Nothing is written before the update callback starts, so only then is a goal-execution.lock
+        // timeout safe to retry. After that, an error never becomes a retry: the claim may be saved.
         throw new TaskClaimLockAcquisitionError(error.message, 'TIMEOUT', { cause: error, lock: 'goal-execution' });
+      } else {
+        throw error;
       }
-      throw error;
     }
 
     for (const task of setupFailures) {
@@ -355,6 +364,24 @@ export class TaskLifecycleService {
       }
     }
     return claimed;
+  }
+
+  private warnLockReleaseAfterWrite(error: unknown): void {
+    const detail = error instanceof AggregateError
+      ? error.errors.map((entry) => sanitizeSensitiveText(getErrorMessage(entry))).join('; ')
+      : sanitizeSensitiveText(getErrorMessage(error));
+    const warning = `Saved .takt/tasks.yaml, but releasing a lock afterwards failed: ${detail}. `
+      + 'This process removes the lock file the next time it takes that lock; until then other TAKT processes wait for it.';
+    try {
+      log.warn(warning);
+    } catch {
+      // Logging must not lose a saved result.
+    }
+    try {
+      this.onWarning?.(warning);
+    } catch {
+      // The saved result must be returned even when the warning sink throws.
+    }
   }
 
   private warnSetupFailureReport(taskName: string, error: unknown): void {
@@ -379,16 +406,32 @@ export class TaskLifecycleService {
     }, this.readTerminalRetryMetadata(task));
   }
 
-  invalidatePendingGoalTasks(goalId: string): void {
-    withGoalExecutionLock(this.projectDir, () => this.store.update((current) => ({
-      tasks: current.tasks.map((task) => {
-        if (task.status !== 'pending' || task.goal_id !== goalId) return task;
-        return buildTerminalTaskRecord(task, {
-          status: 'failed', owner_pid: null,
-          failure: { error: `Goal ${goalId} was aborted`, retryable: false },
-        });
-      }),
-    })));
+  invalidatePendingGoalTasks(goalId: string, onInvalidated?: (task: TaskState) => void): void {
+    const invalidated: TaskRecord[] = [];
+    let written = false;
+    let releaseError: unknown;
+    let releaseFailed = false;
+    try {
+      withGoalExecutionLock(this.projectDir, () => this.store.update((current) => ({
+        tasks: current.tasks.map((task) => {
+          if (task.status !== 'pending' || task.goal_id !== goalId) return task;
+          const failed = buildTerminalTaskRecord(task, {
+            status: 'failed', owner_pid: null,
+            failure: { error: `Goal ${goalId} was aborted`, retryable: false },
+          });
+          invalidated.push(failed);
+          return failed;
+        }),
+      }), { onWritten: () => { written = true; } }));
+    } catch (error) {
+      if (!written) throw error;
+      releaseError = error;
+      releaseFailed = true;
+    }
+    for (const task of invalidated) {
+      onInvalidated?.(toTaskState(this.tasksFile, task));
+    }
+    if (releaseFailed) throw releaseError;
   }
 
   failInterruptedRunningTasks(goalId?: string, onRecovered?: (task: TaskState) => void): number {
@@ -402,6 +445,8 @@ export class TaskLifecycleService {
     if (candidates.size === 0) return 0;
 
     const recovered: TaskRecord[] = [];
+    let written = false;
+    try {
     this.store.update((current) => {
       const tasks = current.tasks.map((task) => {
         const candidate = candidates.get(task.name);
@@ -438,7 +483,11 @@ export class TaskLifecycleService {
         return completed;
       });
       return recovered.length === 0 ? undefined : { tasks };
-    });
+    }, { onWritten: () => { written = true; } });
+    } catch (error) {
+      if (!written) throw error;
+      this.warnLockReleaseAfterWrite(error);
+    }
     for (const task of recovered) onRecovered?.(toTaskState(this.tasksFile, task));
     return recovered.length;
   }

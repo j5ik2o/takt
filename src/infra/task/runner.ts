@@ -118,8 +118,8 @@ export class TaskRunner {
     return this.lifecycle.failInterruptedRunningTasks(goalId, onRecovered);
   }
 
-  invalidatePendingGoalTasks(goalId: string): void {
-    this.lifecycle.invalidatePendingGoalTasks(goalId);
+  invalidatePendingGoalTasks(goalId: string, onInvalidated?: (task: TaskState) => void): void {
+    this.lifecycle.invalidatePendingGoalTasks(goalId, onInvalidated);
   }
 
   completeTask(result: TaskResult): string {
