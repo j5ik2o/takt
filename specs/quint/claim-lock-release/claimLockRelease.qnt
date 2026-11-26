@@ -9,21 +9,29 @@
 //   src/infra/task/taskLifecycleService.ts   claimNextTasks / failInterruptedRunningTasks /
 //                                            invalidatePendingGoalTasks
 //   src/features/daemonTurn/reconcileLostRun.ts
-//   src/infra/fs/file-lock.ts                withFileLock / recoverStaleLock (tasks.yaml.lock)
+//   src/features/tasks/execute/taskFinishHook.ts  runTaskFinishHooks / invalidate...WithFinishHook
+//   src/infra/fs/file-lock.ts                withFileLock / readSnapshot / unlinkSnapshot /
+//                                            recoverStaleLock (tasks.yaml.lock)
 //   src/shared/utils/private-file-lock.ts    runWithAcquiredLock (goal-execution.lock)
 //   src/features/tasks/execute/parallelExecution.ts  claimPreparedTasks / runWithWorkerPool
 //
 // DESIGN picks the implementation:
-//   "Current"    — integration/takt-mcp at ce641a0ce. A release error after the write leaves the
-//                  operation: the claim returns nothing and stops claiming, the interrupted-task
-//                  recovery and the invalidation drop their notices. A lock file the process failed
-//                  to remove names a live owner (itself), so the process waits on it until it exits.
-//   "ReturnOnly" — the issue's first idea alone: after the write, a release error is warned (or
-//                  thrown after the notices) and the operation keeps its result. Nothing removes the
-//                  lock file the process failed to remove.
-//   "Fixed"      — ReturnOnly, plus each process records a lock file it failed to remove and
-//                  removes it at its next acquisition of that lock; if removing it fails again, the
-//                  acquisition throws that error instead of timing out.
+//   "Current"     — integration/takt-mcp at ce641a0ce. A release error after the write leaves the
+//                   operation: the claim returns nothing and stops claiming, the interrupted-task
+//                   recovery and the invalidation drop their notices. A lock file the process failed
+//                   to remove names a live owner (itself), so the process waits on it until it exits.
+//                   A release that cannot read its own lock file returns silently and leaves it.
+//   "ReturnOnly"  — the issue's first idea alone: after the write, a release error is warned (or
+//                   thrown after the notices) and the operation keeps its result. Nothing removes the
+//                   lock file the process failed to remove.
+//   "FirstDesign" — the design as first reviewed (237703e8e): ReturnOnly, plus a process records a
+//                   lock file whose release threw and removes it at its next acquisition. A release
+//                   that cannot read its own lock file still returns silently (not recorded), and
+//                   the finish hooks of setup failures and invalidations re-read tasks.yaml under
+//                   tasks.yaml.lock (runTaskFinishHooks).
+//   "Fixed"       — FirstDesign, plus the release throws (and records) when its own lock file is
+//                   there but cannot be read, and the finish hooks get the saved task states
+//                   instead of re-reading tasks.yaml.
 module claimLockRelease {
   const DESIGN: str
 
@@ -34,8 +42,8 @@ module claimLockRelease {
   type TaskRec = { status: Status, owner: Actor }
 
   // Idle: between poll ticks. Stopped: preparationFailure is set (claiming never resumes; queued
-  // tasks are not started, and the process exits once its active tasks settle). Ended: `takt run`
-  // left the worker pool loop as a normal end.
+  // tasks are not started). Ended: `takt run` left the worker pool loop as a normal end. Both
+  // Stopped and Ended count as dead for dead-owner recovery (see README).
   type Phase = Idle | Stopped | Ended
 
   // Why a process stopped. Unlink: a lock file could not be removed, so nothing can be written.
@@ -50,14 +58,19 @@ module claimLockRelease {
     attempted: bool,  // the last claim attempt completed
   }
 
-  // How the lock release after the write ends. Gone: the lock file was removed or replaced by
-  // someone else ("ownership changed before release"); it throws, but no lock is left. Stuck: the
-  // unlink fails (EIO, EACCES) and the lock file stays; a later unlink succeeds. StuckForGood: the
-  // lock file stays and every later unlink fails too.
-  type ReleaseOutcome = Ok | Gone | Stuck | StuckForGood
+  // How the lock release after the write ends.
+  //   Ok: removed.
+  //   Gone: someone else removed or replaced the lock file ("ownership changed before release");
+  //         it throws, and no lock of this process is left.
+  //   Stuck: the unlink fails (EIO, EACCES) and the file stays; a later unlink succeeds.
+  //   StuckForGood: the file stays and every later unlink fails too.
+  //   Unseen: the release cannot open or read its own lock file (EACCES / EPERM on open, EIO on
+  //           read) and the file stays; a later read and unlink succeed. Before Fixed,
+  //           file-lock.ts returns silently here.
+  type ReleaseOutcome = Ok | Gone | Stuck | StuckForGood | Unseen
 
   // What an acquisition sees. Timeout: the lock names a live owner for the whole wait. UnlinkFails:
-  // removing a lock file that may be removed (dead owner, or Fixed's own recorded one) fails.
+  // removing a lock file that may be removed (dead owner, or a recorded own one) fails.
   type Acquire = Acquired | Timeout | UnlinkFails
 
   pure val NONE: Actor = ""
@@ -68,17 +81,20 @@ module claimLockRelease {
   pure val TASKS: Set[TaskId] = Set("t1", "t2", "t3")
   // t2: a goal task whose runtime_assignment cannot be selected; the claim saves it as failed.
   pure val SETUP_BROKEN: Set[TaskId] = Set("t2")
-  pure val RELEASES: Set[ReleaseOutcome] = Set(Ok, Gone, Stuck, StuckForGood)
+  pure val RELEASES: Set[ReleaseOutcome] = Set(Ok, Gone, Stuck, StuckForGood, Unseen)
 
   var tasks: TaskId -> TaskRec
   var procs: Actor -> Local
-  // The lock file left behind by a failed release: its owner (NONE when there is none), and whether
-  // every later unlink of it fails.
+  // The lock file left behind by a failed release: its owner (NONE when there is none), whether
+  // every later unlink of it fails, and whether its owner recorded it (orphanedLocks).
   var orphanOf: Actor
   var orphanForGood: bool
-  var savedFailed: TaskId -> bool     // ghost: an operation saved this task as failed
-  var notices: TaskId -> int          // finish hook / manager completion event delivered
-  var releaseFailures: Actor -> int   // releases after a write that threw
+  var orphanRecorded: bool
+  var needHook: TaskId -> bool     // ghost: saved as failed by a claim (setup) or an invalidation
+  var needEvent: TaskId -> bool    // ghost: saved as failed by a claim (setup) or a recovery
+  var hooks: TaskId -> int         // finish hook runs
+  var events: TaskId -> int        // manager completion events written
+  var releaseFailures: Actor -> int   // releases after a write that did not remove the lock cleanly
   var releaseReported: Actor -> int   // of those, warned or thrown to the caller
   var waitingOnSelf: Actor -> bool    // the last acquisition timed out on a lock this actor left
   var lastAction: str
@@ -90,36 +106,61 @@ module claimLockRelease {
     else if (PROCS.contains(a)) procs.get(a).phase == Idle
     else false
 
-  // The acquisition of the lock pair by `a`, given the lock file left behind (if any).
-  def acquire(a: Actor): Acquire =
-    if (orphanOf == NONE) Acquired
-    else if (orphanOf == a) {
-      if (DESIGN == "Fixed") { if (orphanForGood) UnlinkFails else Acquired }
-      else Timeout  // the record names this live process: it waits on itself
+  // The acquisition by `a` of the lock pair, given a lock file left behind (`o`, `forGood`,
+  // `recorded`).
+  def acquireAt(a: Actor, o: Actor, forGood: bool, recorded: bool): Acquire =
+    if (o == NONE) Acquired
+    else if (o == a) {
+      if (recorded) { if (forGood) UnlinkFails else Acquired }
+      else Timeout  // the file names this live process and nothing marks it as left behind
     }
-    else if (alive(orphanOf)) Timeout
-    else if (orphanForGood) UnlinkFails  // dead-owner recovery; its unlink fails
+    else if (alive(o)) Timeout
+    else if (forGood) UnlinkFails  // dead-owner recovery; its unlink fails
     else Acquired
 
-  pure def orphanAfter(r: ReleaseOutcome, a: Actor): Actor =
-    match r { | Stuck => a | StuckForGood => a | _ => NONE }
+  def acquire(a: Actor): Acquire = acquireAt(a, orphanOf, orphanForGood, orphanRecorded)
+
+  pure def leavesFile(r: ReleaseOutcome): bool = r == Stuck or r == StuckForGood or r == Unseen
+  pure def orphanAfter(r: ReleaseOutcome, a: Actor): Actor = if (leavesFile(r)) a else NONE
   pure def forGoodAfter(r: ReleaseOutcome): bool = r == StuckForGood
-  pure def released(r: ReleaseOutcome): bool = r == Ok
+
+  // The release throws to the operation. Before Fixed, an unreadable own lock file is skipped
+  // silently (file-lock.ts unlinkSnapshot sees `content !== expected.content` and returns).
+  pure def throws(r: ReleaseOutcome): bool =
+    r == Gone or r == Stuck or r == StuckForGood or (r == Unseen and DESIGN == "Fixed")
+
+  // The process records the lock file it left (FirstDesign and Fixed record what throws).
+  pure def recordedAfter(r: ReleaseOutcome): bool =
+    leavesFile(r) and throws(r) and (DESIGN == "FirstDesign" or DESIGN == "Fixed")
+
+  // After the write, the operation keeps its result: the release did not throw, or the design
+  // keeps results across a release error.
+  pure def keeps(r: ReleaseOutcome): bool = not(throws(r)) or DESIGN != "Current"
+
+  // Do the finish hooks of this write run? Fixed passes the saved states. The others re-read
+  // tasks.yaml (runTaskFinishHooks -> listTaskStateItems -> TaskStore.read) under tasks.yaml.lock;
+  // a failed re-read is only logged (log.error), so the hooks are lost.
+  def hooksRun(a: Actor, r: ReleaseOutcome): bool =
+    keeps(r) and (DESIGN == "Fixed"
+      or acquireAt(a, orphanAfter(r, a), forGoodAfter(r), recordedAfter(r)) == Acquired)
+
+  // The re-read for the hooks may itself remove the recorded own lock file (FirstDesign).
+  def orphanAfterHooks(a: Actor, r: ReleaseOutcome, rereads: bool): Actor =
+    if (rereads and DESIGN != "Fixed" and keeps(r) and orphanAfter(r, a) == a and recordedAfter(r)
+      and not(forGoodAfter(r))) NONE
+    else orphanAfter(r, a)
 
   pure def incIf(m: Actor -> int, a: Actor, c: bool): Actor -> int =
     if (c) m.set(a, m.get(a) + 1) else m
 
-  pure def noticeAll(m: TaskId -> int, s: Set[TaskId]): TaskId -> int =
-    m.keys().mapBy(t => if (s.contains(t)) m.get(t) + 1 else m.get(t))
+  pure def bump(m: TaskId -> int, s: Set[TaskId], c: bool): TaskId -> int =
+    m.keys().mapBy(t => if (c and s.contains(t)) m.get(t) + 1 else m.get(t))
 
-  pure def markFailed(m: TaskId -> bool, s: Set[TaskId]): TaskId -> bool =
+  pure def mark(m: TaskId -> bool, s: Set[TaskId]): TaskId -> bool =
     m.keys().mapBy(t => s.contains(t) or m.get(t))
 
   pure def failAll(ts: TaskId -> TaskRec, s: Set[TaskId]): TaskId -> TaskRec =
     ts.keys().mapBy(t => if (s.contains(t)) { status: Failed, owner: NONE } else ts.get(t))
-
-  // After the write, does the operation keep its result when the release throws?
-  pure val keepsResult: bool = DESIGN != "Current"
 
   // ---------- state machine ----------
 
@@ -129,8 +170,11 @@ module claimLockRelease {
     procs' = ACTORS.mapBy(_ => { phase: Idle, stopReason: NoStop, queue: Set(), retrying: false, attempted: false }),
     orphanOf' = NONE,
     orphanForGood' = false,
-    savedFailed' = TASKS.mapBy(_ => false),
-    notices' = TASKS.mapBy(_ => 0),
+    orphanRecorded' = false,
+    needHook' = TASKS.mapBy(_ => false),
+    needEvent' = TASKS.mapBy(_ => false),
+    hooks' = TASKS.mapBy(_ => 0),
+    events' = TASKS.mapBy(_ => 0),
     releaseFailures' = ACTORS.mapBy(_ => 0),
     releaseReported' = ACTORS.mapBy(_ => 0),
     waitingOnSelf' = ACTORS.mapBy(_ => false),
@@ -147,20 +191,32 @@ module claimLockRelease {
       procs' = procs.setBy(a, l => { ...l, phase: Stopped, stopReason: Unlink, queue: Set() })
     else procs' = procs,  // M: the error goes to the caller (MCP tool, daemon turn)
     waitingOnSelf' = waitingOnSelf.set(a, how == Timeout and orphanOf == a),
-    tasks' = tasks, orphanOf' = orphanOf, orphanForGood' = orphanForGood,
-    savedFailed' = savedFailed, notices' = notices,
+    tasks' = tasks, orphanOf' = orphanOf, orphanForGood' = orphanForGood, orphanRecorded' = orphanRecorded,
+    needHook' = needHook, needEvent' = needEvent, hooks' = hooks, events' = events,
     releaseFailures' = releaseFailures, releaseReported' = releaseReported,
     lastAction' = name,
   }
 
+  // The lock state and report counters after a write by `a` with release outcome `r`.
+  action afterWrite(a: Actor, r: ReleaseOutcome, rereads: bool): bool = all {
+    orphanOf' = orphanAfterHooks(a, r, rereads),
+    orphanForGood' = (forGoodAfter(r) and leavesFile(r)),
+    orphanRecorded' = (recordedAfter(r) and orphanAfterHooks(a, r, rereads) == a),
+    releaseFailures' = incIf(releaseFailures, a, r != Ok),
+    // Current: the error becomes preparationFailure, the run-start failure, or the caller's error.
+    // The others warn (claim, run-start recovery) or throw after the notices (M).
+    releaseReported' = incIf(releaseReported, a, throws(r)),
+    waitingOnSelf' = waitingOnSelf.set(a, false),
+  }
+
   // claimNextTasks(): one write saves the runnable pending tasks as running (owner p) and the
-  // setup-broken ones as failed, then releases the locks (outcome r).
+  // setup-broken ones as failed, then releases the locks (outcome r). Each setup failure gets a
+  // finish hook (claimAvailableTasks) and a manager event (onSetupFailed).
   action claim(p: Actor, r: ReleaseOutcome): bool = {
     val how = acquire(p)
     val pend = TASKS.filter(t => tasks.get(t).status == Pending)
     val claimed = pend.exclude(SETUP_BROKEN)
     val failed = pend.intersect(SETUP_BROKEN)
-    val keep = released(r) or keepsResult
     all {
       PROCS.contains(p),
       procs.get(p).phase == Idle,
@@ -170,76 +226,62 @@ module claimLockRelease {
           if (claimed.contains(t)) { status: Running, owner: p }
           else if (failed.contains(t)) { status: Failed, owner: NONE }
           else tasks.get(t)),
-        savedFailed' = markFailed(savedFailed, failed),
-        orphanOf' = orphanAfter(r, p),
-        orphanForGood' = forGoodAfter(r),
-        releaseFailures' = incIf(releaseFailures, p, not(released(r))),
-        // Current: the error becomes preparationFailure ("Cannot prepare pending tasks"). The others
-        // warn through onWarning.
-        releaseReported' = incIf(releaseReported, p, not(released(r))),
-        waitingOnSelf' = waitingOnSelf.set(p, false),
-        if (keep) all {
-          procs' = procs.setBy(p, l => { ...l, queue: l.queue.union(claimed), retrying: false, attempted: true }),
-          notices' = noticeAll(notices, failed),
-        } else all {
-          procs' = procs.setBy(p, l => { ...l, phase: Stopped, stopReason: ReleaseError, queue: Set() }),
-          notices' = notices,
-        },
+        needHook' = mark(needHook, failed),
+        needEvent' = mark(needEvent, failed),
+        afterWrite(p, r, failed != Set()),
+        hooks' = bump(hooks, failed, hooksRun(p, r)),
+        events' = bump(events, failed, keeps(r)),
+        procs' = if (keeps(r))
+          procs.setBy(p, l => { ...l, queue: l.queue.union(claimed), retrying: false, attempted: true })
+          else procs.setBy(p, l => { ...l, phase: Stopped, stopReason: ReleaseError, queue: Set() }),
         lastAction' =
-          if (orphanOf == p and DESIGN == "Fixed") "claimAfterSelfRecovery"
-          else if (released(r)) "claim" else if (keep) "claimReleaseFailedKept" else "claimReleaseFailedStopped",
+          if (orphanOf == p and orphanRecorded) "claimAfterSelfRecovery"
+          else if (r == Ok) "claim" else if (keeps(r)) "claimReleaseFailedKept" else "claimReleaseFailedStopped",
       },
     }
   }
 
   // failInterruptedRunningTasks() at the start of a run or watch (a in PROCS), or reconcileLostRun()
-  // in the daemon (a = M): running tasks whose owner is dead become failed, then each is notified.
+  // in the daemon (a = M): running tasks whose owner is dead become failed, then each gets a manager
+  // event. (failInterruptedRunningTasks takes tasks.yaml.lock only; the model's lock pair covers it.)
   action recover(a: Actor, r: ReleaseOutcome): bool = {
     val how = acquire(a)
     val lost = TASKS.filter(t => tasks.get(t).status == Running and not(alive(tasks.get(t).owner)))
-    val keep = released(r) or keepsResult
     all {
       alive(a),
       lost != Set(),
       if (how != Acquired) notAcquired(a, how, "recoverNotAcquired")
       else all {
         tasks' = failAll(tasks, lost),
-        savedFailed' = markFailed(savedFailed, lost),
-        orphanOf' = orphanAfter(r, a),
-        orphanForGood' = forGoodAfter(r),
-        releaseFailures' = incIf(releaseFailures, a, not(released(r))),
-        // Run start: Current throws out of runAllTasks / watch; the others warn. Daemon: thrown to the
-        // daemon turn in every design (Fixed throws after the event).
-        releaseReported' = incIf(releaseReported, a, not(released(r))),
-        waitingOnSelf' = waitingOnSelf.set(a, false),
-        notices' = if (keep) noticeAll(notices, lost) else notices,
-        procs' = if (keep or a == M) procs
+        needHook' = needHook,
+        needEvent' = mark(needEvent, lost),
+        afterWrite(a, r, false),
+        hooks' = hooks,
+        events' = bump(events, lost, keeps(r)),
+        procs' = if (keeps(r) or a == M) procs
           else procs.setBy(a, l => { ...l, phase: Stopped, stopReason: ReleaseError, queue: Set() }),
-        lastAction' = if (released(r)) "recover" else "recoverReleaseFailed",
+        lastAction' = if (r == Ok) "recover" else "recoverReleaseFailed",
       },
     }
   }
 
   // invalidatePendingGoalTasks() for an aborted goal (MCP / manager, a = M): pending goal tasks become
-  // failed, then the finish hook runs for each. A release error reaches the caller in every design.
+  // failed, then the finish hook runs for each.
   action invalidate(r: ReleaseOutcome): bool = {
     val how = acquire(M)
     val pend = TASKS.filter(t => tasks.get(t).status == Pending)
-    val keep = released(r) or keepsResult
     all {
       pend != Set(),
       if (how != Acquired) notAcquired(M, how, "invalidateNotAcquired")
       else all {
         tasks' = failAll(tasks, pend),
-        savedFailed' = markFailed(savedFailed, pend),
-        orphanOf' = orphanAfter(r, M),
-        orphanForGood' = forGoodAfter(r),
-        releaseFailures' = incIf(releaseFailures, M, not(released(r))),
-        releaseReported' = incIf(releaseReported, M, not(released(r))),
-        waitingOnSelf' = waitingOnSelf.set(M, false),
-        notices' = if (keep) noticeAll(notices, pend) else notices,
+        needHook' = mark(needHook, pend),
+        needEvent' = needEvent,
+        afterWrite(M, r, true),
+        hooks' = bump(hooks, pend, hooksRun(M, r)),
+        events' = events,
         procs' = procs,
-        lastAction' = if (released(r)) "invalidate" else "invalidateReleaseFailed",
+        lastAction' = if (r == Ok) "invalidate" else "invalidateReleaseFailed",
       },
     }
   }
@@ -251,8 +293,9 @@ module claimLockRelease {
     procs.get(p).queue.contains(t),
     tasks' = tasks.set(t, { status: Done, owner: NONE }),
     procs' = procs.setBy(p, l => { ...l, queue: l.queue.exclude(Set(t)) }),
-    orphanOf' = orphanOf, orphanForGood' = orphanForGood, savedFailed' = savedFailed,
-    notices' = notices, releaseFailures' = releaseFailures, releaseReported' = releaseReported,
+    orphanOf' = orphanOf, orphanForGood' = orphanForGood, orphanRecorded' = orphanRecorded,
+    needHook' = needHook, needEvent' = needEvent, hooks' = hooks, events' = events,
+    releaseFailures' = releaseFailures, releaseReported' = releaseReported,
     waitingOnSelf' = waitingOnSelf, lastAction' = "runTask",
   }
 
@@ -263,8 +306,9 @@ module claimLockRelease {
       PROCS.contains(p),
       l.phase == Idle, l.attempted, not(l.retrying), l.queue == Set(),
       procs' = procs.set(p, { ...l, phase: Ended }),
-      tasks' = tasks, orphanOf' = orphanOf, orphanForGood' = orphanForGood, savedFailed' = savedFailed,
-      notices' = notices, releaseFailures' = releaseFailures, releaseReported' = releaseReported,
+      tasks' = tasks, orphanOf' = orphanOf, orphanForGood' = orphanForGood, orphanRecorded' = orphanRecorded,
+      needHook' = needHook, needEvent' = needEvent, hooks' = hooks, events' = events,
+      releaseFailures' = releaseFailures, releaseReported' = releaseReported,
       waitingOnSelf' = waitingOnSelf, lastAction' = "endRun",
     }
   }
@@ -285,27 +329,31 @@ module claimLockRelease {
 
   // ---------- properties ----------
 
+  def runningOwnedBy(p: Actor): Set[TaskId] = TASKS.filter(t => tasks.get(t) == { status: Running, owner: p })
+
   // A task saved as running by p is in p's queue, unless p stopped because a lock file cannot be
   // removed (then nothing can be written; the task is failed as interrupted after p exits).
-  def runningOwnedBy(p: Actor): Set[TaskId] = TASKS.filter(t => tasks.get(t) == { status: Running, owner: p })
   val noOrphanRunning: bool = PROCS.forall(p =>
     runningOwnedBy(p).forall(t => procs.get(p).queue.contains(t) or procs.get(p).stopReason == Unlink))
 
   val queuedByOwnerOnly: bool = PROCS.forall(p => procs.get(p).queue.forall(t => tasks.get(t).owner == p))
 
-  // Every task an operation saved as failed is notified exactly once (finish hook or manager
-  // completion event), whatever the release after the write did.
-  val noLostNotice: bool = TASKS.forall(t => savedFailed.get(t) implies notices.get(t) == 1)
-  val noDuplicateNotice: bool = TASKS.forall(t => notices.get(t) <= 1)
-  val noFalseNotice: bool = TASKS.forall(t => notices.get(t) > 0 implies savedFailed.get(t))
+  // Every task an operation saved as failed gets its finish hook and its manager event exactly
+  // once, whatever the release after the write did.
+  val noLostNotice: bool = TASKS.forall(t =>
+    (needHook.get(t) implies hooks.get(t) == 1) and (needEvent.get(t) implies events.get(t) == 1))
+  val noDuplicateNotice: bool = TASKS.forall(t => hooks.get(t) <= 1 and events.get(t) <= 1)
+  val noFalseNotice: bool = TASKS.forall(t =>
+    (hooks.get(t) > 0 implies needHook.get(t)) and (events.get(t) > 0 implies needEvent.get(t)))
 
-  // A release that failed after a write is never silent: it is warned or thrown to the caller.
+  // A release that did not remove the lock cleanly after a write is never silent: it is warned or
+  // thrown to the caller.
   val releaseFailureReported: bool = ACTORS.forall(a => releaseReported.get(a) == releaseFailures.get(a))
 
   // No process waits on a lock file it left behind itself.
   val noSelfWait: bool = ACTORS.forall(a => not(waitingOnSelf.get(a)))
 
-  // Claiming stops only when a lock file cannot be removed.
+  // Claiming stops only when a lock file cannot be removed (for writes; see README for reads).
   val stopsOnlyWhenUnlinkFails: bool = PROCS.forall(p =>
     procs.get(p).phase == Stopped implies procs.get(p).stopReason == Unlink)
 
@@ -318,7 +366,7 @@ module claimLockRelease {
     releaseFailureReported, noSelfWait, stopsOnlyWhenUnlinkFails, noFalseCleanEnd,
   }
 
-  // ---------- witnesses (each should be reachable: `--invariant` on its negation finds a trace) ----------
+  // ---------- witnesses (each should be reachable) ----------
   val wClaimKeptAfterReleaseFailure: bool = lastAction == "claimReleaseFailedKept"
   val wTaskRanAfterReleaseFailure: bool = lastAction == "runTask" and releaseFailures.get("A") + releaseFailures.get("B") > 0
   val wSelfRecovered: bool = lastAction == "claimAfterSelfRecovery"
@@ -326,11 +374,15 @@ module claimLockRelease {
   val wOtherWaitsOnLiveOrphan: bool = lastAction == "claimTimeout" and orphanOf != NONE
   val wRecoverReleaseFailed: bool = lastAction == "recoverReleaseFailed"
   val wInvalidateReleaseFailed: bool = lastAction == "invalidateReleaseFailed"
-  val wSetupNoticeAfterReleaseFailure: bool = lastAction == "claimReleaseFailedKept" and notices.get("t2") == 1
+  val wSetupHookAfterReleaseFailure: bool = lastAction == "claimReleaseFailedKept" and hooks.get("t2") == 1
+  val wHookAfterStuckForGood: bool = orphanForGood and hooks.get("t1") + hooks.get("t2") > 0
+  val wUnseenReported: bool = orphanOf != NONE and orphanRecorded and not(orphanForGood)
+    and releaseReported.get("A") + releaseReported.get("B") + releaseReported.get(M) > 0
   val wRunEnded: bool = PROCS.exists(p => procs.get(p).phase == Ended)
   val wRunEndedAfterReleaseFailure: bool = lastAction == "endRun" and releaseFailures.get("A") + releaseFailures.get("B") > 0
 }
 
 module current { import claimLockRelease(DESIGN = "Current").* from "./claimLockRelease" }
 module returnOnly { import claimLockRelease(DESIGN = "ReturnOnly").* from "./claimLockRelease" }
+module firstDesign { import claimLockRelease(DESIGN = "FirstDesign").* from "./claimLockRelease" }
 module fixed { import claimLockRelease(DESIGN = "Fixed").* from "./claimLockRelease" }
