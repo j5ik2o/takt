@@ -402,6 +402,8 @@ export function chunksOf(text: string): fc.Arbitrary<string[]> {
 
 // #175 (takt-175 DESIGN.md): the four families of leaks since before #151. Each fragment is one
 // line; `echoes` are the values a later output may print on their own. Nothing is filtered out.
+// Each family also varies how a secret part ends (design review R175-4): at an `@`, a `,`, a `;`
+// or whitespace, wherever the form allows that ending (DESIGN.md 6 lists which ones apply).
 
 const familySecret = fc.tuple(marker, fc.stringMatching(/^[A-Za-z0-9._~-]{0,4}$/)).map(([mark, tail]) => mark + tail);
 
@@ -411,8 +413,17 @@ export interface ExpectedFragment extends Fragment {
 }
 
 /**
+ * Secret text after an `@` of a URL password: secrets that each end at a `,` or a `;` inside the
+ * password, or right before the next `@` (R175-1: `@,Zq51Zq,Zq52Zq@host`).
+ */
+const urlSecretRun = fc
+  .tuple(fc.array(fc.tuple(familySecret, fc.constantFrom(',', ';')), { maxLength: 2 }), familySecret, fc.constantFrom('', ',', ';'))
+  .map(([inner, last, end]) => inner.map(([secret, stop]) => secret + stop).join('') + last + end);
+
+/**
  * 1. A URL password with a `,` right after an `@`: between that `@` and the `,` there is no letter
- * or digit, so nothing there can be a host and the `,` does not end the URL.
+ * or digit, so nothing there can be a host and the `,` does not end the URL. Neither does a later
+ * `,` before the next `@`.
  */
 export const urlCommaAfterAtFragment: fc.Arbitrary<ExpectedFragment> = fc
   .tuple(
@@ -420,7 +431,7 @@ export const urlCommaAfterAtFragment: fc.Arbitrary<ExpectedFragment> = fc
     fc.stringMatching(/^[a-z0-9]{0,4}$/),
     familySecret,
     fc.option(fc.stringMatching(/^@[a-z0-9]{1,3}$/), { nil: '' }),
-    fc.array(fc.tuple(fc.constantFrom(',', ',,', '-,', '.,', '_,', '~,'), familySecret), { minLength: 1, maxLength: 3 }),
+    fc.array(fc.tuple(fc.constantFrom(',', ',,', '-,', '.,', '_,', '~,'), urlSecretRun), { minLength: 1, maxLength: 3 }),
     hostPart,
   )
   .map(([s, user, head, middle, rest, host]) => {
@@ -428,9 +439,18 @@ export const urlCommaAfterAtFragment: fc.Arbitrary<ExpectedFragment> = fc
     return { text: `${s}://${user}:${password}@${host}`, echoes: [password], expected: `${s}://[REDACTED]@${host}` };
   });
 
-/** Over-masking bound of family 1: a `,` after a host still ends the URL, and the address after it stays. */
+/**
+ * Over-masking bound of family 1: a `,` after a host still ends the URL, and the address after it
+ * stays. A host may be any letters or digits, not only ASCII (R175-3).
+ */
 export const urlCommaAfterHostFragment: fc.Arbitrary<ExpectedFragment> = fc
-  .tuple(scheme, fc.stringMatching(/^[a-z0-9]{0,4}$/), familySecret, fc.option(fc.stringMatching(/^@[a-z0-9]{1,3}$/), { nil: '' }), hostPart)
+  .tuple(
+    scheme,
+    fc.stringMatching(/^[a-z0-9]{0,4}$/),
+    familySecret,
+    fc.option(fc.stringMatching(/^@[a-z0-9]{1,3}$/), { nil: '' }),
+    fc.oneof(hostPart, fc.constantFrom('例え', 'bücher.test', '日本.test', '١٢٣')),
+  )
   .map(([s, user, head, middle, host]) => ({
     text: `${s}://${user}:${head}${middle}@${host},admin@example.test`,
     echoes: [head + middle],
@@ -439,41 +459,51 @@ export const urlCommaAfterHostFragment: fc.Arbitrary<ExpectedFragment> = fc
 
 /**
  * 2. Keys inside one value, joined by shell separators: `token=a;password=secret;token=z`. Every
- * value between two keys is printed on its own later.
+ * value between two keys is printed on its own later. A value ends at the separator, at an `@`
+ * before it, at whitespace or at a `,` (the last two end the whole value).
  */
 export const keysInsideOneValueFragment: fc.Arbitrary<Fragment> = fc
   .tuple(
     fc.array(fc.tuple(fc.constantFrom('', '--'), sensitiveKey, fc.constantFrom('=', ':'), familySecret), { minLength: 3, maxLength: 6 }),
-    fc.array(fc.constantFrom(';', '&', '|', '&&', '||'), { minLength: 5, maxLength: 5 }),
+    fc.array(fc.constantFrom(';', '&', '|', '&&', '||', '@;', '@|', ' ;', ', ', ' '), { minLength: 5, maxLength: 5 }),
   )
-  .map(([pairs, separators]) => ({
-    text: pairs.map(([dashes, key, separator, value], index) => (index === 0 ? '' : separators[index - 1]) + dashes + key + separator + value).join(''),
-    echoes: pairs.map(([, , , value]) => value),
+  .map(([pairs, joins]) => ({
+    text: pairs.map(([dashes, key, separator, value], index) => (index === 0 ? '' : joins[index - 1]) + dashes + key + separator + value).join(''),
+    // A value is everything up to the separator, so a value followed by `@;` is printed with its `@`.
+    echoes: pairs.map(([, , , value], index) => value + (joins[index]?.startsWith('@') && index + 1 < pairs.length ? '@' : '')),
   }));
 
 /**
  * 3. A capital `Bearer` right after a word character: glued to other text, or after an escaped
- * line break or tab in serialized JSON (`\nBearer`).
+ * line break or tab in serialized JSON (`\nBearer`). The value ends at whitespace, a `,`, a `;`,
+ * an `@`, a quote or the end.
  */
 export const gluedBearerFragment: fc.Arbitrary<Fragment> = fc
   .tuple(
     fc.oneof(fc.stringMatching(/^[A-Za-z0-9_]{1,6}$/), fc.nat(999).map((id) => `Id${id}`), fc.constantFrom('\\n', '\\t', '\\r\\n', '401\\n')),
     fc.tuple(marker, fc.stringMatching(/^[A-Za-z0-9._~+/-]{3,8}$/)).map(([mark, tail]) => mark + tail),
-    fc.constantFrom('', ' rejected', '"}'),
+    fc.constantFrom('', ' rejected', '"}', ',next', ';next', '@host'),
   )
   .map(([glue, value, after]) => ({ text: `${glue}Bearer ${value}${after}`, echoes: [value] }));
 
-/** 4. A cookie value without a name, before the first `;` of a cookie header. */
+/**
+ * 4. A cookie value without a name: the part before the first `;` of a cookie header. The value
+ * may hold `=` (Base64 padding, R175-2) and ends at the `;`, at whitespace before it, at an `@`
+ * before it, or at the end of the header.
+ */
 export const unnamedCookieFragment: fc.Arbitrary<Fragment> = fc
   .tuple(
     fc.constantFrom('', 'https://cookie:a@host '),
     fc.constantFrom('Cookie:', 'Set-Cookie:', 'cookie:', 'set-cookie:', 'COOKIE:'),
     fc.constantFrom(' ', ''),
-    fc.tuple(marker, fc.stringMatching(/^[A-Za-z0-9._~+/-]{0,6}$/)).map(([mark, tail]) => mark + tail),
-    fc.constantFrom('', ' '),
+    fc.tuple(marker, fc.stringMatching(/^[A-Za-z0-9._~+/=-]{0,6}$/), fc.constantFrom('', '=', '==')).map(([mark, tail, padding]) => mark + tail + padding),
+    fc.constantFrom(';', '; ', ' ;', '@;', ''),
     fc.constantFrom('path=/', 'Path=/; HttpOnly', 'Secure', 'Max-Age=60; SameSite=Lax', 'a=b'),
   )
-  .map(([before, header, space, value, gap, attributes]) => ({ text: `${before}${header}${space}${value};${gap}${attributes}`, echoes: [value] }));
+  .map(([before, header, space, value, end, attributes]) => ({
+    text: `${before}${header}${space}${value}${end}${end === '' ? '' : attributes}`,
+    echoes: [value + (end.startsWith('@') ? '@' : '')],
+  }));
 
 /** The four families of #175, each one line. */
 export const KNOWN_LEAK_FAMILIES: ReadonlyArray<readonly [name: string, fragment: fc.Arbitrary<Fragment>]> = [

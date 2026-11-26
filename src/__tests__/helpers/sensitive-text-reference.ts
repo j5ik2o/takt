@@ -11,20 +11,24 @@ const endsAssignedValue = (char: string | undefined): boolean => char === undefi
 
 /**
  * The last `@` at or after `from` before the tail ends, or -1. The tail starts right after an `@`.
- * A `,` ends it only after a letter or digit since the latest `@`, which could be a host (#175):
- * `@host,admin@example.test` ends at the `,`, `@,secret@host` does not.
+ * A `,` ends it only after a letter or digit (of any script) since the latest `@`, which could be
+ * a host (#175): `@host,admin@example.test` ends at the `,`, `@,secret@host` does not. Once a `,`
+ * was passed, later ones up to the next `@` do not end it either (`@,a,b@host`, R175-1).
  */
 function lastAtInTail(text: string, from: number): number {
   let last = -1;
   let hostChar = false;
+  let passedComma = false;
   for (let index = from; !endsTail(text[index]); index++) {
     const char = text[index]!;
     if (char === '@') {
       last = index;
       hostChar = false;
+      passedComma = false;
     } else if (char === ',') {
-      if (hostChar) break;
-    } else if (/^[A-Za-z0-9]$/.test(char)) {
+      if (hostChar && !passedComma) break;
+      passedComma = true;
+    } else if (/^[\p{L}\p{N}]$/u.test(char)) {
       hostChar = true;
     }
   }

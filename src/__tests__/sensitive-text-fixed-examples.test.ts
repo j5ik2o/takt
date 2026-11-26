@@ -144,15 +144,28 @@ describe('#175: a cookie value without a name is hidden in later output', () => 
     ['Cookie: Zq37Zq; path=/', 'Zq37Zq'],
     ['Set-Cookie: Zq38Zq; Path=/; HttpOnly; Secure', 'Zq38Zq'],
     ['set-cookie:Zq39Zq;Max-Age=60', 'Zq39Zq'],
+    // R175-2: Base64 padding puts `=` into a value without a name.
+    ['Cookie: Zq34Zq==; path=/', 'Zq34Zq=='],
+    ['Set-Cookie: Zq40Zqab=cd; Path=/', 'Zq40Zqab=cd'],
   ])('%j', (source, secret) => {
     for (const [path, output] of [...Object.entries(shownOnItsOwn(source)), ...Object.entries(shownLater(source, `echoed ${secret}`))]) {
-      expect(output, path).not.toContain(secret);
+      for (const marker of markersIn(secret)) expect(output, path).not.toContain(marker);
     }
   });
 
   it('hides a named cookie value in the same place', () => {
     const source = NAMED_COOKIE;
     for (const output of Object.values(shownLater(source, 'echoed Zq36Zq'))) expect(output).not.toContain('Zq36Zq');
+  });
+
+  // Known over-masking (R175-2, case c): the first part is tracked whole, with or without `=`, so a
+  // named cookie is hidden with its name where it is printed again.
+  it('hides a named first cookie with its name where it is printed again', () => {
+    const source = NAMED_COOKIE;
+    for (const [path, output] of Object.entries(shownLater(source, 'echoed sid=Zq36Zq'))) {
+      if (path === 'phase1') expect(output, path).toContain('echoed [REDACTED]');
+      else expect(output, path).toBe('echoed [REDACTED]');
+    }
   });
 
   // Over-masking bound: only the part before the first `;` is a value. The attributes after it are
@@ -188,6 +201,10 @@ describe('#175: a URL password with a `,` right after an `@` is hidden to its la
     ['redis://:Zq55Zq@-,Zq56Zq@db:6379/0', 'redis://[REDACTED]@db:6379/0'],
     ['https://u:Zq57Zq@,Zq58Zq@,Zq59Zq@host', 'https://[REDACTED]@host'],
     ['clone https://u:Zq60Zq@x@,Zq61Zq@host failed', 'clone https://[REDACTED]@host failed'],
+    // R175-1: once a `,` was skipped, later `,` before the next `@` do not end the URL either.
+    ['https://:Zq50Zq@,Zq51Zq,Zq52Zq@host', 'https://[REDACTED]@host'],
+    ['https://u:Zq69Zq@,Zq70Zq,Zq71Zq,@host', 'https://[REDACTED]@host'],
+    ['https://u:Zq72Zq@,Zq73Zq;Zq74Zq,Zq75Zq@db:5432/x', 'https://[REDACTED]@db:5432/x'],
   ])('%j', (text, expected) => {
     expect(sanitizeSensitiveText(text)).toBe(expected);
     expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(expected);
@@ -216,6 +233,22 @@ describe('#175: a URL password with a `,` right after an `@` is hidden to its la
       expect(output, path).toContain('admin@example.test');
       expect(output, path).toContain('[REDACTED]');
     }
+  });
+
+  // R175-3: a host may be letters or digits of any script, as before #175.
+  it.each([
+    ['https://user:pass@例え,admin@example.test', 'https://[REDACTED]@例え,admin@example.test'],
+    ['https://user:pass@bücher.test,admin@example.test', 'https://[REDACTED]@bücher.test,admin@example.test'],
+    ['https://u:p@x@١٢٣,admin@example.test', 'https://[REDACTED]@١٢٣,admin@example.test'],
+  ])('keeps the host and the address in %j', (text, expected) => {
+    expect(sanitizeSensitiveText(text)).toBe(expected);
+    expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(expected);
+  });
+
+  // Known leak, kept (open point 1): a `,` after letters or digits may follow a host, as in
+  // `user:pass@host,admin@example.test`, so `@x,Zq77Zq@host` still shows its rest.
+  it('still shows the rest after a `,` that follows letters or digits (known leak)', () => {
+    expect(sanitizeSensitiveText('https://u:Zq76Zq@x,Zq77Zq@host')).toBe('https://[REDACTED]@x,Zq77Zq@host');
   });
 });
 
@@ -272,6 +305,15 @@ describe('#175: a capital `Bearer` right after a word character is read', () => 
   ])('keeps %j readable', (text) => {
     expect(sanitizeSensitiveText(text)).toBe(text);
     expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(text);
+  });
+});
+
+// Open point 6 (DECISIONS-after-review.md): the glued `Bearer` of #3 and #4 also shows through the
+// stream, which is still the previous stream. #175 does not change the stream; this stays a known
+// leak until the stream reads the new reading (second PR of #151), which turns it into "hidden".
+describe('#175 known leak (stream): a capital `Bearer` right after a word character', () => {
+  it.each(PHASE1_COMPOSITION.map((input) => [input]))('the stream shows Zq1Zq of %j', (input) => {
+    expect(streamedAlone(input)).toContain('Zq1Zq');
   });
 });
 
