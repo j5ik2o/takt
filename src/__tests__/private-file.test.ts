@@ -152,6 +152,26 @@ describe('direct private file persistence', () => {
     expect(existsSync(path)).toBe(false);
   });
 
+  // #169 1節 (設計レビュー 低-3): once rename has published the file, its temporary file is gone, so
+  // cleanup must not call unlink: on NFS or FUSE an error other than ENOENT would fail a saved write.
+  it('does not unlink the temporary file after rename has published it', () => {
+    const { directory, path } = fixture();
+    failures.unlink = true;
+    writePrivateFile(path, 'saved');
+    expect(readFileSync(path, 'utf8')).toBe('saved');
+    expect(failures.unlink).toBe(true);
+    expect(readdirSync(directory)).toEqual(['data.json']);
+  });
+
+  it('still removes the temporary file after link has published a new file', () => {
+    const { directory, path } = fixture();
+    failures.unlink = true;
+    expect(() => writeNewPrivateFileWithMode(path, 'saved', 0o600)).toThrow('cleanup failed');
+    expect(failures.unlink).toBe(false);
+    expect(readFileSync(path, 'utf8')).toBe('saved');
+    expect(readdirSync(directory).filter((name) => name !== 'data.json')).toHaveLength(1);
+  });
+
   it.skipIf(process.platform === 'win32')('rejects a symlink leaf', () => {
     const { directory, path } = fixture();
     const other = join(directory, 'other');

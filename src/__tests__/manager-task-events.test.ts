@@ -30,8 +30,10 @@ it('publishes task setup failures once when claiming changes their state', () =>
     },
   };
   const taskRunner = runner as unknown as TaskRunner;
-  expect(claimTasksWithGoalCompletions(taskRunner, 1, '/project', new AbortController().signal))
-    .toEqual({ tasks: [], setupFailedTaskNames: ['task-a'] });
+  const claimed = claimTasksWithGoalCompletions(taskRunner, 1, '/project', new AbortController().signal);
+  // #169: the claim returns the saved states instead of the names; the names checked are the same.
+  expect(claimed.tasks).toEqual([]);
+  expect(claimed.setupFailedTasks.map((task) => task.name)).toEqual(['task-a']);
   expect(runner.listTaskStateItems).toHaveBeenCalledOnce();
   expect(save).toHaveBeenCalledExactlyOnceWith('/project', { kind: 'completion', goalId: goalRecord().id, taskName: 'task-a', runSlug: 'setup-run', result: { success: false, interrupted: false } });
   claimTasksWithGoalCompletions(taskRunner, 1, '/project', new AbortController().signal); expect(save).toHaveBeenCalledOnce();
