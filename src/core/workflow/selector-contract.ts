@@ -1,6 +1,7 @@
 import type { AgentResponse } from '../models/types.js';
 import { projectNativeStructuredOutputSchema } from '../models/native-structured-output-schema.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
+import { sanitizeSensitiveValue } from '../../shared/utils/sensitive-value.js';
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
 import { parseStructuredOutputObject } from '../../agents/structured-caller/shared.js';
 import {
@@ -71,9 +72,12 @@ function redactJson(value: unknown, redact: Redact): unknown {
   return value;
 }
 
-/** Redacts each string and key before encoding: an escaped or shortened secret no longer matches its known value. */
+/**
+ * Masks whatever sits under a secret key, then redacts each string and key before encoding: an
+ * escaped or shortened secret no longer matches its known value.
+ */
 function renderIds(ids: unknown, redact: Redact): string {
-  return JSON.stringify(redactJson(ids, redact));
+  return JSON.stringify(redactJson(sanitizeSensitiveValue(ids), redact));
 }
 
 function renderReturnedIds(returned: unknown, redact: Redact): string {

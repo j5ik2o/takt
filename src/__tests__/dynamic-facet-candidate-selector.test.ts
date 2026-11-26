@@ -345,6 +345,22 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
     });
 
     it.each([
+      ['an array', { password: ['hunter2-array'] }],
+      ['an object', { api_key: { value: 'hunter2-object' } }],
+    ])('should redact %s held under a secret key even when the secret is not a known value', (_name, selectedIds) => {
+      const message = describeSelectorError(
+        terminalRejected({ selected_ids: selectedIds, rationale: 'x' }),
+        contract,
+        'fix',
+        identity,
+        label,
+      );
+
+      expect(message).toContain('returned selected_ids:');
+      expect(message).not.toContain('hunter2');
+    });
+
+    it.each([
       ['a provider failure', createAgentFailureError('provider_error', 'connection reset: {"selected_ids":["coding"]}')],
       ['a rate limit', new StructuredAgentResponseError('rate limited', {
         persona: 'selector',
