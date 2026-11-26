@@ -2,6 +2,7 @@ import type { TaskFileData, TaskFailure } from './schema.js';
 import type { TaskInfo, TaskResult, TaskListItem, TaskState } from './types.js';
 import type { TaskStatus } from './schema.js';
 import { TaskStore } from './store.js';
+import type { GoalTaskSetupGuard } from './goalTaskSetupGuard.js';
 import { TaskLifecycleService, type PrMergeTaskInput } from './taskLifecycleService.js';
 import { TaskQueryService } from './taskQueryService.js';
 import { TaskDeletionService, type TaskDeletionCleanup } from './taskDeletionService.js';
@@ -105,8 +106,12 @@ export class TaskRunner {
     return this.query.listTasksForProviderPreflight(goalTasksOnly);
   }
 
-  claimNextTasks(count: number, goalSetupFailure?: (task: TaskInfo) => string | undefined): TaskInfo[] {
-    return this.lifecycle.claimNextTasks(count, goalSetupFailure);
+  claimNextTasks(
+    count: number,
+    goalSetupGuard?: GoalTaskSetupGuard,
+    onSetupFailed?: (task: TaskState) => void,
+  ): TaskInfo[] {
+    return this.lifecycle.claimNextTasks(count, goalSetupGuard, onSetupFailed);
   }
 
   failInterruptedRunningTasks(goalId?: string, onRecovered?: (task: TaskState) => void): number {

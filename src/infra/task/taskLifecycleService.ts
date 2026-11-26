@@ -24,6 +24,8 @@ import type { Goal } from '../goals/schema.js';
 import { GoalStore } from '../goals/store.js';
 import { isGoalPaused } from '../goals/state.js';
 import { withGoalExecutionLock } from '../goals/execution-lock.js';
+import { PrivateFileLockTimeoutError } from '../../shared/utils/private-file-lock.js';
+import type { GoalTaskSetupGuard } from './goalTaskSetupGuard.js';
 import type { MergeMethod } from '../../core/models/config-types.js';
 import type { PrExecutionContext } from '../../core/workflow/system/pr-execution-context.js';
 import { getSelfTaskProcessIdentity, getTaskProcessIdentity } from './taskProcessIdentity.js';
@@ -40,10 +42,19 @@ export interface PrMergeTaskInput {
 }
 
 export type TaskClaimLockFailureCode = 'ENOSPC' | 'TIMEOUT';
+/** The lock a claim could not take: `tasks.yaml.lock`, or `goal-execution.lock` held around it. */
+export type TaskClaimLock = 'tasks.yaml' | 'goal-execution';
 
 export class TaskClaimLockAcquisitionError extends Error {
-  constructor(message: string, readonly code: TaskClaimLockFailureCode, options?: ErrorOptions) {
+  readonly lock: TaskClaimLock;
+
+  constructor(
+    message: string,
+    readonly code: TaskClaimLockFailureCode,
+    options?: ErrorOptions & { lock?: TaskClaimLock },
+  ) {
     super(message, options);
+    this.lock = options?.lock ?? 'tasks.yaml';
   }
 }
 
@@ -245,70 +256,114 @@ export class TaskLifecycleService {
     return toTaskInfo(this.projectDir, this.tasksFile, created);
   }
 
-  claimNextTasks(count: number, goalSetupFailure?: (task: TaskInfo) => string | undefined): TaskInfo[] {
+  /**
+   * Claims up to `count` pending tasks in one tasks.yaml write. A goal task that `goalSetupGuard`
+   * rejects is saved as failed instead, and passed to `onSetupFailed` after the write. The claimed
+   * tasks are always returned once the write is done: an error from `onSetupFailed` is warned and
+   * never escapes, and only a failure before the write becomes a retryable
+   * `TaskClaimLockAcquisitionError`.
+   */
+  claimNextTasks(
+    count: number,
+    goalSetupGuard?: GoalTaskSetupGuard,
+    onSetupFailed?: (task: TaskState) => void,
+  ): TaskInfo[] {
     if (count <= 0) {
       return [];
     }
 
     const claimed: TaskInfo[] = [];
+    const setupFailures: TaskRecord[] = [];
+    const recordSetupFailure = (task: TaskRecord, next: TaskRecord, reason: string): TaskRecord => {
+      const failed = this.buildSetupFailedTaskRecord(task, next, reason);
+      setupFailures.push(failed);
+      return failed;
+    };
+    let writeStarted = false;
 
-    withGoalExecutionLock(this.projectDir, () => this.store.update((current) => {
-      let remaining = count;
-      const goalStore = new GoalStore(this.projectDir);
-      const blockedByGoal = new Map<string, boolean>();
-      const tasks = current.tasks.map((task) => {
-        if (remaining > 0 && task.status === 'pending' && task.deletion === undefined
-          && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
-          if (task.goal_id !== undefined) {
-            try {
-              let blocked = blockedByGoal.get(task.goal_id);
-              if (blocked === undefined) {
-                const goal = goalStore.getSync(task.goal_id);
-                blocked = isGoalPaused(goal) || goal.executionStatus === 'aborted';
-                blockedByGoal.set(task.goal_id, blocked);
+    try {
+      withGoalExecutionLock(this.projectDir, () => this.store.update((current) => {
+        writeStarted = true;
+        let remaining = count;
+        const goalStore = new GoalStore(this.projectDir);
+        const blockedByGoal = new Map<string, boolean>();
+        const tasks = current.tasks.map((task) => {
+          if (remaining > 0 && task.status === 'pending' && task.deletion === undefined
+            && (this.goalTasksOnly !== true || task.goal_id !== undefined)) {
+            if (task.goal_id !== undefined) {
+              try {
+                let blocked = blockedByGoal.get(task.goal_id);
+                if (blocked === undefined) {
+                  const goal = goalStore.getSync(task.goal_id);
+                  blocked = isGoalPaused(goal) || goal.executionStatus === 'aborted';
+                  blockedByGoal.set(task.goal_id, blocked);
+                }
+                if (blocked) return task;
+              } catch (error) {
+                this.onWarning?.(`Cannot read goal for task ${task.name}: ${sanitizeSensitiveText(getErrorMessage(error))}`);
+                return task;
               }
-              if (blocked) return task;
+            }
+            const next = buildClaimedTaskRecord(task);
+            let info: TaskInfo;
+            try {
+              info = toTaskInfo(this.projectDir, this.tasksFile, next);
             } catch (error) {
-              this.onWarning?.(`Cannot read goal for task ${task.name}: ${sanitizeSensitiveText(getErrorMessage(error))}`);
-              return task;
+              if (task.goal_id === undefined) throw error;
+              const reason = sanitizeSensitiveText(getErrorMessage(error));
+              return recordSetupFailure(task, next, reason);
             }
-          }
-          const next = buildClaimedTaskRecord(task);
-          let info: TaskInfo;
-          try {
-            info = toTaskInfo(this.projectDir, this.tasksFile, next);
-          } catch (error) {
-            if (task.goal_id === undefined) throw error;
-            const reason = sanitizeSensitiveText(getErrorMessage(error));
-            return this.buildSetupFailedTaskRecord(task, next, reason);
-          }
-          if (task.goal_id !== undefined && goalSetupFailure !== undefined) {
-            const reason = goalSetupFailure(info);
-            if (reason !== undefined) {
-              this.onWarning?.(`Task ${task.name} cannot run: ${sanitizeSensitiveText(reason)}`);
-              return this.buildSetupFailedTaskRecord(task, next, reason);
+            if (task.goal_id !== undefined && goalSetupGuard !== undefined) {
+              const reason = goalSetupGuard.setupFailureReason(info);
+              if (reason !== undefined) {
+                this.onWarning?.(`Task ${task.name} cannot run: ${sanitizeSensitiveText(reason)}`);
+                return recordSetupFailure(task, next, reason);
+              }
             }
+            claimed.push(info);
+            remaining--;
+            return next;
           }
-          claimed.push(info);
-          remaining--;
-          return next;
-        }
-        return task;
-      });
-      return { tasks };
-    }, {
-      onAcquisitionError: (error) => {
-        if (error instanceof Error && 'code' in error && error.code === 'ENOSPC') {
-          throw new TaskClaimLockAcquisitionError(error.message, 'ENOSPC', { cause: error });
-        }
-        if (isFileLockTimeoutError(error)) {
-          throw new TaskClaimLockAcquisitionError(error.message, 'TIMEOUT', { cause: error });
-        }
-        throw error;
-      },
-    }));
+          return task;
+        });
+        return { tasks };
+      }, {
+        onAcquisitionError: (error) => {
+          if (error instanceof Error && 'code' in error && error.code === 'ENOSPC') {
+            throw new TaskClaimLockAcquisitionError(error.message, 'ENOSPC', { cause: error });
+          }
+          if (isFileLockTimeoutError(error)) {
+            throw new TaskClaimLockAcquisitionError(error.message, 'TIMEOUT', { cause: error });
+          }
+          throw error;
+        },
+      }));
+    } catch (error) {
+      // Nothing is written before the update callback starts, so only then is a goal-execution.lock
+      // timeout safe to retry. After that, an error never becomes a retry: the claim may be saved.
+      if (!writeStarted && error instanceof PrivateFileLockTimeoutError) {
+        throw new TaskClaimLockAcquisitionError(error.message, 'TIMEOUT', { cause: error, lock: 'goal-execution' });
+      }
+      throw error;
+    }
 
+    for (const task of setupFailures) {
+      try {
+        onSetupFailed?.(toTaskState(this.tasksFile, task));
+      } catch (error) {
+        this.warnSetupFailureReport(task.name, error);
+      }
+    }
     return claimed;
+  }
+
+  private warnSetupFailureReport(taskName: string, error: unknown): void {
+    try {
+      this.onWarning?.(`Task ${taskName} was saved as failed during setup, but reporting it failed: ${sanitizeSensitiveText(getErrorMessage(error))}`);
+    } catch (warningError) {
+      // The claim is already saved and must be returned; a warning sink that throws is dropped.
+      void warningError;
+    }
   }
 
   private buildSetupFailedTaskRecord(task: TaskRecord, next: TaskRecord, reason: string): TaskRecord {

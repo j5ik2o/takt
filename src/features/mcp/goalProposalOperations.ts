@@ -110,7 +110,8 @@ async function resolveOwnedProposal(
   assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
   const owner = await resolveProposalOwner(input.cwd);
   if (owner.conversationId !== input.conversationId) {
-    throw new Error(`The conversationId ${input.conversationId} does not own the pending goal proposal of ${input.cwd}`);
+    // The fork's wording: MCP clients (takt-dash) match it to tell a recreated proposal from other failures.
+    throw new Error(`The conversationId ${input.conversationId} does not own the pending registration proposal of ${input.cwd}`);
   }
   return owner;
 }

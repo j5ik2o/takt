@@ -33,6 +33,7 @@ vi.mock('../infra/goals/execution-lock.js', async (importOriginal) => {
 
 import { claimTasksWithGoalCompletions, isClaimLockTimeoutFailure, TaskClaimLockUnavailableError } from '../features/tasks/execute/claimTasks.js';
 import { TaskClaimLockAcquisitionError } from '../infra/task/taskLifecycleService.js';
+import { createRuntimeAssignmentSetupGuard } from '../features/tasks/execute/runtimeAssignmentGuard.js';
 import { TaskStore } from '../infra/task/store.js';
 import { TaskRunner, type TaskInfo, type TaskState } from '../infra/task/index.js';
 import { PrivateFileLockAcquisitionError, PrivateFileLockTimeoutError } from '../shared/utils/private-file-lock.js';
@@ -185,12 +186,12 @@ describe('the claim that saved a setup failure reports it', () => {
     const runnable = addRunnable(runner);
     const first = addBroken(runner, 'Broken goal work 1');
     const second = addBroken(runner, 'Broken goal work 2');
-    const onSetupFailed = vi.fn(() => { throw new Error('stdout closed: EPIPE'); });
+    const onSetupFailed = vi.fn((_task: TaskState) => { throw new Error('stdout closed: EPIPE'); });
 
-    const claimed = runner.claimNextTasks(3, undefined, onSetupFailed);
+    const claimed = runner.claimNextTasks(3, createRuntimeAssignmentSetupGuard(dir), onSetupFailed);
 
     expect(claimed.map((task) => task.name)).toEqual([runnable.name]);
-    expect(onSetupFailed.mock.calls.map(([task]) => (task as TaskState).name)).toEqual([first.name, second.name]);
+    expect(onSetupFailed.mock.calls.map(([task]) => task.name)).toEqual([first.name, second.name]);
     const reportFailures = onWarning.mock.calls.map(([message]) => String(message)).filter((message) => message.includes('EPIPE'));
     expect(reportFailures).toHaveLength(2);
     expect(reportFailures[0]).toContain(first.name);
@@ -198,11 +199,14 @@ describe('the claim that saved a setup failure reports it', () => {
 
   it('returns the claimed task when both onSetupFailed and onWarning throw', () => {
     const dir = project();
-    const runner = new TaskRunner(dir, { onWarning: () => { throw new Error('warning sink closed'); } });
+    // Only the warning about the failed report throws: it is the one given after the write.
+    const runner = new TaskRunner(dir, {
+      onWarning: (message) => { if (message.includes('reporting it failed')) throw new Error('warning sink closed'); },
+    });
     const runnable = addRunnable(runner);
     addBroken(runner);
 
-    const claimed = runner.claimNextTasks(2, undefined, () => { throw new Error('stdout closed: EPIPE'); });
+    const claimed = runner.claimNextTasks(2, createRuntimeAssignmentSetupGuard(dir), () => { throw new Error('stdout closed: EPIPE'); });
 
     expect(claimed.map((task) => task.name)).toEqual([runnable.name]);
   });

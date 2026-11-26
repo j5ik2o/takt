@@ -5,9 +5,11 @@ import {
   withTaskRuntimeAssignment,
 } from '../../../infra/config/runtime-provider/invocation.js';
 import { RuntimeAssignmentSelectionError } from '../../../infra/config/runtime-provider/loader.js';
+import type { GoalTaskSetupGuard } from '../../../infra/task/index.js';
 
 /**
- * タスク自身の runtime_assignment が runtime.yaml から消えているときだけ、選択エラーの文面を返す。
+ * タスク自身の runtime_assignment を選択できないときだけ、選択エラーの文面を返す。
+ * 名前が runtime.yaml から消えている場合と、名前は定義済みで provider section が無効な場合がある。
  *
  * goal の判定は呼び出し側が行う。provider.defaults.assignment や provider.directories の
  * 参照不正は別文面・別経路のため判定しない。`--runtime-assignment` 起動時はタスク名が解決に
@@ -31,4 +33,11 @@ export function runtimeAssignmentUnavailableReason(
     return undefined;
   }
   return undefined;
+}
+
+/** goal タスクの runtime_assignment を選択できないとき、そのタスクを実行へ渡さない。 */
+export function createRuntimeAssignmentSetupGuard(cwd: string): GoalTaskSetupGuard {
+  return {
+    setupFailureReason: (task) => runtimeAssignmentUnavailableReason(cwd, task.data),
+  };
 }
