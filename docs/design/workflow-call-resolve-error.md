@@ -19,7 +19,7 @@ PR: [j5ik2o/takt#167](https://github.com/j5ik2o/takt/pull/167)（マージ済み
 - path 呼び出し（`./x.yaml`）の doctor での扱い（従来どおり飛ばす）。
 - `resolveTask`・`providerPreflight`・`taskRetryStartPath` など、ほかの箇所の `null` の扱い。
 - `beginRun` 自体が失敗したときの記録。
-- `beginRun` 前の `resolveAvailableSourceLineage` が `OperationLineageUnavailableError` 以外の `OperationRecoveryError`（不正な slug・祖先循環・別 journal）を投げたときの挙動（PR #167 以前からの既存挙動であり、ディレクトリ・`meta.json` は作られない）。
+- `beginRun` 前の `resolveAvailableSourceLineage` が `OperationLineageUnavailableError` 以外の `OperationRecoveryError`（不正な slug・祖先循環・別 journal）や `readRunMetaBySlug` の読み取り・検証例外（`EACCES`・非通常ディレクトリ・slug 不一致等）を投げたときの挙動（PR #167 以前からの既存挙動であり、ディレクトリ・`meta.json` は作られない）。
 
 ## 守る不変条件
 
@@ -31,7 +31,7 @@ PR: [j5ik2o/takt#167](https://github.com/j5ik2o/takt/pull/167)（マージ済み
 - 成功で終わった run の `meta.json` は `completed` になり、失敗記録や探索失敗理由を残さない。
 - 1 つの run について、初期 `meta.json` 公開・`workflow_start`・終端ログ・`activeRun.finish` が二重にならない（ただし既存の `initNdjsonLog` 実行後 bootstrap 失敗時の二重追記は別件）。
 - resume した 2 試行目の run は再開元とは別の slug を持ち、再開元の operation lineage が取得できるとき（`publishedResumeSource` があるとき）は準備・bootstrap 失敗時を含め終了時に `source_run_slug` を記録する。再開元の operation lineage が取得できないとき（`OperationLineageUnavailableError` フォールバック時）は新しい journal を開始し、`meta.json` に `source_run_slug` を書かない。いずれの場合も再開元 run の `meta.json` と logs を改変しない（operation journal は系譜の `operationJournalRunSlug` へ共有して追記する）。
-- `reports/` を持たない run（準備や pre-meta bootstrap で失敗した 0 ステップ run など）から resume した場合、`inheritResumeReportSnapshot` が失敗するためステップ実行・完了へ進まず、`terminalizeBootstrapFailure` で `failed` 記録を残して終了する（既存の挙動。0 ステップ失敗 run からの `requeueTask` 等の見直しは別件）。
+- `reports/` を持たない run（準備や pre-meta bootstrap で失敗した 0 ステップ run など）から resume した場合、未解決の `workflow_call` など準備・先行検査で失敗すればその探索失敗理由等で終了し、`prepareWorkflowExecutionBundle` と先行検査を通過して `inheritResumeReportSnapshot` に到達した場合は `reports/` 不在で失敗するためステップ実行・完了へ進まず、`terminalizeBootstrapFailure` で `failed` 記録を残して終了する（既存の挙動。0 ステップ失敗 run からの `requeueTask` 等の見直しは別件）。
 - 説明の builtin の扱いは、実際の探索と一致する（探した側か外した側のどちらか一方にだけ出る）。
 - doctor が `Workflow OK` と出した workflow は、named・scope の呼び出しがすべて解決できる。
 
@@ -46,7 +46,7 @@ PR: [j5ik2o/takt#167](https://github.com/j5ik2o/takt/pull/167)（マージ済み
   - `quint test runStartRecord_test.qnt --main prepareFirstTest`: 2 passing
   - `quint run beginFirst.qnt --main beginFirst --invariant invariant --witnesses ... --max-steps 16 --max-samples 10000`: 違反なし。全 11 witness が到達（到達割合は seed 依存。例: `--seed=0x2e8b1bddb2e882f3` で 0.70%〜46.21%）。
   - `quint run prepareFirst.qnt --main prepareFirst --invariant <条件> --max-steps 16 --max-samples 10000`（`<条件>` に `failureIsRecorded`・`unresolvedReasonExplains`・`resumePreservesIntegrity` を個別に指定。再現コマンドは `specs/quint/run-start-record/README.md` 参照）: 3 つとも期待どおり違反。
-- モデル対象外（`README.md` に明記）: `beginRun` 前の `resolveAvailableSourceLineage` での `OperationRecoveryError`、`beginRun` 自体の失敗（`resolveRunSlug` の同 slug 例外を含む）、終端書き込み途中の I/O 失敗／強制停止（`terminalizeBootstrapFailure` の 2 段階書き込み途中、および `fileWorkflowRunTerminalPublisher` での `meta.json` 更新と `workflow_abort` 追記の間の部分書き込み）、`createWorkflowExecutionBootstrap` 内で `initNdjsonLog` 実行後に失敗した際の `workflow_start` 二重追記、`createWorkflowExecutionBootstrap` 成功後・`WorkflowEngine` が `reports/` を作る前の実行失敗、利用者の中断（Ctrl+C・入力キャンセルによる `meta.json` の `status: aborted`）、operation journal の系譜共有追記、並行 run の slug 競合（実装では `mkdirSync` + `EEXIST` リトライ）。
+- モデル対象外（`README.md` に明記）: `beginRun` 前の `resolveAvailableSourceLineage` での `OperationRecoveryError` や `readRunMetaBySlug` の読み取り・検証例外、`beginRun` 自体の失敗（`resolveRunSlug` の同 slug 例外を含む）、終端書き込み途中の I/O 失敗／強制停止（`terminalizeBootstrapFailure` の 2 段階書き込み途中、および `fileWorkflowRunTerminalPublisher` での `meta.json` 更新と `workflow_abort` 追記の間の部分書き込み）、`createWorkflowExecutionBootstrap` 内で `initNdjsonLog` 実行後に失敗した際の `workflow_start` 二重追記、`createWorkflowExecutionBootstrap` 成功後・ステップ実行前の `WorkflowEngine` 初期化失敗（`reports/` 作成前の失敗および `ensureRunDirsExist` 途中の I/O 失敗）、利用者の中断（Ctrl+C・入力キャンセルによる `meta.json` の `status: aborted`）、operation journal の系譜共有追記、並行 run の slug 競合（実装では `mkdirSync` + `EEXIST` リトライ）。
 
 ## 性質のテスト（PBT）
 
@@ -63,7 +63,7 @@ PR: [j5ik2o/takt#167](https://github.com/j5ik2o/takt/pull/167)（マージ済み
 - 区切り: 不正な識別子 `a//b`・`..`（既存の識別子エラーが先に出る）。
 - `{$param}` の呼び出し: callable を単体で診断すると、既定値の無い `workflow_ref` には discovery 読み込みが仮名（`__takt_discovery_workflow_ref___<param>`）を入れる。doctor は仮名の呼び出しを飛ばす（Devin の指摘で直した）。既定値がある `workflow_ref` は実名なので確かめる。
 - 長さ・Unicode: パスや名前はそのまま連結するだけで、`meta.json`・NDJSON・CLI 出力では切り詰めない。terminal ではエスケープされる。`task_finish_hook` に渡す `TAKT_FINISH_FAILURE_REASON` のみ 4096 文字で切り詰める（`taskFinishHook.ts` の `MAX_FAILURE_REASON_CHARS`）。`takt-dash` のログ末尾表示の `sanitize` は 512 文字で丸める（仕様どおり、`meta.json` には全文が残る）。
-- 並行・再開: 並行 run の slug 衝突は `reserveRunDirectory` の `mkdirSync` + `EEXIST` リトライ（`requestedRunSlug` 固定時は即時例外）で防ぐ。再開（`resumeSource`）の run でも順序は同じで、再開元の operation lineage が取れる場合は `prepareWorkflowExecutionBundle` 失敗時にも `meta.json` に `source_run_slug` と `operation_journal_run_slug` / `operation_claim_token` が残り、lineage が取れない場合（`OperationLineageUnavailableError` フォールバック）は新しい journal を始めて `source_run_slug` を書かない。再開元の `meta.json` と logs は改変されない（operation journal は系譜で共有して追記される）。また、`reports/` を持たない run（準備失敗 run など）からの再開は `inheritResumeReportSnapshot` で失敗する。
+- 並行・再開: 並行 run の slug 衝突は `reserveRunDirectory` の `mkdirSync` + `EEXIST` リトライ（`requestedRunSlug` 固定時は即時例外）で防ぐ。再開（`resumeSource`）の run でも順序は同じで、再開元の operation lineage が取れる場合は `prepareWorkflowExecutionBundle` 失敗時にも `meta.json` に `source_run_slug` と `operation_journal_run_slug` / `operation_claim_token` が残り、lineage が取れない場合（`OperationLineageUnavailableError` フォールバック）は新しい journal を始めて `source_run_slug` を書かない。再開元の `meta.json` と logs は改変されない（operation journal は系譜で共有して追記される）。また、`reports/` を持たない run（準備失敗 run など）からの再開は、準備（未解決の `workflow_call` のままなら再び探索失敗の理由が残る）と先行検査を通過して `inheritResumeReportSnapshot` に到達した場合に `reports/` 不在で失敗する。
 - `.yml` だけがある場合: 候補は `.yaml (or .yml)` と書く。
 
 ## 影響
@@ -96,7 +96,7 @@ PR: [j5ik2o/takt#167](https://github.com/j5ik2o/takt/pull/167)（マージ済み
      - `logs/*.jsonl` に `workflow_start` と `workflow_abort` レコードがあり、`workflow_abort.reason` にも同じ探索理由が含まれること
    - 実装時に、`terminalizeBootstrapFailure` で `reason` を差し替える変異（M3）を入れてこの E2E テストが失敗することを確かめてから元に戻す。
 3. **Quint 仕様の修正（`specs/quint/run-start-record/`）**:
-   - 上記「Quint」節のとおり、実物の `beginRun`・pre-meta bootstrap 失敗（`inheritResumeReportSnapshot` の `reports/` 欠如を含む）・`createWorkflowExecutionBootstrap`・`terminalizeBootstrapFailure`・成功終了・2 試行 resume（`lineageAvailable` 分岐付き）に合わせたモデルへ更新し、9 不変条件・9 witness・シナリオテスト（8 + 2 件）を整備する。
+   - 上記「Quint」節のとおり、実物の `beginRun`・pre-meta bootstrap 失敗・`createWorkflowExecutionBootstrap`・`terminalizeBootstrapFailure`・成功終了・2 試行 resume（`lineageAvailable` 分岐付き）に合わせたモデルへ更新し、不変条件・witness・シナリオテストを整備する（件数と結果は「Quint」節参照）。
 4. **設計書の追記（`docs/design/workflow-call-resolve-error.md`）**:
    - 上記「影響」節の書き漏れ（`task_finish_hook`・`loop_analysis`・付随ファイル）と本節、および設計レビュー 2 回目のトリアージ表を追記する。
 
