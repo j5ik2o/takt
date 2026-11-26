@@ -62,6 +62,7 @@ export class TaskRunner {
       slug?: string;
       summary?: string;
       deduplicateActiveTargets?: boolean;
+      onWritten?: () => void;
     },
   ): TaskInfo {
     return this.lifecycle.addTask(content, options);

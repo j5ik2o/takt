@@ -224,9 +224,10 @@ export class TaskLifecycleService {
       slug?: string;
       summary?: string;
       deduplicateActiveTargets?: boolean;
+      onWritten?: () => void;
     },
   ): TaskInfo {
-    const { deduplicateActiveTargets, ...recordOptions } = options ?? {};
+    const { deduplicateActiveTargets, onWritten, ...recordOptions } = options ?? {};
     const state = this.store.update((current) => {
       const slug = options?.slug ?? slugify(firstLine(content));
       const name = generateTaskName(slug, current.tasks.map((task) => task.name));
@@ -250,7 +251,7 @@ export class TaskLifecycleService {
         }
       }
       return { tasks: [...current.tasks, record] };
-    });
+    }, { onWritten });
 
     const created = state.tasks[state.tasks.length - 1];
     if (!created) {
