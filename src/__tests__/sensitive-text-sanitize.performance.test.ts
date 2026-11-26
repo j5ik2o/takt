@@ -206,7 +206,8 @@ describe('redaction of overlapping credential forms stays linear', () => {
 // #151: every path also runs the frozen copy of the previous implementation and the trace of its
 // display (design 6). Each form is measured in five pairs of 1 MiB and 4 MiB, and the judgment is
 // the ratio within a pair: a linear path is about 4 times slower at 4 MiB, a quadratic one 16
-// times. The time limit at 4 MiB only catches a path that stops making progress.
+// times. The time limit at 4 MiB catches what the ratio cannot see: a path that becomes many times
+// slower at every size. A path that never returns hangs the run instead: no check inside the test can stop it.
 describe('the union with the previous redaction stays linear', () => {
   const median = (samples: number[]): number => [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)]!;
   const fill = (unit: string, size: number): string => unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
@@ -237,6 +238,6 @@ describe('the union with the previous redaction stays linear', () => {
     const large = median(pairs.map((pair) => pair.large));
     const ratio = median(pairs.map((pair) => pair.large / pair.small));
     expect(ratio).toBeLessThan(6);
-    expect(large).toBeLessThan(25_000);
+    expect(large).toBeLessThan(scaledMs(25_000));
   }, scaledMs(300_000));
 });
