@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { stringify as stringifyYaml } from 'yaml';
 import { GlobalConfigSchema } from '../../../core/models/index.js';
+import { assertValidConfig } from '../configValidation.js';
 import type { GlobalConfig, TaktProviderConfigEntry } from '../../../core/models/config-types.js';
 import {
   normalizeConfigProviderReference,
@@ -44,37 +45,6 @@ function getRecord(value: unknown): Record<string, unknown> | undefined {
     return undefined;
   }
   return value as Record<string, unknown>;
-}
-
-function assertNoUnknownGlobalConfigKeys(rawConfig: Record<string, unknown>): void {
-  const parsedResult = GlobalConfigSchema.safeParse(rawConfig);
-  if (parsedResult.success) {
-    return;
-  }
-  const issue = parsedResult.error.issues.find((candidate) => candidate.code === 'unrecognized_keys');
-  if (!issue) {
-    return;
-  }
-  throw new Error(issue.message);
-}
-
-function assertValidGlobalConfig(
-  rawConfig: Record<string, unknown>,
-  configPath: string,
-  onlyUnrecognizedKeys = false,
-): void {
-  const parsedResult = GlobalConfigSchema.safeParse(rawConfig);
-  if (!parsedResult.success) {
-    const firstIssue = onlyUnrecognizedKeys
-      ? parsedResult.error.issues.find((issue) => issue.code === 'unrecognized_keys')
-      : parsedResult.error.issues[0];
-    if (!firstIssue) {
-      return;
-    }
-    throw new Error(
-      `Configuration error: invalid ${firstIssue.path.join('.')} in ${configPath}: ${firstIssue.message ?? 'Invalid configuration value'}`,
-    );
-  }
 }
 
 type ProviderType = NonNullable<GlobalConfig['provider']>;
@@ -129,8 +99,8 @@ export class GlobalConfigManager {
     const parsedConfig = parsedWithoutLegacy.config;
     const rawConfig = rawWithoutLegacy.config;
     const { trace } = loadedTrace;
-    assertValidGlobalConfig(parsedConfig, configPath, true);
-    assertNoUnknownGlobalConfigKeys(rawConfig);
+    assertValidConfig(GlobalConfigSchema, parsedConfig, configPath, true);
+    assertValidConfig(GlobalConfigSchema, rawConfig, configPath, true);
     const parsed = GlobalConfigSchema.parse(rawConfig);
     const normalizedProvider = normalizeConfigProviderReference(
       parsed.provider as RawProviderReference,
