@@ -1,4 +1,5 @@
 import fc from 'fast-check';
+import { scaledMs } from '../../scripts/test-time-factor.mjs';
 import { afterAll, describe, expect, it } from 'vitest';
 import { sanitizeKnownSecrets } from '../infra/deepseek-harness/client.js';
 import * as current from '../shared/utils/sensitive-text.js';
@@ -25,7 +26,7 @@ const NUM_RUNS = (() => {
 })();
 const SEED = Number.parseInt(process.env.TAKT_PBT_SEED ?? '', 10);
 const runs = { numRuns: NUM_RUNS, ...(Number.isInteger(SEED) ? { seed: SEED } : {}) };
-const TIMEOUT = Math.max(120_000, NUM_RUNS * 200);
+const TIMEOUT = scaledMs(Math.max(120_000, NUM_RUNS * 200));
 
 const counts = { inputs: 0, markers: 0 };
 afterAll(() => {

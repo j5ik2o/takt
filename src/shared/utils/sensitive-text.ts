@@ -67,6 +67,7 @@ const SENSITIVE_OPTION_PREFIX_REGEX = new RegExp(
   'gi',
 );
 const WHITESPACE_REGEX = /\s/g;
+const SHELL_WORD_END_REGEX = /[\s;&|]/g;
 const SENSITIVE_QUERY_PREFIX_REGEX = /[?&](?:api[_-]?key|key|token|password|secret|sig|(?:x-amz-)?signature)=/gi;
 const QUERY_VALUE_STOP_REGEX = /[&\s]/g;
 // A shell statement can follow an unquoted value without a space (`TOKEN=secret;echo`).
@@ -327,13 +328,15 @@ function* optionValues(text: string): Generator<KeyedValue> {
   const prefixes = new RegExp(SENSITIVE_OPTION_PREFIX_REGEX.source, SENSITIVE_OPTION_PREFIX_REGEX.flags);
   const quotedValue = new RegExp(SENSITIVE_QUOTED_VALUE_PATTERN, 'y');
   const whitespaceAt = forwardFinder(text, WHITESPACE_REGEX);
+  const wordEndAt = forwardFinder(text, SHELL_WORD_END_REGEX);
   for (let match = prefixes.exec(text); match !== null; match = prefixes.exec(text)) {
     const start = match.index + match[0].length;
     quotedValue.lastIndex = start;
     const quoted = quotedValue.exec(text);
     const afterQuote = quoted === null ? start : start + quoted[0].length;
-    // `--password=''secret` is one shell word: the value runs on past the quotes.
-    const end = quoted === null || (afterQuote < text.length && !/\s/u.test(text[afterQuote]!)) ? whitespaceAt(afterQuote) : afterQuote;
+    // `--password=''secret` is one shell word: the value runs on past the quotes, up to whitespace
+    // or a shell operator (`--password "x"&& next` keeps `&& next`).
+    const end = quoted === null ? whitespaceAt(start) : wordEndAt(afterQuote);
     if (end === start) {
       prefixes.lastIndex = match.index + 1;
       continue;
@@ -568,10 +571,15 @@ export function collectTrackedEmbeddedSensitiveValues(text: string, into: { lega
 function collectNewEmbeddedValues(text: string, values: Set<string>): void {
   const matches = findSensitiveMatches(text);
   for (const { start, end } of matches.whole) addSensitiveValue(values, text.slice(start, end));
-  for (const { valueStart, valueEnd, gluedEnd } of matches.quoted) {
+  matches.quoted.forEach(({ valueStart, valueEnd, gluedEnd }, index) => {
     const quotedValue = text.slice(valueStart, valueEnd);
     addSensitiveValue(values, quotedValue);
-    if (gluedEnd !== undefined && gluedEnd > valueEnd) {
+    // Quoted assignments glued into one long word (`token="a"token="a"…`) end at the same place.
+    // As for keys inside a value, only the first and the last of them track the glued part, which
+    // keeps the tracked bytes linear.
+    const sameEnd = (other: KeyedValue | undefined): boolean => other?.gluedEnd === gluedEnd;
+    const tracksGlued = !sameEnd(matches.quoted[index - 1]) || !sameEnd(matches.quoted[index + 1]);
+    if (tracksGlued && gluedEnd !== undefined && gluedEnd > valueEnd) {
       const glued = text.slice(valueEnd, gluedEnd);
       addSensitiveValue(values, glued);
       addSensitiveValue(values, stripMatchingQuotes(quotedValue) + glued.replace(/\\"|["']/gu, ''));
@@ -579,7 +587,7 @@ function collectNewEmbeddedValues(text: string, values: Set<string>): void {
     // Everything inside the quotes is tracked as well: an embedded `token=…`, URL or header
     // can be printed again on its own.
     collectNewEmbeddedValues(stripMatchingQuotes(quotedValue), values);
-  }
+  });
   for (const value of outermostAndInnermost(matches.assignments)) {
     const assigned = text.slice(value.valueStart, value.valueEnd);
     addSensitiveValue(values, assigned);

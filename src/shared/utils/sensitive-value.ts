@@ -27,7 +27,18 @@ export interface SensitiveValues {
  * One bound on tracked values, with the limits, order and counts the previous
  * BoundedSensitiveValues had (#151, design 1.2).
  */
-export class SensitiveValueBound {
+/** What callers may read of one bound. */
+export interface SensitiveValueBoundView {
+  readonly values: ReadonlySet<string>;
+  readonly exhausted: boolean;
+  readonly storedValueBytes: number;
+  readonly skippedValueCount: number;
+  readonly skippedValueBytes: number;
+  readonly truncatedSourceCount: number;
+  readonly hasUntrackedValues: boolean;
+}
+
+class SensitiveValueBound implements SensitiveValueBoundView {
   readonly values = new Set<string>();
   exhausted = false;
   storedValueBytes = 0;
@@ -102,8 +113,9 @@ export class SensitiveValueBound {
  */
 export class BoundedSensitiveValues implements TrackedSensitiveValues {
   readonly values = new Set<string>();
-  readonly legacyBound = new SensitiveValueBound();
-  readonly newBound = new SensitiveValueBound();
+  // The bounds change only through collect, collectNewOnly and reset, which keep `values` their union.
+  private readonly legacySide = new SensitiveValueBound();
+  private readonly newSide = new SensitiveValueBound();
   private readonly keep = (value: string): void => {
     this.values.add(value);
   };
@@ -113,80 +125,88 @@ export class BoundedSensitiveValues implements TrackedSensitiveValues {
   }
 
   get legacy(): ReadonlySet<string> {
-    return this.legacyBound.values;
+    return this.legacySide.values;
   }
 
-  get legacyValues(): Set<string> {
-    return this.legacyBound.values;
+  get legacyValues(): ReadonlySet<string> {
+    return this.legacySide.values;
+  }
+
+  get legacyBound(): SensitiveValueBoundView {
+    return this.legacySide;
+  }
+
+  get newBound(): SensitiveValueBoundView {
+    return this.newSide;
   }
 
   get legacyExhausted(): boolean {
-    return this.legacyBound.exhausted;
+    return this.legacySide.exhausted;
   }
 
   get newExhausted(): boolean {
-    return this.newBound.exhausted;
+    return this.newSide.exhausted;
   }
 
   /** Either bound is full. For reporting only. */
   get exhausted(): boolean {
-    return this.legacyBound.exhausted || this.newBound.exhausted;
+    return this.legacySide.exhausted || this.newSide.exhausted;
   }
 
   /** Either bound left a value untracked. For reporting only. */
   get hasUntrackedValues(): boolean {
-    return this.legacyBound.hasUntrackedValues || this.newBound.hasUntrackedValues;
+    return this.legacySide.hasUntrackedValues || this.newSide.hasUntrackedValues;
   }
 
   get storedValueBytes(): number {
-    return this.legacyBound.storedValueBytes + this.newBound.storedValueBytes;
+    return this.legacySide.storedValueBytes + this.newSide.storedValueBytes;
   }
 
   get skippedValueCount(): number {
-    return this.legacyBound.skippedValueCount + this.newBound.skippedValueCount;
+    return this.legacySide.skippedValueCount + this.newSide.skippedValueCount;
   }
 
   get skippedValueBytes(): number {
-    return this.legacyBound.skippedValueBytes + this.newBound.skippedValueBytes;
+    return this.legacySide.skippedValueBytes + this.newSide.skippedValueBytes;
   }
 
   get truncatedSourceCount(): number {
-    return Math.max(this.legacyBound.truncatedSourceCount, this.newBound.truncatedSourceCount);
+    return Math.max(this.legacySide.truncatedSourceCount, this.newSide.truncatedSourceCount);
   }
 
   collect(source: unknown): void {
     if (source === this) return;
     if (source instanceof BoundedSensitiveValues) {
       // Each bound copies the same bound of the source; the either-bound marks are not copied.
-      this.legacyBound.copy(source.legacyBound, this.keep);
-      this.newBound.copy(source.newBound, this.keep, (value) => this.legacyBound.values.has(value));
+      this.legacySide.copy(source.legacySide, this.keep);
+      this.newSide.copy(source.newSide, this.keep, (value) => this.legacySide.values.has(value));
       return;
     }
-    if (this.legacyBound.exhausted && this.newBound.exhausted) return;
+    if (this.legacySide.exhausted && this.newSide.exhausted) return;
     const collected = collectSensitiveStringValues(source, MAX_INSPECTED_BYTES_PER_SOURCE);
-    if (!this.legacyBound.exhausted) {
-      if (collected.truncated) this.legacyBound.truncatedSourceCount += 1;
-      this.legacyBound.add(collected.legacyValues, this.keep);
+    if (!this.legacySide.exhausted) {
+      if (collected.truncated) this.legacySide.truncatedSourceCount += 1;
+      this.legacySide.add(collected.legacyValues, this.keep);
     }
     this.addNew(collected, (value) => collected.legacyValues.has(value));
   }
 
   /** Tracks every value of `source` in the new bound only: values repacked from the new reading. */
   collectNewOnly(source: unknown): void {
-    if (this.newBound.exhausted) return;
+    if (this.newSide.exhausted) return;
     this.addNew(collectSensitiveStringValues(source, MAX_INSPECTED_BYTES_PER_SOURCE), () => false);
   }
 
   private addNew(collected: SensitiveValues, fromLegacy: (value: string) => boolean): void {
-    if (this.newBound.exhausted) return;
-    if (collected.truncated) this.newBound.truncatedSourceCount += 1;
-    this.newBound.add(collected.values, this.keep, (value) => fromLegacy(value) || this.legacyBound.values.has(value));
+    if (this.newSide.exhausted) return;
+    if (collected.truncated) this.newSide.truncatedSourceCount += 1;
+    this.newSide.add(collected.values, this.keep, (value) => fromLegacy(value) || this.legacySide.values.has(value));
   }
 
   reset(): void {
     this.values.clear();
-    this.legacyBound.reset();
-    this.newBound.reset();
+    this.legacySide.reset();
+    this.newSide.reset();
   }
 }
 

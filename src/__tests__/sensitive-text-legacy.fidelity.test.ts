@@ -1,4 +1,5 @@
 import fc from 'fast-check';
+import { scaledMs } from '../../scripts/test-time-factor.mjs';
 import { describe, expect, it } from 'vitest';
 import * as frozen from '../shared/utils/sensitive-text-legacy.js';
 import { legacySequentialRanges } from '../shared/utils/sensitive-text-legacy-trace.js';
@@ -19,7 +20,7 @@ const F2_RUNS = (() => {
 })();
 const SEED = Number.parseInt(process.env.TAKT_PBT_SEED ?? '', 10);
 const seed = Number.isInteger(SEED) ? { seed: SEED } : {};
-const TIMEOUT = Math.max(120_000, Math.max(NUM_RUNS, F2_RUNS) * 20);
+const TIMEOUT = scaledMs(Math.max(120_000, Math.max(NUM_RUNS, F2_RUNS) * 20));
 
 const collected = (collect: (text: string, values: Set<string>) => void, text: string): string[] => {
   const values = new Set<string>();

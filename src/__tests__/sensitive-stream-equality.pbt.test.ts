@@ -1,4 +1,5 @@
 import fc from 'fast-check';
+import { scaledMs } from '../../scripts/test-time-factor.mjs';
 import { describe, expect, it } from 'vitest';
 import { responseBoundaryRanges } from '../infra/deepseek-harness/client.js';
 import { createSensitiveTextStreamRedactor, SensitiveTextStreamBuffer } from '../shared/utils/sensitive-stream.js';
@@ -18,7 +19,7 @@ const NUM_RUNS = (() => {
 })();
 const SEED = Number.parseInt(process.env.TAKT_PBT_SEED ?? '', 10);
 const runs = { numRuns: NUM_RUNS, ...(Number.isInteger(SEED) ? { seed: SEED } : {}) };
-const TIMEOUT = Math.max(120_000, NUM_RUNS * 200);
+const TIMEOUT = scaledMs(Math.max(120_000, NUM_RUNS * 200));
 
 /** A source as the callers pass it; `bounded` is another stream's tracked values (OpenCode, DeepSeek). */
 type SourceSpec =

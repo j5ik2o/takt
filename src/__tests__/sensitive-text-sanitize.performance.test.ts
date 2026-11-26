@@ -1,3 +1,4 @@
+import { scaledMs } from '../../scripts/test-time-factor.mjs';
 import { describe, expect, it } from 'vitest';
 import { Phase1ExecutionLog } from '../core/workflow/phase1-execution-log.js';
 import { sanitizeTextWithValues } from '../shared/utils/sensitive-text.js';
@@ -219,6 +220,8 @@ describe('the union with the previous redaction stays linear', () => {
     ['mixed', "TOKEN=apikey: ?token=' 'Zq4Zq https://cookie:p@host Cookie: sid=x\n"],
     ['l2', 'token :--password=\\" \\"Zq0Zq'],
     ['token lines', 'token:\n'],
+    // Quoted assignments glued into one word share its end (review of #165, Devin).
+    ['glued quoted assignments', 'token="a"'],
   ])('on %s', (name, unit) => {
     const run = (bytes: number): number => {
       const text = (name === 'at' ? 'https://u:' : '') + fill(unit, bytes);
@@ -232,5 +235,5 @@ describe('the union with the previous redaction stays linear', () => {
     const large = median(Array.from({ length: 5 }, () => run(4 * 1024 * 1024)));
     expect(large).toBeLessThan(Math.max(32 * small, 50));
     expect(large).toBeLessThan(10_000);
-  }, 300_000);
+  }, scaledMs(300_000));
 });

@@ -1,4 +1,5 @@
 import fc from 'fast-check';
+import { scaledMs } from '../../scripts/test-time-factor.mjs';
 import { describe, expect, it } from 'vitest';
 import { normalizeToolResultText, toolResultSensitiveValues } from '../shared/tool-activity/sanitize.js';
 import { SensitiveTextStreamBuffer } from '../shared/utils/sensitive-stream.js';
@@ -23,7 +24,7 @@ const NUM_RUNS = (() => {
 })();
 const SEED = Number.parseInt(process.env.TAKT_PBT_SEED ?? '', 10);
 const runs = { numRuns: Math.max(50, Math.ceil(NUM_RUNS / 4)), ...(Number.isInteger(SEED) ? { seed: SEED } : {}) };
-const TIMEOUT = Math.max(120_000, NUM_RUNS * 200);
+const TIMEOUT = scaledMs(Math.max(120_000, NUM_RUNS * 200));
 
 /**
  * Values only the new collection finds: assignments inside a quoted value. The previous collection

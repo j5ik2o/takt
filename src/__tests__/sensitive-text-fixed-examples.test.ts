@@ -183,3 +183,12 @@ describe('#151 known leaks of the stream paths in the first PR', () => {
     expect(leaks).toEqual(KNOWN_STREAM_LEAKS);
   });
 });
+
+describe('#151 4.3: a quoted option value is one shell word, up to a shell operator', () => {
+  it.each([
+    ['curl --password "Zq40Zq"&& next', 'curl --password [REDACTED]&& next'],
+    ["run --token 'a'Zq41Zq; echo done", 'run --token [REDACTED]; echo done'],
+  ])('%j', (input, expected) => {
+    expect(sanitizeSensitiveText(input)).toBe(expected);
+  });
+});

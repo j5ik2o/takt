@@ -1,4 +1,5 @@
 import fc from 'fast-check';
+import { scaledMs } from '../../scripts/test-time-factor.mjs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import counterexamples from '../../test/fixtures/sensitive-text-redaction-counterexamples.json' with { type: 'json' };
 import { Phase1ExecutionLog } from '../core/workflow/phase1-execution-log.js';
@@ -46,7 +47,7 @@ const NUM_RUNS = (() => {
 })();
 const SEED = Number.parseInt(process.env.TAKT_PBT_SEED ?? '', 10);
 const runs = { numRuns: NUM_RUNS, ...(Number.isInteger(SEED) ? { seed: SEED } : {}) };
-const TIMEOUT = Math.max(120_000, NUM_RUNS * 200);
+const TIMEOUT = scaledMs(Math.max(120_000, NUM_RUNS * 200));
 const NO_VALUES: ReadonlySet<string> = new Set();
 
 const counts = { inputs: 0, markers: 0, laterOutputs: 0 };
