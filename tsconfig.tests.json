@@ -914,6 +914,7 @@
     "src/__tests__/workflow-resume-root.test.ts",
     "src/__tests__/workflow-run-lifecycle-boundary.test.ts",
     "src/__tests__/workflow-run-loop-command-gates.test.ts",
+    "src/__tests__/workflow-run-loop-cycle-order.test.ts",
     "src/__tests__/workflow-session-state-removal.test.ts",
     "src/__tests__/workflow-validator.test.ts",
     "src/__tests__/workflowCallExecutor-restart.test.ts",

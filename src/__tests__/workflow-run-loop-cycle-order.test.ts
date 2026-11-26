@@ -9,7 +9,7 @@ import { createWorkflowRunLoopTestContract } from './test-helpers.js';
 const monitor: LoopMonitorConfig = {
   cycle: ['fix', 'reviewers'],
   threshold: 1,
-  judge: { rules: [makeRule('stalled', 'ABORT')] },
+  judge: { rules: [{ ...makeRule('stalled', 'ABORT'), next: 'ABORT' }] },
 };
 
 function makeDeps(nextStep: string) {
@@ -25,7 +25,7 @@ function makeDeps(nextStep: string) {
   const commitTransition = vi.fn();
   return {
     state,
-    options: {},
+    options: { projectCwd: '/worktree' },
     getWorkflowName: () => config.name,
     getCwd: () => '/worktree',
     getMaxSteps: () => config.maxSteps,
@@ -35,8 +35,8 @@ function makeDeps(nextStep: string) {
     applyRuntimeEnvironment: vi.fn(),
     loopDetectorCheck: () => ({ count: 1, isLoop: false }),
     cycleDetectorRecordAndCheck: vi.fn(() => ({ triggered: true, cycleCount: 1, monitor })),
-    stepVisitCheckEntry: () => undefined,
-    stepVisitRecordCompletion: () => undefined,
+    stepVisitCheckEntry: (): string | undefined => undefined,
+    stepVisitRecordCompletion: (): string | undefined => undefined,
     resolveDoneTransition: vi.fn(() => ({ nextStep, commandGates: 'required' as const })),
     runLoopMonitorJudge: vi.fn(async () => 'ABORT'),
     runStep: vi.fn(async (_step: WorkflowStep, { text: instruction }: PreparedInstruction = { text: '', injectedReports: [] }) => ({
@@ -46,7 +46,7 @@ function makeDeps(nextStep: string) {
     })),
     runQualityGates: vi.fn(async () => ({ ok: true as const })),
     persistPreviousResponseSnapshot: vi.fn(),
-    prepareInstruction: vi.fn(() => ({ text: 'instruction', injectedReports: [] })),
+    prepareInstruction: vi.fn(() => ({ text: 'instruction', injectedReports: [], reviewScope: { kind: 'not_a_git_repository' as const } })),
     buildPhase1Instruction: vi.fn((_step: WorkflowStep, instruction: string) => instruction),
     prepareNormalStepExecution: vi.fn(async () => undefined),
     resolveStepProviderModel: vi.fn(() => ({ provider: undefined, model: undefined })),

@@ -202,8 +202,8 @@ step に semantic rule がある場合、最後に意味ラベルを1つだけ�
 
 `loop_monitors` がある場合、指定サイクルを監視する。
 
-1. step 遷移履歴を記録する
-2. `cycle` が `threshold` 回以上連続出現したら judge を実行する
+1. step 遷移履歴と各 step の完了回数を記録する
+2. `cycle` が `threshold` 回以上連続出現し、`min_trigger_visits` が指定されている場合は `cycle` 末尾の step のこの実行における完了回数が `min_trigger_visits` 以上であるときに judge を実行する（judge 実行後に履歴はリセットされるが、完了回数はリセットしない）
 3. judge は `persona` + `instruction` + `rules` でプロンプト構築する
 4. judge も同じく `codex exec` で起動する
 5. judge の評価結果 `next` で遷移先を上書きする
