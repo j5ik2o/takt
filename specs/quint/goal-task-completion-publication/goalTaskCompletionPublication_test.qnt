@@ -2,6 +2,9 @@
 // Scenario tests for durable goal task completion publication (issue #170).
 // Run:
 //   quint test goalTaskCompletionPublication_test.qnt --main beforeTest
+//   quint test goalTaskCompletionPublication_test.qnt --main fixedNoRepublisherTest
+//   quint test goalTaskCompletionPublication_test.qnt --main fixedNoHasWorkTest
+//   quint test goalTaskCompletionPublication_test.qnt --main fixedStaleDeletionBlocksTest
 //   quint test goalTaskCompletionPublication_test.qnt --main fixedNoDedupTest
 //   quint test goalTaskCompletionPublication_test.qnt --main fixedUncheckedClearTest
 //   quint test goalTaskCompletionPublication_test.qnt --main fixedTest
@@ -19,6 +22,7 @@ module beforeTest {
         inbox == Set(),
         wakes.get(("t1", 1)) == 0,
         not(noUnrecoverableLoss),
+        not(quiescentDelivery),
       })
 
   // Setup failure: process crashes between tasks.yaml write and saveManagerEvent.
@@ -28,6 +32,7 @@ module beforeTest {
         tasks.get("t1").status == Failed,
         wakes.get(("t1", 1)) == 0,
         not(noUnrecoverableLoss),
+        not(quiescentDelivery),
       })
 
   // failInterruptedTasksWithGoalEvents: saveManagerEvent fails -> notice lost.
@@ -37,6 +42,7 @@ module beforeTest {
         tasks.get("t1").status == Failed,
         wakes.get(("t1", 1)) == 0,
         not(noUnrecoverableLoss),
+        not(quiescentDelivery),
       })
 
   // reconcileLostRun: crash after tasks.yaml write (even without run_slug) -> notice lost.
@@ -46,6 +52,71 @@ module beforeTest {
         tasks.get("t1").status == Failed,
         wakes.get(("t1", 1)) == 0,
         not(noUnrecoverableLoss),
+        not(quiescentDelivery),
+      })
+}
+
+// Medium-1 probe: writing pendingPub without a daemon republisher still satisfies noUnrecoverableLoss
+// (because pendingPub stays true), yet violates quiescentDelivery because nothing can deliver it.
+module fixedNoRepublisherTest {
+  import goalTaskCompletionPublication(DESIGN = "FixedNoRepublisher").* from "./goalTaskCompletionPublication"
+
+  run disabledRepublisherStrandsPendingMarkTest =
+    init.then(writeSetupFailure("t1")).then(writerPublishFails)
+      .expect(and {
+        tasks.get("t1").status == Failed,
+        tasks.get("t1").pendingPub,
+        wakes.get(("t1", 1)) == 0,
+        noUnrecoverableLoss,
+        not(quiescentDelivery),
+        not(safety),
+      })
+
+  run disabledRepublisherStrandsAbortedMarkTest =
+    init.then(writeSetupFailure("t1")).then(writerPublishFails)
+      .then(abortGoal)
+      .expect(and {
+        goal == Aborted,
+        tasks.get("t1").pendingPub,
+        not(quiescentDelivery),
+        not(safety),
+      })
+}
+
+// Medium-1 hasWork ablation: if hasWork ignores pendingPub, daemon idle-exits after goal abort
+// while pendingPub is still set in tasks.yaml.
+module fixedNoHasWorkTest {
+  import goalTaskCompletionPublication(DESIGN = "FixedNoHasWork").* from "./goalTaskCompletionPublication"
+
+  run idleExitBeforeSettlingPendingMarkTest =
+    init.then(writeSetupFailure("t1")).then(writerPublishFails)
+      .then(writeSetupFailure("t2")).then(writerPublishOk).then(writerClearOk)
+      .then(abortGoal)
+      .then(daemonIdleExit)
+      .expect(and {
+        not(daemonRunning),
+        tasks.get("t1").pendingPub,
+        not(noDaemonExitWithWork),
+        not(quiescentDelivery),
+        not(safety),
+      })
+}
+
+// Low-5 ablation: if daemon skips any deletion reservation without checking owner liveness,
+// a crashed deletion owner strands pendingPub forever.
+module fixedStaleDeletionBlocksTest {
+  import goalTaskCompletionPublication(DESIGN = "FixedStaleDeletionBlocks").* from "./goalTaskCompletionPublication"
+
+  run deadDeletionOwnerStrandsPendingMarkTest =
+    init.then(writeSetupFailure("t1")).then(writerPublishFails)
+      .then(reserveDeletion("t1")).then(deletionOwnerCrash("t1"))
+      .expect(and {
+        tasks.get("t1").pendingPub,
+        tasks.get("t1").deletion == DelDead,
+        wakes.get(("t1", 1)) == 0,
+        noUnrecoverableLoss,
+        not(quiescentDelivery),
+        not(safety),
       })
 }
 
@@ -84,11 +155,12 @@ module fixedUncheckedClearTest {
         not(tasks.get("t1").pendingPub),
         wakes.get(("t1", 2)) == 0,
         not(noUnrecoverableLoss),
+        not(quiescentDelivery),
       })
 }
 
-// Full fix: durable pendingPub, daemon republisher, deterministic eventId, attempt-matched clear,
-// deletion guard, and aborted/deleted/paused goal handling.
+// Full fix: durable pendingPub, daemon republisher, hasWork, stale-deletion recovery,
+// deterministic eventId, attempt-matched clear, live-deletion guard, and aborted/deleted/paused handling.
 module fixedTest {
   import goalTaskCompletionPublication(DESIGN = "Fixed").* from "./goalTaskCompletionPublication"
 
@@ -100,6 +172,7 @@ module fixedTest {
       .expect(and {
         not(tasks.get("t1").pendingPub),
         wakes.get(("t1", 1)) == 1,
+        wDaemonSoleRepublishWoke,
         safety,
       })
 
@@ -111,6 +184,7 @@ module fixedTest {
       .expect(and {
         not(tasks.get("t1").pendingPub),
         wakes.get(("t1", 1)) == 1,
+        wDaemonSoleRepublishWoke,
         safety,
       })
 
@@ -168,27 +242,42 @@ module fixedTest {
       .then(consumeInbox({ fileId: 1, task: "t1", attempt: 1, hasRunSlug: true, hasExecId: true }))
       .expect(not(tasks.get("t1").pendingPub) and wakes.get(("t1", 1)) == 1 and safety)
 
-  // Aborted goal: daemon clears pendingPub without writing an inbox file and never wakes manager.
-  run abortedGoalClearsPendingWithoutNoticeTest =
+  // Aborted goal: daemon keeps running while pendingPub exists, clears pendingPub without
+  // writing an inbox file, and then cleanly idle-exits once all tasks are terminal.
+  run abortedGoalClearsPendingThenIdleExitsTest =
     init.then(writeSetupFailure("t1")).then(writerPublishFails)
+      .then(writeSetupFailure("t2")).then(writerPublishOk).then(writerClearOk)
       .then(abortGoal)
+      .expect(daemonHasWork(DESIGN, goal, tasks, inbox) and daemonRunning and safety)
       .then(daemonReadPending("t1")).then(daemonPublishOk).then(daemonClearOk)
       .expect(and {
         inbox == Set(),
         not(tasks.get("t1").pendingPub),
+        not(daemonHasWork(DESIGN, goal, tasks, inbox)),
         wakes.get(("t1", 1)) == 0,
         safety,
       })
+      .then(daemonIdleExit)
+      .expect(and {
+        not(daemonRunning),
+        wDaemonIdleExitedAfterSettle,
+        safety,
+      })
 
-  // Deleted goal: daemon clears pendingPub without writing an inbox file.
-  run deletedGoalClearsPendingWithoutNoticeTest =
+  // Deleted goal: daemon clears pendingPub without writing an inbox file, then idle-exits.
+  run deletedGoalClearsPendingThenIdleExitsTest =
     init.then(writeSetupFailure("t1")).then(writerPublishFails)
+      .then(writeSetupFailure("t2")).then(writerPublishOk).then(writerClearOk)
       .then(abortGoal).then(deleteGoal)
+      .expect(daemonHasWork(DESIGN, goal, tasks, inbox) and daemonRunning and safety)
       .then(daemonReadPending("t1")).then(daemonPublishOk).then(daemonClearOk)
+      .then(daemonIdleExit)
       .expect(and {
         inbox == Set(),
         not(tasks.get("t1").pendingPub),
+        not(daemonRunning),
         wakes.get(("t1", 1)) == 0,
+        wDaemonIdleExitedAfterSettle,
         safety,
       })
 
@@ -202,16 +291,52 @@ module fixedTest {
       .then(resumeGoal).then(deliverDeferred(("t1", 1)))
       .expect(wakes.get(("t1", 1)) == 1 and deferred == Set() and safety)
 
-  // Deletion reservation prevents daemon from mutating the task until deletion completes or cancels.
-  run deletionReservationBlocksClearUntilCancelledTest =
+  // Live deletion reservation prevents daemon from mutating the task until deletion completes or cancels.
+  run liveDeletionReservationBlocksClearUntilCancelledTest =
     init.then(writeSetupFailure("t1")).then(writerPublishFails)
       .then(daemonReadPending("t1")).then(daemonPublishOk)
       .then(reserveDeletion("t1"))
       .then(daemonClearOk)
-      .expect(tasks.get("t1").pendingPub and tasks.get("t1").deleting and safety)
+      .expect(tasks.get("t1").pendingPub and tasks.get("t1").deletion == DelAlive and safety)
       .then(cancelDeletion("t1"))
       .then(daemonReadPending("t1")).then(daemonPublishOk).then(daemonClearOk)
       .then(consumeInbox({ fileId: 1, task: "t1", attempt: 1, hasRunSlug: true, hasExecId: true }))
       .then(consumeInbox({ fileId: 2, task: "t1", attempt: 1, hasRunSlug: true, hasExecId: true }))
       .expect(not(tasks.get("t1").pendingPub) and wakes.get(("t1", 1)) == 1 and safety)
+
+  // Dead deletion owner (Low-5): daemon detects stale deletion, republishes, clears both
+  // pendingPub and stale deletion, and wakes manager once.
+  run deadDeletionOwnerRecoveredUnderActiveGoalTest =
+    init.then(writeSetupFailure("t1")).then(writerPublishFails)
+      .then(reserveDeletion("t1")).then(deletionOwnerCrash("t1"))
+      .expect(tasks.get("t1").deletion == DelDead and safety)
+      .then(daemonReadPending("t1")).then(daemonPublishOk).then(daemonClearOk)
+      .then(consumeInbox({ fileId: 1, task: "t1", attempt: 1, hasRunSlug: true, hasExecId: true }))
+      .expect(and {
+        not(tasks.get("t1").pendingPub),
+        tasks.get("t1").deletion == DelNone,
+        wakes.get(("t1", 1)) == 1,
+        wStaleDeletionRecovered,
+        wDaemonSoleRepublishWoke,
+        safety,
+      })
+
+  // Dead deletion owner under Aborted goal: hasWork keeps daemon alive, daemon clears pendingPub
+  // and stale deletion without waking manager, and then idle-exits cleanly.
+  run deadDeletionOwnerSettledUnderAbortedGoalTest =
+    init.then(writeSetupFailure("t1")).then(writerPublishFails)
+      .then(writeSetupFailure("t2")).then(writerPublishOk).then(writerClearOk)
+      .then(reserveDeletion("t1")).then(abortGoal)
+      .expect(daemonHasWork(DESIGN, goal, tasks, inbox) and safety)
+      .then(deletionOwnerCrash("t1"))
+      .then(daemonReadPending("t1")).then(daemonPublishOk).then(daemonClearOk)
+      .then(daemonIdleExit)
+      .expect(and {
+        not(tasks.get("t1").pendingPub),
+        tasks.get("t1").deletion == DelNone,
+        not(daemonRunning),
+        wStaleDeletionRecovered,
+        wDaemonIdleExitedAfterSettle,
+        safety,
+      })
 }

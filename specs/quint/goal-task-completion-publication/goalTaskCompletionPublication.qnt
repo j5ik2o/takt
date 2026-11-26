@@ -4,27 +4,36 @@
 // failInterruptedRunningTasks, and lost-run reconciliation in reconcileLostRun.
 //
 // Code:
-//   src/infra/task/taskRecordSchemas.ts             TaskRecordSchema (completion_publication_pending)
+//   src/infra/task/taskRecordSchemas.ts             TaskRecordSchema (completion_publication_pending normalization)
 //   src/infra/task/taskLifecycleService.ts          claimNextTasks, failInterruptedRunningTasks, clearCompletionPublicationPending
 //   src/features/tasks/execute/claimTasks.ts        publishSetupFailure, failInterruptedTasksWithGoalEvents
 //   src/features/daemonTurn/reconcileLostRun.ts     reconcileLostRun
-//   src/infra/task/taskStateReader.ts               WatchTaskSchema, readWatchTasks
+//   src/infra/task/taskStateReader.ts               WatchTaskSchema, readPendingGoalTaskCompletions
 //   src/infra/daemon/persistedFiles.ts              saveGoalTaskCompletion, markGoalTaskCompletionPublished
 //   src/features/daemon/pendingGoalTaskCompletions.ts publishPendingGoalTaskCompletions
 //   src/features/daemon/watchSource.ts              FileDaemonWatchSource (hasWork, taskCompletions)
 //   src/features/daemon/inbox.ts                    receiveInboxChange (deterministic eventId)
 //
-// DESIGN picks the implementation:
-//   "Before"              — current code: no completion_publication_pending mark, no daemon
-//                           republisher for terminal failed tasks, random per-file inbox eventId.
-//   "FixedNoDedup"        — adds completion_publication_pending and daemon republisher, but keeps
-//                           random per-file inbox eventId in inbox.ts (proves dedup is load-bearing).
-//   "FixedUncheckedClear" — adds completion_publication_pending, daemon republisher, and dedup, but
-//                           clears the pending mark by task name without matching attempt identity
-//                           (proves attempt-matched clearing is load-bearing).
-//   "Fixed"               — full fix: durable completion_publication_pending mark, daemon
-//                           republisher, deterministic eventId per (task, attempt), attempt-matched
-//                           clear, deletion-reservation guard, and aborted/deleted goal settlement.
+// DESIGN picks the implementation (single-ablation negative controls + Before + Fixed):
+//   "Before"                   — current code: no completion_publication_pending mark, no daemon
+//                                republisher, no pending hasWork, random per-file inbox eventId.
+//   "FixedNoRepublisher"       — adds completion_publication_pending, hasWork, dedup, checked clear,
+//                                and stale-deletion recovery, but disables daemon republishing
+//                                (proves quiescentDelivery catches missing delivery, unlike
+//                                noUnrecoverableLoss alone).
+//   "FixedNoHasWork"           — full fix except hasWork ignores pendingPub, allowing premature
+//                                daemon idle exit while pendingPub remains unsettled.
+//   "FixedStaleDeletionBlocks" — full fix except daemon treats a dead deletion owner as blocking
+//                                instead of recovering stale deletion reservations.
+//   "FixedNoDedup"             — full fix except inbox.ts keeps random per-file eventId (proves
+//                                deterministic dedup is load-bearing).
+//   "FixedUncheckedClear"      — full fix except clear matches by task name without attempt
+//                                identity (proves attempt-matched clearing is load-bearing).
+//   "Fixed"                    — full fix: durable completion_publication_pending mark, daemon
+//                                republisher, hasWork keeping daemon alive for pending marks,
+//                                stale-deletion recovery, deterministic eventId per (task, attempt),
+//                                attempt-matched clear, live-deletion guard, and aborted/deleted
+//                                goal settlement.
 module goalTaskCompletionPublication {
   const DESIGN: str
 
@@ -33,13 +42,14 @@ module goalTaskCompletionPublication {
   type FailureKind = SetupFail | InterruptedFail | ReconcileFail
   type TaskStatus = Absent | Pending | Running | Failed
   type GoalStatus = Active | Paused | Aborted | Deleted
+  type DeletionState = DelNone | DelAlive | DelDead
 
   type TaskRec = {
     status: TaskStatus,
     attempt: Attempt,
     hasCompletion: bool,
     pendingPub: bool,
-    deleting: bool,
+    deletion: DeletionState,
     hasRunSlug: bool,
     hasExecId: bool,
   }
@@ -79,7 +89,7 @@ module goalTaskCompletionPublication {
   pure val NONE_TASK: TaskId = ""
   pure val TASKS: Set[TaskId] = Set("t1", "t2")
   pure val MAX_ATTEMPTS: int = 2
-  pure val MAX_FILES: int = 16
+  pure val MAX_FILES: int = 32
   pure val ATTEMPT_KEYS: Set[(TaskId, Attempt)] = tuples(TASKS, 1.to(MAX_ATTEMPTS))
 
   pure val IDLE_WRITER: WriterState = {
@@ -93,6 +103,7 @@ module goalTaskCompletionPublication {
   var goal: GoalStatus
   var writer: WriterState
   var daemon: DaemonState
+  var daemonRunning: bool
   var inbox: Set[InboxFile]
   var nextFileId: int
   var acceptedKeys: Set[EventKey]
@@ -100,13 +111,19 @@ module goalTaskCompletionPublication {
   var wakes: (TaskId, Attempt) -> int
   var failedAttempts: Set[(TaskId, Attempt)]
   var attemptKind: (TaskId, Attempt) -> str
+  var writerPublished: Set[(TaskId, Attempt)]
+  var daemonRepublished: Set[(TaskId, Attempt)]
+  var staleDeletionRecovered: bool
   var lastAction: str
 
   // ---------- functional layer ----------
 
   pure def usesOutbox(design: str): bool = design != "Before"
-  pure def usesDedup(design: str): bool = design == "Fixed" or design == "FixedUncheckedClear"
-  pure def usesCheckedClear(design: str): bool = design == "Fixed" or design == "FixedNoDedup"
+  pure def usesRepublisher(design: str): bool = design != "Before" and design != "FixedNoRepublisher"
+  pure def usesPendingHasWork(design: str): bool = design != "Before" and design != "FixedNoHasWork"
+  pure def usesDedup(design: str): bool = design != "Before" and design != "FixedNoDedup"
+  pure def usesCheckedClear(design: str): bool = design != "Before" and design != "FixedUncheckedClear"
+  pure def usesStaleDeletionRecovery(design: str): bool = design != "Before" and design != "FixedStaleDeletionBlocks"
 
   pure def eventKeyFor(design: str, f: InboxFile): EventKey =
     if (not(usesDedup(design))) FileKey(f.fileId)
@@ -114,24 +131,61 @@ module goalTaskCompletionPublication {
     else if (f.hasExecId) ExecKey((f.task, f.attempt))
     else FileKey(f.fileId)
 
-  pure def canClearPending(design: str, rec: TaskRec, expectedAttempt: Attempt): bool =
+  pure def deletionBlocks(allowStaleRecovery: bool, d: DeletionState): bool =
+    if (allowStaleRecovery) d == DelAlive
+    else d != DelNone
+
+  pure def canClearPending(allowStaleRecovery: bool, design: str, rec: TaskRec, expectedAttempt: Attempt): bool =
     rec.status == Failed
       and rec.pendingPub
-      and not(rec.deleting)
+      and not(deletionBlocks(allowStaleRecovery, rec.deletion))
       and (not(usesCheckedClear(design)) or rec.attempt == expectedAttempt)
 
-  pure def applyClearPending(ts: TaskId -> TaskRec, design: str, t: TaskId, expectedAttempt: Attempt): TaskId -> TaskRec = {
+  pure def applyClearPending(
+    ts: TaskId -> TaskRec,
+    allowStaleRecovery: bool,
+    design: str,
+    t: TaskId,
+    expectedAttempt: Attempt,
+  ): TaskId -> TaskRec = {
     val rec = ts.get(t)
-    if (canClearPending(design, rec, expectedAttempt)) ts.set(t, { ...rec, pendingPub: false })
+    if (canClearPending(allowStaleRecovery, design, rec, expectedAttempt))
+      ts.set(t, { ...rec, pendingPub: false, deletion: DelNone })
     else ts
   }
 
-  pure def canReadPending(rec: TaskRec): bool =
+  pure def clearsStaleDeletion(
+    ts: TaskId -> TaskRec,
+    allowStaleRecovery: bool,
+    design: str,
+    t: TaskId,
+    expectedAttempt: Attempt,
+  ): bool = {
+    val rec = ts.get(t)
+    canClearPending(allowStaleRecovery, design, rec, expectedAttempt) and (rec.deletion == DelDead)
+  }
+
+  pure def canReadPending(design: str, rec: TaskRec): bool =
     rec.status == Failed
       and rec.hasCompletion
       and rec.pendingPub
-      and not(rec.deleting)
+      and not(deletionBlocks(usesStaleDeletionRecovery(design), rec.deletion))
       and (rec.hasRunSlug or rec.hasExecId)
+
+  pure def republisherAccepts(design: str, rec: TaskRec): bool =
+    usesRepublisher(design) and canReadPending(design, rec)
+
+  pure def daemonHasWork(
+    design: str,
+    g: GoalStatus,
+    ts: TaskId -> TaskRec,
+    ib: Set[InboxFile],
+  ): bool = or {
+    g == Active or g == Paused,
+    ib.size() > 0,
+    TASKS.exists(t => ts.get(t).status == Pending or ts.get(t).status == Running),
+    usesPendingHasWork(design) and TASKS.exists(t => ts.get(t).pendingPub),
+  }
 
   pure def kindLabel(k: FailureKind): str =
     match k {
@@ -148,13 +202,14 @@ module goalTaskCompletionPublication {
       attempt: 0,
       hasCompletion: false,
       pendingPub: false,
-      deleting: false,
+      deletion: DelNone,
       hasRunSlug: false,
       hasExecId: false,
     }),
     goal' = Active,
     writer' = IDLE_WRITER,
     daemon' = IDLE_DAEMON,
+    daemonRunning' = true,
     inbox' = Set(),
     nextFileId' = 1,
     acceptedKeys' = Set(),
@@ -162,6 +217,9 @@ module goalTaskCompletionPublication {
     wakes' = ATTEMPT_KEYS.mapBy(_ => 0),
     failedAttempts' = Set(),
     attemptKind' = ATTEMPT_KEYS.mapBy(_ => "none"),
+    writerPublished' = Set(),
+    daemonRepublished' = Set(),
+    staleDeletionRecovered' = false,
     lastAction' = "init",
   }
 
@@ -172,20 +230,22 @@ module goalTaskCompletionPublication {
     all {
       goal == Active,
       rec.status == Pending,
-      not(rec.deleting),
+      rec.deletion != DelAlive,
       nextAttempt <= MAX_ATTEMPTS,
       tasks' = tasks.set(t, {
         status: Running,
         attempt: nextAttempt,
         hasCompletion: false,
         pendingPub: false,
-        deleting: false,
+        deletion: DelNone,
         hasRunSlug: withRunSlug,
         hasExecId: true,
       }),
-      goal' = goal, writer' = writer, daemon' = daemon, inbox' = inbox, nextFileId' = nextFileId,
-      acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
-      failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+      goal' = goal, writer' = writer, daemon' = daemon, daemonRunning' = daemonRunning,
+      inbox' = inbox, nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred,
+      wakes' = wakes, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+      writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+      staleDeletionRecovered' = staleDeletionRecovered,
       lastAction' = "startTask",
     }
   }
@@ -198,22 +258,24 @@ module goalTaskCompletionPublication {
       writer.phase == WriterIdle,
       goal == Active,
       rec.status == Pending,
-      not(rec.deleting),
+      rec.deletion != DelAlive,
       nextAttempt <= MAX_ATTEMPTS,
       tasks' = tasks.set(t, {
         status: Failed,
         attempt: nextAttempt,
         hasCompletion: true,
         pendingPub: usesOutbox(DESIGN),
-        deleting: false,
+        deletion: DelNone,
         hasRunSlug: true,
         hasExecId: true,
       }),
       writer' = { phase: WriterSaved, task: t, attempt: nextAttempt, kind: SetupFail, hasRunSlug: true, hasExecId: true },
       failedAttempts' = failedAttempts.union(Set((t, nextAttempt))),
       attemptKind' = attemptKind.set((t, nextAttempt), kindLabel(SetupFail)),
-      goal' = goal, daemon' = daemon, inbox' = inbox, nextFileId' = nextFileId,
-      acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
+      goal' = goal, daemon' = daemon, daemonRunning' = daemonRunning, inbox' = inbox,
+      nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
+      writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+      staleDeletionRecovered' = staleDeletionRecovered,
       lastAction' = "writeSetupFailure",
     }
   }
@@ -224,19 +286,22 @@ module goalTaskCompletionPublication {
     all {
       writer.phase == WriterIdle,
       rec.status == Running,
-      not(rec.deleting),
+      rec.deletion != DelAlive,
       tasks' = tasks.set(t, {
         ...rec,
         status: Failed,
         hasCompletion: true,
         pendingPub: usesOutbox(DESIGN),
+        deletion: DelNone,
         hasRunSlug: true,
       }),
       writer' = { phase: WriterSaved, task: t, attempt: rec.attempt, kind: InterruptedFail, hasRunSlug: true, hasExecId: rec.hasExecId },
       failedAttempts' = failedAttempts.union(Set((t, rec.attempt))),
       attemptKind' = attemptKind.set((t, rec.attempt), kindLabel(InterruptedFail)),
-      goal' = goal, daemon' = daemon, inbox' = inbox, nextFileId' = nextFileId,
-      acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
+      goal' = goal, daemon' = daemon, daemonRunning' = daemonRunning, inbox' = inbox,
+      nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
+      writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+      staleDeletionRecovered' = staleDeletionRecovered,
       lastAction' = "writeInterruptedFailure",
     }
   }
@@ -249,19 +314,22 @@ module goalTaskCompletionPublication {
     all {
       writer.phase == WriterIdle,
       rec.status == Running,
-      not(rec.deleting),
+      rec.deletion != DelAlive,
       tasks' = tasks.set(t, {
         ...rec,
         status: Failed,
         hasCompletion: true,
         pendingPub: usesOutbox(DESIGN),
+        deletion: DelNone,
         hasExecId: ensuredExecId,
       }),
       writer' = { phase: WriterSaved, task: t, attempt: rec.attempt, kind: ReconcileFail, hasRunSlug: rec.hasRunSlug, hasExecId: ensuredExecId },
       failedAttempts' = failedAttempts.union(Set((t, rec.attempt))),
       attemptKind' = attemptKind.set((t, rec.attempt), kindLabel(ReconcileFail)),
-      goal' = goal, daemon' = daemon, inbox' = inbox, nextFileId' = nextFileId,
-      acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
+      goal' = goal, daemon' = daemon, daemonRunning' = daemonRunning, inbox' = inbox,
+      nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
+      writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+      staleDeletionRecovered' = staleDeletionRecovered,
       lastAction' = "writeReconcileFailure",
     }
   }
@@ -275,6 +343,7 @@ module goalTaskCompletionPublication {
     if (goal == Aborted) all {
       inbox' = inbox,
       nextFileId' = nextFileId,
+      writerPublished' = writerPublished,
     } else all {
       inbox' = inbox.union(Set({
         fileId: nextFileId,
@@ -284,11 +353,13 @@ module goalTaskCompletionPublication {
         hasExecId: writer.hasExecId,
       })),
       nextFileId' = nextFileId + 1,
+      writerPublished' = writerPublished.union(Set((writer.task, writer.attempt))),
     },
     writer' = if (usesOutbox(DESIGN)) { ...writer, phase: WriterPublished } else IDLE_WRITER,
-    tasks' = tasks, goal' = goal, daemon' = daemon,
+    tasks' = tasks, goal' = goal, daemon' = daemon, daemonRunning' = daemonRunning,
     acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
     failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    daemonRepublished' = daemonRepublished, staleDeletionRecovered' = staleDeletionRecovered,
     lastAction' = "writerPublishOk",
   }
 
@@ -297,9 +368,11 @@ module goalTaskCompletionPublication {
   action writerPublishFails: bool = all {
     writer.phase == WriterSaved,
     writer' = IDLE_WRITER,
-    tasks' = tasks, goal' = goal, daemon' = daemon, inbox' = inbox, nextFileId' = nextFileId,
-    acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
-    failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    tasks' = tasks, goal' = goal, daemon' = daemon, daemonRunning' = daemonRunning,
+    inbox' = inbox, nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred,
+    wakes' = wakes, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+    staleDeletionRecovered' = staleDeletionRecovered,
     lastAction' = "writerPublishFails",
   }
 
@@ -307,21 +380,26 @@ module goalTaskCompletionPublication {
   action writerCrash: bool = all {
     writer.phase != WriterIdle,
     writer' = IDLE_WRITER,
-    tasks' = tasks, goal' = goal, daemon' = daemon, inbox' = inbox, nextFileId' = nextFileId,
-    acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
-    failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    tasks' = tasks, goal' = goal, daemon' = daemon, daemonRunning' = daemonRunning,
+    inbox' = inbox, nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred,
+    wakes' = wakes, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+    staleDeletionRecovered' = staleDeletionRecovered,
     lastAction' = "writerCrash",
   }
 
-  // Writer clears completion_publication_pending after saveManagerEvent succeeded.
+  // Writer clears completion_publication_pending after saveManagerEvent succeeded (via TaskStore.update,
+  // which always clears stale dead deletions before running the mutator).
   action writerClearOk: bool = all {
     usesOutbox(DESIGN),
     writer.phase == WriterPublished,
-    tasks' = applyClearPending(tasks, DESIGN, writer.task, writer.attempt),
+    tasks' = applyClearPending(tasks, true, DESIGN, writer.task, writer.attempt),
     writer' = IDLE_WRITER,
-    goal' = goal, daemon' = daemon, inbox' = inbox, nextFileId' = nextFileId,
-    acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
+    goal' = goal, daemon' = daemon, daemonRunning' = daemonRunning, inbox' = inbox,
+    nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
     failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+    staleDeletionRecovered' = staleDeletionRecovered,
     lastAction' = "writerClearOk",
   }
 
@@ -330,9 +408,11 @@ module goalTaskCompletionPublication {
     usesOutbox(DESIGN),
     writer.phase == WriterPublished,
     writer' = IDLE_WRITER,
-    tasks' = tasks, goal' = goal, daemon' = daemon, inbox' = inbox, nextFileId' = nextFileId,
-    acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
-    failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    tasks' = tasks, goal' = goal, daemon' = daemon, daemonRunning' = daemonRunning,
+    inbox' = inbox, nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred,
+    wakes' = wakes, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+    staleDeletionRecovered' = staleDeletionRecovered,
     lastAction' = "writerClearFails",
   }
 
@@ -340,25 +420,29 @@ module goalTaskCompletionPublication {
   action daemonReadPending(t: TaskId): bool = {
     val rec = tasks.get(t)
     all {
-      usesOutbox(DESIGN),
+      daemonRunning,
       daemon.phase == DaemonIdle,
-      canReadPending(rec),
+      republisherAccepts(DESIGN, rec),
       daemon' = { phase: DaemonRead, task: t, attempt: rec.attempt, hasRunSlug: rec.hasRunSlug, hasExecId: rec.hasExecId },
-      tasks' = tasks, goal' = goal, writer' = writer, inbox' = inbox, nextFileId' = nextFileId,
-      acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
-      failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+      tasks' = tasks, goal' = goal, writer' = writer, daemonRunning' = daemonRunning,
+      inbox' = inbox, nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred,
+      wakes' = wakes, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+      writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+      staleDeletionRecovered' = staleDeletionRecovered,
       lastAction' = "daemonReadPending",
     }
   }
 
   // Daemon checks goal.json and writes the inbox event (if Active/Paused) or skips inbox write (if Aborted/Deleted).
   action daemonPublishOk: bool = all {
-    usesOutbox(DESIGN),
+    daemonRunning,
+    usesRepublisher(DESIGN),
     daemon.phase == DaemonRead,
     nextFileId <= MAX_FILES,
     if (goal == Aborted or goal == Deleted) all {
       inbox' = inbox,
       nextFileId' = nextFileId,
+      daemonRepublished' = daemonRepublished,
     } else all {
       inbox' = inbox.union(Set({
         fileId: nextFileId,
@@ -368,46 +452,74 @@ module goalTaskCompletionPublication {
         hasExecId: daemon.hasExecId,
       })),
       nextFileId' = nextFileId + 1,
+      daemonRepublished' = daemonRepublished.union(Set((daemon.task, daemon.attempt))),
     },
     daemon' = { ...daemon, phase: DaemonPublished },
-    tasks' = tasks, goal' = goal, writer' = writer,
+    tasks' = tasks, goal' = goal, writer' = writer, daemonRunning' = daemonRunning,
     acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
     failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    writerPublished' = writerPublished, staleDeletionRecovered' = staleDeletionRecovered,
     lastAction' = "daemonPublishOk",
   }
 
   // Daemon fails reading goal.json (corrupt/EACCES/timeout) or writing inbox (ENOSPC): keeps pendingPub untouched.
   action daemonPublishFails: bool = all {
-    usesOutbox(DESIGN),
+    daemonRunning,
+    usesRepublisher(DESIGN),
     daemon.phase == DaemonRead,
     daemon' = IDLE_DAEMON,
-    tasks' = tasks, goal' = goal, writer' = writer, inbox' = inbox, nextFileId' = nextFileId,
-    acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
-    failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    tasks' = tasks, goal' = goal, writer' = writer, daemonRunning' = daemonRunning,
+    inbox' = inbox, nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred,
+    wakes' = wakes, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+    staleDeletionRecovered' = staleDeletionRecovered,
     lastAction' = "daemonPublishFails",
   }
 
-  // Daemon clears completion_publication_pending in tasks.yaml under tasks.yaml.lock.
+  // Daemon clears completion_publication_pending (and any stale dead deletion) under tasks.yaml.lock.
   action daemonClearOk: bool = all {
-    usesOutbox(DESIGN),
+    daemonRunning,
+    usesRepublisher(DESIGN),
     daemon.phase == DaemonPublished,
-    tasks' = applyClearPending(tasks, DESIGN, daemon.task, daemon.attempt),
+    tasks' = applyClearPending(tasks, usesStaleDeletionRecovery(DESIGN), DESIGN, daemon.task, daemon.attempt),
     daemon' = IDLE_DAEMON,
-    goal' = goal, writer' = writer, inbox' = inbox, nextFileId' = nextFileId,
-    acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
+    staleDeletionRecovered' = (staleDeletionRecovered or clearsStaleDeletion(
+      tasks, usesStaleDeletionRecovery(DESIGN), DESIGN, daemon.task, daemon.attempt
+    )),
+    goal' = goal, writer' = writer, daemonRunning' = daemonRunning, inbox' = inbox,
+    nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
     failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
     lastAction' = "daemonClearOk",
   }
 
   // Daemon fails to clear completion_publication_pending (lock timeout / ENOSPC / restart).
   action daemonClearFails: bool = all {
-    usesOutbox(DESIGN),
+    daemonRunning,
+    usesRepublisher(DESIGN),
     daemon.phase == DaemonPublished,
     daemon' = IDLE_DAEMON,
-    tasks' = tasks, goal' = goal, writer' = writer, inbox' = inbox, nextFileId' = nextFileId,
-    acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
-    failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    tasks' = tasks, goal' = goal, writer' = writer, daemonRunning' = daemonRunning,
+    inbox' = inbox, nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred,
+    wakes' = wakes, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+    staleDeletionRecovered' = staleDeletionRecovered,
     lastAction' = "daemonClearFails",
+  }
+
+  // Daemon idle shutdown (runDaemon.ts idleCheck -> watchSource.hasWork):
+  // exits when idle and hasWork returns false.
+  action daemonIdleExit: bool = all {
+    daemonRunning,
+    daemon.phase == DaemonIdle,
+    not(daemonHasWork(DESIGN, goal, tasks, inbox)),
+    daemonRunning' = false,
+    tasks' = tasks, goal' = goal, writer' = writer, daemon' = daemon, inbox' = inbox,
+    nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
+    failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+    staleDeletionRecovered' = staleDeletionRecovered,
+    lastAction' = "daemonIdleExit",
   }
 
   // receiveInboxChange + FileEventStore.accept + conversationService handling:
@@ -418,6 +530,7 @@ module goalTaskCompletionPublication {
     val isNew = not(acceptedKeys.contains(key))
     val pair = (f.task, f.attempt)
     all {
+      daemonRunning,
       inbox.contains(f),
       inbox' = inbox.exclude(Set(f)),
       acceptedKeys' = acceptedKeys.union(Set(key)),
@@ -432,51 +545,60 @@ module goalTaskCompletionPublication {
         wakes' = wakes,
         deferred' = deferred,
       },
-      tasks' = tasks, goal' = goal, writer' = writer, daemon' = daemon, nextFileId' = nextFileId,
-      failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+      tasks' = tasks, goal' = goal, writer' = writer, daemon' = daemon, daemonRunning' = daemonRunning,
+      nextFileId' = nextFileId, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+      writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+      staleDeletionRecovered' = staleDeletionRecovered,
       lastAction' = "consumeInbox",
     }
   }
 
   action consumeAnyInbox: bool = all {
+    daemonRunning,
     inbox.size() > 0,
     nondet f = inbox.oneOf()
     consumeInbox(f),
   }
 
-  // Requeue a failed task (clears completion, run_slug, execution_id, completion_publication_pending).
+  // Requeue a failed task (clears completion, run_slug, execution_id, completion_publication_pending,
+  // and any stale dead deletion reservation via TaskStore.update).
   action requeueTask(t: TaskId): bool = {
     val rec = tasks.get(t)
     all {
+      goal == Active or goal == Paused,
       rec.status == Failed,
-      not(rec.deleting),
+      rec.deletion != DelAlive,
       rec.attempt < MAX_ATTEMPTS,
       tasks' = tasks.set(t, {
         status: Pending,
         attempt: rec.attempt,
         hasCompletion: false,
         pendingPub: false,
-        deleting: false,
+        deletion: DelNone,
         hasRunSlug: false,
         hasExecId: false,
       }),
-      goal' = goal, writer' = writer, daemon' = daemon, inbox' = inbox, nextFileId' = nextFileId,
-      acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
-      failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+      goal' = goal, writer' = writer, daemon' = daemon, daemonRunning' = daemonRunning,
+      inbox' = inbox, nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred,
+      wakes' = wakes, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+      writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+      staleDeletionRecovered' = staleDeletionRecovered,
       lastAction' = "requeueTask",
     }
   }
 
-  // Task deletion reservation (deleteTaskWithCleanup step 1 / rollback / step 3).
+  // Task deletion reservation (deleteTaskWithCleanup step 1 / rollback / step 3 / owner crash).
   action reserveDeletion(t: TaskId): bool = {
     val rec = tasks.get(t)
     all {
       rec.status == Failed,
-      not(rec.deleting),
-      tasks' = tasks.set(t, { ...rec, deleting: true }),
-      goal' = goal, writer' = writer, daemon' = daemon, inbox' = inbox, nextFileId' = nextFileId,
-      acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
-      failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+      rec.deletion != DelAlive,
+      tasks' = tasks.set(t, { ...rec, deletion: DelAlive }),
+      goal' = goal, writer' = writer, daemon' = daemon, daemonRunning' = daemonRunning,
+      inbox' = inbox, nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred,
+      wakes' = wakes, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+      writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+      staleDeletionRecovered' = staleDeletionRecovered,
       lastAction' = "reserveDeletion",
     }
   }
@@ -484,31 +606,49 @@ module goalTaskCompletionPublication {
   action cancelDeletion(t: TaskId): bool = {
     val rec = tasks.get(t)
     all {
-      rec.deleting,
-      tasks' = tasks.set(t, { ...rec, deleting: false }),
-      goal' = goal, writer' = writer, daemon' = daemon, inbox' = inbox, nextFileId' = nextFileId,
-      acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
-      failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+      rec.deletion == DelAlive,
+      tasks' = tasks.set(t, { ...rec, deletion: DelNone }),
+      goal' = goal, writer' = writer, daemon' = daemon, daemonRunning' = daemonRunning,
+      inbox' = inbox, nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred,
+      wakes' = wakes, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+      writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+      staleDeletionRecovered' = staleDeletionRecovered,
       lastAction' = "cancelDeletion",
+    }
+  }
+
+  action deletionOwnerCrash(t: TaskId): bool = {
+    val rec = tasks.get(t)
+    all {
+      rec.deletion == DelAlive,
+      tasks' = tasks.set(t, { ...rec, deletion: DelDead }),
+      goal' = goal, writer' = writer, daemon' = daemon, daemonRunning' = daemonRunning,
+      inbox' = inbox, nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred,
+      wakes' = wakes, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+      writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+      staleDeletionRecovered' = staleDeletionRecovered,
+      lastAction' = "deletionOwnerCrash",
     }
   }
 
   action finishDeletion(t: TaskId): bool = {
     val rec = tasks.get(t)
     all {
-      rec.deleting,
+      rec.deletion == DelAlive,
       tasks' = tasks.set(t, {
         status: Absent,
         attempt: rec.attempt,
         hasCompletion: false,
         pendingPub: false,
-        deleting: false,
+        deletion: DelNone,
         hasRunSlug: false,
         hasExecId: false,
       }),
-      goal' = goal, writer' = writer, daemon' = daemon, inbox' = inbox, nextFileId' = nextFileId,
-      acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
-      failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+      goal' = goal, writer' = writer, daemon' = daemon, daemonRunning' = daemonRunning,
+      inbox' = inbox, nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred,
+      wakes' = wakes, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+      writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+      staleDeletionRecovered' = staleDeletionRecovered,
       lastAction' = "finishDeletion",
     }
   }
@@ -517,33 +657,42 @@ module goalTaskCompletionPublication {
   action pauseGoal: bool = all {
     goal == Active,
     goal' = Paused,
-    tasks' = tasks, writer' = writer, daemon' = daemon, inbox' = inbox, nextFileId' = nextFileId,
-    acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
-    failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    tasks' = tasks, writer' = writer, daemon' = daemon, daemonRunning' = daemonRunning,
+    inbox' = inbox, nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred,
+    wakes' = wakes, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+    staleDeletionRecovered' = staleDeletionRecovered,
     lastAction' = "pauseGoal",
   }
 
   action resumeGoal: bool = all {
     goal == Paused,
     goal' = Active,
-    tasks' = tasks, writer' = writer, daemon' = daemon, inbox' = inbox, nextFileId' = nextFileId,
-    acceptedKeys' = acceptedKeys, deferred' = deferred, wakes' = wakes,
-    failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    tasks' = tasks, writer' = writer, daemon' = daemon, daemonRunning' = daemonRunning,
+    inbox' = inbox, nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred,
+    wakes' = wakes, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+    staleDeletionRecovered' = staleDeletionRecovered,
     lastAction' = "resumeGoal",
   }
 
   // Deliver one deferred completion after the goal resumed.
   action deliverDeferred(pair: (TaskId, Attempt)): bool = all {
+    daemonRunning,
     goal == Active,
     deferred.contains(pair),
     deferred' = deferred.exclude(Set(pair)),
     wakes' = wakes.setBy(pair, n => n + 1),
-    tasks' = tasks, goal' = goal, writer' = writer, daemon' = daemon, inbox' = inbox, nextFileId' = nextFileId,
-    acceptedKeys' = acceptedKeys, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    tasks' = tasks, goal' = goal, writer' = writer, daemon' = daemon, daemonRunning' = daemonRunning,
+    inbox' = inbox, nextFileId' = nextFileId, acceptedKeys' = acceptedKeys,
+    failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+    staleDeletionRecovered' = staleDeletionRecovered,
     lastAction' = "deliverDeferred",
   }
 
   action deliverAnyDeferred: bool = all {
+    daemonRunning,
     deferred.size() > 0,
     nondet pair = deferred.oneOf()
     deliverDeferred(pair),
@@ -555,9 +704,11 @@ module goalTaskCompletionPublication {
     goal' = Aborted,
     inbox' = Set(),
     deferred' = Set(),
-    tasks' = tasks, writer' = writer, daemon' = daemon, nextFileId' = nextFileId,
-    acceptedKeys' = acceptedKeys, wakes' = wakes,
+    tasks' = tasks, writer' = writer, daemon' = daemon, daemonRunning' = daemonRunning,
+    nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, wakes' = wakes,
     failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+    staleDeletionRecovered' = staleDeletionRecovered,
     lastAction' = "abortGoal",
   }
 
@@ -567,9 +718,11 @@ module goalTaskCompletionPublication {
     goal' = Deleted,
     inbox' = Set(),
     deferred' = Set(),
-    tasks' = tasks, writer' = writer, daemon' = daemon, nextFileId' = nextFileId,
-    acceptedKeys' = acceptedKeys, wakes' = wakes,
+    tasks' = tasks, writer' = writer, daemon' = daemon, daemonRunning' = daemonRunning,
+    nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, wakes' = wakes,
     failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+    staleDeletionRecovered' = staleDeletionRecovered,
     lastAction' = "deleteGoal",
   }
 
@@ -591,11 +744,13 @@ module goalTaskCompletionPublication {
       daemonPublishFails,
       daemonClearOk,
       daemonClearFails,
+      daemonIdleExit,
       consumeAnyInbox,
       deliverAnyDeferred,
       requeueTask(t),
       reserveDeletion(t),
       cancelDeletion(t),
+      deletionOwnerCrash(t),
       finishDeletion(t),
       pauseGoal,
       resumeGoal,
@@ -640,12 +795,61 @@ module goalTaskCompletionPublication {
   val noDeferredWhenAbortedOrDeleted: bool =
     (goal == Aborted or goal == Deleted) implies deferred == Set()
 
+  // 6. Daemon never idle-exits while live goal work, inbox files, active tasks, or pendingPub marks remain.
+  val noDaemonExitWithWork: bool =
+    not(daemonRunning) implies and {
+      goal == Aborted or goal == Deleted,
+      inbox == Set(),
+      deferred == Set(),
+      TASKS.forall(t => {
+        val rec = tasks.get(t)
+        rec.status != Pending and rec.status != Running and not(rec.pendingPub)
+      }),
+    }
+
+  // 7. Quiescent delivery (progress/delivery property):
+  //    True when a recovery, delivery, or live-deletion step is enabled for task t.
+  //    Note: does NOT assume not(rec.pendingPub); if pendingPub is set but no republisher can
+  //    pick it up (e.g., republisher removed, daemon exited early, or dead deletion blocks it),
+  //    taskRecoveryEnabled becomes false and quiescentDelivery fails.
+  pure def taskRecoveryEnabled(
+    design: str,
+    dRunning: bool,
+    g: GoalStatus,
+    w: WriterState,
+    d: DaemonState,
+    ib: Set[InboxFile],
+    defSet: Set[(TaskId, Attempt)],
+    t: TaskId,
+    rec: TaskRec,
+  ): bool = or {
+    w.phase != WriterIdle and w.task == t and w.attempt == rec.attempt,
+    dRunning and d.phase != DaemonIdle and d.task == t and d.attempt == rec.attempt,
+    dRunning and republisherAccepts(design, rec),
+    dRunning and ib.exists(f => f.task == t and f.attempt == rec.attempt),
+    dRunning and g == Active and defSet.contains((t, rec.attempt)),
+    rec.deletion == DelAlive,
+  }
+
+  val quiescentDelivery: bool =
+    TASKS.forall(t => {
+      val rec = tasks.get(t)
+      not(taskRecoveryEnabled(DESIGN, daemonRunning, goal, writer, daemon, inbox, deferred, t, rec)) implies and {
+        (goal == Active and rec.status == Failed and rec.hasCompletion) implies wakes.get((t, rec.attempt)) >= 1,
+        (goal == Paused and rec.status == Failed and rec.hasCompletion) implies
+          (wakes.get((t, rec.attempt)) >= 1 or deferred.contains((t, rec.attempt))),
+        (goal == Aborted or goal == Deleted) implies not(rec.pendingPub),
+      }
+    })
+
   val safety: bool = and {
     noDuplicateManagerWake,
     noUnrecoverableLoss,
     pendingPubSchemaValid,
     noPhantomWake,
     noDeferredWhenAbortedOrDeleted,
+    noDaemonExitWithWork,
+    quiescentDelivery,
   }
 
   // ---------- witnesses ----------
@@ -655,14 +859,36 @@ module goalTaskCompletionPublication {
   val wReconcileWithoutRunSlugWoke: bool = TASKS.exists(t =>
     tasks.get(t).status == Failed and not(tasks.get(t).hasRunSlug) and wakes.get((t, tasks.get(t).attempt)) == 1)
   val wDaemonRepublished: bool = lastAction == "daemonClearOk" and ATTEMPT_KEYS.exists(p => wakes.get(p) == 1)
+  val wDaemonSoleRepublishWoke: bool =
+    TASKS.exists(t => {
+      val rec = tasks.get(t)
+      val pair = (t, rec.attempt)
+      and {
+        goal == Active,
+        rec.status == Failed,
+        not(rec.pendingPub),
+        not(writerPublished.contains(pair)),
+        daemonRepublished.contains(pair),
+        wakes.get(pair) == 1,
+        not(taskRecoveryEnabled(DESIGN, daemonRunning, goal, writer, daemon, inbox, deferred, t, rec)),
+      }
+    })
   val wSecondAttemptWoke: bool = TASKS.exists(t => wakes.get((t, 2)) == 1)
   val wDeferredDelivered: bool = lastAction == "deliverDeferred"
   val wAbortedSettled: bool = goal == Aborted and lastAction == "daemonClearOk"
   val wDeletedSettled: bool = goal == Deleted and lastAction == "daemonClearOk"
   val wDeletionReserved: bool = lastAction == "finishDeletion"
+  val wStaleDeletionRecovered: bool = staleDeletionRecovered
+  val wDaemonIdleExitedAfterSettle: bool =
+    not(daemonRunning)
+      and (goal == Aborted or goal == Deleted)
+      and TASKS.forall(t => not(tasks.get(t).pendingPub))
 }
 
 module before { import goalTaskCompletionPublication(DESIGN = "Before").* from "./goalTaskCompletionPublication" }
+module fixedNoRepublisher { import goalTaskCompletionPublication(DESIGN = "FixedNoRepublisher").* from "./goalTaskCompletionPublication" }
+module fixedNoHasWork { import goalTaskCompletionPublication(DESIGN = "FixedNoHasWork").* from "./goalTaskCompletionPublication" }
+module fixedStaleDeletionBlocks { import goalTaskCompletionPublication(DESIGN = "FixedStaleDeletionBlocks").* from "./goalTaskCompletionPublication" }
 module fixedNoDedup { import goalTaskCompletionPublication(DESIGN = "FixedNoDedup").* from "./goalTaskCompletionPublication" }
 module fixedUncheckedClear { import goalTaskCompletionPublication(DESIGN = "FixedUncheckedClear").* from "./goalTaskCompletionPublication" }
 module fixed { import goalTaskCompletionPublication(DESIGN = "Fixed").* from "./goalTaskCompletionPublication" }
