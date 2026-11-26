@@ -80,14 +80,14 @@ takt-dash（`j5ik2o/takt-dash` の main、`f3c90e5`、2026-11-26 に読み直し
 
 - 4つの旧名を、新しい名前と同じ入力の schema、同じ処理でサーバーに登録する。入力の形（`cwd`・`conversationId`・`revision`・`path`・`textOffset` など）と応答の形（`proposals`・`proposal`・`fields`・`revision`）は、親1 と今の版で同じであることを確かめた（処理のファイルは名前の置き換えだけの差だった）。
 - 登録する道具の組: 一覧と本文の旧名は `all` と `manager`、承認と却下の旧名は `all` だけ（承認と却下は、親1 でも既定の組 `toolSet` なしか `all` だけだった）。親1 は一覧と本文を `read-only` にも出していたが、旧名は `read-only` には出さない。`read-only` の組は takt 自身のエージェント（`taskStateMcp.ts` が `--tool-set read-only` で起動する task state の道具）向けで、takt-dash は使わない（`docs/requirements.md:47`「read-only ではなく操作を含む tool-set（manager または all）」。常駐の HTTP サーバーも `--tool-set` なしで起動し、`all` になる）。`it-conversation-task-state-mcp.test.ts:431` は「エージェントの許可リストが read-only の組の道具をすべて含む」ことを確かめているので、read-only に旧名を出すと、旧名をエージェントに許すか、この試験を弱めるかになる。
-- 旧名は `TAKT_MCP_READ_ONLY_TOOL_NAMES` と `TAKT_MCP_MANAGER_TOOL_NAMES` には入れず、別の一覧（`TAKT_MCP_DEPRECATED_ALIAS_TOOL_NAMES`）にする。この2つの一覧は、manager と task state のエージェントに渡す道具の許可にも使われる（`turnExecutor.ts`、`taskStateMcp.ts`）。エージェントの許可には新しい名前だけを入れる。manager のエージェントがつなぐ `manager` の組の `listTools()` には、一覧と本文の旧名が出るが、許可リストに無いので呼ばれない（description が新しい名前を指す）。
+- 旧名は `TAKT_MCP_READ_ONLY_TOOL_NAMES` と `TAKT_MCP_MANAGER_TOOL_NAMES` には入れず、別の一覧（`TAKT_MCP_DEPRECATED_ALIAS_TOOL_NAMES`）にする。この2つの一覧は、manager と task state のエージェントに渡す道具の許可にも使われる（`turnExecutor.ts`、`taskStateMcp.ts`）。エージェントの許可には新しい名前だけを入れる。manager のエージェントがつなぐ `manager` の組の `listTools()` には、一覧と本文の旧名が出る。許可リストを守る provider では、許可リストに無いので呼ばれない。`allowedTools` を守らない provider（`cursor.ts`・`devin.ts`・`kiro.ts` は「does not support allowedTools; ignoring」と出して無視する）では見えるが、旧名は新しい名前と同じ処理で、description も新しい名前を指すので、呼ばれても正しく動く。親1 でもこの名前は見えていたので、害は無い（設計の再レビュー 低-B）。
 - 道具名を完全一致で確かめている試験（設計レビュー 中-4）: `all` と `manager` の組の一覧を完全一致で確かめる試験は、期待する一覧に旧名を足す。足すだけなので、試験は弱まらない。該当は `runtime-mcp.integration.test.ts`（302 行以降）と `it-goal-mcp-stdio.test.ts`（1036 行、`TAKT_MCP_MANAGER_TOOL_NAMES` に別名の一覧を足した期待にする）。実装では、`listTools()` の名前を `toEqual` で比べる試験を grep で洗い直し、`all`・`manager` の組のものはすべて同じように足す。`read-only` の組の完全一致（`mcp-entrypoint.test.ts:1075`、`it-goal-mcp-stdio.test.ts:1044`）と、エージェントの許可リストの試験（`it-assistant-mcp-cli-args.test.ts`・`it-conversation-task-state-mcp.test.ts`・`it-opencode-task-state-mcp.test.ts`・`it-opencode-v2-assistant-mcp.test.ts`）は変えない。試験を通すために旧名を許可リストの一覧へ入れてはならない。
 - 旧名の description は「Deprecated alias of `takt_list_goal_proposals`. Kept for MCP clients written against the earlier name.」のように、新しい名前を指す。
 - 持ち主が違うときの文面は、旧名・新名のどちらから呼んでも親1 の「The conversationId … does not own the pending registration proposal of …」にする。上流の試験はこの文面を確かめていない（上流の `goal-proposal-operations.test.ts` は 84 行で、この確かめは無い）。今の版の 833 行目の確かめは、親1 の試験を改名したときに書き換えたものなので、親1 の文面に戻す。
 
 知らせと移り方:
 
-- PR 本文に、「旧名の4つは別名として残す。新しい名前に移ってほしい」「`takt_list_runtime_assignments` は `state` を受け付けない」と書く。`docs/CHANGELOG.ja.md` は上流のファイルなので触らない（次の取り込みで競合する）。
+- PR 本文に、「旧名の4つは別名として残す。新しい名前に移ってほしい」「`--tool-set read-only` には旧名を出さない（親1 は一覧と本文の旧名を出していた。新しい名前を使う）」「`takt_list_runtime_assignments` は `state` を受け付けない」と書く（設計の再レビュー 低-A）。`docs/CHANGELOG.ja.md` は上流のファイルなので触らない（次の取り込みで競合する）。
 - takt-dash へ、新しい名前に移ることと、持ち主の食い違いを文面ではなく安定したコードで見分けることの issue を出す（宛先と出すかどうかは元帥に聞く。今回は takt-dash には何も書かない）。
 - 別名を消すのは、takt-dash が新しい名前に移って公開された後の、別の PR にする。この PR では消さない。
 

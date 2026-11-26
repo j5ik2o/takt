@@ -336,6 +336,12 @@ describe('deterministic stdio MCP server fixture (MCP-INTEGRATION-TESTS)', () =>
         'takt_create_goal_proposal',
         'takt_list_goal_proposals',
         'takt_get_goal_proposal',
+        // Deprecated aliases kept for the fork's MCP clients (item 201): added to the exact list,
+        // not a weaker check.
+        'takt_list_goal_registration_proposals',
+        'takt_get_goal_registration_proposal',
+        'takt_approve_goal_registration',
+        'takt_reject_goal_registration',
         'takt_list_goals',
         'takt_get_goal',
         'takt_list_tasks',

@@ -830,7 +830,7 @@ describe('takt_get_goal_proposal', () => {
       { cwd, conversationId: conversationId({ kind: 'repository', repositoryDirectory: '/other' }) }, {});
 
     expect(result.isError).toBe(true);
-    expect(firstTextContent(result.content)).toContain('does not own the pending goal proposal');
+    expect(firstTextContent(result.content)).toContain('does not own the pending registration proposal');
     expect(doubles.read).not.toHaveBeenCalled();
   });
 });

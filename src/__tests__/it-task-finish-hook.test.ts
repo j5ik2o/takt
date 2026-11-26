@@ -417,6 +417,31 @@ describe('task finish hook', () => {
 
   it('reports a goal task that is saved as failed while it is claimed', async () => {
     const project = createProject();
+    const task = project.runner.addTask('Goal work', { workflow: 'default' });
+    const claimForReal = project.runner.claimNextTasks.bind(project.runner);
+    // Stand-in for the claim-time setup failure of a goal task: the task is saved as failed and
+    // reported through the callback, and never handed out for execution.
+    vi.spyOn(project.runner, 'claimNextTasks').mockImplementation((count, _setupFailure, onSetupFailed) => {
+      const claimed = claimForReal(count)[0]!;
+      const now = new Date().toISOString();
+      project.runner.failTask({ task: claimed, success: false, response: 'runtime assignment is gone',
+        executionLog: [], startedAt: now, completedAt: now });
+      onSetupFailed?.(project.runner.listTaskStateItems().find((item) => item.name === claimed.name)!);
+      return [];
+    });
+
+    const claimed = claimTasksWithGoalCompletions(project.runner, 1, project.dir, new AbortController().signal);
+
+    expect(claimed).toEqual({ tasks: [], setupFailedTaskNames: [task.name] });
+    await runTaskFinishHooks(project.dir, project.runner, claimed.setupFailedTaskNames, { emitStatusLog: false });
+    expect(hookCalls(project).map((call) => [call.env.TAKT_FINISH_TASK_NAME, call.env.TAKT_FINISH_STATUS]))
+      .toEqual([[task.name, 'failed']]);
+  });
+
+  // Kept from the upstream merge (d2bd16a30) next to the fork test above: it drives the real claim
+  // instead of a stand-in, so it also checks that the real setup failure reaches the hook.
+  it('reports a goal task whose runtime assignment is gone through the real claim', async () => {
+    const project = createProject();
     const goalDirectory = path.join(project.dir, '.takt', 'goals', goalId);
     fs.mkdirSync(goalDirectory, { recursive: true });
     fs.writeFileSync(path.join(goalDirectory, 'goal.json'), JSON.stringify(goalRecord()));

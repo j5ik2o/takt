@@ -401,6 +401,8 @@
     "src/__tests__/it-goal-mcp.test.ts",
     "src/__tests__/it-goal-run-specifications.test.ts",
     "src/__tests__/it-goal-store.test.ts",
+    "src/__tests__/it-goal-task-claim-run-end.test.ts",
+    "src/__tests__/it-goal-task-claim.test.ts",
     "src/__tests__/it-goal-task-pause-retry.test.ts",
     "src/__tests__/it-goal-task-pr-retry.test.ts",
     "src/__tests__/it-goal-task-retry.test.ts",

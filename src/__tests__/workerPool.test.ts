@@ -573,15 +573,11 @@ describe('runWithWorkerPool', () => {
   it('claim で失敗として保存されたゴールのタスクを run の失敗に数える', async () => {
     const passed = createTask('passed');
     const runner = createRunner();
-    let goalTaskStatus = 'pending';
-    const goalTask = () => ({ name: 'goal-task', status: goalTaskStatus, goalId: 'goal-1', runSlug: 'setup-run',
-      completion: { success: false, interrupted: false } });
-    runner.listTaskStateItems.mockImplementation((() => [goalTask()]) as never);
     runner.claimNextTasks
-      .mockImplementationOnce(() => {
-        goalTaskStatus = 'failed';
+      .mockImplementationOnce(((_count: number, _reason: unknown, onSetupFailed: (task: unknown) => void) => {
+        onSetupFailed({ name: 'goal-task', status: 'failed', goalId: 'goal-1' });
         return [passed];
-      })
+      }) as never)
       .mockReturnValue([]);
 
     const result = await runWithWorkerPool(runner as never, [], 1, '/cwd', undefined, undefined, 10, 'run');

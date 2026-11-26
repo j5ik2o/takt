@@ -19,10 +19,22 @@ function lockTimeoutFailure(): Error {
 it('publishes task setup failures once when claiming changes their state', () => {
   let status = 'pending';
   const record = () => ({ name: 'task-a', goalId: goalRecord().id, status, runSlug: 'setup-run', completion: { success: false, interrupted: false } });
-  const runner = { listTaskStateItems: () => [record()], claimNextTasks: () => { status = 'failed'; return []; } } as unknown as TaskRunner;
-  expect(claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal)).toEqual({ tasks: [], setupFailedTaskNames: ['task-a'] });
+  const runner = {
+    listTaskStateItems: vi.fn(() => [record()]),
+    claimNextTasks: (_count: number, _check: unknown, onSetupFailed: (task: unknown) => void) => {
+      if (status === 'pending') {
+        status = 'failed';
+        onSetupFailed(record());
+      }
+      return [];
+    },
+  };
+  const taskRunner = runner as unknown as TaskRunner;
+  expect(claimTasksWithGoalCompletions(taskRunner, 1, '/project', new AbortController().signal))
+    .toEqual({ tasks: [], setupFailedTaskNames: ['task-a'] });
+  expect(runner.listTaskStateItems).toHaveBeenCalledOnce();
   expect(save).toHaveBeenCalledExactlyOnceWith('/project', { kind: 'completion', goalId: goalRecord().id, taskName: 'task-a', runSlug: 'setup-run', result: { success: false, interrupted: false } });
-  claimTasksWithGoalCompletions(runner, 1, '/project', new AbortController().signal); expect(save).toHaveBeenCalledOnce();
+  claimTasksWithGoalCompletions(taskRunner, 1, '/project', new AbortController().signal); expect(save).toHaveBeenCalledOnce();
 });
 it('publishes newly interrupted goal tasks while leaving older results untouched', () => {
   let status: TaskState['status'] = 'running';
