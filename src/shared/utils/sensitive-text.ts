@@ -1,3 +1,6 @@
+import * as legacy from './sensitive-text-legacy.js';
+import { legacySequentialRanges } from './sensitive-text-legacy-trace.js';
+
 export const REDACTED_VALUE = '[REDACTED]';
 
 const SENSITIVE_KEY_CHAR_PATTERN = String.raw`[A-Za-z0-9_.-]`;
@@ -187,7 +190,9 @@ function findSensitiveMatches(text: string): SensitiveMatches {
     whole: [...wholeMatches(text, PEM_PRIVATE_KEY_REGEX), ...wholeMatches(text, KNOWN_TOKEN_REGEX)],
     quoted,
     userinfos,
-    headers: [...httpHeaderValues(text)].filter(notUser),
+    // A header name inside a URL user or password (`https://cookie:a@host`) is not read as a header,
+    // and the scan goes on right after it, so a real `Cookie:` later on the line is still read.
+    headers: [...httpHeaderValues(text, userinfos)],
     // Bare matches inside a quoted assignment would extend past its closing `\"`
     // (e.g. `token=\"x-secret==\"` yields `=\`), and masking ranges would then eat the escape.
     assignments: bareAssignments(text).filter((assignment) => notUser(assignment) && !insideAny(quoted, assignment.keyStart)),
@@ -231,6 +236,20 @@ function bearerValues(text: string): KeyedValue[] {
     const end = start + match[2]!.length;
     return { keyStart: match.index, start, end, valueStart: start, valueEnd: end };
   });
+}
+
+/** `position` lies inside one of the ordered, disjoint `ranges`. */
+function insideRange(ranges: readonly SensitiveRange[], position: number): boolean {
+  let low = 0;
+  let high = ranges.length - 1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    const range = ranges[middle]!;
+    if (position < range.start) high = middle - 1;
+    else if (position >= range.end) low = middle + 1;
+    else return true;
+  }
+  return false;
 }
 
 /** `keyStart` lies inside one of the ordered, disjoint `values`. */
@@ -372,12 +391,16 @@ function curlUserValueReader(text: string): (start: number) => CurlUserValue | u
   };
 }
 
-function* httpHeaderValues(text: string): Generator<HttpHeaderValue & { keyStart: number }> {
+function* httpHeaderValues(text: string, userinfos: readonly SensitiveRange[]): Generator<HttpHeaderValue & { keyStart: number }> {
   const headers = new RegExp(HTTP_HEADER_PREFIX_REGEX.source, HTTP_HEADER_PREFIX_REGEX.flags);
   const quotedAssignments = text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX);
   let quotedAssignment = quotedAssignments.next().value;
   const authScheme = /([A-Za-z]+)[ \t]+/y;
   for (let match = headers.exec(text); match !== null; match = headers.exec(text)) {
+    if (insideRange(userinfos, match.index)) {
+      headers.lastIndex = match.index + match[0].length;
+      continue;
+    }
     while (quotedAssignment !== undefined && quotedAssignment.index + quotedAssignment[0].length <= match.index) {
       quotedAssignment = quotedAssignments.next().value;
     }
@@ -437,90 +460,29 @@ function httpHeaderValueEnd(text: string, start: number, shellQuote: ShellHeader
   return cursor;
 }
 
+const NO_VALUES: ReadonlySet<string> = new Set();
+
+// #151: every path hides the union of what the new reading finds and what the previous
+// implementation (the frozen copy, sensitive-text-legacy.ts) hid, so nothing it hid shows again.
+// (a) the new reading, (b) the trace of the previous display, which applied one pattern at a time,
+// (c) the previous range path. All are ranges on the original text, merged and replaced once.
+function displayRanges(text: string, trace: SensitiveRange[]): SensitiveRange[] {
+  return [...patternRanges(findSensitiveMatches(text)), ...trace, ...legacy.sensitiveTextRanges(text, NO_VALUES)];
+}
+
+/** The previous range path (c), for callers that rebuild the previous masking themselves. */
+export function previousSensitiveTextRanges(text: string): SensitiveRange[] {
+  return legacy.sensitiveTextRanges(text, NO_VALUES);
+}
+
+/** What the previous display hid when it ran over `text` with `masked` already replaced. */
+export function previousDisplayRanges(text: string, masked: readonly SensitiveRange[]): SensitiveRange[] {
+  return legacySequentialRanges(text, masked).ranges;
+}
+
 export function sanitizeSensitiveText(text: string): string {
   if (!text) return text;
-  return maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()));
-}
-
-const valueRanges = (values: readonly KeyedValue[]): SensitiveRange[] => values.map(({ start, end }) => ({ start, end }));
-
-// Until #151, redaction replaced one pattern at a time, each on the output of the one before.
-// A replacement can join text that was apart: `-ux://--user=" :\"secret"` becomes
-// `-ux://--user=[REDACTED]secret"`, and the short `-u` value then runs on over `secret`.
-// The patterns are applied once more in that order, each reading the text with the earlier
-// ranges replaced, so that everything the old order hid stays hidden. Known values are not part
-// of this pass: hiding more of them could hide a key and so hide less, and adding a known value
-// must never show anything that was hidden without it.
-const SEQUENTIAL_ORDER: ReadonlyArray<(text: string) => SensitiveRange[]> = [
-  (text) => wholeMatches(text, PEM_PRIVATE_KEY_REGEX),
-  (text) => valueRanges(quotedAssignments(text)),
-  urlUserinfos,
-  (text) => valueRanges(bearerValues(text)),
-  (text) => [...httpHeaderValues(text)].map(({ credentialStart, end }) => ({ start: credentialStart, end })),
-  (text) => valueRanges(curlUserValues(text, CURL_USER_EQUALS_PREFIX_REGEX)),
-  (text) => valueRanges(curlUserValues(text, CURL_USER_SPACE_PREFIX_REGEX)),
-  (text) => valueRanges(curlUserValues(text, CURL_SHORT_USER_COMPACT_PREFIX_REGEX)),
-  (text) => valueRanges(headerAssignments(text)),
-  (text) => valueRanges(sessionIdColonValues(text)),
-  (text) => valueRanges(bareAssignments(text)),
-  (text) => valueRanges([...optionValues(text)]),
-  (text) => valueRanges(queryValues(text)),
-  (text) => wholeMatches(text, KNOWN_TOKEN_REGEX),
-];
-
-function sequentialRanges(text: string): SensitiveRange[] {
-  let hidden: SensitiveRange[] = [];
-  for (const find of SEQUENTIAL_ORDER) {
-    const view = maskedView(text, hidden);
-    const found = find(view.text);
-    if (found.length > 0) hidden = mergedRanges([...hidden, ...found.map(view.toOriginal)]);
-  }
-  return hidden;
-}
-
-/** `text` with each of the ordered, disjoint `hidden` ranges replaced by REDACTED_VALUE. */
-function maskedView(text: string, hidden: readonly SensitiveRange[]): {
-  text: string;
-  toOriginal: (range: SensitiveRange) => SensitiveRange;
-} {
-  if (hidden.length === 0) return { text, toOriginal: (range) => range };
-  // Start of each replacement in the view, and how far the view runs ahead of the text after it.
-  const viewStarts: number[] = [];
-  const shifts: number[] = [];
-  let shift = 0;
-  for (const range of hidden) {
-    viewStarts.push(range.start + shift);
-    shift += REDACTED_VALUE.length - (range.end - range.start);
-    shifts.push(shift);
-  }
-  // Index of the last replacement that starts at or before `position` in the view, or -1.
-  const replacementAt = (position: number): number => {
-    let low = 0;
-    let high = viewStarts.length - 1;
-    let found = -1;
-    while (low <= high) {
-      const middle = (low + high) >> 1;
-      if (viewStarts[middle]! <= position) {
-        found = middle;
-        low = middle + 1;
-      } else {
-        high = middle - 1;
-      }
-    }
-    return found;
-  };
-  // Where the view character at `position` comes from: a whole hidden range, or one character.
-  const source = (position: number): SensitiveRange => {
-    const index = replacementAt(position);
-    if (index < 0) return { start: position, end: position + 1 };
-    if (position < viewStarts[index]! + REDACTED_VALUE.length) return hidden[index]!;
-    const original = position - shifts[index]!;
-    return { start: original, end: original + 1 };
-  };
-  return {
-    text: maskSensitiveRanges(text, hidden),
-    toOriginal: ({ start, end }) => ({ start: source(start).start, end: end > start ? source(end - 1).end : source(start).start }),
-  };
+  return maskSensitiveRanges(text, displayRanges(text, legacySequentialRanges(text, []).ranges));
 }
 
 export function isSensitiveKeyName(key: string): boolean {
@@ -544,7 +506,27 @@ function patternRanges(matches: SensitiveMatches): SensitiveRange[] {
   return ranges;
 }
 
+/** Values hidden from later output: the previous collection and the new one (`all`). */
 export function collectEmbeddedSensitiveValues(text: string, values: Set<string>): void {
+  legacy.collectEmbeddedSensitiveValues(text, values);
+  collectNewEmbeddedValues(text, values);
+}
+
+/**
+ * The same values, split by where they come from: `legacy` gets what the previous collection
+ * found (the start of the previous composition, see sanitizeTextWithValues), `all` gets both.
+ */
+export function collectTrackedEmbeddedSensitiveValues(text: string, into: { legacy: Set<string>; all: Set<string> }): void {
+  const found = new Set<string>();
+  legacy.collectEmbeddedSensitiveValues(text, found);
+  for (const value of found) {
+    into.legacy.add(value);
+    into.all.add(value);
+  }
+  collectNewEmbeddedValues(text, into.all);
+}
+
+function collectNewEmbeddedValues(text: string, values: Set<string>): void {
   const matches = findSensitiveMatches(text);
   for (const { start, end } of matches.whole) addSensitiveValue(values, text.slice(start, end));
   for (const { valueStart, valueEnd } of matches.quoted) {
@@ -552,7 +534,7 @@ export function collectEmbeddedSensitiveValues(text: string, values: Set<string>
     addSensitiveValue(values, quotedValue);
     // Everything inside the quotes is tracked as well: an embedded `token=…`, URL or header
     // can be printed again on its own.
-    collectEmbeddedSensitiveValues(stripMatchingQuotes(quotedValue), values);
+    collectNewEmbeddedValues(stripMatchingQuotes(quotedValue), values);
   }
   for (const value of outermostAndInnermost(matches.assignments)) {
     const assigned = text.slice(value.valueStart, value.valueEnd);
@@ -643,10 +625,30 @@ export function addSensitiveValue(values: Set<string>, rawValue: string, key?: s
   }
 }
 
-/** Hides the credentials `sanitizeSensitiveText` finds and every known value, in one pass. */
-export function sanitizeTextWithValues(text: string, sensitiveValues: ReadonlySet<string>): string {
+/** Values tracked from earlier output. `legacy` is what the previous implementation tracked; `legacy ⊆ all`. */
+export interface TrackedSensitiveValues {
+  readonly all: ReadonlySet<string>;
+  readonly legacy: ReadonlySet<string>;
+}
+
+/**
+ * Hides what `sanitizeSensitiveText` hides and every known value. It also hides what the previous
+ * implementation hid: it replaced the known values first and then ran its patterns, which can
+ * chain a pattern across a replaced value (d). That composition starts from `legacy` only: a value
+ * that only the new collection tracks can hide a key and break the previous chain.
+ */
+export function sanitizeTextWithValues(text: string, values: TrackedSensitiveValues): string {
   if (!text) return text;
-  return maskSensitiveRanges(text, sensitiveTextRanges(text, sensitiveValues));
+  const occurrences = knownValueOccurrences(text, values.all);
+  const display = legacySequentialRanges(text, []).ranges;
+  const legacyKnown = occurrences.filter((occurrence) => values.legacy.has(occurrence.value)).flatMap((occurrence) => occurrence.ranges);
+  // Without a legacy value in the text, the composition is the display trace.
+  const composed = legacyKnown.length === 0 ? [] : legacySequentialRanges(text, legacyKnown).ranges;
+  return maskSensitiveRanges(text, [
+    ...displayRanges(text, display),
+    ...occurrences.flatMap((occurrence) => occurrence.ranges),
+    ...composed,
+  ]);
 }
 
 function addCredentialComponents(values: Set<string>, rawValue: string): void {
@@ -682,23 +684,33 @@ function stripMatchingQuotes(value: string): string {
     : value;
 }
 
-/** The ranges `sanitizeTextWithValues` hides, on the original text. */
+/** What `sanitizeSensitiveText` hides and every occurrence of a known value, on the original text. */
 export function sensitiveTextRanges(text: string, values: ReadonlySet<string>): SensitiveRange[] {
-  return [...patternRanges(findSensitiveMatches(text)), ...sequentialRanges(text), ...knownValueRanges(text, values)];
+  return [
+    ...displayRanges(text, legacySequentialRanges(text, []).ranges),
+    ...knownValueOccurrences(text, values).flatMap((occurrence) => occurrence.ranges),
+  ];
 }
 
-function knownValueRanges(text: string, values: ReadonlySet<string>): SensitiveRange[] {
-  const ranges = substringSensitiveRanges(text, [...values].filter((value) => value.length >= 4));
+/** Where each known value occurs: long values anywhere, values under 4 characters as whole words. */
+function knownValueOccurrences(text: string, values: ReadonlySet<string>): Array<{ value: string; ranges: SensitiveRange[] }> {
+  const occurrences: Array<{ value: string; ranges: SensitiveRange[] }> = [];
   for (const value of values) {
-    if (value.length === 0 || value.length >= 4) continue;
+    if (value.length === 0) continue;
+    if (value.length >= 4) {
+      const ranges = substringSensitiveRanges(text, [value]);
+      if (ranges.length > 0) occurrences.push({ value, ranges });
+      continue;
+    }
     const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const bounded = new RegExp(
       String.raw`(?<![\p{L}\p{N}_])${escaped}(?![\p{L}\p{N}_])`,
       'gu',
     );
-    for (const match of text.matchAll(bounded)) ranges.push({ start: match.index, end: match.index + value.length });
+    const ranges = [...text.matchAll(bounded)].map((match) => ({ start: match.index, end: match.index + value.length }));
+    if (ranges.length > 0) occurrences.push({ value, ranges });
   }
-  return ranges;
+  return occurrences;
 }
 
 export function substringSensitiveRanges(text: string, values: Iterable<string>): SensitiveRange[] {

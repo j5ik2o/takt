@@ -4,10 +4,13 @@ import { join } from 'node:path';
 import type { StreamEvent } from '../../shared/types/provider.js';
 import { normalizeProviderEventValue } from '../../shared/utils/logMetadata.js';
 import {
-  collectEmbeddedSensitiveValues,
+  collectTrackedEmbeddedSensitiveValues,
+  previousDisplayRanges,
+  previousSensitiveTextRanges,
   REDACTED_VALUE,
   sensitiveTextRanges,
   substringSensitiveRanges,
+  type SensitiveRange,
 } from '../../shared/utils/sensitive-text.js';
 import { MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES } from '../../shared/utils/sensitive-value.js';
 import { getErrorMessage } from '../../shared/utils/index.js';
@@ -31,12 +34,59 @@ interface SensitiveMatchNode {
   shortLengths: number;
 }
 
+// Each fragment is shown through the display redaction afterwards (normalizeProviderEventValue),
+// so the log is the display run over masked text. The previous log did the same with its own
+// masking, and its display could chain a pattern across a masked value. What that hid is hidden
+// as well (#151): the previous masking is rebuilt from the previous ranges and the values the
+// previous collection found, and the previous display is traced from it, fragment by fragment.
 function maskTextFragments(chunks: readonly string[]): string[] {
   const fullText = chunks.join('');
-  const patternRanges = sensitiveTextRanges(fullText, new Set());
-  const sensitiveValues = new Set<string>();
-  collectEmbeddedSensitiveValues(fullText, sensitiveValues);
-  if (patternRanges.length === 0 && sensitiveValues.size === 0) return [...chunks];
+  const tracked = { legacy: new Set<string>(), all: new Set<string>() };
+  collectTrackedEmbeddedSensitiveValues(fullText, tracked);
+  const masked = maskedCharacters(fullText, sensitiveTextRanges(fullText, new Set()), tracked.all);
+  const previous = maskedCharacters(fullText, previousSensitiveTextRanges(fullText), tracked.legacy);
+  if (masked === undefined && previous === undefined) return [...chunks];
+  const hidden = masked ?? new Uint8Array(fullText.length);
+  let offset = 0;
+  return chunks.map((chunk) => {
+    const previousSpans = previous === undefined ? [] : maskedSpans(previous, offset, chunk.length);
+    if (previousSpans.length > 0) {
+      for (const range of previousDisplayRanges(chunk, previousSpans)) hidden.fill(1, offset + range.start, offset + range.end);
+    }
+    let output = '';
+    let inMaskedSpan = false;
+    for (let index = 0; index < chunk.length; index++) {
+      if (hidden[offset + index]) {
+        if (!inMaskedSpan) output += REDACTED_VALUE;
+        inMaskedSpan = true;
+      } else {
+        output += chunk[index];
+        inMaskedSpan = false;
+      }
+    }
+    offset += chunk.length;
+    return output;
+  });
+}
+
+/** The masked runs of `masked` within [offset, offset + length), as ranges on that fragment. */
+function maskedSpans(masked: Uint8Array, offset: number, length: number): SensitiveRange[] {
+  const spans: SensitiveRange[] = [];
+  for (let index = 0; index < length;) {
+    if (masked[offset + index] !== 1) {
+      index++;
+      continue;
+    }
+    const start = index;
+    while (index < length && masked[offset + index] === 1) index++;
+    spans.push({ start, end: index });
+  }
+  return spans;
+}
+
+/** Characters of `fullText` covered by a pattern range or by an occurrence of a value, or undefined if none. */
+function maskedCharacters(fullText: string, patternRanges: readonly SensitiveRange[], sensitiveValues: ReadonlySet<string>): Uint8Array | undefined {
+  if (patternRanges.length === 0 && sensitiveValues.size === 0) return undefined;
   const maskChanges = new Int32Array(fullText.length + 1);
   const markMask = (start: number, end: number): void => {
     if (end <= start) return;
@@ -103,22 +153,7 @@ function maskTextFragments(chunks: readonly string[]): string[] {
     activeMasks += maskChanges[index]!;
     if (activeMasks > 0) masked[index] = 1;
   }
-  let offset = 0;
-  return chunks.map((chunk) => {
-    let output = '';
-    let inMaskedSpan = false;
-    for (let index = 0; index < chunk.length; index++) {
-      if (masked[offset + index]) {
-        if (!inMaskedSpan) output += REDACTED_VALUE;
-        inMaskedSpan = true;
-      } else {
-        output += chunk[index];
-        inMaskedSpan = false;
-      }
-    }
-    offset += chunk.length;
-    return output;
-  });
+  return masked;
 }
 
 export interface Phase1ExecutionLogReference {

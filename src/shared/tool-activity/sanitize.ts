@@ -14,8 +14,11 @@ export function toolResultSensitiveValues(source: unknown): ReturnType<typeof cr
   const known = createBoundedSensitiveValues();
   known.collect(source);
   // 本文と秘密値を同じ端末表現で照合し、元の秘密値ソースは変更しない。
-  const normalized = [...known.values].map((value) => normalizeToolResultText(value));
-  known.collect({ token: normalized });
+  // 変更前の収集から来た値の正規化は collect で、新しい読みだけの値の正規化は新しい側にだけ詰め直す。
+  const normalizedLegacy = [...known.legacyValues].map((value) => normalizeToolResultText(value));
+  const normalizedNew = [...known.newBound.values].map((value) => normalizeToolResultText(value));
+  known.collect({ token: normalizedLegacy });
+  known.collectNewOnly({ token: normalizedNew });
   return known;
 }
 

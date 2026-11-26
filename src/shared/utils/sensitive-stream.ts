@@ -1,5 +1,5 @@
 import {
-  collectEmbeddedSensitiveValues, maskSensitiveRanges, sensitiveTextRanges, substringSensitiveRanges, REDACTED_VALUE,
+  collectTrackedEmbeddedSensitiveValues, maskSensitiveRanges, sensitiveTextRanges, substringSensitiveRanges, REDACTED_VALUE,
   type SensitiveRange,
 } from './sensitive-text.js';
 import { createBoundedSensitiveValues, type BoundedSensitiveValues } from './sensitive-value.js';
@@ -10,9 +10,12 @@ const SENSITIVE_PREVIEW_BYTES = 8 * 1024;
 const MAX_PENDING_SENSITIVE_LINE_LENGTH = 10_000;
 
 function maskingRanges(text: string, values: BoundedSensitiveValues): SensitiveRange[] {
-  const found = new Set<string>();
-  collectEmbeddedSensitiveValues(text, found);
-  values.collect({ token: [...found] });
+  const found = { legacy: new Set<string>(), all: new Set<string>() };
+  collectTrackedEmbeddedSensitiveValues(text, found);
+  // Repacked values keep their origin: what the previous collection found goes through `collect`
+  // as before, what only the new reading found is tracked in the new bound only.
+  values.collect({ token: [...found.legacy] });
+  values.collectNewOnly({ token: [...found.all].filter((value) => !found.legacy.has(value)) });
   return sensitiveTextRanges(text, values.values);
 }
 

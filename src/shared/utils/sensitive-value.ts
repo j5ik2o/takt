@@ -1,9 +1,10 @@
 import {
   REDACTED_VALUE,
   addSensitiveValue,
-  collectEmbeddedSensitiveValues,
+  collectTrackedEmbeddedSensitiveValues,
   isSensitiveKeyName,
   sanitizeTextWithValues,
+  type TrackedSensitiveValues,
 } from './sensitive-text.js';
 
 const MAX_SENSITIVE_VALUE_NODES = 10_000;
@@ -13,28 +14,26 @@ export const MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES = 16 * 1024;
 export const MAX_INSPECTED_BYTES_PER_SOURCE = 16 * 1024 * 1024;
 
 export interface SensitiveValues {
+  /** Every collected value (`all`). */
   values: Set<string>;
+  /** The values the previous implementation collected from the same source, in its order. */
+  legacyValues: Set<string>;
   inspectedBytes: number;
   truncated: boolean;
 }
 
 /**
- * 予算は「検査した量」ではなく「保持している機密候補」に課金する。
- * Write/Edit 本文などの非機密の大きな入力でも、候補を増やさず継続できる。
- * 1 候補あたりの上限または合計バイト残量を超える候補はその候補だけを見送り、
- * 後続の別の秘密値の追跡は止めない（見送った件数・バイト数で追跡不能を記録する）。
- * 件数上限または合計バイト満杯に達して新規候補を一切保持できないときだけ exhausted にする。
- * 1 つの入力の検査上限（バイト・ノード数）は走査コストのためのもので、超えた入力も
- * それまでに集めた候補を追加し、打ち切り回数を記録したうえで以後の入力の追跡は止めない。
+ * One bound on tracked values, with the limits, order and counts the previous
+ * BoundedSensitiveValues had (#151, design 1.2).
  */
-export class BoundedSensitiveValues {
+export class SensitiveValueBound {
   readonly values = new Set<string>();
   exhausted = false;
   storedValueBytes = 0;
   skippedValueCount = 0;
   skippedValueBytes = 0;
   truncatedSourceCount = 0;
-  private inheritedUntrackedValues = false;
+  inheritedUntrackedValues = false;
 
   get hasUntrackedValues(): boolean {
     return (
@@ -45,18 +44,10 @@ export class BoundedSensitiveValues {
     );
   }
 
-  collect(source: unknown): void {
-    if (source === this || this.exhausted) return;
-    const isBoundedSource = source instanceof BoundedSensitiveValues;
-    if (isBoundedSource && source.hasUntrackedValues) {
-      this.inheritedUntrackedValues = true;
-    }
-    const collected = collectSensitiveStringValues(source, MAX_INSPECTED_BYTES_PER_SOURCE);
-    if (!isBoundedSource && collected.truncated) {
-      this.truncatedSourceCount += 1;
-    }
-    for (const value of collected.values) {
-      if (this.values.has(value)) continue;
+  /** Keeps `values` in order until the bound is full; `kept` sees each value it keeps. */
+  add(values: Iterable<string>, kept: (value: string) => void, keptElsewhere?: (value: string) => boolean): void {
+    for (const value of values) {
+      if (this.values.has(value) || keptElsewhere?.(value) === true) continue;
       if (this.values.size >= MAX_TRACKED_SENSITIVE_VALUES || this.storedValueBytes >= MAX_TRACKED_SENSITIVE_VALUE_BYTES) {
         this.exhausted = true;
         break;
@@ -72,10 +63,16 @@ export class BoundedSensitiveValues {
       }
       this.values.add(value);
       this.storedValueBytes += bytes;
+      kept(value);
     }
-    if (isBoundedSource && source.exhausted) {
-      this.exhausted = true;
-    }
+  }
+
+  /** Takes over another bound's values and marks, as the previous collect of a bounded source did. */
+  copy(source: SensitiveValueBound, kept: (value: string) => void, keptElsewhere?: (value: string) => boolean): void {
+    if (this.exhausted) return;
+    if (source.hasUntrackedValues) this.inheritedUntrackedValues = true;
+    this.add(source.values, kept, keptElsewhere);
+    if (source.exhausted) this.exhausted = true;
   }
 
   reset(): void {
@@ -86,6 +83,109 @@ export class BoundedSensitiveValues {
     this.skippedValueBytes = 0;
     this.truncatedSourceCount = 0;
     this.inheritedUntrackedValues = false;
+  }
+}
+
+/**
+ * 予算は「検査した量」ではなく「保持している機密候補」に課金する。
+ * Write/Edit 本文などの非機密の大きな入力でも、候補を増やさず継続できる。
+ * 1 候補あたりの上限または合計バイト残量を超える候補はその候補だけを見送り、
+ * 後続の別の秘密値の追跡は止めない（見送った件数・バイト数で追跡不能を記録する）。
+ * 件数上限または合計バイト満杯に達して新規候補を一切保持できないときだけ exhausted にする。
+ * 1 つの入力の検査上限（バイト・ノード数）は走査コストのためのもので、超えた入力も
+ * それまでに集めた候補を追加し、打ち切り回数を記録したうえで以後の入力の追跡は止めない。
+ *
+ * 値は2本の上限で持つ（#151）。`legacyBound` は変更前の実装が同じ呼び出しで集めたはずの値を、
+ * 変更前と同じ上限・順番・数えで持つ。`newBound` はそれ以外の値を、別の同じ大きさの上限で持つ。
+ * 満杯は上限ごとで、満杯になった側だけが止まる。`values` は両方の和集合。
+ */
+export class BoundedSensitiveValues implements TrackedSensitiveValues {
+  readonly values = new Set<string>();
+  readonly legacyBound = new SensitiveValueBound();
+  readonly newBound = new SensitiveValueBound();
+  private readonly keep = (value: string): void => {
+    this.values.add(value);
+  };
+
+  get all(): ReadonlySet<string> {
+    return this.values;
+  }
+
+  get legacy(): ReadonlySet<string> {
+    return this.legacyBound.values;
+  }
+
+  get legacyValues(): Set<string> {
+    return this.legacyBound.values;
+  }
+
+  get legacyExhausted(): boolean {
+    return this.legacyBound.exhausted;
+  }
+
+  get newExhausted(): boolean {
+    return this.newBound.exhausted;
+  }
+
+  /** Either bound is full. For reporting only. */
+  get exhausted(): boolean {
+    return this.legacyBound.exhausted || this.newBound.exhausted;
+  }
+
+  /** Either bound left a value untracked. For reporting only. */
+  get hasUntrackedValues(): boolean {
+    return this.legacyBound.hasUntrackedValues || this.newBound.hasUntrackedValues;
+  }
+
+  get storedValueBytes(): number {
+    return this.legacyBound.storedValueBytes + this.newBound.storedValueBytes;
+  }
+
+  get skippedValueCount(): number {
+    return this.legacyBound.skippedValueCount + this.newBound.skippedValueCount;
+  }
+
+  get skippedValueBytes(): number {
+    return this.legacyBound.skippedValueBytes + this.newBound.skippedValueBytes;
+  }
+
+  get truncatedSourceCount(): number {
+    return Math.max(this.legacyBound.truncatedSourceCount, this.newBound.truncatedSourceCount);
+  }
+
+  collect(source: unknown): void {
+    if (source === this) return;
+    if (source instanceof BoundedSensitiveValues) {
+      // Each bound copies the same bound of the source; the either-bound marks are not copied.
+      this.legacyBound.copy(source.legacyBound, this.keep);
+      this.newBound.copy(source.newBound, this.keep, (value) => this.legacyBound.values.has(value));
+      return;
+    }
+    if (this.legacyBound.exhausted && this.newBound.exhausted) return;
+    const collected = collectSensitiveStringValues(source, MAX_INSPECTED_BYTES_PER_SOURCE);
+    if (!this.legacyBound.exhausted) {
+      if (collected.truncated) this.legacyBound.truncatedSourceCount += 1;
+      this.legacyBound.add(collected.legacyValues, this.keep);
+    }
+    this.addNew(collected, (value) => collected.legacyValues.has(value));
+  }
+
+  /** Tracks every value of `source` in the new bound only: values repacked from the new reading. */
+  collectNewOnly(source: unknown): void {
+    if (this.newBound.exhausted) return;
+    this.addNew(collectSensitiveStringValues(source, MAX_INSPECTED_BYTES_PER_SOURCE), () => false);
+  }
+
+  private addNew(collected: SensitiveValues, fromLegacy: (value: string) => boolean): void {
+    if (this.newBound.exhausted) return;
+    if (collected.truncated) this.newBound.truncatedSourceCount += 1;
+    this.newBound.add(collected.values, this.keep, (value) => fromLegacy(value) || this.legacyBound.values.has(value));
+  }
+
+  reset(): void {
+    this.values.clear();
+    this.legacyBound.reset();
+    this.newBound.reset();
   }
 }
 
@@ -117,8 +217,14 @@ export type SensitiveStringReplacer = (
   key: string | undefined,
 ) => SensitiveStringReplacement | undefined;
 
+const NO_TRACKED_VALUES: TrackedSensitiveValues = { all: new Set(), legacy: new Set() };
+
+function trackedValues(collected: SensitiveValues): TrackedSensitiveValues {
+  return { all: collected.values, legacy: collected.legacyValues };
+}
+
 export function sanitizeSensitiveValue(value: unknown, key?: string): unknown {
-  return sanitizeValue(value, key, new Set(), undefined);
+  return sanitizeValue(value, key, NO_TRACKED_VALUES, undefined);
 }
 
 export function sanitizeSensitiveValueWithStringReplacer(
@@ -129,7 +235,7 @@ export function sanitizeSensitiveValueWithStringReplacer(
   return sanitizeValue(
     value,
     undefined,
-    sensitiveValues.values,
+    trackedValues(sensitiveValues),
     replacer,
   );
 }
@@ -143,20 +249,20 @@ export function sanitizeSensitiveValueWithKnownValues(
   return sanitizeValue(
     value,
     key,
-    sensitiveValues.values,
+    trackedValues(sensitiveValues),
     undefined,
   );
 }
 
 export function sanitizeSensitiveTextWithKnownValues(text: string, source: unknown): string {
   const sensitiveValues = collectSensitiveStringValues(source);
-  return sanitizeTextWithValues(text, sensitiveValues.values);
+  return sanitizeTextWithValues(text, trackedValues(sensitiveValues));
 }
 
 function sanitizeValue(
   value: unknown,
   key: string | undefined,
-  knownValues: ReadonlySet<string>,
+  knownValues: TrackedSensitiveValues,
   stringReplacer: SensitiveStringReplacer | undefined,
 ): unknown {
   const holder: Record<string, unknown> = {};
@@ -215,11 +321,12 @@ export function collectSensitiveStringValues(
   if (source instanceof BoundedSensitiveValues) {
     return {
       values: new Set(source.values),
+      legacyValues: new Set(source.legacyValues),
       inspectedBytes: 0,
       truncated: source.hasUntrackedValues,
     };
   }
-  const result: SensitiveValues = { values: new Set(), inspectedBytes: 0, truncated: false };
+  const result: SensitiveValues = { values: new Set(), legacyValues: new Set(), inspectedBytes: 0, truncated: false };
   const work: ValueWorkItem[] = [{ value: source, sensitiveContext: false }];
   const seen = new WeakSet<object>();
   let visitedNodes = 0;
@@ -238,10 +345,12 @@ export function collectSensitiveStringValues(
         result.truncated = true;
         break;
       }
+      // A value found by its key is what the previous implementation collected as well.
       if (sensitiveContext) {
+        addSensitiveValue(result.legacyValues, item.value, item.key);
         addSensitiveValue(result.values, item.value, item.key);
       }
-      collectEmbeddedSensitiveValues(item.value, result.values);
+      collectTrackedEmbeddedSensitiveValues(item.value, { legacy: result.legacyValues, all: result.values });
       continue;
     }
     if (result.inspectedBytes > maxInspectedBytes) {

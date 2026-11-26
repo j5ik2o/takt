@@ -1,15 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { Phase1ExecutionLog } from '../core/workflow/phase1-execution-log.js';
-import {
-  collectEmbeddedSensitiveValues,
-  sanitizeTextWithValues,
-} from '../shared/utils/sensitive-text.js';
+import { sanitizeTextWithValues } from '../shared/utils/sensitive-text.js';
 import {
   createSensitiveTextStreamRedactor,
   MAX_TRACKED_SENSITIVE_SINGLE_VALUE_BYTES,
   sanitizeSensitiveText,
   sanitizeSensitiveTextWithKnownValues,
 } from '../shared/utils/sensitiveText.js';
+import { trackedValuesOf } from './helpers/sensitive-text-tracked.js';
 
 describe('sanitizeSensitiveText performance', () => {
   it('sanitizes a 64KiB uniform alphanumeric run without quadratic blowup', () => {
@@ -191,9 +189,7 @@ describe('redaction of overlapping credential forms stays linear', () => {
     const run = (bytes: number): number => {
       const text = head + unit.repeat(Math.ceil(bytes / unit.length));
       const start = performance.now();
-      const values = new Set<string>();
-      collectEmbeddedSensitiveValues(text, values);
-      sanitizeTextWithValues(text, values);
+      sanitizeTextWithValues(text, trackedValuesOf(text));
       sanitizeSensitiveText(text);
       return performance.now() - start;
     };
@@ -204,4 +200,37 @@ describe('redaction of overlapping credential forms stays linear', () => {
     expect(large).toBeLessThan(Math.max(8 * small, 50));
     expect(large).toBeLessThan(5000);
   });
+});
+
+// #151: every path also runs the frozen copy of the previous implementation and the trace of its
+// display (design 6). Each form is measured five times at 256 KiB and at 4 MiB (16 times larger);
+// a quadratic path would be 256 times slower, so 32 times still tells the two apart.
+describe('the union with the previous redaction stays linear', () => {
+  const median = (samples: number[]): number => [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)]!;
+  const fill = (unit: string, size: number): string => unit.repeat(Math.ceil(size / unit.length)).slice(0, size);
+  it.each([
+    ['plain', 'lorem ipsum dolor '],
+    ['at', '@'],
+    ['schemes', 'http://'],
+    ['urlList', 'https://u:p@h,'],
+    ['tokenRun', 'token='],
+    ['curlUser', '--user=a;'],
+    ['cookieLines', 'Cookie: a=b; token:\n'],
+    ['mixed', "TOKEN=apikey: ?token=' 'Zq4Zq https://cookie:p@host Cookie: sid=x\n"],
+    ['l2', 'token :--password=\\" \\"Zq0Zq'],
+    ['token lines', 'token:\n'],
+  ])('on %s', (name, unit) => {
+    const run = (bytes: number): number => {
+      const text = (name === 'at' ? 'https://u:' : '') + fill(unit, bytes);
+      const start = performance.now();
+      sanitizeTextWithValues(text, trackedValuesOf(text));
+      sanitizeSensitiveText(text);
+      return performance.now() - start;
+    };
+    run(16 * 1024);
+    const small = median(Array.from({ length: 5 }, () => run(256 * 1024)));
+    const large = median(Array.from({ length: 5 }, () => run(4 * 1024 * 1024)));
+    expect(large).toBeLessThan(Math.max(32 * small, 50));
+    expect(large).toBeLessThan(10_000);
+  }, 300_000);
 });

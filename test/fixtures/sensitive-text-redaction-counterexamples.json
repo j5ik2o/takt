@@ -7,9 +7,9 @@
       "later": "echoed Zq1Zq"
     },
     {
-      "name": "#151-3 empty user and a port in a quoted list",
+      "name": "#151-3 empty user and a port in a quoted list (known over-masking, design 9.4)",
       "input": "[\"https://:443\",\"ops@example.test\"]",
-      "expected": "[\"https://:443\",\"ops@example.test\"]"
+      "expected": "[\"https://[REDACTED]@example.test\"]"
     },
     {
       "name": "#151-4 URL password inside TOKEN=\"…\", echoed later",
@@ -40,19 +40,19 @@
       "input": "curl -u a:b--password --password Zq7Zq"
     },
     {
-      "name": "review: port URL and an address in a JSON array",
+      "name": "review: port URL and an address in a JSON array (known over-masking, design 9.4)",
       "input": "[\"https://localhost:443\",\"ops@example.test\"]",
-      "expected": "[\"https://localhost:443\",\"ops@example.test\"]"
+      "expected": "[\"https://[REDACTED]@example.test\"]"
     },
     {
-      "name": "review: URL user named token keeps the host",
+      "name": "review: URL user named token hides from the host on (known over-masking, design 9.4)",
       "input": "clone https://token:Zq8Zq@host/repo.git failed",
-      "expected": "clone https://[REDACTED]@host/repo.git failed"
+      "expected": "clone https://[REDACTED] failed"
     },
     {
-      "name": "review: URL user named cookie keeps the host",
+      "name": "review: URL user named cookie hides to the line end (known over-masking, design 9.4)",
       "input": "clone https://cookie:Zq9Zq@host/repo.git failed",
-      "expected": "clone https://[REDACTED]@host/repo.git failed"
+      "expected": "clone https://[REDACTED]"
     },
     {
       "name": "review: shell statement after an unquoted value",
@@ -120,7 +120,7 @@
     {
       "name": "fast-check/URL users named token, then a curl -u lookalike after ;",
       "input": "https://token:p@host;https://token:p@host;https://token:p@host;-u,:Zq0Zq@-u a:b--password --password Zq0Zq,",
-      "expected": "https://[REDACTED]@host;https://[REDACTED]@host;https://[REDACTED]@host;-u,:Zq0Zq@-u [REDACTED] [REDACTED] [REDACTED]",
+      "expected": "https://[REDACTED],:Zq0Zq@-u [REDACTED] [REDACTED] [REDACTED]",
       "readable": [
         "Zq0Zq"
       ]
