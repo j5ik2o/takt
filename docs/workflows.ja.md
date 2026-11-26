@@ -366,7 +366,7 @@ TAKT は Normal / Parallel / Dynamic Parallel / Arpeggio / Team Leader / Workflo
 - `replace`（既定）は新しい round で以前の pool 選択を置き換えます。`cumulative` は過去の round で選んだ候補を維持します。
 - プロセスの resume は保存済みの選択を復元せず、現在の pool に対して selector を再実行します。
 - `all()` と `any()` は当該 round で実行する fixed と選択済み pool だけを集約します。固定位置に依存する aggregate 式は dynamic parallel では使えません。
-- 不正な selector 出力や pool 外の ID は fixed/pool agent の起動前に失敗します。全 pool を実行する fallback はありません。
+- 不正な selector 出力や pool 外の ID は fixed/pool agent の起動前に失敗します。全 pool を実行する fallback はありません。selector の出力が選択の schema に反したときの失敗理由には、selector の種類と step 名、許される候補 ID が載ります。出力を JSON として読めた場合は、返った `selected_ids` も載ります。
 - ロード時には`pool` の未指定・空配列、pool の空 `description`、fragment 展開失敗、展開後の名前重複、agent sub-step 以外の fixed/pool、無効な `selection.mode`、または全候補が定義しない aggregate 結果ラベルを検出して実行前に失敗します。selector の provider 未解決・strict 出力不正、fixed と選択済み pool を結合した実行対象の空集合も reviewer 起動前に失敗します。削除された dynamic selection fields を含む resume point はサポートしません。
 - selector にはタスク、Report Directory のパス、対象レポート名（`selection.reports` の指定を含む）、`HEAD` に対する変更ファイルのパス一覧、候補 ID と `description`（役目）および `selection_hint`（指定されていれば選ぶ基準）、`cumulative` の過去の選択、および初回か新しい round かを渡します。selector は既存の report-reference の探索順（現在の workflow scope、exact resume snapshot、親 workflow scope）でレポート参照を解決してからパスを受け取ります。参照先のファイルとレポートを読むために `Read`・`Glob`・`Grep` のツール許可リストが設定され、許可リストを尊重する provider ではそれらの tool のみが許可されます。出力は `selected_ids` と `rationale` だけを持つ完了済み JSON object でなければならず、非配列・非文字列 ID・重複 ID・追加プロパティは拒否します。
 - 変更パス一覧には `HEAD` に対する staged・unstaged・削除・未追跡のファイル名が含まれ、`.takt/runs/` 配下は除外します。レポート参照は既存の report-reference ルールで解決されたパスとして渡し、本文の読み取りは selector が必要に応じて行います。
@@ -563,7 +563,7 @@ selector には少なくとも次を渡します。
 - selector 呼び出し時点の working tree の変更（`git diff HEAD` 相当）を示す変更ファイルのパス一覧
 - 候補 ID と description
 
-候補 facet の本文は個別には selector に渡しません。対象 agent の prompt は本文で渡し、selector は既存の report-reference の探索順（現在の workflow scope、exact resume snapshot、親 workflow scope）でレポート参照を解決してから、参照先のファイルとレポートを読むための `Read`・`Glob`・`Grep` のツール許可リストを使います。許可リストを尊重する provider ではそれらの tool のみが許可されます。厳格な structured output schema（`additionalProperties: false`、`selected_ids` は pool の候補 ID を `enum` とする unique array、加えて必須の `rationale` 文字列）に対して候補 ID と理由だけを返します。pool 外 ID、重複 ID、指定した `max_selected` の超過は拒否します。selector 失敗時は main agent を起動せず fail-fast し、全候補や空選択への暗黙 fallback はありません。selector 自身を dynamic facet selection や auto routing の対象にしません。
+候補 facet の本文は個別には selector に渡しません。対象 agent の prompt は本文で渡し、selector は既存の report-reference の探索順（現在の workflow scope、exact resume snapshot、親 workflow scope）でレポート参照を解決してから、参照先のファイルとレポートを読むための `Read`・`Glob`・`Grep` のツール許可リストを使います。許可リストを尊重する provider ではそれらの tool のみが許可されます。厳格な structured output schema（`additionalProperties: false`、`selected_ids` は pool の候補 ID を `enum` とする unique array、加えて必須の `rationale` 文字列）に対して候補 ID と理由だけを返します。pool 外 ID、重複 ID、指定した `max_selected` の超過は拒否します。selector 失敗時は main agent を起動せず fail-fast し、全候補や空選択への暗黙 fallback はありません。selector の出力が選択の schema に反したときの失敗理由には、selector の種類と step 名、許される候補 ID が載ります。出力を JSON として読めた場合は、返った `selected_ids` も載ります。selector 自身を dynamic facet selection や auto routing の対象にしません。
 
 selector provider は #1136 の `runtime.yaml` の `provider.targets.internal_agents.selector` で解決します。未指定時は runtime の通常 default を使います。
 

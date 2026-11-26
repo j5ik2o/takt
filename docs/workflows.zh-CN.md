@@ -339,7 +339,7 @@ TAKT 支持 Normal、Parallel、Dynamic Parallel、Arpeggio、Team Leader、Work
 
 `fixed` 总是运行，selector 只能选择展开后的 pool step name。`replace`（默认）在新 round 替换上一轮 pool selection；`cumulative` 保留之前选中的 item。恢复运行不会恢复保存的 selection，而是针对当前 pool 再次调用 selector。
 
-`all()` 和 `any()` 只聚合当前 round 的 fixed 与 selected pool item。selector 输出无效或选择未知项时，在任何 agent 启动前失败；没有 all-pool fallback。缺失/空 pool、重复展开名称、非 agent 子 step、无效 selection mode、provider 未解析、严格 structured output 无效或 fixed 加 selected 为空都会在执行前失败。Selector 输入包括任务、Report Directory 路径、目标 report 名称、相对 `HEAD` 的变更文件路径、候选项 ID 及其 `description`（职责）和 `selection_hint`（若指定，则为选择标准）、`cumulative` 的上一轮 selection 以及是否首次进入/新 round。报告引用按当前 scope、resume snapshot 和父 scope 解析；读取工具只允许 `Read`、`Glob` 和 `Grep`。
+`all()` 和 `any()` 只聚合当前 round 的 fixed 与 selected pool item。selector 输出无效或选择未知项时，在任何 agent 启动前失败；没有 all-pool fallback。selector 输出违反选择 schema 时，失败原因会写明 selector 类型和 step 名称以及允许的候选项 ID；输出能按 JSON 读取时，还会写明返回的 `selected_ids`。缺失/空 pool、重复展开名称、非 agent 子 step、无效 selection mode、provider 未解析、严格 structured output 无效或 fixed 加 selected 为空都会在执行前失败。Selector 输入包括任务、Report Directory 路径、目标 report 名称、相对 `HEAD` 的变更文件路径、候选项 ID 及其 `description`（职责）和 `selection_hint`（若指定，则为选择标准）、`cumulative` 的上一轮 selection 以及是否首次进入/新 round。报告引用按当前 scope、resume snapshot 和父 scope 解析；读取工具只允许 `Read`、`Glob` 和 `Grep`。
 
 ### Dynamic Facet Selection（Facet Pool）
 
@@ -509,7 +509,7 @@ candidates:
 
 #### Selector contract
 
-selector 使用新 session、只读权限和 `Read`/`Glob`/`Grep` 工具。输入包括用户请求、叶 workflow、workflow-call instance、step identity、round 信息、Report Directory 和 report 名称、调用时 `git diff HEAD` 对应的变更路径以及 candidate ID/description。candidate facet body 不会单独发送；selector 通过读取目标 prompt 和 report 获取所需上下文。输出必须是只含 `selected_ids` 和 `rationale` 的严格 JSON；未知/重复 ID、非数组和超出 `max_selected` 都会在主 agent 启动前失败，失败时没有 fallback。selector guidance 可以配置 `instruction`（必填）和 `persona`（可选）：
+selector 使用新 session、只读权限和 `Read`/`Glob`/`Grep` 工具。输入包括用户请求、叶 workflow、workflow-call instance、step identity、round 信息、Report Directory 和 report 名称、调用时 `git diff HEAD` 对应的变更路径以及 candidate ID/description。candidate facet body 不会单独发送；selector 通过读取目标 prompt 和 report 获取所需上下文。输出必须是只含 `selected_ids` 和 `rationale` 的严格 JSON；未知/重复 ID、非数组和超出 `max_selected` 都会在主 agent 启动前失败，失败时没有 fallback。selector 输出违反选择 schema 时，失败原因会写明 selector 类型和 step 名称以及允许的候选项 ID；输出能按 JSON 读取时，还会写明返回的 `selected_ids`。selector guidance 可以配置 `instruction`（必填）和 `persona`（可选）：
 
 ```yaml
 steps:

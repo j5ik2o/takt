@@ -21,7 +21,14 @@ vi.mock('../agents/structured-caller/transport.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../agents/agent-usecases.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../agents/agent-usecases.js')>()),
+  executeAgent: vi.fn(),
+}));
+
 import { executeStructuredAgent, type StructuredAgentResponse } from '../agents/structured-caller/transport.js';
+import { executeAgent } from '../agents/agent-usecases.js';
+import { normalizeClaudeTerminalResponse } from '../infra/claude-terminal/response-normalizer.js';
 import * as contextBuilder from '../core/workflow/dynamic-facets/dynamicFacetContextBuilder.js';
 
 const mockedExecuteAgent = vi.mocked(executeStructuredAgent);
@@ -542,6 +549,130 @@ describe('DynamicFacetSelectorCoordinator', () => {
     await expect(
       coordinator.resolveDynamicFacets(step, makeState(), 'task', pool),
     ).rejects.toThrow(/invalid structured output/);
+  });
+
+  it.each([
+    {
+      transport: 'a native structured-output provider',
+      provider: 'mock',
+      payload: { content: '', structuredOutput: { selected_ids: ['coding'], rationale: 'x' } },
+    },
+    {
+      transport: 'a prompt-based JSON provider',
+      provider: 'cursor',
+      payload: { content: JSON.stringify({ selected_ids: ['coding'], rationale: 'x' }) },
+    },
+  ] as const)('names the returned and allowed ids when $transport selects an id outside the pool', async ({ provider, payload }) => {
+    const transport = await vi.importActual<typeof import('../agents/structured-caller/transport.js')>(
+      '../agents/structured-caller/transport.js',
+    );
+    mockedExecuteAgent.mockImplementationOnce(transport.executeStructuredAgent);
+    vi.mocked(executeAgent).mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      timestamp: new Date(),
+      ...payload,
+    });
+    const pool = makePool([
+      { id: 'frontend', description: 'Frontend' },
+      { id: 'backend', description: 'Backend' },
+    ]);
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps({
+      engineOptions: makeOptions({
+        selectorProvider: {
+          provider,
+          providerSource: 'step',
+          model: 'm',
+          modelSource: 'step',
+          providerOptions: {},
+        },
+      } as Partial<WorkflowEngineOptions>),
+    }));
+
+    const failure = await coordinator
+      .resolveDynamicFacets(makeStep(), makeState(), 'task', pool)
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    const reason = (failure as Error).message;
+    expect(reason).toContain('Dynamic facet selector for "fix"');
+    expect(reason).toContain('returned selected_ids: ["coding"]');
+    expect(reason).toContain('allowed candidate ids: ["frontend","backend"]');
+  });
+
+  it('names the returned and allowed ids when Claude Terminal rejects an id outside the pool against the schema', async () => {
+    const transport = await vi.importActual<typeof import('../agents/structured-caller/transport.js')>(
+      '../agents/structured-caller/transport.js',
+    );
+    mockedExecuteAgent.mockImplementationOnce(transport.executeStructuredAgent);
+    vi.mocked(executeAgent).mockImplementationOnce(async (_persona, _instruction, options) => normalizeClaudeTerminalResponse({
+      agentName: 'selector',
+      sessionId: 'terminal-session',
+      assistantText: 'Reading the pool.\n{"selected_ids":["coding"],"rationale":"x"}',
+      lastAssistantText: '{"selected_ids":["coding"],"rationale":"x"}',
+      outputSchema: options.outputSchema,
+    }));
+    const pool = makePool([
+      { id: 'frontend', description: 'Frontend' },
+      { id: 'backend', description: 'Backend' },
+    ]);
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps({
+      engineOptions: makeOptions({
+        selectorProvider: {
+          provider: 'claude-terminal',
+          providerSource: 'step',
+          model: 'm',
+          modelSource: 'step',
+          providerOptions: {},
+        },
+      } as Partial<WorkflowEngineOptions>),
+    }));
+
+    const failure = await coordinator
+      .resolveDynamicFacets(makeStep(), makeState(), 'task', pool)
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    const reason = (failure as Error).message;
+    expect(reason).toContain('Dynamic facet selector for "fix"');
+    expect(reason).toContain('returned selected_ids: ["coding"]');
+    expect(reason).toContain('allowed candidate ids: ["frontend","backend"]');
+  });
+
+  it('redacts a credential the selector returns as an id before the failure reason is shortened', async () => {
+    const secret = 'k'.repeat(600);
+    const transport = await vi.importActual<typeof import('../agents/structured-caller/transport.js')>(
+      '../agents/structured-caller/transport.js',
+    );
+    mockedExecuteAgent.mockImplementationOnce(transport.executeStructuredAgent);
+    vi.mocked(executeAgent).mockResolvedValueOnce({
+      persona: 'selector',
+      status: 'done',
+      content: '',
+      timestamp: new Date(),
+      structuredOutput: { selected_ids: [secret], rationale: 'x' },
+    });
+    const pool = makePool([{ id: 'frontend', description: 'Frontend' }]);
+    const coordinator = new DynamicFacetSelectorCoordinator(buildDeps({
+      engineOptions: makeOptions({
+        selectorProvider: {
+          provider: 'mock',
+          providerSource: 'step',
+          model: 'm',
+          modelSource: 'step',
+          providerOptions: {},
+        },
+      } as Partial<WorkflowEngineOptions>),
+    }));
+
+    const failure = await coordinator
+      .resolveDynamicFacets(makeStep(), makeState(), `Deploy with token=${secret}`, pool)
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    const reason = (failure as Error).message;
+    expect(reason).toContain('returned selected_ids: ["[REDACTED]"]');
+    expect(reason).not.toContain('kkkk');
   });
 
   it('propagates run-local selection commit failure and leaves active identity unset', async () => {

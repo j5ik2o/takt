@@ -26,6 +26,8 @@ import {
   recordWorkflowStepProviderEventActivity,
 } from '../core/workflow/engine/step-deadline.js';
 import type { ProviderActivityCallback } from '../shared/types/provider.js';
+import { normalizeClaudeTerminalResponse } from '../infra/claude-terminal/response-normalizer.js';
+import { AgentFailureError } from '../shared/types/agent-failure.js';
 
 vi.mock('../agents/runner.js', () => ({
   runAgent: vi.fn(),
@@ -71,6 +73,17 @@ function doneResponse(content: string, structuredOutput?: Record<string, unknown
     timestamp: new Date('2026-02-12T00:00:00Z'),
     structuredOutput: structuredOutput ?? { content },
   };
+}
+
+/** Claude Terminal returns JSON that parses but breaks the requested schema. */
+function mockClaudeTerminalSchemaViolation(): void {
+  vi.mocked(runAgent).mockImplementation(async (_persona, _instruction, options) => normalizeClaudeTerminalResponse({
+    agentName: 'tester',
+    sessionId: 'terminal-session',
+    assistantText: '{"unexpected":true}',
+    lastAssistantText: '{"unexpected":true}',
+    outputSchema: options.outputSchema,
+  }));
 }
 
 const judgeOptions = { cwd: '/repo', stepName: 'review', judgmentInput: 'work result' };
@@ -465,6 +478,19 @@ describe('agent-usecases', () => {
     const options = vi.mocked(runAgent).mock.calls[0]?.[2];
     expect(options?.resolvedExecution).toMatchObject({ provider: 'claude-terminal' });
     expect(options).not.toHaveProperty('maxTurns');
+  });
+
+  it('evaluateCondition stops with the provider_error failure when Claude Terminal rejects its output against the schema', async () => {
+    mockClaudeTerminalSchemaViolation();
+
+    const failure = await evaluateCondition('agent output', [{ index: 0, text: 'first' }], {
+      cwd: '/repo',
+      resolvedProvider: 'claude-terminal',
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AgentFailureError);
+    expect((failure as AgentFailureError).failureCategory).toBe('provider_error');
+    expect(detectJudgeIndex).not.toHaveBeenCalled();
   });
 
   // --- judgeStatus: 3-stage fallback ---
@@ -1179,6 +1205,25 @@ describe('agent-usecases', () => {
     expect(runAgent).toHaveBeenCalledOnce();
     expect(onAgentError).toHaveBeenCalledOnce();
     expect(onAgentError).toHaveBeenCalledWith(providerError);
+  });
+
+  it('decomposeTask reports the provider_error failure when Claude Terminal rejects its output against the schema', async () => {
+    mockClaudeTerminalSchemaViolation();
+    const onAgentError = vi.fn();
+    const onAgentResponse = vi.fn();
+
+    const failure = await decomposeTask('instruction', 2, {
+      cwd: '/repo',
+      resolvedProvider: 'claude-terminal',
+      onAgentError,
+      onAgentResponse,
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AgentFailureError);
+    expect((failure as AgentFailureError).failureCategory).toBe('provider_error');
+    expect(runAgent).toHaveBeenCalledOnce();
+    expect(onAgentError).toHaveBeenCalledWith(failure);
+    expect(onAgentResponse).not.toHaveBeenCalled();
   });
 
   it('decomposeTask は done 以外をエラーにする', async () => {

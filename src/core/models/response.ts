@@ -69,6 +69,8 @@ export interface AgentResponse {
   systemWaitTimeout?: boolean;
   /** Structured output returned by provider SDK (JSON Schema mode) */
   structuredOutput?: Record<string, unknown>;
+  /** Structured output the provider parsed but rejected against the requested schema */
+  rejectedStructuredOutput?: Record<string, unknown>;
   /** Provider-native usage payload normalized for TAKT observability */
   providerUsage?: ProviderUsageSnapshot;
   /** Number of provider-level retry attempts performed before this response */

@@ -11,12 +11,13 @@ import {
   type WorkflowStep,
 } from '../../models/types.js';
 import type { WorkflowEngineOptions } from '../types.js';
-import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { createLogger } from '../../../shared/utils/index.js';
 import { recordAgentUsageEvent } from '../engine/agent-usage-event.js';
 import { buildDynamicParallelSelectionIdentityFromPath } from './identity.js';
 import { createDynamicParallelSelectionSnapshot, resolveDynamicParallelSelection } from './snapshot.js';
 import {
   createSelectorContract,
+  describeSelectorError,
   SELECTOR_READ_ONLY_TOOLS,
   validateSelectorResponse,
 } from '../selector-contract.js';
@@ -42,6 +43,7 @@ import { renderPhaseContext } from '../../../shared/prompts/phase-context.js';
 
 const log = createLogger('dynamic-parallel-selector');
 const SELECTOR_RATIONALE_LOG_MAX_BYTES = 1024;
+const SELECTOR_LABEL = { label: 'Dynamic parallel' } as const;
 
 export interface DynamicParallelSelectorCoordinatorDeps {
   readonly engineOptions: WorkflowEngineOptions;
@@ -185,10 +187,10 @@ export class DynamicParallelSelectorCoordinator {
       signal?.throwIfAborted();
       selectorResult = validateSelectorResponse(
         response,
-        selectorContract.validationSchema,
+        selectorContract,
         step.name,
         redact,
-        { label: 'Dynamic parallel' },
+        SELECTOR_LABEL,
       );
       signal?.throwIfAborted();
       const selectedIds = selectorResult.selectedIds;
@@ -217,7 +219,7 @@ export class DynamicParallelSelectorCoordinator {
         response?.providerUsage,
       );
       signal?.throwIfAborted();
-      throw new Error(redact(getErrorMessage(error)));
+      throw new Error(describeSelectorError(error, selectorContract, step.name, redact, SELECTOR_LABEL));
     }
     recordAgentUsageEvent(
       this.deps.engineOptions,
