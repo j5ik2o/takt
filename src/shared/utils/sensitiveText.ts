@@ -13,5 +13,9 @@ export {
   sanitizeSensitiveValue,
   sanitizeSensitiveValueWithKnownValues,
 } from './sensitive-value.js';
-export { createSensitiveTextStreamRedactor } from './sensitive-stream.js';
-export type { SensitiveTextStreamRedactor, SensitiveTextStreamRedactorFactory } from './sensitive-stream.js';
+export {
+  createLegacySensitiveTextStreamBuffer, createLegacySensitiveTextStreamRedactor, createSensitiveTextStreamRedactor,
+} from './sensitive-stream.js';
+export type {
+  SensitiveTextCommit, SensitiveTextStreamBufferLike, SensitiveTextStreamRedactor, SensitiveTextStreamRedactorFactory,
+} from './sensitive-stream.js';

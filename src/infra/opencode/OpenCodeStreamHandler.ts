@@ -12,7 +12,7 @@ import {
   sanitizeSensitiveTextWithKnownValues,
   sanitizeSensitiveValue,
 } from '../../shared/utils/sensitiveText.js';
-import { maskSensitiveTextChunks, SensitiveTextStreamBuffer, type SensitiveTextCommit } from '../../shared/utils/sensitive-stream.js';
+import { createLegacySensitiveTextStreamBuffer, maskSensitiveTextChunks, type SensitiveTextCommit, type SensitiveTextStreamBufferLike } from '../../shared/utils/sensitive-stream.js';
 import {
   maskOpenCodeToolContentInText,
   sanitizeOpenCodeToolInput,
@@ -178,7 +178,7 @@ export interface OpenCodeStreamLimits {
 export interface StreamTrackingState {
   textOffsets: Map<string, number>;
   thinkingOffsets: Map<string, number>;
-  responseBuffer: SensitiveTextStreamBuffer;
+  responseBuffer: SensitiveTextStreamBufferLike;
   pendingResponseChunks: Array<{ kind: 'text' | 'thinking'; partId: string; text: string }>;
   partTypes: Map<string, string>;
   startedTools: Set<string>;
@@ -248,7 +248,7 @@ export function createStreamTrackingState(
   return {
     textOffsets: new Map<string, number>(),
     thinkingOffsets: new Map<string, number>(),
-    responseBuffer: new SensitiveTextStreamBuffer(),
+    responseBuffer: createLegacySensitiveTextStreamBuffer(),
     pendingResponseChunks: [],
     partTypes: new Map<string, string>(),
     startedTools: new Set<string>(),
@@ -298,7 +298,7 @@ function exhaustStreamTrackingState(
   }
   state.textOffsets.clear();
   state.thinkingOffsets.clear();
-  state.responseBuffer = new SensitiveTextStreamBuffer();
+  state.responseBuffer = createLegacySensitiveTextStreamBuffer();
   state.pendingResponseChunks = [];
   state.partTypes.clear();
   state.startedTools.clear();

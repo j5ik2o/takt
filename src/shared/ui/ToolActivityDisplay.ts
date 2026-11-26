@@ -62,10 +62,8 @@ export class ToolActivityDisplay {
     private readonly writeLine: (text: string) => void,
     private readonly showCompactStarts: boolean,
     private readonly committedOutput = false,
-    createRedactor?: SensitiveTextStreamRedactorFactory,
-  ) {
-    if (createRedactor !== undefined) throw new Error('not implemented');
-  }
+    private readonly createRedactor: SensitiveTextStreamRedactorFactory = createSensitiveTextStreamRedactor,
+  ) {}
 
   handle(event: StreamEvent): ToolActivityEntry[] {
     const entries = this.history.apply(event);
@@ -108,7 +106,7 @@ export class ToolActivityDisplay {
     if (!this.committedOutput) {
       let result = this.runningResults.get(entry.key);
       if (result === undefined) {
-        result = new RunningToolResult();
+        result = new RunningToolResult(this.createRedactor);
         this.runningResults.set(entry.key, result);
       }
       result.read(entry);
@@ -167,7 +165,7 @@ export class ToolActivityDisplay {
 
   private newStream(entry: ToolActivityEntry, tool: string): StreamOutputState {
     return {
-      redactor: createSensitiveTextStreamRedactor(), pending: '', printed: '',
+      redactor: this.createRedactor(), pending: '', printed: '',
       printedLines: 0, printedBytes: 0,
       omitted: false, omissionPrinted: false,
       headerTool: projectLabel(tool || entry.tool, this.resultView(entry).sensitiveValues), consumed: 0, previewed: '',

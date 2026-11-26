@@ -31,7 +31,7 @@ import {
 import {
   createBoundedSensitiveValues,
 } from '../../shared/utils/sensitiveText.js';
-import { maskSensitiveTextChunks, SensitiveTextStreamBuffer, type SensitiveTextCommit } from '../../shared/utils/sensitive-stream.js';
+import { createLegacySensitiveTextStreamBuffer, maskSensitiveTextChunks, type SensitiveTextCommit, type SensitiveTextStreamBufferLike } from '../../shared/utils/sensitive-stream.js';
 import { sanitizeSensitiveValueWithStringReplacer } from '../../shared/utils/sensitive-value.js';
 import {
   maskSensitiveRanges,
@@ -121,7 +121,7 @@ interface ResponseTextChunk {
 
 interface ResponseRedactionContext {
   pendingChunks: ResponseTextChunk[];
-  buffer: SensitiveTextStreamBuffer;
+  buffer: SensitiveTextStreamBufferLike;
   toolInputValues: ReturnType<typeof createBoundedSensitiveValues>;
   toolBoundaryText: string;
 }
@@ -1836,7 +1836,7 @@ export async function callDeepSeekHarness(
     pendingThinkingDeltasBySession: new Set(),
     responseRedactionContext: {
       pendingChunks: [],
-      buffer: new SensitiveTextStreamBuffer(),
+      buffer: createLegacySensitiveTextStreamBuffer(),
       toolInputValues: createBoundedSensitiveValues(),
       toolBoundaryText: '',
     },

@@ -1,4 +1,4 @@
-import { createSensitiveTextStreamRedactor, type SensitiveTextStreamRedactorFactory } from '../utils/sensitiveText.js';
+import { createSensitiveTextStreamRedactor, type SensitiveTextStreamRedactor, type SensitiveTextStreamRedactorFactory } from '../utils/sensitiveText.js';
 import type { ToolActivityResultView } from './presentation.js';
 import { classifyToolResult } from './result.js';
 import { normalizeToolResultText, toolResultSensitiveValues } from './sanitize.js';
@@ -6,12 +6,12 @@ import type { ToolActivityEntry } from './types.js';
 
 /** 通常TUIの生出力だけに使う。daemonでマスク済みの出力には適用しない。 */
 export class RunningToolResult {
-  private readonly redactor = createSensitiveTextStreamRedactor();
+  private readonly redactor: SensitiveTextStreamRedactor;
   private consumed = 0;
   private text = '';
 
-  constructor(createRedactor?: SensitiveTextStreamRedactorFactory) {
-    if (createRedactor !== undefined) throw new Error('not implemented');
+  constructor(createRedactor: SensitiveTextStreamRedactorFactory = createSensitiveTextStreamRedactor) {
+    this.redactor = createRedactor();
   }
 
   read(entry: ToolActivityEntry): void {
