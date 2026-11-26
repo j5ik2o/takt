@@ -457,7 +457,7 @@ export const keysInsideOneValueFragment: fc.Arbitrary<Fragment> = fc
  */
 export const gluedBearerFragment: fc.Arbitrary<Fragment> = fc
   .tuple(
-    fc.oneof(fc.stringMatching(/^[A-Za-z0-9_]{1,6}$/), marker, fc.constantFrom('\\n', '\\t', '\\r\\n', '401\\n')),
+    fc.oneof(fc.stringMatching(/^[A-Za-z0-9_]{1,6}$/), fc.nat(999).map((id) => `Id${id}`), fc.constantFrom('\\n', '\\t', '\\r\\n', '401\\n')),
     fc.tuple(marker, fc.stringMatching(/^[A-Za-z0-9._~+/-]{3,8}$/)).map(([mark, tail]) => mark + tail),
     fc.constantFrom('', ' rejected', '"}'),
   )

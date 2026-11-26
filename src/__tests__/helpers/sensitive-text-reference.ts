@@ -6,13 +6,28 @@ const isKeyChar = (char: string | undefined): boolean => char !== undefined && /
 const isSpace = (char: string | undefined): boolean => char === ' ' || char === '\n' || char === '\t' || char === '\r';
 const KEY_WORDS = ['apikey', 'api_key', 'api-key', 'token', 'password', 'secret'];
 const endsUserOrPasswordHead = (char: string | undefined): boolean => char === undefined || '/?#@'.includes(char) || isSpace(char);
-const endsTail = (char: string | undefined): boolean => char === undefined || '/?#"\'`,<>()[]{}'.includes(char) || isSpace(char);
+const endsTail = (char: string | undefined): boolean => char === undefined || '/?#"\'`<>()[]{}'.includes(char) || isSpace(char);
 const endsAssignedValue = (char: string | undefined): boolean => char === undefined || '"\'[{,}]'.includes(char) || isSpace(char);
 
-/** The last `@` at or after `from` before the tail ends, or -1. */
+/**
+ * The last `@` at or after `from` before the tail ends, or -1. The tail starts right after an `@`.
+ * A `,` ends it only after a letter or digit since the latest `@`, which could be a host (#175):
+ * `@host,admin@example.test` ends at the `,`, `@,secret@host` does not.
+ */
 function lastAtInTail(text: string, from: number): number {
   let last = -1;
-  for (let index = from; !endsTail(text[index]); index++) if (text[index] === '@') last = index;
+  let hostChar = false;
+  for (let index = from; !endsTail(text[index]); index++) {
+    const char = text[index]!;
+    if (char === '@') {
+      last = index;
+      hostChar = false;
+    } else if (char === ',') {
+      if (hostChar) break;
+    } else if (/^[A-Za-z0-9]$/.test(char)) {
+      hostChar = true;
+    }
+  }
   return last;
 }
 
