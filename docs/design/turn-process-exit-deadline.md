@@ -111,3 +111,125 @@
 - 再現の形: daemon が SIGKILL などで落ちる。ターン用プロセスは `disconnect` を受けて `exitAfter` に入る。実行中のターンが中断に応じず、プロバイダーが `spawnManagedProcess` を通らずに起こした子孫（SDK が直接 spawn したものなど）がターン用プロセスのグループ（`spawn.ts:215` の `detached: true`）にいる。または `business.close()` 自体が終わらない。5 秒後にターン用プロセスは `process.exit(1)` で終わるが、グループの子孫には何も送らない。親が生きていれば `managed.terminate()` がグループへ SIGTERM と SIGKILL を送るが、親がいないので誰も送らない。
 - 案: 期限切れのタイマーで `exit(1)` の前に、自分のグループへ SIGTERM を送る（`process.kill(-process.pid, 'SIGTERM')`）。自分にも届くが、SIGTERM ハンドラが `exitAfter` をもう一度呼ぶだけで、直後の `exit(1)` で終わる。POSIX のみ（Windows はグループの扱いが違う）。
 - 影響: 親が落ちた後に、プロバイダーや MCP の子孫が残り続ける。`scripts/leftover-turn-processes.mjs` はターン用プロセスしか見ないので、テストでも検出されない。
+
+---
+
+# 追記: ターン用プロセスのグループに残る子孫の掃除（#177）
+
+- Issue: [j5ik2o/takt#177](https://github.com/j5ik2o/takt/issues/177)（上の「別件の issue の中身（中1）」を切り出したもの）
+- Quint 仕様: 同じ `specs/quint/turn-process-exit-deadline/` を広げた（`GROUP_SIGNAL` の軸と子孫の状態）
+- 上流（`nrslib/takt`）: `main` の `src/app/daemon-turn/index.ts` には `exitAfter` 自体がない（#141 の期限もフォークだけの変更）。開いている PR で `src/app/daemon-turn/index.ts`・`src/shared/utils/spawn.ts`・`scripts/leftover-turn-processes.mjs` に触れるものはない（2026-11-27 確認）。
+
+## 何が起きているか
+
+ターン用プロセスは `turnProcessHost.ts` の `spawnManagedProcess` で `detached: true` として起動されるので、自分の PID と同じ ID のプロセスグループを率いる。プロバイダーの SDK が `spawnManagedProcess` を通らずに起こした子（`detached` なし）は、このグループに入る。`spawnManagedProcess` で起こした子は、それぞれ自分のグループを持つ。
+
+グループを掃除するのは親だけである。親が生きていれば、ターン用プロセスが終わったあとに `managed.waitForExit()` に続く `managed.terminate()` がグループへ SIGTERM、250 ms 後に SIGKILL を送る（`turnProcessHost.ts:179-183`）。期限の前に親が SIGKILL するときも同じである。親が落ちていると誰も送らないので、ターン用プロセスが `exit` したあともグループの子孫は動き続ける。
+
+これは期限切れの `exit(1)` に限らない。親が落ちたあと、中断に応じたターンで後片付けが `shutdown_complete` の送信に失敗して `fatal` から `exit(1)` するとき（期限より前）や、親が `shutdown` を送った直後に正常終了し、親の掃除が走る前に親が落ちたときも、同じように残る。Quint の `timeoutOnlyGroupSignal`（issue の案どおり、期限切れのときだけ送る）は前者で反例を出す。
+
+## 何をどう変えるか
+
+`src/app/daemon-turn/index.ts` の `exitAfter` で、`process.exit` を呼ぶ 2 か所の直前に、自分のグループへ SIGTERM を送る。
+
+```ts
+// 親が落ちているとグループを誰も掃除しないので、終わる前に自分のグループへ SIGTERM を送る。
+const signalOwnGroup = (): void => {
+  if (process.platform === 'win32') return;
+  try { process.kill(-process.pid, 'SIGTERM'); } catch { /* ESRCH: グループを率いていない。どの失敗でも終了は続ける */ }
+};
+const exitAfter = (cleanup: Promise<void>): void => {
+  setTimeout(() => { process.stderr.write('Turn process cleanup timed out\n'); signalOwnGroup(); process.exit(1); }, TURN_SHUTDOWN_GRACE_MS);
+  void cleanup.catch(fatal).finally(() => { signalOwnGroup(); process.exit(); });
+};
+```
+
+- 期限切れだけでなく、後片付けが済んだときの終了でも送る（issue の案を広げる）。ターン用プロセスの終了は、実際にはすべて `exitAfter` を通る。`shutdown` メッセージの経路は `process.disconnect()` から `'disconnect'` に入り、`fatal` も `process.disconnect()` から同じ所に入る。だから 2 か所に置けば、「`exitAfter` から終わるときは、必ず先にグループへ SIGTERM を送っている」と言える。
+- SIGTERM は自分にも届く。`index.ts` は読み込みの時点で `process.on('SIGTERM', ...)` を登録しているので、既定の動作（シグナルで死ぬ）は起きない。JS のハンドラはイベントループに積まれるだけで、直後の同期の `process.exit` が先に走るので動かない。終了コードは今と同じ（期限切れは 1、後片付けの結果どおり 0 か 1）。
+- 診断文の書き込みは SIGTERM より前に置く（今の順序を変えない）。
+- 親が生きている場合、親の掃除と重なって同じグループに SIGTERM が 2 回届くだけで、害はない。
+
+### 採らなかった案
+
+- **期限切れのときだけ送る（issue の案のまま）**: 上で書いたとおり、期限より前の `exit(1)` と正常終了のあとに親が落ちる窓が残る。置く場所が 1 か所増えるだけなので、広げるほうを採る。
+- **SIGTERM のあと SIGKILL まで送る**: グループへの SIGKILL は自分も殺す。終了コード 1 の代わりにシグナル終了になり、期限も 250 ms 延びる。メンバーを列挙して自分以外に送るには `ps` を同期で呼ぶ必要があり、macOS と Linux で引数が違う。SIGTERM を無視する子孫は残る（範囲の外）として、こちらは採らない。
+- **`spawnManagedProcess` で起こした子のグループにも、期限切れで送る**: それらは `business.close()` の `terminateManagedProcesses()` が期限内に止める（ターンが止まっていても `close()` は並行に呼ばれる。`processRuntime.ts:74`）。残るのは `close()` 自体が止まったときだけで、それは今回の範囲の外にする。
+
+### 範囲の外
+
+- SIGTERM を無視する子孫（親が落ちていると、誰も SIGKILL しない）。Quint では `wOrphanIgnoringDescendantLeft` として、残ることを明示している。
+- macOS で、送れない（euid の違う）メンバーがグループにいる場合（`EPERM` で全員に届かない）。
+- 自分でグループを作り直した子孫（`setsid`・`detached: true`）。`spawnManagedProcess` の子、`clone-exec.ts:405`、deepseek-harness の supervisor、devin が追いかける子孫グループなどがこれに当たる。`-process.pid` では届かない。
+- `business.close()` が止まり、`spawnManagedProcess` の子のグループが掃除されないまま期限が切れる場合。
+- `exitAfter` を通らない終わり方（捕まえていない例外での異常終了、外からの SIGKILL）。親が生きていれば親が掃除する。
+- Windows（グループの扱いが違う。今と同じく何もしない）。
+- daemon 本体の終了処理（[j5ik2o/takt#142](https://github.com/j5ik2o/takt/issues/142)）。
+
+## 守る不変条件
+
+前半の 1〜7 はそのまま守る（グループへの送信は同期で、時刻も終了コードも変えない）。足すのは次の 2 つ。
+
+8. **親のいないグループの子孫には SIGTERM が届いている（`orphanedGroupSignalled`）**: ターン用プロセスが終わり、親も落ちていて（掃除する者がいない）、ターン用プロセスがグループを率いているなら、まだ動いているグループの子孫は SIGTERM を受け取り済みである。SIGTERM に応じる子孫はそのあと終わる（`descendantExitOnTerm`）。
+9. **自分の率いるグループにしか送らない（`signalsOnlyOwnGroup`）**: グループを率いていない（`detached` なしで起動された）とき、`-process.pid` はどのグループも指さず、ほかのグループの子孫には何も届かない。モデルでは構成上成り立つ健全性の確認で、実物では後述の OS の前提に依る。
+
+設計を区別するのは 8 である（`noGroupSignal`・`timeoutOnlyGroupSignal` で反例、`fixed` で成り立つ）。
+
+## PBT の性質と除外
+
+製品の変更は `exitAfter` の 2 か所と小さな関数 1 つで、入力のデータを変換しない。そのため fast-check は使わず、状態遷移の性質を `quint run` の無作為シミュレーションで確かめる。初期構成（`initialized` × `hasTurn` × `stallAt` × `holdsHandle` × `closeFails` × 子孫の種類 3 通り × グループを率いるか）は `init` で全部を非決定に選び、除外する入力はない（`validConfig` が落とすのは実物で起こらない組み合わせだけ。子孫は初期化済みのときだけ置く）。
+
+確かめる性質は、不変条件 1〜9 と次の到達（witness）である。
+
+- 親が落ちたあとの期限切れで、SIGTERM に応じる子孫が終わる（`wOrphanDescendantGoneAfterTimeout`）
+- 親が落ちたあとの後片付けの失敗（期限より前の `exit(1)`）でも終わる（`wOrphanDescendantGoneAfterFailedCleanup`）
+- 正常終了のあと、親が掃除する前に落ちても、子孫は SIGTERM を受け取り済み（`wParentCrashAfterExitSignalled`）
+- 親が生きていれば、終了後の掃除が子孫を消す（`wParentSweepAfterExit`）
+- SIGTERM を無視する子孫は残る（`wOrphanIgnoringDescendantLeft`。範囲の外を明示する）
+- グループを率いていなければ何も届かない（`wNonLeaderDescendantUntouched`）
+
+実プロセスでは、実装の段で heavy IT（`src/__tests__/daemon-turn-process.integration.test.ts`）に次の 2 件を足す。ターン用プロセスは `detached: true` で起動し（グループを率いる）、フィクスチャのターンが `detached` なしで子（`setInterval` だけの node）を起こし、その PID を `turn_progress` で知らせる。テストが `child.disconnect()` で親の消失を作り、ターン用プロセスの終了後、子の PID が期限内に消えることを確かめる。後始末では子に SIGKILL を送る。
+
+- 中断に応じないターン: 期限切れで終了コード 1 と診断文、その後に子が消える。修正前は子が残って失敗する。
+- 中断に応じるが子を残すターン: 期限より前に終了コード 1（`shutdown_complete` を送れない）、その後に子が消える。期限切れのときだけ送る形では失敗する。
+
+既存の 3 件は `spawn` を `detached` なしで呼んでいるので、グループを率いない場合（`ESRCH` を握って終了する）の確認を兼ねる。終了コードの検証（1 のまま）で、自分に届く SIGTERM が終了を変えないことも確かめる。
+
+## 壊しうる入力・状況の一覧
+
+| 状況・入力 | 扱い | 確認手段 |
+|---|---|---|
+| 親が落ちたあとの期限切れ（ターンが中断に応じない、`close()` が止まる、初期化が止まる） | `exit(1)` の前にグループへ SIGTERM | Quint (`orphanTimeoutSignalsGroupTest`, `orphanCloseHangsSignalsGroupTest`)・IT |
+| 親が落ちたあと、期限より前の `exit(1)`（`shutdown_complete` を送れない） | `finally` でグループへ SIGTERM | Quint (`orphanFailedCleanupSignalsGroupTest`)・IT |
+| 正常終了の直後、親の掃除が走る前に親が落ちる | 終了前に送り済み | Quint (`parentCrashAfterCleanExitStillSignalledTest`) |
+| 親が生きている | 親の掃除と重なるだけ。SIGTERM を無視する子孫も親の SIGKILL で消える | Quint (`parentSigkillEndsIgnoringDescendantTest`, `parentAliveSweepsWithoutGroupSignalTest`) |
+| SIGTERM を無視する子孫（親が落ちている） | 残る（範囲の外） | Quint (`orphanIgnoringDescendantStaysTest`) |
+| 自分にも SIGTERM が届く | `process.on('SIGTERM')` が登録済みなので死なない。ハンドラは同期の `process.exit` より後になるので動かない。ハンドラを外す変更は、終了をシグナル終了に変える | IT（終了コード 1 の検証） |
+| グループを率いていない（`detached` なしで起動された。既存の IT など） | `kill(-pid)` は `ESRCH`。握って終了する。起動元のグループには何も届かない | Quint (`nonLeaderSignalsNothingTest`)・既存 IT |
+| 別のグループ（`setsid`・`detached: true` の子孫、`spawnManagedProcess` の子） | 届かない。`spawnManagedProcess` の子は `close()` が止める | 範囲の外として明記 |
+| PID の再利用 | 送るのは自分が生きている間で、自分の PID はほかのプロセスに使われない。グループを率いていないのに同じ ID のグループが残っている状況は、そのグループの元の主が同じ PID を持っていて、それが再利用されたことを意味する。Linux と macOS は、グループ ID として使われている番号をプロセスに割り当てない（OS の前提） | 前提として明記 |
+| 権限（setuid された子孫など、送れないメンバーがいる） | Linux はメンバーに 1 つでも送れれば成功し、送れるメンバーには届く（自分には必ず送れる）。macOS の `kill(2)` は「グループのメンバーに 1 つでも送れないと `EPERM`」で、見出しは「失敗したときシグナルは送られない」なので、グループ全員に届かないと読める。その場合の子孫は残る（範囲の外）。どちらも例外を握って終了を続ける | macOS の man（`kill(2)` の ERRORS）・前提として明記 |
+| macOS と Linux の違い | `kill(-pgid)` の意味（グループ全員）と `ESRCH` は同じ。違うのは上の `EPERM` の扱いだけ。ほかのグループの動き（親を失ったグループに SIGHUP が届くのは、止まっているメンバーがいるときだけ）は今回の変更と関係しない | CI（Linux）・手元（macOS）で IT |
+| イベントループが同期処理で塞がる | 期限のタイマーと同じく、送信も遅れる（前提は前半と同じ） | 前提として明記 |
+| Windows | 何もしない | コード確認 |
+
+## 影響
+
+- **上流**: 該当なし（冒頭）。
+- **保存済みデータ・公開 API**: 変更なし。`index.ts` の中に関数を 1 つ足すだけで、メッセージ・設定・CLI に触れない。
+- **守りの仕組み（`scripts/leftover-turn-processes.mjs`）**: 今の検査はターン用プロセス（`dist/app/daemon-turn/index.js` か `src/app/daemon-turn/index.ts` を起動したもの）しか見ないので、グループに残った子孫は見つけない。実装の段で次を足す。
+  - `ps -axww -o pid=,pgid=,command=` に広げ、「グループの主（`pgid` と同じ PID）がもう動いていない」かつ「作業ディレクトリがテスト用の設定ルート（`/takt-test-global-`）の下」にあるプロセスを、子孫の残りとして報告し、今と同じ手順（待つ、SIGTERM、SIGKILL）で止める。報告の行には種類（ターン用プロセスか子孫か）を出す。`pgid` は macOS と Linux のどちらの `ps` でも同じ名前で取れる。
+  - 作業ディレクトリで絞るのは、テストと関係のないプロセスに触れないためである。子孫が別のディレクトリへ移ると見逃すが、検出が漏れるだけで、誤って止めることはない。
+  - 危うさ: ターンと関係のない、テスト用の設定ルートに残ったプロセス（たとえば Git）も拾い、heavy IT を落とすようになるかもしれない。実装の段で heavy IT を一度流し、拾ったものがあればその場で報告して、検査を広げるかを決める。
+  - `src/__tests__/leftover-turn-processes.integration.test.ts` に、主が抜けたグループに残る子孫を報告して止めるケースを足す。
+
+## Quint の仕様と検査結果（#177）
+
+状態に、グループの子孫の種類 `desc`（`DescNone`・`DescHonorsTerm`・`DescIgnoresTerm`）、グループを率いるか `groupLeader`、`descAlive`・`descTermed`・`groupSignalled` を足した。操作は、親が終了後に掃除する `parentSweepAfterExit`、終了後に親が落ちる `parentCrashAfterExit`、SIGTERM を受けた子孫が終わる `descendantExitOnTerm` を足した。`parentSigkill` はグループ全体を SIGKILL するので、SIGTERM を無視する子孫も消す。設計の軸 `GROUP_SIGNAL` は `None`（#141 のまま）・`TimeoutOnly`（issue の案）・`EveryExit`（この設計）の 3 通りで、`fixed` を `EveryExit` に変え、`noGroupSignal` と `timeoutOnlyGroupSignal` を足した。#141 の場面は `initWith`（子孫なし、グループを率いる）のまま動く。
+
+- `quint typecheck`: 本体・テストともに成功。
+- `quint test`: `beforeTest` 5、`unrefTimerTest` 1、`noGroupSignalTest` 4、`timeoutOnlyGroupSignalTest` 2、`fixedTest` 21（#177 の 7 件を含む）、`noAbortTest` 1 の計 34 件すべて通過。
+- `quint run`（`--max-samples 3000 --max-steps 15 --seed 0x2a`）の `orphanedGroupSignalled`:
+  - `noGroupSignal`（直す前の形）: 反例。中断に応じないターンで `shutdown` → SIGTERM → 親が落ちる → 期限切れの `exit(1)`、子孫は SIGTERM を受け取らないまま動いている。
+  - `timeoutOnlyGroupSignal`: 反例。ターンのない初期化済みの子で親が落ち、`shutdown_complete` を送れず期限より前に `exit(1)`、子孫は残る。
+  - `fixed`: 違反なし。`before`・`unrefTimer` も反例（送らないので）。`noAbort` は 8 と 9 を満たし、7 で反例（前半と同じ）。
+- `quint run`（`fixed`, `--invariant safety`, 18 本の witness, `--max-samples 10000 --max-steps 15 --seed 0x2a`）: 違反 0 件、witness はすべて到達。seed `0x1`・`0x7`・`0xbeef`（2 万標本・20 手）でも違反 0 件。

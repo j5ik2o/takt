@@ -3,7 +3,8 @@
 // (src/app/daemon-turn/index.ts + src/features/daemonTurn/processRuntime.ts
 //  + src/features/daemon/turnProcessHost.ts).
 //
-// Issue: https://github.com/j5ik2o/takt/issues/141
+// Issue: https://github.com/j5ik2o/takt/issues/141 (exit deadline)
+//        https://github.com/j5ik2o/takt/issues/177 (descendants left in the turn process group)
 // PR:    https://github.com/j5ik2o/takt/pull/166
 //
 // DESIGN picks the child exitAfter implementation:
@@ -11,8 +12,15 @@
 //   "UnrefTimer" - exitAfter sets a TURN_SHUTDOWN_GRACE_MS timer, but calls .unref() on it.
 //   "Fixed"      - 0a8bf2f2b: exitAfter sets a ref'd setTimeout(..., TURN_SHUTDOWN_GRACE_MS)
 //                  that writes 'Turn process cleanup timed out\n' and calls process.exit(1).
+//
+// GROUP_SIGNAL picks what exitAfter sends to the turn process's own group (#177):
+//   "None"        - 0a8bf2f2b: nothing. Descendants in the group stay when the parent is gone.
+//   "TimeoutOnly" - the deadline timer calls process.kill(-process.pid, 'SIGTERM') before exit(1).
+//   "EveryExit"   - both exits in exitAfter (deadline timer and cleanup settled) signal the group
+//                   before process.exit.
 module turnProcessExitDeadline {
   const DESIGN: str
+  const GROUP_SIGNAL: str
   // true: shutdown() aborts the active turn first (processRuntime.ts:71). false is a mutant that
   // drops the abort, used to check that the model notices a regression there.
   const ABORTS_ON_SHUTDOWN: bool
@@ -30,6 +38,9 @@ module turnProcessExitDeadline {
   type CleanupState = CleanIdle | Cleaning | CleanupDone | CleanupFailed
   type ExitStatus = Running | ExitedZero | ExitedOne | KilledByParent
   type ParentState = ParentAlive | ParentDead
+  // A descendant in the turn process group that did not come from spawnManagedProcess (which
+  // gives every child its own group), for example a child an SDK spawned directly.
+  type Descendant = DescNone | DescHonorsTerm | DescIgnoresTerm
 
   type State = {
     // Initial run configuration
@@ -38,6 +49,10 @@ module turnProcessExitDeadline {
     stallAt: StallPoint,
     holdsHandle: bool,
     closeFails: bool,
+    desc: Descendant,
+    // The turn process leads its own group (turnProcessHost spawns it with detached: true).
+    // false: something else spawned it without detached, so -process.pid names no group.
+    groupLeader: bool,
 
     // Parent and IPC channel state
     parent: ParentState,
@@ -56,6 +71,11 @@ module turnProcessExitDeadline {
     exitAfterCount: int,
     status: ExitStatus,
     lastAction: str,
+
+    // Turn process group state (#177)
+    descAlive: bool,
+    descTermed: bool,
+    groupSignalled: bool,
   }
 
   var s: State
@@ -73,6 +93,23 @@ module turnProcessExitDeadline {
     // close() either hangs or rejects, not both.
     stall != StallClose or not(closeErr),
   }
+
+  // process.kill(-process.pid, 'SIGTERM'). It reaches the group only when the turn process leads
+  // it; otherwise the kill fails with ESRCH and nothing outside the group is touched.
+  pure def signalOwnGroup(st: State): State = {
+    ...st,
+    groupSignalled: true,
+    descTermed: st.descTermed or (st.groupLeader and st.descAlive),
+  }
+
+  // exitAfter's `cleanup.finally(() => process.exit())`. Every cleanupResolve / cleanupReject in the
+  // real code ends there: the shutdown message path calls process.disconnect(), and 'disconnect'
+  // enters exitAfter. The model takes that path as a shortcut, so the group signal is applied here.
+  pure def signalOnSettledExit(st: State): State =
+    if (GROUP_SIGNAL == "EveryExit") signalOwnGroup(st) else st
+
+  pure def signalOnDeadlineExit(st: State): State =
+    if (GROUP_SIGNAL == "None") st else signalOwnGroup(st)
 
   pure def startShutdownState(st: State): State =
     if (st.cleanup != CleanIdle) st
@@ -151,7 +188,7 @@ module turnProcessExitDeadline {
 
   pure def applyCleanupResolve(st: State): State = {
     {
-      ...st,
+      ...signalOnSettledExit(st),
       cleanup: CleanupDone,
       ipcConnected: false,
       status: ExitedZero,
@@ -168,7 +205,7 @@ module turnProcessExitDeadline {
 
   pure def applyCleanupReject(st: State): State = {
     {
-      ...st,
+      ...signalOnSettledExit(st),
       cleanup: CleanupFailed,
       ipcConnected: false,
       status: ExitedOne,
@@ -201,7 +238,7 @@ module turnProcessExitDeadline {
 
   pure def applyChildDeadlineFire(st: State): State = {
     {
-      ...st,
+      ...signalOnDeadlineExit(st),
       timedOutMsg: true,
       status: ExitedOne,
       lastAction: "childDeadlineFire",
@@ -210,6 +247,7 @@ module turnProcessExitDeadline {
 
   // Discretized: the real parent signals the group GRACE after shutdown, then SIGKILLs it
   // TERMINATION_GRACE_MS (250 ms) later (spawn.ts). The 250 ms is absorbed into the same tick.
+  // The SIGKILL also ends every descendant in the group, including one that ignores SIGTERM.
   pure def canParentSigkill(st: State): bool =
     st.status == Running
       and st.parent == ParentAlive
@@ -220,9 +258,32 @@ module turnProcessExitDeadline {
     {
       ...st,
       status: KilledByParent,
+      descAlive: st.descAlive and not(st.groupLeader),
       lastAction: "parentSigkill",
     }
   }
+
+  // A live parent sweeps the group after the leader exits: turnProcessHost.ts `managed.waitForExit()`
+  // then `managed.terminate()` (SIGTERM, 250 ms, SIGKILL to -pid).
+  pure def canParentSweepAfterExit(st: State): bool =
+    st.status != Running and st.parent == ParentAlive and st.groupLeader and st.descAlive
+
+  pure def applyParentSweepAfterExit(st: State): State =
+    { ...st, descAlive: false, lastAction: "parentSweepAfterExit" }
+
+  // The parent can die after the turn process exited but before its sweep ran.
+  pure def canParentCrashAfterExit(st: State): bool =
+    st.status != Running and st.parent == ParentAlive
+
+  pure def applyParentCrashAfterExit(st: State): State =
+    { ...st, parent: ParentDead, ipcConnected: false, lastAction: "parentCrashAfterExit" }
+
+  // A descendant that keeps the default SIGTERM action (or handles it and exits) ends after SIGTERM.
+  pure def canDescendantExitOnTerm(st: State): bool =
+    st.descAlive and st.descTermed and st.desc == DescHonorsTerm
+
+  pure def applyDescendantExitOnTerm(st: State): State =
+    { ...st, descAlive: false, lastAction: "descendantExitOnTerm" }
 
   // Timers fire exactly at their deadline: the clock does not pass a pending deadline.
   // Invariants 1 and 6 rely on this (the event loop is assumed not to be blocked).
@@ -237,14 +298,19 @@ module turnProcessExitDeadline {
 
   // ---------- state machine ----------
 
-  action initWith(initDone: bool, turn: bool, stall: StallPoint, holds: bool, closeErr: bool): bool = all {
+  action initWithGroup(initDone: bool, turn: bool, stall: StallPoint, holds: bool, closeErr: bool,
+                       d: Descendant, leader: bool): bool = all {
     validConfig(initDone, turn, stall, closeErr),
+    // Only a running turn (or business.close()) can have spawned a descendant.
+    d == DescNone or initDone,
     s' = {
       initialized: initDone,
       hasTurn: turn,
       stallAt: stall,
       holdsHandle: holds,
       closeFails: closeErr,
+      desc: d,
+      groupLeader: leader,
       parent: ParentAlive,
       ipcConnected: true,
       parentShutdownAt: -1,
@@ -259,8 +325,15 @@ module turnProcessExitDeadline {
       exitAfterCount: 0,
       status: Running,
       lastAction: "init",
+      descAlive: d != DescNone,
+      descTermed: false,
+      groupSignalled: false,
     },
   }
+
+  // The #141 scenarios: no descendant, and the turn process leads its group as in production.
+  action initWith(initDone: bool, turn: bool, stall: StallPoint, holds: bool, closeErr: bool): bool =
+    initWithGroup(initDone, turn, stall, holds, closeErr, DescNone, true)
 
   action init: bool = {
     nondet initDone = Set(true, false).oneOf()
@@ -268,7 +341,9 @@ module turnProcessExitDeadline {
     nondet stall = Set(StallNone, StallTurn, StallClose, StallInit).oneOf()
     nondet holds = Set(true, false).oneOf()
     nondet closeErr = Set(true, false).oneOf()
-    initWith(initDone, turn, stall, holds, closeErr)
+    nondet d = Set(DescNone, DescHonorsTerm, DescIgnoresTerm).oneOf()
+    nondet leader = Set(true, false).oneOf()
+    initWithGroup(initDone, turn, stall, holds, closeErr, d, leader)
   }
 
   action receiveShutdownMsg: bool = all {
@@ -321,6 +396,21 @@ module turnProcessExitDeadline {
     s' = applyTick(s),
   }
 
+  action parentSweepAfterExit: bool = all {
+    canParentSweepAfterExit(s),
+    s' = applyParentSweepAfterExit(s),
+  }
+
+  action parentCrashAfterExit: bool = all {
+    canParentCrashAfterExit(s),
+    s' = applyParentCrashAfterExit(s),
+  }
+
+  action descendantExitOnTerm: bool = all {
+    canDescendantExitOnTerm(s),
+    s' = applyDescendantExitOnTerm(s),
+  }
+
   action step: bool = any {
     receiveShutdownMsg,
     receiveSigterm,
@@ -332,6 +422,9 @@ module turnProcessExitDeadline {
     childDeadlineFire,
     parentSigkill,
     tick,
+    parentSweepAfterExit,
+    parentCrashAfterExit,
+    descendantExitOnTerm,
   }
 
   // ---------- invariants ----------
@@ -372,6 +465,19 @@ module turnProcessExitDeadline {
   val cleanupAbortsActiveTurn: bool =
     (s.cleanup != CleanIdle and s.hasTurn) implies s.aborted
 
+  // 8. (#177) Once the turn process has exited and no parent is left to sweep its group, every
+  //    descendant still running in that group has been sent SIGTERM. A descendant that ignores
+  //    SIGTERM can still stay (see wOrphanIgnoringDescendantLeft); nothing can SIGKILL it.
+  val orphanedGroupSignalled: bool =
+    (s.status != Running and s.parent == ParentDead and s.groupLeader and s.descAlive)
+      implies s.descTermed
+
+  // 9. (#177, by construction) The turn process signals only the group it leads. When it is not a
+  //    group leader, -process.pid names no group and a descendant in someone else's group is not
+  //    touched.
+  val signalsOnlyOwnGroup: bool =
+    not(s.groupLeader) implies not(s.descTermed)
+
   val safety: bool = all {
     exitsByDeadline,
     noZeroExitWithoutCleanup,
@@ -380,6 +486,8 @@ module turnProcessExitDeadline {
     failedCleanupNeverExitsZero,
     parentAliveBoundedShutdown,
     cleanupAbortsActiveTurn,
+    orphanedGroupSignalled,
+    signalsOnlyOwnGroup,
   }
 
   // ---------- witnesses ----------
@@ -420,21 +528,54 @@ module turnProcessExitDeadline {
 
   val wShutdownMsgThenParentCrashTimeout: bool =
     s.status == ExitedOne and s.timedOutMsg and s.parent == ParentDead and s.inExitAfter
+
+  // #177 witnesses
+  val wOrphanDescendantGoneAfterTimeout: bool =
+    s.timedOutMsg and s.parent == ParentDead and s.desc == DescHonorsTerm and s.groupLeader and not(s.descAlive)
+
+  val wOrphanDescendantGoneAfterFailedCleanup: bool =
+    s.cleanup == CleanupFailed and not(s.timedOutMsg) and s.parent == ParentDead
+      and s.desc == DescHonorsTerm and s.groupLeader and not(s.descAlive)
+
+  // Known residual: a descendant that ignores SIGTERM stays once the parent is gone.
+  val wOrphanIgnoringDescendantLeft: bool =
+    s.status != Running and s.parent == ParentDead and s.desc == DescIgnoresTerm and s.groupLeader
+      and s.descAlive and s.descTermed
+
+  val wParentSweepAfterExit: bool =
+    s.lastAction == "parentSweepAfterExit"
+
+  val wParentCrashAfterExitSignalled: bool =
+    s.lastAction == "parentCrashAfterExit" and s.groupLeader and s.descAlive and s.descTermed
+
+  val wNonLeaderDescendantUntouched: bool =
+    s.status != Running and not(s.groupLeader) and s.groupSignalled and s.descAlive and not(s.descTermed)
 }
 
 module before {
-  import turnProcessExitDeadline(DESIGN = "Before", ABORTS_ON_SHUTDOWN = true).*
+  import turnProcessExitDeadline(DESIGN = "Before", GROUP_SIGNAL = "None", ABORTS_ON_SHUTDOWN = true).*
 }
 
 module unrefTimer {
-  import turnProcessExitDeadline(DESIGN = "UnrefTimer", ABORTS_ON_SHUTDOWN = true).*
+  import turnProcessExitDeadline(DESIGN = "UnrefTimer", GROUP_SIGNAL = "None", ABORTS_ON_SHUTDOWN = true).*
 }
 
+// The code as of #141 (0a8bf2f2b): the deadline exists, but nothing is sent to the group.
+module noGroupSignal {
+  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "None", ABORTS_ON_SHUTDOWN = true).*
+}
+
+// The proposal in #177 as written: only the deadline timer signals the group.
+module timeoutOnlyGroupSignal {
+  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "TimeoutOnly", ABORTS_ON_SHUTDOWN = true).*
+}
+
+// Target: #141 deadline plus a group SIGTERM before every exit in exitAfter (#177).
 module fixed {
-  import turnProcessExitDeadline(DESIGN = "Fixed", ABORTS_ON_SHUTDOWN = true).*
+  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "EveryExit", ABORTS_ON_SHUTDOWN = true).*
 }
 
 // Mutant: the fixed exitAfter, but shutdown() forgets to abort the active turn.
 module noAbort {
-  import turnProcessExitDeadline(DESIGN = "Fixed", ABORTS_ON_SHUTDOWN = false).*
+  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "EveryExit", ABORTS_ON_SHUTDOWN = false).*
 }
