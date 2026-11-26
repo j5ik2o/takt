@@ -4,7 +4,12 @@ import {
   describeSelectorError,
   validateSelectorResponse,
 } from '../core/workflow/selector-contract.js';
-import { StructuredAgentContractError } from '../agents/structured-caller/transport.js';
+import {
+  StructuredAgentContractError,
+  StructuredAgentResponseError,
+  StructuredOutputRejectedError,
+} from '../agents/structured-caller/transport.js';
+import { createAgentFailureError } from '../shared/types/agent-failure.js';
 import type { AgentResponse } from '../core/models/types.js';
 import { assertStrictStructuredOutputSchema } from '../core/workflow/engine/structured-output-schema-validator.js';
 
@@ -291,6 +296,67 @@ describe('CandidateSelector strict ID selection primitive (C-SHARED-SELECTOR, C-
       );
 
       expect(message).toContain('returned selected_ids: ["[REDACTED]"]');
+    });
+
+    const terminalRejected = (output: Record<string, unknown>) => new StructuredOutputRejectedError(
+      {
+        status: 'error',
+        content: '',
+        error: 'Claude terminal structured output validation failed: $.selected_ids[0] must be equal to one of the allowed values',
+      },
+      output,
+    );
+
+    it('should name the returned and allowed ids when the provider rejected the output itself', () => {
+      const message = describeSelectorError(
+        terminalRejected({ selected_ids: ['coding'], rationale: 'x' }),
+        contract,
+        'fix',
+        identity,
+        label,
+      );
+
+      expect(message).toContain('Dynamic facet selector for "fix" returned invalid structured output');
+      expect(message).toContain('returned selected_ids: ["coding"]');
+      expect(message).toContain('allowed candidate ids: ["backend","transaction"]');
+    });
+
+    it('should omit the returned ids line when the rejected output has no selected_ids', () => {
+      const message = describeSelectorError(terminalRejected({ rationale: 'x' }), contract, 'fix', identity, label);
+
+      expect(message).not.toContain('returned selected_ids');
+      expect(message).toContain('allowed candidate ids: ["backend","transaction"]');
+    });
+
+    it('should redact secrets in object keys at every depth before the returned ids are shortened', () => {
+      const secret = 'k'.repeat(600);
+      const nested = 'n'.repeat(600);
+      const message = describeSelectorError(
+        terminalRejected({ selected_ids: { [secret]: { [nested]: [secret] } }, rationale: 'x' }),
+        contract,
+        'fix',
+        (text) => text.replaceAll(secret, '[REDACTED]').replaceAll(nested, '[REDACTED]'),
+        label,
+      );
+
+      expect(message).toContain('returned selected_ids: {"[REDACTED]":{"[REDACTED]":["[REDACTED]"]}}');
+      expect(message).not.toContain('kkkk');
+      expect(message).not.toContain('nnnn');
+    });
+
+    it.each([
+      ['a provider failure', createAgentFailureError('provider_error', 'connection reset: {"selected_ids":["coding"]}')],
+      ['a rate limit', new StructuredAgentResponseError('rate limited', {
+        persona: 'selector',
+        status: 'rate_limited',
+        content: '{"selected_ids":["coding"]}',
+        timestamp: new Date(),
+      })],
+    ])('should not treat %s as a contract violation', (_name, error) => {
+      const message = describeSelectorError(error, contract, 'fix', identity, label);
+
+      expect(message).not.toContain('returned selected_ids');
+      expect(message).not.toContain('allowed candidate ids');
     });
 
     it('should redact a failure that is not a contract violation without adding candidates', () => {
