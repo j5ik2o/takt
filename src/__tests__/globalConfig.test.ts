@@ -21,6 +21,7 @@ vi.mock('../infra/config/paths.js', () => ({
   getProjectCwd: vi.fn(),
 }));
 
+import { packageVersion } from '../shared/package-info.js';
 import { GlobalConfigManager } from '../infra/config/global/globalConfigCore.js';
 import {
   disableRoutingTelemetry,
@@ -32,6 +33,7 @@ const configEnvKeys = [
   'TAKT_CODEX_CLI_PATH',
   'TAKT_CLAUDE_CLI_PATH',
   'TAKT_TELEMETRY_ROUTING_DECISIONS',
+  'TAKT_OBSERVABILITY',
 ] as const;
 
 type ConfigEnvKey = (typeof configEnvKeys)[number];
@@ -41,6 +43,7 @@ function snapshotConfigEnv(): Record<ConfigEnvKey, string | undefined> {
     TAKT_CODEX_CLI_PATH: process.env.TAKT_CODEX_CLI_PATH,
     TAKT_CLAUDE_CLI_PATH: process.env.TAKT_CLAUDE_CLI_PATH,
     TAKT_TELEMETRY_ROUTING_DECISIONS: process.env.TAKT_TELEMETRY_ROUTING_DECISIONS,
+    TAKT_OBSERVABILITY: process.env.TAKT_OBSERVABILITY,
   };
 }
 
@@ -193,6 +196,8 @@ workflow_overrides:
 
     it('should preserve non-empty quality_gates array', () => {
       const config: GlobalConfig = {
+        language: 'en',
+        autoFetch: false,
         workflowOverrides: {
           qualityGates: ['Test 1', 'Test 2'],
         },
@@ -321,6 +326,30 @@ workflow_overrides:
       expect(loaded.workflowOverrides?.steps?.implement?.qualityGates).toEqual([]);
     });
 
+    it('should say the running takt version does not support an unknown global key', () => {
+      writeFileSync(testConfigPath, 'future_only_key: true\n', 'utf-8');
+
+      expect(() => GlobalConfigManager.getInstance().load()).toThrow(
+        `takt ${packageVersion} does not support key "future_only_key"`,
+      );
+    });
+
+    it('should name the unknown key, not a type error, when the file has both', () => {
+      writeFileSync(testConfigPath, 'language: 123\nfuture_only_key: true\n', 'utf-8');
+
+      expect(() => GlobalConfigManager.getInstance().load()).toThrow(
+        `takt ${packageVersion} does not support key "future_only_key"`,
+      );
+    });
+
+    it('should say the running takt version does not support an unknown key from a root JSON env override', () => {
+      process.env.TAKT_OBSERVABILITY = JSON.stringify({ future_only_key: true });
+
+      expect(() => GlobalConfigManager.getInstance().load()).toThrow(
+        `takt ${packageVersion} does not support key "observability.future_only_key"`,
+      );
+    });
+
     it('should reject an unexpected override key when workflow_overrides is also present', () => {
       const configContent = `
 workflow_overrides:
@@ -357,6 +386,8 @@ unexpected_overrides:
 
     it('should save workflowOverrides using workflow_overrides and steps keys', () => {
       const config: GlobalConfig = {
+        language: 'en',
+        autoFetch: false,
         workflowOverrides: {
           steps: {
             implement: {
@@ -404,7 +435,7 @@ logging:
     ] as const)('should expand "~/" for %s', (yamlKey, configKey) => {
       writeFileSync(testConfigPath, `${yamlKey}: ~/.takt/bin/value\n`, 'utf-8');
 
-      const loaded = GlobalConfigManager.getInstance().load() as Record<string, unknown>;
+      const loaded: Record<string, unknown> = { ...GlobalConfigManager.getInstance().load() };
 
       expect(loaded[configKey]).toBe(join(homedir(), '.takt/bin/value'));
     });
@@ -471,6 +502,8 @@ logging:
 
     it('should save workflowRuntimePrepare using workflow_runtime_prepare key', () => {
       const config: GlobalConfig = {
+        language: 'en',
+        autoFetch: false,
         workflowRuntimePrepare: { customScripts: true },
       };
 
@@ -482,6 +515,8 @@ logging:
 
     it('should save workflowCommandGates using workflow_command_gates key', () => {
       const config: GlobalConfig = {
+        language: 'en',
+        autoFetch: false,
         workflowCommandGates: { customScripts: true },
       };
 
@@ -737,6 +772,8 @@ logging:
 
     it('should save workflowArpeggio using workflow_arpeggio key', () => {
       const config: GlobalConfig = {
+        language: 'en',
+        autoFetch: false,
         workflowArpeggio: {
           customDataSourceModules: true,
           customMergeInlineJs: true,
@@ -764,6 +801,8 @@ logging:
 
     it('should save workflowMcpServers using workflow_mcp_servers key', () => {
       const config: GlobalConfig = {
+        language: 'en',
+        autoFetch: false,
         workflowMcpServers: { stdio: true, http: true, sse: false },
       };
 
@@ -783,6 +822,8 @@ logging:
 
     it('should save enableBuiltinWorkflows using enable_builtin_workflows key', () => {
       const config: GlobalConfig = {
+        language: 'en',
+        autoFetch: false,
         enableBuiltinWorkflows: true,
       };
 
@@ -794,6 +835,8 @@ logging:
 
     it('should save workflowCategoriesFile using workflow_categories_file key', () => {
       const config: GlobalConfig = {
+        language: 'en',
+        autoFetch: false,
         workflowCategoriesFile: '/tmp/workflow-categories.yaml',
       };
 
@@ -824,6 +867,8 @@ logging:
 
     it('should save notificationSoundEvents using workflow notification keys', () => {
       const config: GlobalConfig = {
+        language: 'en',
+        autoFetch: false,
         notificationSoundEvents: {
           workflowComplete: true,
           workflowAbort: false,

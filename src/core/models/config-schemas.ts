@@ -18,6 +18,7 @@ import {
   ObservabilityConfigSchema,
   StepProviderOptionsSchema,
   StepQualityGatesOverrideSchema,
+  StepWorkflowOverrideSchema,
   PersonaProviderReferenceSchema,
   PipelineConfigSchema,
   ProviderPermissionProfilesSchema,
@@ -33,7 +34,7 @@ import {
 export const WorkflowOverridesSchema = z.object({
   quality_gates: QualityGatesSchema,
   quality_gates_edit_only: z.boolean().optional(),
-  steps: z.record(z.string(), StepQualityGatesOverrideSchema).optional(),
+  steps: z.record(z.string(), StepWorkflowOverrideSchema).optional(),
   personas: z.record(z.string(), StepQualityGatesOverrideSchema).optional(),
 }).optional();
 

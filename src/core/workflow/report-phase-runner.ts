@@ -465,7 +465,8 @@ export type ReportRetryFailureReason =
   | 'tool_call'
   | 'empty_output'
   | 'provider_error'
-  | 'invalid_output';
+  | 'invalid_output'
+  | 'context_compacted';
 
 function isFreshPhase1RecoveryFailure(
   failureReason: ReportRetryFailureReason,
@@ -503,6 +504,20 @@ async function runSingleReportAttempt(
   const attemptProviderInfo = resolveReportAttemptProviderInfo(step, options, ctx);
   const allowedTools = new Set(reportPhaseEventTools(attemptProviderInfo.provider));
   const allowedCalls = new Map<string, string>();
+  let compactionDetected = false;
+  let compactionSessionId: string | undefined;
+  const classifyAttemptFailure = (result: AgentResponse): ReportRetryableFailure | undefined => {
+    const responseSessionId = result.sessionId ?? options.sessionId;
+    const compactionMatchesResponse = compactionSessionId === undefined
+      || compactionSessionId === responseSessionId;
+    if (result.status === 'done' && compactionDetected && compactionMatchesResponse) {
+      return {
+        failureReason: 'context_compacted',
+        errorMessage: buildRetryableFailureEventError('context_compacted'),
+      };
+    }
+    return classifyRetryableFailure(step, result, validateReportContent);
+  };
   const callOptions: RunAgentOptions = {
     ...options,
     onPromptResolved: (promptParts) => {
@@ -511,6 +526,10 @@ async function runSingleReportAttempt(
       didEmitPhaseStart = true;
     },
     onStream: (event) => {
+      if (event.type === 'context_compacted') {
+        compactionDetected = true;
+        compactionSessionId = event.data.sessionId;
+      }
       const detected = detectReportPhaseToolCall(event, allowedTools, allowedCalls);
       if (detected !== undefined) {
         reportToolCallError ??= detected;
@@ -551,11 +570,7 @@ async function runSingleReportAttempt(
       return result;
     }, (result) => {
       didClassifySpanOutcome = true;
-      classifiedFailure = classifyRetryableFailure(
-        step,
-        result,
-        validateReportContent,
-      );
+      classifiedFailure = classifyAttemptFailure(result);
       return buildReportAttemptSpanOutcome(
         result,
         reportToolCallError,
@@ -563,11 +578,7 @@ async function runSingleReportAttempt(
       );
     });
     if (!didClassifySpanOutcome) {
-      classifiedFailure = classifyRetryableFailure(
-        step,
-        response,
-        validateReportContent,
-      );
+      classifiedFailure = classifyAttemptFailure(response);
     }
     didRecordProviderAttempt = true;
     ctx.onProviderAttempt?.(
@@ -822,6 +833,9 @@ function buildRetryableFailureEventError(
   }
   if (failureReason === 'tool_call') {
     return 'Report phase emitted a tool call';
+  }
+  if (failureReason === 'context_compacted') {
+    return 'Report phase context was compacted';
   }
   return 'Report output failed deterministic validation';
 }

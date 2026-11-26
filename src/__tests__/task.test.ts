@@ -2848,7 +2848,9 @@ describe('claim lock acquisition errors', () => {
     expect(claimError(failure)).toBe(failure);
   });
 
-  it('keeps goal-execution.lock timeouts outside the recoverable claim classification', () => {
+  // Renamed in item 201 (body unchanged): a real goal-execution.lock timeout is now retryable, so the
+  // old name described the opposite; this still pins that the text alone is not classified.
+  it('does not classify a plain Error with the private-lock timeout text from the task store', () => {
     const failure = new Error('Timed out waiting for private file lock: /project/.takt/goal-execution.lock');
     expect(claimError(failure)).toBe(failure);
   });

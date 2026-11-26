@@ -60,6 +60,7 @@ import { buildWorkflowStepParticipationIdentity } from '../core/workflow/workflo
 import { getReportFiles } from '../core/workflow/output-contract-files.js';
 import { inheritResumeReportSnapshot } from '../core/workflow/run/resume-report-snapshot.js';
 import { mockRuleEvaluation } from './rule-evaluator-test-double.js';
+import { normalizeClaudeTerminalResponse } from '../infra/claude-terminal/response-normalizer.js';
 import {
   makeResponse,
   makeStep,
@@ -481,10 +482,10 @@ describe('report current versions and execution history in complete prompts', ()
 
     const prompt = prompts.find(({ persona }) => persona === 'consumer')!.prompt;
     const rows = new Map(prompt.split('\n').flatMap((line) => {
-      const match = /^- remediation: ([^;]+); execution=([^;]+); order=(\d+); completion_order=(\d+); producer execution=([^;]+); producer start=(\d+); producer completion=(\d+)$/.exec(line);
+      const match = /^- remediation: ([^;]+); execution=([^;]+); order=(\d+); completion_order=(\d+); producer execution=([^;]+); producer start=(\d+); producer completion=(\d+); path=`([^`]+)`$/.exec(line);
       return match === null ? [] : [[match[1]!, {
         execution: match[2]!, order: Number(match[3]), completion: Number(match[4]),
-        origin: match[5]!, start: Number(match[6]), originCompletion: Number(match[7]),
+        origin: match[5]!, start: Number(match[6]), originCompletion: Number(match[7]), path: match[8]!,
       }]];
     }));
     const alphaRow = rows.get(plan)!;
@@ -501,6 +502,9 @@ describe('report current versions and execution history in complete prompts', ()
     expect(betaRow.start).toBeLessThan(alphaRow.originCompletion);
     expect(alphaRow.completion).toBeGreaterThan(alphaRow.originCompletion);
     expect(betaRow.completion).toBe(alphaRow.completion);
+    expect(alphaRow.path).not.toBe(betaRow.path);
+    expect(readFileSync(alphaRow.path, 'utf8')).toBe(`BODY-${plan}`);
+    expect(readFileSync(betaRow.path, 'utf8')).toBe(`BODY-${report}`);
 
     const alphaExecution = store.executions(alphaIdentity)
       .find((entry) => entry.id === alphaRow.origin.split('/').at(-1));
@@ -2173,6 +2177,63 @@ describe('WorkflowEngine Integration: Loop Monitors', () => {
 
       expect(state.status).toBe('aborted');
       expect(abortReasons.some((reason) => /content.*string/i.test(reason))).toBe(true);
+    });
+  });
+
+  describe('Claude Terminal loop judge that breaks the typed text contract', () => {
+    it('stops the run with the provider_error step failure instead of taking the natural transition', async () => {
+      const config = buildConfigWithLoopMonitor(1, {
+        judge: { persona: 'supervisor', rules: loopJudgeRules() },
+      } as Partial<LoopMonitorConfig>);
+      engine = new WorkflowEngine(config, tmpDir, 'test task', {
+        projectCwd: tmpDir,
+        provider: 'claude-terminal',
+      });
+      mockBaseRunAgentSequence([
+        makeResponse({ persona: 'implement', content: 'Implementation done' }),
+        makeResponse({ persona: 'ai_review', content: 'Issues found' }),
+        makeResponse({ persona: 'ai_fix', content: 'Fixed' }),
+      ]);
+      // The loop judge, and any retry of it, gets the real Claude Terminal normalization of JSON
+      // that parses but does not match {content}. A natural transition would call ai_review next.
+      vi.mocked(runAgent).mockImplementation(async (persona, task, options) => {
+        options.onPromptResolved?.({ systemPrompt: persona ?? '', userInstruction: task });
+        return persona === 'supervisor'
+          ? normalizeClaudeTerminalResponse({
+            agentName: 'supervisor',
+            sessionId: 'terminal-session',
+            assistantText: '{"verdict":"Healthy"}',
+            lastAssistantText: '{"verdict":"Healthy"}',
+            outputSchema: options.outputSchema,
+          })
+          : makeResponse({ persona: persona ?? 'unknown', content: 'No issues' });
+      });
+      mockRuleEvaluationSequence([
+        { index: 0, method: 'phase3_tag' },
+        { index: 1, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+        { index: 0, method: 'phase3_tag' },
+      ]);
+      const aborts: { kind: string | undefined; failureCategory: string | undefined; reason: string }[] = [];
+      engine.on('workflow:abort', (_state, reason, kind, failure) => aborts.push({
+        kind,
+        failureCategory: failure?.failureCategory,
+        reason,
+      }));
+
+      const state = await engine.run();
+
+      expect(state.status).toBe('aborted');
+      const personas = vi.mocked(runAgent).mock.calls.map((call) => call[0]?.replace(/^.*\/|\.md$/g, ''));
+      expect({ personas, aborts }).toEqual({
+        personas: ['implement', 'ai_review', 'ai_fix', 'supervisor'],
+        aborts: [{
+          kind: 'step_error',
+          failureCategory: 'provider_error',
+          reason: expect.stringContaining('Claude terminal structured output validation failed'),
+        }],
+      });
     });
   });
 

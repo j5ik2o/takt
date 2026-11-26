@@ -93,6 +93,7 @@ const CodexProviderOptionShape = {
   network_access: z.boolean().optional(),
   permission_control: z.enum(['takt', 'codex']).optional(),
   config_profile: CodexConfigProfileSchema.optional(),
+  readonly_permission_base: CodexConfigProfileSchema.optional(),
   reasoning_effort: ProviderEffortSchema.optional(),
   fast_mode: z.boolean().optional(),
   skills: z.object(CodexSkillsShape).optional(),
@@ -564,6 +565,11 @@ export const StepQualityGatesOverrideSchema = z.object({
   quality_gates: QualityGatesSchema,
 }).optional();
 
+export const StepWorkflowOverrideSchema = z.object({
+  quality_gates: QualityGatesSchema,
+  max_visits: z.number().int().positive().safe().optional(),
+}).optional();
+
 export function hasProviderOptionsLeaf(
   providerOptions: Readonly<Record<string, unknown>>,
 ): boolean {
@@ -659,6 +665,7 @@ const NormalizedStepProviderOptionsSchema = z.object({
     networkAccess: z.boolean().optional(),
     permissionControl: z.enum(['takt', 'codex']).optional(),
     configProfile: CodexConfigProfileSchema.optional(),
+    readonlyPermissionBase: CodexConfigProfileSchema.optional(),
     reasoningEffort: ProviderEffortSchema.optional(),
     fastMode: z.boolean().optional(),
     guards: z.object({

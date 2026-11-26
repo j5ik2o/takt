@@ -219,8 +219,10 @@ export interface WorkflowCallInvocationRecord {
 
 export interface WorkflowReportInput {
   fromStep: string;
+  fallbackFromStep?: string;
   reports: readonly string[] | 'all';
   optionalIfUnrun?: true;
+  previousOnly?: true;
   history?: { previous: number };
 }
 
@@ -304,6 +306,10 @@ interface WorkflowStepBase {
   /** Loader-preserved instruction reference or inline declaration before facet resolution. */
   instructionRef?: string | string[];
   delayBeforeMs?: number;
+  /** The engine stops instead of entering this step a (maxVisits + 1)-th time. */
+  maxVisits?: number;
+  /** The engine stops when this step matches the same rule as on its previous visit. */
+  stopOnRepeatedVerdict?: boolean;
   rules?: WorkflowRule[];
   passPreviousResponse?: boolean;
   /** Internal-only marker for Team Leader planning steps that need lossless state output. */

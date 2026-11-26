@@ -395,7 +395,7 @@ export class CompanionStepRuntime {
     const redact = (text: string): string => sanitizeCompanionSelectorRationale(text, request);
     const validateSelection = (response: AgentResponse) => validateSelectorResponse(
       response,
-      selectorContract.validationSchema,
+      selectorContract,
       this.deps.step.name,
       redact,
       { label: 'Companion' },

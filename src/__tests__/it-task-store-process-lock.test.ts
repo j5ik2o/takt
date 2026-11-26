@@ -329,7 +329,9 @@ describe('TaskStore process lock', () => {
     }
   }, 60_000);
 
-  it('does not convert another process holding the goal-execution lock into a recoverable claim timeout', async () => {
+  // Expectation reversed in item 201: #91's expected behaviour (a transient lock timeout must not
+  // stop claiming) holds for goal-execution.lock too, so its timeout is now a retryable claim failure.
+  it('converts another process holding the goal-execution lock into a recoverable claim timeout', async () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'takt-claim-goal-lock-'));
     testDirs.push(projectDir);
     const signalsDir = join(projectDir, 'signals');
@@ -347,10 +349,16 @@ describe('TaskStore process lock', () => {
       const outcome = readClaimOutcome(join(projectDir, 'claim-goal.json'));
       expect(outcome.error).toMatch(/Timed out waiting for private file lock/);
       expect(outcome.error).not.toMatch(/File lock: timed out waiting for lock/);
-      expect(outcome.errorName).not.toBe('TaskClaimLockAcquisitionError');
+      expect(outcome.errorName).toBe('TaskClaimLockAcquisitionError');
+      expect(outcome.code).toBe('TIMEOUT');
       expect(outcome.claimed).toBeUndefined();
       expect(runner.listTaskStateItems()[0]).toMatchObject({ name: pending.name, status: 'pending' });
       expect(existsSync(join(projectDir, '.takt', 'tasks.yaml.lock'))).toBe(false);
+
+      await stopLockHolder(holder, signalsDir);
+      holder = undefined;
+      // The retry path: once the holder releases the lock, the same claim succeeds.
+      expect(runner.claimNextTasks(1).map(({ name }) => name)).toEqual([pending.name]);
     } finally {
       if (holder !== undefined) await stopLockHolder(holder, signalsDir);
     }
