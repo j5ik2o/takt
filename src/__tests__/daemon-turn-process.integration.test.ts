@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
+import { scaledMs } from '../../scripts/test-time-factor.mjs';
 import { spawnManagedProcess } from '../shared/utils/spawn.js';
 import { parseTurnProcessMessage, type DaemonProcessMessage, type TurnProcessMessage } from '../core/daemon/processProtocol.js';
 import { conversationId } from '../infra/conversations/identity.js';
@@ -87,3 +88,71 @@ it.each(['SIGTERM', 'disconnect'] as const)('exits after %s even while a stray h
     await rm(configDirectory, { recursive: true, force: true });
   }
 }, 30_000);
+
+// 本物の入口（daemon-turn/index.ts）を起動し、turnBusiness.js だけを中断に応じない業務に差し替える。
+const abortIgnoringBusiness = new URL('./fixtures/abort-ignoring-turn-business.ts', import.meta.url).href;
+const replaceTurnBusiness = `data:text/javascript,${encodeURIComponent(`import{register}from"node:module";register("data:text/javascript,"+encodeURIComponent(${JSON.stringify(
+  `export async function resolve(specifier,context,next){if(/\\/daemonTurn\\/turnBusiness\\.[jt]s$/.test(specifier))return{url:${JSON.stringify(abortIgnoringBusiness)},shortCircuit:true};return next(specifier,context);}`,
+)}));`)}`;
+
+it.each([
+  { trigger: 'SIGTERM', holdsHandle: true },
+  { trigger: 'disconnect', holdsHandle: true },
+  // ハンドルが残らないとイベントループが空になる。後片付けは済んでいないので、0 で終わってはいけない。
+  { trigger: 'disconnect', holdsHandle: false },
+] as const)('exits with failure after $trigger within the shutdown grace while the running turn ignores abort (holds handle: $holdsHandle, #141)', async ({ trigger, holdsHandle }) => {
+  const configDirectory = await mkdtemp(join(tmpdir(), 'takt-turn-child-'));
+  const child = spawn(process.execPath, ['--import', 'tsx', '--import', replaceTurnBusiness,
+    fileURLToPath(new URL('../app/daemon-turn/index.ts', import.meta.url))], {
+    cwd: process.cwd(), stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+    env: { ...process.env, HOME: configDirectory, TAKT_CONFIG_DIR: configDirectory, TAKT_SLACK_APP_TOKEN: undefined, TAKT_SLACK_BOT_TOKEN: undefined,
+      TAKT_TEST_TURN_HOLDS_HANDLE: holdsHandle ? '1' : '0' },
+  });
+  let stderr = '';
+  child.stderr?.on('data', (chunk: Buffer) => { if (stderr.length < 8192) stderr += chunk.toString(); });
+  const stderrEnd = child.stderr === null
+    ? Promise.resolve()
+    : new Promise<void>((resolve) => {
+      child.stderr!.once('end', resolve);
+      child.stderr!.once('close', resolve);
+    });
+  const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.once('exit', (code, signal) => { resolve({ code, signal }); });
+  });
+  // Node では child.disconnect() 後に child の close が発火しないことがあるため、exit と stderr の end を両方待つ。
+  const exitedWithStderr = Promise.all([exit, stderrEnd]).then(([result]) => result);
+  const envelope = { protocolVersion: 1 as const, launchId: 'abort-ignoring-child' };
+  const seen = new Map<string, ReturnType<typeof deferred<void>>>([['ready', deferred<void>()], ['turn_progress', deferred<void>()]]);
+  child.on('message', (value: unknown) => { seen.get(parseTurnProcessMessage(value, envelope.launchId).kind)?.resolve(); });
+  const reach = (kind: string) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([
+      seen.get(kind)!.promise,
+      exitedWithStderr.then(() => { throw new Error(`Child exited before ${kind}: ${stderr}`); }),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => { reject(new Error(`Timed out waiting for ${kind}: ${stderr}`)); }, scaledMs(10_000));
+      }),
+    ]).finally(() => { clearTimeout(timer); });
+  };
+  try {
+    const start = turnStart();
+    child.send({ ...envelope, kind: 'initialize', conversationId: start.turn.conversationId,
+      assignment: start.state.assignment, configDirectory } satisfies DaemonProcessMessage);
+    await reach('ready');
+    child.send({ ...envelope, kind: 'start_turn', input: start } satisfies DaemonProcessMessage);
+    await reach('turn_progress');
+    // 親の daemon が先に落ちた後の状況（IPC 切断、その後の SIGTERM）: 誰も SIGKILL しない。親と同じ 5 秒の猶予に 3 秒の余裕を足して待つ。
+    if (trigger === 'SIGTERM') child.kill('SIGTERM');
+    else child.disconnect();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      exitedWithStderr,
+      new Promise<'still running'>((resolve) => { timer = setTimeout(() => { resolve('still running'); }, scaledMs(8_000)); }),
+    ]).finally(() => { clearTimeout(timer); });
+    expect(result).toEqual({ code: 1, signal: null });
+    expect(stderr).toContain('Turn process cleanup timed out');
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); await exit; }
+    await rm(configDirectory, { recursive: true, force: true });
+  }
+}, scaledMs(30_000));

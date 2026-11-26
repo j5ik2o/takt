@@ -2,14 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import type { DaemonBus, TurnRunner } from '../../core/daemon/ports.js';
 import type { TurnIdentity, TurnOutcome, TurnStart } from '../../core/daemon/messages.js';
-import { TURN_PROTOCOL_VERSION, parseDaemonProcessMessage, parseTurnProcessMessage,
+import { TURN_PROTOCOL_VERSION, TURN_SHUTDOWN_GRACE_MS, parseDaemonProcessMessage, parseTurnProcessMessage,
   type DaemonProcessMessage, type DaemonStateReply } from '../../core/daemon/processProtocol.js';
 import { spawnManagedProcess, type ManagedProcess } from '../../shared/utils/spawn.js';
 import { SerialSender } from '../../shared/utils/serialSender.js';
 
 const STARTUP_TIMEOUT_MS = 30_000;
 const INTERRUPT_GRACE_MS = 5_000;
-const SHUTDOWN_GRACE_MS = 5_000;
 const sameTurn = (a: TurnIdentity, b: TurnIdentity): boolean => a.conversationId === b.conversationId
   && a.operationId === b.operationId && a.generation === b.generation;
 
@@ -89,7 +88,7 @@ export function createTurnProcessHost(input: {
         } else if (process.platform !== 'win32') entry.process.child.kill('SIGTERM');
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
-          await Promise.race([entry.exit, new Promise<void>((resolve) => { timer = setTimeout(resolve, SHUTDOWN_GRACE_MS); })]);
+          await Promise.race([entry.exit, new Promise<void>((resolve) => { timer = setTimeout(resolve, TURN_SHUTDOWN_GRACE_MS); })]);
         } finally { clearTimeout(timer); }
       }
       if (!entry.exited) await entry.process.terminate();
