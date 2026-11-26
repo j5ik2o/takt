@@ -13,13 +13,20 @@
 //                  that writes 'Turn process cleanup timed out\n' and calls process.exit(1).
 module turnProcessExitDeadline {
   const DESIGN: str
+  // true: shutdown() aborts the active turn first (processRuntime.ts:71). false is a mutant that
+  // drops the abort, used to check that the model notices a regression there.
+  const ABORTS_ON_SHUTDOWN: bool
 
   // Models TURN_SHUTDOWN_GRACE_MS (5_000 ms in src/core/daemon/processProtocol.ts),
   // shared between parent (turnProcessHost.ts) and child (daemon-turn/index.ts).
   pure val GRACE: int = 2
   pure val MAX_CLOCK: int = 6
 
-  type TurnMode = Idle | Cooperative | IgnoresAbort
+  // Where shutdown() can wait forever (processRuntime.ts:70-78):
+  //   StallTurn  - `await active.completion`: the active turn ignores AbortSignal
+  //   StallClose - `business.close()` never settles
+  //   StallInit  - `await initialization`: createBusiness never settles
+  type StallPoint = StallNone | StallTurn | StallClose | StallInit
   type CleanupState = CleanIdle | Cleaning | CleanupDone | CleanupFailed
   type ExitStatus = Running | ExitedZero | ExitedOne | KilledByParent
   type ParentState = ParentAlive | ParentDead
@@ -27,7 +34,8 @@ module turnProcessExitDeadline {
   type State = {
     // Initial run configuration
     initialized: bool,
-    turnMode: TurnMode,
+    hasTurn: bool,
+    stallAt: StallPoint,
     holdsHandle: bool,
     closeFails: bool,
 
@@ -40,7 +48,6 @@ module turnProcessExitDeadline {
     clock: int,
     cleanup: CleanupState,
     aborted: bool,
-    exitCodeFlag: int,
     inExitAfter: bool,
     exitAfterStartedAt: int,
     exitAfterDeadline: int,
@@ -55,13 +62,29 @@ module turnProcessExitDeadline {
 
   // ---------- functional layer ----------
 
+  // Initial configurations that the real process can be in.
+  pure def validConfig(initDone: bool, turn: bool, stall: StallPoint, closeErr: bool): bool = all {
+    // Before `initialize` there is no business, no turn and nothing to close.
+    initDone or (not(turn) and stall == StallNone and not(closeErr)),
+    // A turn that ignores abort needs an active turn.
+    stall != StallTurn or turn,
+    // While createBusiness is pending, start_turn is rejected and business.close() is not called.
+    stall != StallInit or (not(turn) and not(closeErr)),
+    // close() either hangs or rejects, not both.
+    stall != StallClose or not(closeErr),
+  }
+
   pure def startShutdownState(st: State): State =
     if (st.cleanup != CleanIdle) st
     else {
       ...st,
       cleanup: Cleaning,
-      aborted: st.aborted or (st.turnMode != Idle),
+      aborted: st.aborted or (ABORTS_ON_SHUTDOWN and st.hasTurn),
     }
+
+  // shutdown() cannot settle: it waits on a stall point, or on a cooperative turn that was never aborted.
+  pure def cleanupBlocked(st: State): bool =
+    st.stallAt != StallNone or (st.hasTurn and not(st.aborted))
 
   pure def armExitAfter(st: State, design: str): State = {
     val startedAt = if (st.exitAfterStartedAt == -1) st.clock else st.exitAfterStartedAt
@@ -122,49 +145,51 @@ module turnProcessExitDeadline {
   pure def canCleanupResolve(st: State): bool =
     st.status == Running
       and st.cleanup == Cleaning
-      and st.turnMode != IgnoresAbort
+      and not(cleanupBlocked(st))
       and not(st.closeFails)
       and (not(st.initialized) or st.ipcConnected)
 
   pure def applyCleanupResolve(st: State): State = {
-    val exitStatus = if (st.exitCodeFlag == 1) ExitedOne else ExitedZero
     {
       ...st,
       cleanup: CleanupDone,
       ipcConnected: false,
-      status: exitStatus,
+      status: ExitedZero,
       lastAction: "cleanupResolve",
     }
   }
 
+  // business.close() rejects, or (after disconnect) turn_finished / shutdown_complete cannot be sent.
   pure def canCleanupReject(st: State): bool =
     st.status == Running
       and st.cleanup == Cleaning
-      and st.turnMode != IgnoresAbort
+      and not(cleanupBlocked(st))
       and (st.closeFails or (st.initialized and not(st.ipcConnected)))
 
   pure def applyCleanupReject(st: State): State = {
     {
       ...st,
       cleanup: CleanupFailed,
-      exitCodeFlag: 1,
       ipcConnected: false,
       status: ExitedOne,
       lastAction: "cleanupReject",
     }
   }
 
+  // The event loop empties only when nothing keeps it alive. Microtasks run first, so a cleanup
+  // that can still settle settles before the loop drains; draining needs shutdown() to be stuck.
   pure def canEventLoopDrain(st: State): bool =
     st.status == Running
+      and st.cleanup == Cleaning
+      and cleanupBlocked(st)
       and not(st.ipcConnected)
       and not(st.holdsHandle)
       and not(st.hasRefTimer)
 
   pure def applyEventLoopDrain(st: State): State = {
-    val exitStatus = if (st.exitCodeFlag == 1) ExitedOne else ExitedZero
     {
       ...st,
-      status: exitStatus,
+      status: ExitedZero,
       lastAction: "eventLoopDrain",
     }
   }
@@ -183,6 +208,8 @@ module turnProcessExitDeadline {
     }
   }
 
+  // Discretized: the real parent signals the group GRACE after shutdown, then SIGKILLs it
+  // TERMINATION_GRACE_MS (250 ms) later (spawn.ts). The 250 ms is absorbed into the same tick.
   pure def canParentSigkill(st: State): bool =
     st.status == Running
       and st.parent == ParentAlive
@@ -197,6 +224,8 @@ module turnProcessExitDeadline {
     }
   }
 
+  // Timers fire exactly at their deadline: the clock does not pass a pending deadline.
+  // Invariants 1 and 6 rely on this (the event loop is assumed not to be blocked).
   pure def canTick(st: State): bool =
     st.status == Running
       and st.clock < MAX_CLOCK
@@ -208,10 +237,12 @@ module turnProcessExitDeadline {
 
   // ---------- state machine ----------
 
-  action initWith(initDone: bool, mode: TurnMode, holds: bool, closeErr: bool): bool = all {
+  action initWith(initDone: bool, turn: bool, stall: StallPoint, holds: bool, closeErr: bool): bool = all {
+    validConfig(initDone, turn, stall, closeErr),
     s' = {
       initialized: initDone,
-      turnMode: mode,
+      hasTurn: turn,
+      stallAt: stall,
       holdsHandle: holds,
       closeFails: closeErr,
       parent: ParentAlive,
@@ -220,7 +251,6 @@ module turnProcessExitDeadline {
       clock: 0,
       cleanup: CleanIdle,
       aborted: false,
-      exitCodeFlag: 0,
       inExitAfter: false,
       exitAfterStartedAt: -1,
       exitAfterDeadline: -1,
@@ -234,12 +264,11 @@ module turnProcessExitDeadline {
 
   action init: bool = {
     nondet initDone = Set(true, false).oneOf()
-    nondet mode = Set(Idle, Cooperative, IgnoresAbort).oneOf()
+    nondet turn = Set(true, false).oneOf()
+    nondet stall = Set(StallNone, StallTurn, StallClose, StallInit).oneOf()
     nondet holds = Set(true, false).oneOf()
     nondet closeErr = Set(true, false).oneOf()
-    val validMode = if (initDone) mode else Idle
-    val validCloseErr = if (initDone) closeErr else false
-    initWith(initDone, validMode, holds, validCloseErr)
+    initWith(initDone, turn, stall, holds, closeErr)
   }
 
   action receiveShutdownMsg: bool = all {
@@ -306,9 +335,12 @@ module turnProcessExitDeadline {
   }
 
   // ---------- invariants ----------
+  // 1-3 tell the designs apart. 4 and 5 hold by construction in every design (sanity checks).
+  // 1 and 6 also rest on the canTick premise that timers fire at their deadline.
 
   // 1. Once the grace period after SIGTERM / disconnect passes, the child is never still running
-  //    (even when the parent has died and nobody will send SIGKILL).
+  //    (even when the parent has died and nobody will send SIGKILL). "Child" is the turn process
+  //    itself; descendants left in its process group are not covered.
   val exitsByDeadline: bool =
     (s.exitAfterStartedAt != -1 and s.clock > s.exitAfterStartedAt + GRACE)
       implies s.status != Running
@@ -317,9 +349,10 @@ module turnProcessExitDeadline {
   val noZeroExitWithoutCleanup: bool =
     s.status == ExitedZero implies s.cleanup == CleanupDone
 
-  // 3. A child whose active turn ignores abort never exits with code 0.
-  val abortIgnoringNeverExitsZero: bool =
-    (s.turnMode == IgnoresAbort and s.status != Running) implies s.status != ExitedZero
+  // 3. If shutdown() waits on something that never settles (turn, close() or initialization),
+  //    the child never exits with code 0.
+  val stalledCleanupNeverExitsZero: bool =
+    (s.stallAt != StallNone and s.status != Running) implies s.status != ExitedZero
 
   // 4. Writing the cleanup timeout diagnostic always corresponds to exit code 1.
   val timeoutExitsOne: bool =
@@ -334,14 +367,15 @@ module turnProcessExitDeadline {
     (s.parent == ParentAlive and s.parentShutdownAt != -1 and s.clock > s.parentShutdownAt + GRACE)
       implies s.status != Running
 
-  // 7. Starting cleanup always aborts an active turn.
+  // 7. Starting cleanup always aborts an active turn. The behavioural side (a cooperative turn
+  //    finishes only after abort) is in cleanupBlocked and checked by the noAbort mutant.
   val cleanupAbortsActiveTurn: bool =
-    (s.cleanup != CleanIdle and s.turnMode != Idle) implies s.aborted
+    (s.cleanup != CleanIdle and s.hasTurn) implies s.aborted
 
   val safety: bool = all {
     exitsByDeadline,
     noZeroExitWithoutCleanup,
-    abortIgnoringNeverExitsZero,
+    stalledCleanupNeverExitsZero,
     timeoutExitsOne,
     failedCleanupNeverExitsZero,
     parentAliveBoundedShutdown,
@@ -359,8 +393,18 @@ module turnProcessExitDeadline {
   val wTimeoutAfterDisconnectNoHandle: bool =
     s.status == ExitedOne and s.timedOutMsg and not(s.ipcConnected) and not(s.holdsHandle)
 
+  val wTimeoutCloseHangsNoHandle: bool =
+    s.status == ExitedOne and s.timedOutMsg and s.stallAt == StallClose and not(s.hasTurn)
+      and not(s.ipcConnected) and not(s.holdsHandle)
+
+  val wTimeoutInitHangs: bool =
+    s.status == ExitedOne and s.timedOutMsg and s.stallAt == StallInit
+
   val wCleanExitAfterSigterm: bool =
     s.status == ExitedZero and s.cleanup == CleanupDone and s.inExitAfter
+
+  val wCooperativeTurnCleanExit: bool =
+    s.status == ExitedZero and s.cleanup == CleanupDone and s.hasTurn
 
   val wCleanExitAfterShutdownMsg: bool =
     s.status == ExitedZero and s.cleanup == CleanupDone and not(s.inExitAfter) and s.parentShutdownAt != -1
@@ -379,13 +423,18 @@ module turnProcessExitDeadline {
 }
 
 module before {
-  import turnProcessExitDeadline(DESIGN = "Before").*
+  import turnProcessExitDeadline(DESIGN = "Before", ABORTS_ON_SHUTDOWN = true).*
 }
 
 module unrefTimer {
-  import turnProcessExitDeadline(DESIGN = "UnrefTimer").*
+  import turnProcessExitDeadline(DESIGN = "UnrefTimer", ABORTS_ON_SHUTDOWN = true).*
 }
 
 module fixed {
-  import turnProcessExitDeadline(DESIGN = "Fixed").*
+  import turnProcessExitDeadline(DESIGN = "Fixed", ABORTS_ON_SHUTDOWN = true).*
+}
+
+// Mutant: the fixed exitAfter, but shutdown() forgets to abort the active turn.
+module noAbort {
+  import turnProcessExitDeadline(DESIGN = "Fixed", ABORTS_ON_SHUTDOWN = false).*
 }
