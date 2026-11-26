@@ -53,3 +53,6 @@ eval/.results/
 eval/**/.manager-filter-*.yaml
 .tmp/
 eval/scenarios/phase-awareness/.phase-awareness-*.json
+
+# Apalache output from quint verify
+_apalache-out/

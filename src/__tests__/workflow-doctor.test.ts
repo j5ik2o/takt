@@ -628,6 +628,15 @@ steps:
     await expect(doctorWorkflowCommand([filePath], projectDir)).resolves.toBeUndefined();
   });
 
+  it('does not treat the discovery placeholder of a required workflow_ref param as an unresolved call', async () => {
+    writeWorkflowRefComposer(projectDir);
+
+    await expect(doctorWorkflowCommand(['composer'], projectDir)).resolves.toBeUndefined();
+
+    expect(mockError).not.toHaveBeenCalled();
+    expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('composer.yaml'));
+  });
+
   it('attributes runtime validation errors to the referenced step fragment', async () => {
     const fragmentPath = writeWorkflow(projectDir, '.takt/steps/opencode-review.yaml', `provider: opencode
 instruction: review the implementation
@@ -2507,6 +2516,30 @@ steps:
     expect(mockError).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['enable_builtin_workflows: false\n', 'excluded because enable_builtin_workflows is false'],
+    ['disabled_builtins:\n  - development-core\n', 'excluded because disabled_builtins lists "development-core"'],
+  ])('reports a workflow_call to an excluded builtin as an error (config %j)', async (config, reason) => {
+    writeFileSync(join(process.env.TAKT_CONFIG_DIR!, 'config.yaml'), config, 'utf-8');
+    invalidateAllResolvedConfigCache();
+    writeWorkflow(projectDir, '.takt/workflows/builtin-caller.yaml', `name: builtin-caller
+initial_step: develop
+steps:
+  - name: develop
+    kind: workflow_call
+    call: development-core
+    rules:
+      - condition: COMPLETE
+        next: COMPLETE
+`);
+
+    await expect(doctorWorkflowCommand(['builtin-caller'], projectDir)).rejects.toThrow('Workflow validation failed');
+
+    expect(mockSuccess).not.toHaveBeenCalled();
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining('call: development-core'));
+    expect(mockError).toHaveBeenCalledWith(expect.stringContaining(reason));
+  });
+
   it('rejects named builtin workflow targets when the builtin is individually disabled', async () => {
     writeFileSync(
       join(process.env.TAKT_CONFIG_DIR!, 'config.yaml'),
@@ -2649,7 +2682,7 @@ steps:
           expect.objectContaining({ name: 'parent' }),
           projectDir,
           worktreeDir,
-          { allowPathBasedCalls: false },
+          expect.objectContaining({ allowPathBasedCalls: false }),
         );
       } finally {
         validateContractsSpy.mockRestore();
@@ -2735,7 +2768,7 @@ steps:
         expect.objectContaining({ name: 'parent' }),
         projectDir,
         worktreeDir,
-        { allowPathBasedCalls: false },
+        expect.objectContaining({ allowPathBasedCalls: false }),
       );
     } finally {
       validateContractsSpy.mockRestore();
@@ -2757,5 +2790,71 @@ steps:
     await doctorWorkflowCommand(['named'], projectDir);
 
     expect(mockSuccess).toHaveBeenCalledWith(expect.stringContaining('named.yaml'));
+  });
+});
+
+describe('named workflow lookup explanation agrees with the lookup', () => {
+  // Every combination of the settings that decide whether the builtin is a candidate,
+  // crossed with whether a builtin of that name exists and whether a project copy exists.
+  const enableValues = [undefined, true, false] as const;
+  const listedValues = [false, true] as const;
+  const names = ['development-core', 'no-such-builtin-workflow'] as const;
+  const projectCopyValues = [false, true] as const;
+  const cases = enableValues.flatMap((enable) => listedValues.flatMap((listed) =>
+    names.flatMap((name) => projectCopyValues.map((projectCopy) => ({ enable, listed, name, projectCopy })))));
+
+  let projectDir: string;
+  const previousConfigDir = process.env.TAKT_CONFIG_DIR;
+  beforeEach(() => {
+    projectDir = mkdtempSync(join(tmpdir(), 'takt-lookup-explanation-'));
+    process.env.TAKT_CONFIG_DIR = mkdtempSync(join(tmpdir(), 'takt-lookup-explanation-global-'));
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+  });
+  afterEach(() => {
+    rmSync(projectDir, { recursive: true, force: true });
+    if (process.env.TAKT_CONFIG_DIR) {
+      rmSync(process.env.TAKT_CONFIG_DIR, { recursive: true, force: true });
+    }
+    if (previousConfigDir === undefined) {
+      delete process.env.TAKT_CONFIG_DIR;
+    } else {
+      process.env.TAKT_CONFIG_DIR = previousConfigDir;
+    }
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+  });
+
+  it.each(cases)('enable=$enable listed=$listed name=$name projectCopy=$projectCopy', async ({ enable, listed, name, projectCopy }) => {
+    const { explainNamedWorkflowLookup, findWorkflowInLookupDirs, getNamedWorkflowLookupDirs } = await import(
+      '../infra/config/loaders/workflowLookupDirectories.js'
+    );
+    const config = [
+      ...(enable === undefined ? [] : [`enable_builtin_workflows: ${enable}`]),
+      ...(listed ? ['disabled_builtins:', `  - ${name}`] : []),
+    ].join('\n');
+    writeFileSync(join(process.env.TAKT_CONFIG_DIR!, 'config.yaml'), `${config}\n`, 'utf-8');
+    if (projectCopy) writeWorkflow(projectDir, `.takt/workflows/${name}.yaml`, `name: ${name}\nsteps: []\n`);
+    invalidateGlobalConfigCache();
+    invalidateAllResolvedConfigCache();
+
+    const { searched, excluded } = explainNamedWorkflowLookup(name, projectDir);
+    const match = findWorkflowInLookupDirs(name, getNamedWorkflowLookupDirs(projectDir));
+    const builtinIsCandidate = enable !== false && !listed;
+
+    // The builtin is either searched or excluded with its reason, never both and never neither.
+    expect(searched.some((line) => line.startsWith('builtin: '))).toBe(builtinIsCandidate);
+    expect(excluded).toHaveLength(builtinIsCandidate ? 0 : 1);
+    if (!builtinIsCandidate) {
+      expect(excluded[0]).toContain(enable === false
+        ? 'excluded because enable_builtin_workflows is false'
+        : `excluded because disabled_builtins lists "${name}"`);
+    }
+    // Project and user candidates are always listed, in lookup order.
+    expect(searched[0]).toContain(join(projectDir, '.takt', 'workflows', `${name}.yaml`));
+    expect(searched[1]).toMatch(/^user: /);
+    // The explanation describes the lookup that actually ran.
+    const expectedSource = projectCopy ? 'project' : builtinIsCandidate && name === 'development-core' ? 'builtin' : undefined;
+    expect(match?.source).toBe(expectedSource);
   });
 });
