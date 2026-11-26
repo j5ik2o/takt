@@ -402,6 +402,7 @@
     "src/__tests__/it-daemon-worktree-run-log.test.ts",
     "src/__tests__/it-declared-report-inputs.test.ts",
     "src/__tests__/it-edit-false-readonly.test.ts",
+    "src/__tests__/it-enqueue-lock-release-after-write.test.ts",
     "src/__tests__/it-failed-retry-order-revision-worktree.test.ts",
     "src/__tests__/it-goal-content-inclusion.test.ts",
     "src/__tests__/it-goal-deletion.test.ts",

@@ -3,7 +3,8 @@
  *
  * A test arms faults with `armAfterWrite`. They start when tasks.yaml is next published (its rename),
  * that is, after the write and before the two locks around it are released. Each armed fault then
- * fails its operation `times` times (`Infinity` keeps failing until `heal`).
+ * fails its operation `times` times (`Infinity` keeps failing until `heal`). `armAfterGoalWrite` arms
+ * the `goal-json-*` faults the same way on the next publication of a goal.json (`GoalStore.update`).
  *
  * Use it from a `vi.mock('node:fs', ...)` factory, with the state made by `vi.hoisted`:
  *
@@ -23,7 +24,9 @@ export type LockReleaseFault =
   | 'tasks-open-EACCES'
   | 'tasks-read-EIO'
   | 'goal-unlink-EIO'
-  | 'goal-ownership';
+  | 'goal-ownership'
+  | 'goal-json-unlink-EIO'
+  | 'goal-json-read-EIO';
 
 /** Every way a release can fail after the write, as listed in PBT 1 of the design. */
 export const LOCK_RELEASE_FAULTS: readonly LockReleaseFault[] = [
@@ -42,6 +45,8 @@ export interface LockReleaseFaultState {
   failingReads: Set<number>;
   /** Fails taking tasks.yaml.lock itself (EACCES on its temporary file): a failure before the write. */
   failAcquisition?: boolean;
+  /** Which publication starts the armed faults; tasks.yaml unless `armAfterGoalWrite` set it. */
+  armedOn?: 'tasks.yaml' | 'goal.json';
 }
 
 /** A PID no process has: the goal-execution.lock that replaces this process's lock is recovered as dead. */
@@ -54,6 +59,14 @@ export function emptyLockReleaseFaults(): LockReleaseFaultState {
 export function armAfterWrite(state: LockReleaseFaultState, faults: readonly LockReleaseFault[], times = 1): void {
   state.armed = [...faults];
   state.times = times;
+  state.armedOn = 'tasks.yaml';
+}
+
+/** Arms faults of goal.json.lock that start once a goal.json is saved (#169, PR #182 Devin). */
+export function armAfterGoalWrite(state: LockReleaseFaultState, faults: readonly LockReleaseFault[], times = 1): void {
+  state.armed = [...faults];
+  state.times = times;
+  state.armedOn = 'goal.json';
 }
 
 export function healLockReleaseFaults(state: LockReleaseFaultState): void {
@@ -61,17 +74,25 @@ export function healLockReleaseFaults(state: LockReleaseFaultState): void {
   state.active.clear();
   state.failingReads.clear();
   state.failAcquisition = false;
+  state.armedOn = 'tasks.yaml';
 }
 
 function fsError(code: string, syscall: string, path: unknown): NodeJS.ErrnoException {
   return Object.assign(new Error(`${code}: injected failure, ${syscall} '${String(path)}'`), { code, syscall });
 }
 
-function lockOf(path: unknown): 'tasks' | 'goal' | undefined {
+function lockOf(path: unknown): 'tasks' | 'goal' | 'goal-json' | undefined {
   const value = String(path);
   if (value.endsWith(`${sep}.takt${sep}tasks.yaml.lock`)) return 'tasks';
   if (value.endsWith(`${sep}.takt${sep}goal-execution.lock`)) return 'goal';
+  if (value.endsWith(`${sep}goal.json.lock`)) return 'goal-json';
   return undefined;
+}
+
+function isArmedPublication(state: LockReleaseFaultState, to: unknown): boolean {
+  return (state.armedOn ?? 'tasks.yaml') === 'goal.json'
+    ? String(to).endsWith(`${sep}goal.json`)
+    : String(to).endsWith(`${sep}.takt${sep}tasks.yaml`);
 }
 
 export function withLockReleaseFaults(actual: typeof Fs, state: LockReleaseFaultState): typeof Fs {
@@ -84,7 +105,7 @@ export function withLockReleaseFaults(actual: typeof Fs, state: LockReleaseFault
   const renameSync = (...args: Parameters<typeof Fs.renameSync>): void => {
     actual.renameSync(...args);
     const [, to] = args;
-    if (!String(to).endsWith(`${sep}.takt${sep}tasks.yaml`) || state.armed.length === 0) return;
+    if (!isArmedPublication(state, to) || state.armed.length === 0) return;
     for (const fault of state.armed.splice(0)) {
       if (fault === 'goal-ownership') {
         // Another holder replaced goal-execution.lock: release finds its ownership changed.
@@ -104,6 +125,7 @@ export function withLockReleaseFaults(actual: typeof Fs, state: LockReleaseFault
       if (take('tasks-unlink-EACCES')) throw fsError('EACCES', 'unlink', path);
     }
     if (lock === 'goal' && take('goal-unlink-EIO')) throw fsError('EIO', 'unlink', path);
+    if (lock === 'goal-json' && take('goal-json-unlink-EIO')) throw fsError('EIO', 'unlink', path);
     actual.unlinkSync(...args);
   };
   const openSync = (...args: Parameters<typeof Fs.openSync>): number => {
@@ -111,10 +133,11 @@ export function withLockReleaseFaults(actual: typeof Fs, state: LockReleaseFault
     if (state.failAcquisition === true && flags === 'wx' && /tasks\.yaml\.lock\..+\.tmp$/.test(String(path))) {
       throw fsError('EACCES', 'open', path);
     }
-    if (lockOf(path) !== 'tasks' || flags !== 'r') return actual.openSync(...args);
-    if (take('tasks-open-EACCES')) throw fsError('EACCES', 'open', path);
+    const lock = lockOf(path);
+    if ((lock !== 'tasks' && lock !== 'goal-json') || flags !== 'r') return actual.openSync(...args);
+    if (lock === 'tasks' && take('tasks-open-EACCES')) throw fsError('EACCES', 'open', path);
     const descriptor = actual.openSync(...args);
-    if (take('tasks-read-EIO')) state.failingReads.add(descriptor);
+    if (take(lock === 'tasks' ? 'tasks-read-EIO' : 'goal-json-read-EIO')) state.failingReads.add(descriptor);
     return descriptor;
   };
   const readFileSync = ((...args: unknown[]): unknown => {

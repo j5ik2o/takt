@@ -430,6 +430,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-cli-entrypoint-required-option-errors.test.ts',
   'src/__tests__/it-daemon-projects.test.ts',
   'src/__tests__/it-declared-report-inputs.test.ts',
+  'src/__tests__/it-enqueue-lock-release-after-write.test.ts',
   'src/__tests__/it-goal-task-claim.test.ts',
   'src/__tests__/it-goal-task-stop.test.ts',
   'src/__tests__/it-handoff-progress.test.ts',

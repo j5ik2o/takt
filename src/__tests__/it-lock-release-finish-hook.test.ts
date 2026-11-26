@@ -18,7 +18,15 @@ import type { LockReleaseFaultState } from './helpers/lock-release-faults.js';
 const faults = vi.hoisted(() => ({ armed: [], times: 1, active: new Map(), failingReads: new Set() }) as LockReleaseFaultState);
 vi.mock('node:fs', async (original) => (await import('./helpers/lock-release-faults.js'))
   .withLockReleaseFaults(await original<typeof import('node:fs')>(), faults));
-vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: vi.fn() }));
+const managerEvents = vi.hoisted(() => ({ save: vi.fn(), deleteGoal: vi.fn() }));
+vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: managerEvents.save, deleteGoalEvents: managerEvents.deleteGoal }));
+const managerStart = vi.hoisted(() => ({ daemon: vi.fn(), run: vi.fn() }));
+vi.mock('../features/daemon/lifecycle.js', async (original) => ({
+  ...await original<typeof import('../features/daemon/lifecycle.js')>(), ensureDaemon: managerStart.daemon,
+}));
+vi.mock('../features/manager/autoRun.js', async (original) => ({
+  ...await original<typeof import('../features/manager/autoRun.js')>(), ensureManagerRun: managerStart.run,
+}));
 const { executeRunTaskAndComplete } = vi.hoisted(() => ({ executeRunTaskAndComplete: vi.fn() }));
 vi.mock('../features/tasks/execute/providerPreflight.js', () => ({
   checkPendingTaskProviders: vi.fn(async () => undefined),
@@ -33,11 +41,12 @@ vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({
 vi.mock('../features/tasks/execute/inputWait.js', () => ({ isInputWaiting: vi.fn(() => false) }));
 
 import { invalidatePendingGoalTasksWithFinishHook } from '../features/tasks/execute/taskFinishHook.js';
+import { abortTaktGoal, resumeTaktGoal } from '../features/mcp/goalExecutionOperations.js';
 import { runWithWorkerPool } from '../features/tasks/execute/parallelExecution.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { invalidateAllResolvedConfigCache } from '../infra/config/index.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
-import { armAfterWrite, healLockReleaseFaults, LOCK_RELEASE_FAULTS } from './helpers/lock-release-faults.js';
+import { armAfterGoalWrite, armAfterWrite, healLockReleaseFaults, LOCK_RELEASE_FAULTS, type LockReleaseFault } from './helpers/lock-release-faults.js';
 
 // Devin (PR #182): limits this test owns follow TEST_TIME_FACTOR, as CONTRIBUTING.md asks.
 const HOOK_TEST_TIMEOUT_MS = scaledMs(30_000);
@@ -86,6 +95,10 @@ function statuses(project: Project): Record<string, string> {
 
 beforeEach(() => {
   healLockReleaseFaults(faults);
+  managerEvents.save.mockReset();
+  managerEvents.deleteGoal.mockReset();
+  managerStart.daemon.mockReset().mockResolvedValue(undefined);
+  managerStart.run.mockReset().mockResolvedValue(undefined);
   executeRunTaskAndComplete.mockReset().mockResolvedValue(true);
   vi.spyOn(console, 'log').mockImplementation(() => {});
 });
@@ -144,5 +157,48 @@ describe('claiming through the worker pool when a lock release fails after the w
     expect(project.warnings.filter((warning) => warning.includes('releasing a lock afterwards failed'))).toHaveLength(1);
     expect(executeRunTaskAndComplete).not.toHaveBeenCalled();
     expect(statuses(project)).toMatchObject({ [broken.name]: 'failed' });
+  }, HOOK_TEST_TIMEOUT_MS);
+});
+
+// PR #182 Devin (file-lock.ts:245): GoalStore.update saves goal.json under goal.json.lock. When that
+// release fails after the save, the change has happened, and an abort cannot be called again (the
+// goal is aborted already), so the steps after the save must still run before the error is thrown.
+describe('changing a goal through MCP when the goal.json.lock release fails after the save', () => {
+  const goalFaults: readonly LockReleaseFault[] = ['goal-json-unlink-EIO', 'goal-json-read-EIO'];
+  const signal = new AbortController().signal;
+
+  function savedGoal(project: Project): { executionStatus: string } {
+    return JSON.parse(fs.readFileSync(path.join(project.dir, '.takt', 'goals', goalId, 'goal.json'), 'utf-8')) as { executionStatus: string };
+  }
+
+  it.each(goalFaults)('abort fails the pending goal tasks, calls their hook, then returns an error: %s', async (fault) => {
+    const project = createProject();
+    const first = project.runner.addTask('Goal work 1', { workflow: 'default', goal_id: goalId });
+    const second = project.runner.addTask('Goal work 2', { workflow: 'default', goal_id: goalId });
+    const unrelated = project.runner.addTask('Other work', { workflow: 'default' });
+    armAfterGoalWrite(faults, [fault]);
+
+    const result = await abortTaktGoal({ cwd: project.dir, goalId, reason: '中止します' }, { allowedProjectRoot: project.dir }, signal);
+
+    expect(result.isError).toBe(true);
+    expect(savedGoal(project).executionStatus).toBe('aborted');
+    expect(managerEvents.deleteGoal).toHaveBeenCalledWith(project.dir, goalId);
+    expect(statuses(project)).toMatchObject({ [first.name]: 'failed', [second.name]: 'failed', [unrelated.name]: 'pending' });
+    const calls = hookCalls(project);
+    expect(calls.map((call) => call.TAKT_FINISH_TASK_NAME).sort()).toEqual([first.name, second.name].sort());
+    expect(calls.every((call) => call.TAKT_FINISH_STATUS === 'failed' && call.TAKT_FINISH_GOAL_ID === goalId)).toBe(true);
+  }, HOOK_TEST_TIMEOUT_MS);
+
+  it.each(goalFaults)('resume saves the resumed event and starts the manager, then returns an error: %s', async (fault) => {
+    const project = createProject();
+    fs.writeFileSync(path.join(project.dir, '.takt', 'goals', goalId, 'goal.json'), JSON.stringify({ ...goalRecord(), executionStatus: 'paused' }));
+    armAfterGoalWrite(faults, [fault]);
+
+    const result = await resumeTaktGoal({ cwd: project.dir, goalId }, { allowedProjectRoot: project.dir }, signal);
+
+    expect(result.isError).toBe(true);
+    expect(savedGoal(project).executionStatus).toBe('active');
+    expect(managerEvents.save).toHaveBeenCalledExactlyOnceWith(project.dir, expect.objectContaining({ kind: 'resumed', goalId }));
+    expect(managerStart.run).toHaveBeenCalledExactlyOnceWith(project.dir);
   }, HOOK_TEST_TIMEOUT_MS);
 });

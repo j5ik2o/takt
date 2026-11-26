@@ -23,12 +23,12 @@ let stat: fs.Stats;
 let temporaryContent: string | undefined;
 let temporaryStat: fs.Stats;
 // Faults on the lock file itself (#169). `reads` is consumed one entry per read of the lock file
-// (an open for reading, then the read): 'open' fails the open with EACCES, 'read' fails the read
-// with EIO, 'ok' lets it through. Once `reads` is empty, `readForever` applies to every read.
+// (an open for reading, then the read): 'open' fails the open with EACCES, 'openEIO' fails the open
+// with EIO, 'read' fails the read with EIO, 'ok' lets it through. Once `reads` is empty, `readForever` applies to every read.
 const faults = {
   unlink: 0,
   unlinkCode: 'EIO',
-  reads: [] as ('open' | 'read' | 'ok')[],
+  reads: [] as ('open' | 'openEIO' | 'read' | 'ok')[],
   readForever: undefined as 'open' | 'read' | undefined,
   pendingRead: false,
 };
@@ -58,6 +58,7 @@ beforeEach(() => {
     }
     const read = faults.reads.shift() ?? faults.readForever ?? 'ok';
     if (read === 'open') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    if (read === 'openEIO') throw Object.assign(new Error('i/o error, open'), { code: 'EIO' });
     faults.pendingRead = read === 'read';
     return 42;
   });
@@ -383,6 +384,21 @@ describe('a lock this process failed to release (#169)', () => {
 
     expect(next).toHaveBeenCalledOnce();
     expect(Date.now() - started).toBeLessThan(1_000);
+    expect(content).toBeUndefined();
+  });
+
+  // CodeRabbit (PR #182): an EIO on opening the recorded file is a failed read like EACCES, so one
+  // failed open must not throw out of the acquisition (再レビュー 中-B, design 3-1).
+  it('keeps waiting when opening its recorded file fails once with EIO, then removes it and runs the action once', () => {
+    failRelease();
+    faults.reads = ['openEIO'];
+    const before = waits();
+    const next = vi.fn(() => 'next');
+
+    expect(withFileLock(lockPath, next, { timeoutMs: 1_000 })).toBe('next');
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(waits()).toBeGreaterThan(before);
     expect(content).toBeUndefined();
   });
 
