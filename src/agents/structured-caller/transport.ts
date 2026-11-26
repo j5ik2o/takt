@@ -8,7 +8,12 @@ import {
   providerSupportsStructuredOutput,
 } from '../../infra/providers/provider-capabilities.js';
 import { buildStructuredJsonSchemaInstruction } from '../../shared/prompts/index.js';
-import { createAgentResponseFailureError } from '../../shared/types/agent-failure.js';
+import {
+  AGENT_FAILURE_CATEGORIES,
+  AgentFailureError,
+  createAgentResponseFailureError,
+  type AgentFailureResponseLike,
+} from '../../shared/types/agent-failure.js';
 import type { ProviderType } from '../../shared/types/provider.js';
 import type { RunAgentOptions } from '../runner.js';
 import { executeAgent } from '../agent-usecases.js';
@@ -82,6 +87,33 @@ export class StructuredAgentContractError extends StructuredAgentResponseError {
     super(message, response, options);
     this.name = 'StructuredAgentContractError';
   }
+}
+
+/**
+ * The provider parsed the output and rejected it against the schema. It stays the provider_error
+ * failure it was before the rejected output was kept, so every caller stops as it did. Only the
+ * selectors read the rejected output; it is not enumerable, so logging or serializing the error
+ * does not print it.
+ */
+export class StructuredOutputRejectedError extends AgentFailureError {
+  declare readonly rejectedStructuredOutput: Record<string, unknown>;
+
+  constructor(response: AgentFailureResponseLike, rejectedStructuredOutput: Record<string, unknown>) {
+    super({
+      category: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR,
+      reason: response.error || response.content || response.status,
+    });
+    Object.defineProperty(this, 'rejectedStructuredOutput', { value: rejectedStructuredOutput, enumerable: false });
+  }
+}
+
+function isRejectedProviderError(response: AgentResponse): response is AgentResponse & {
+  rejectedStructuredOutput: Record<string, unknown>;
+} {
+  return response.status !== 'rate_limited'
+    && response.rejectedStructuredOutput !== undefined
+    && (response.failureCategory === undefined
+      || response.failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR);
 }
 
 export function requireStructuredAgentProvider(
@@ -200,11 +232,8 @@ export async function executeStructuredAgent<T extends Record<string, unknown>>(
   );
 
   if (response.status !== 'done') {
-    if (response.rejectedStructuredOutput !== undefined) {
-      throw new StructuredAgentContractError(
-        response.error || 'Structured output validation failed',
-        { ...response, structuredOutput: response.rejectedStructuredOutput },
-      );
+    if (isRejectedProviderError(response)) {
+      throw new StructuredOutputRejectedError(response, response.rejectedStructuredOutput);
     }
     if (response.failureCategory !== undefined) {
       throw createAgentResponseFailureError(response, `Structured agent "${options.name}" did not complete`);

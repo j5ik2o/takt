@@ -3,7 +3,10 @@ import { projectNativeStructuredOutputSchema } from '../models/native-structured
 import { getErrorMessage } from '../../shared/utils/index.js';
 import { truncateUtf8 } from '../../shared/utils/utf8.js';
 import { parseStructuredOutputObject } from '../../agents/structured-caller/shared.js';
-import { StructuredAgentContractError } from '../../agents/structured-caller/transport.js';
+import {
+  StructuredAgentContractError,
+  StructuredOutputRejectedError,
+} from '../../agents/structured-caller/transport.js';
 import { validateStructuredOutputAgainstSchema } from './engine/structured-output-schema-validator.js';
 
 export interface SelectorCandidate {
@@ -59,9 +62,18 @@ export function createSelectorContract(
 
 type Redact = (text: string) => string;
 
-/** Redacts each string before encoding: an escaped or shortened secret no longer matches its known value. */
+function redactJson(value: unknown, redact: Redact): unknown {
+  if (typeof value === 'string') return redact(value);
+  if (Array.isArray(value)) return value.map((item) => redactJson(item, redact));
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [redact(key), redactJson(item, redact)]));
+  }
+  return value;
+}
+
+/** Redacts each string and key before encoding: an escaped or shortened secret no longer matches its known value. */
 function renderIds(ids: unknown, redact: Redact): string {
-  return JSON.stringify(ids, (_key, value: unknown) => (typeof value === 'string' ? redact(value) : value));
+  return JSON.stringify(redactJson(ids, redact));
 }
 
 function renderReturnedIds(returned: unknown, redact: Redact): string {
@@ -96,8 +108,8 @@ function rejectedStructuredOutput(response: AgentResponse): Record<string, unkno
 }
 
 /**
- * The transport rejects an out-of-contract selection before `validateSelectorResponse` runs,
- * so its error names neither the selector nor the candidates.
+ * The transport, or the provider itself, rejects an out-of-contract selection before
+ * `validateSelectorResponse` runs, so its error names neither the selector nor the candidates.
  */
 export function describeSelectorError(
   error: unknown,
@@ -106,6 +118,16 @@ export function describeSelectorError(
   redact: Redact,
   label: SelectorResponseLabel,
 ): string {
+  if (error instanceof StructuredOutputRejectedError) {
+    return invalidSelectorOutputMessage(
+      error.message,
+      error.rejectedStructuredOutput,
+      contract,
+      stepName,
+      redact,
+      label,
+    );
+  }
   return error instanceof StructuredAgentContractError
     ? invalidSelectorOutputMessage(
       error.message,
