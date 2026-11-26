@@ -30,6 +30,8 @@ export interface CycleCheckResult {
 export class CycleDetector {
   /** Step execution history (names in order) */
   private history: string[] = [];
+  /** Engine-wide completed visit count per step (preserved across reset()) */
+  private readonly completedCounts = new Map<string, number>();
   private monitors: LoopMonitorConfig[];
 
   constructor(monitors: LoopMonitorConfig[] = []) {
@@ -40,10 +42,11 @@ export class CycleDetector {
    * Record a step completion and check if any cycle threshold is reached.
    *
    * The detection logic works as follows:
-   * 1. The step name is appended to the history
+   * 1. The step name is appended to the history and its completed count increments
    * 2. For each monitor whose first step is the proposed next step, we check
    *    if the cycle pattern has been completed by looking at the tail of the
-   *    history
+   *    history (and, if configured, that the cycle's last step has reached
+   *    `minTriggerVisits` completions in this engine run)
    * 3. A cycle is "completed" when the last N entries in history match
    *    the cycle pattern repeated `threshold` times
    *
@@ -53,6 +56,7 @@ export class CycleDetector {
    */
   recordAndCheck(stepName: string, nextStep: string): CycleCheckResult {
     this.history.push(stepName);
+    this.completedCounts.set(stepName, (this.completedCounts.get(stepName) ?? 0) + 1);
 
     for (const monitor of this.monitors) {
       const result = this.checkMonitor(monitor, nextStep);
@@ -87,8 +91,15 @@ export class CycleDetector {
     }
 
     // The cycle's last step must match the most recent step
-    const lastStep = cycle[cycleLen - 1];
+    const lastStep = cycle[cycleLen - 1]!;
     if (relevantHistory[relevantHistory.length - 1] !== lastStep) {
+      return { triggered: false, cycleCount: 0 };
+    }
+
+    if (
+      monitor.minTriggerVisits !== undefined
+      && (this.completedCounts.get(lastStep) ?? 0) < monitor.minTriggerVisits
+    ) {
       return { triggered: false, cycleCount: 0 };
     }
 

@@ -8,6 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Step-level `max_visits` and `stop_on_repeated_verdict` stop laps that make no progress (#164). The builtin development workflows set `max_visits: 4` on `replan`, `fix-replan`, and `verification-replan`.
+- `loop_monitors[].min_trigger_visits` delays a monitor until the last step of its cycle has completed that many visits in the run. `development-core` sets it to 2 on the `[replan, peer-review]` monitor, so the judge no longer fires on the first independent review.
+
+### Changed
+
+- A visit limit wins over loop monitors: when the next step has already reached its `max_visits`, the run aborts with `Visit limit reached` without running a loop-monitor judge, even when a judge rule would route elsewhere.
+
+### Fixed
+
+- `stop_on_repeated_verdict` no longer stops when a `system` step's `wait.on_timeout` sits between two equal verdicts.
+
 ## [0.77.0] - 2026-11-24
 
 ### Added

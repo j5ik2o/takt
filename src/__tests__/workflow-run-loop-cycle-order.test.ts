@@ -110,4 +110,27 @@ describe('WorkflowRunLoop loop monitor ordering', () => {
       nextStep: 'COMPLETE',
     });
   });
+
+  it('skips loop monitor checks and judge when nextStep has already reached max_visits', async () => {
+    const deps = makeDeps('reviewers');
+    const limitReason = 'Visit limit reached: step "reviewers" already completed 1 times (max_visits: 1); stopping instead of another lap.';
+    let completed = false;
+    deps.stepVisitRecordCompletion = () => {
+      completed = true;
+      return undefined;
+    };
+    deps.stepVisitCheckEntry = () => (completed ? limitReason : undefined);
+
+    const result = await runWorkflowToCompletion(deps);
+
+    expect(result.state.status).toBe('aborted');
+    expect(result.abort?.kind).toBe('loop_detected');
+    expect(result.abort?.reason).toBe(limitReason);
+    expect(deps.cycleDetectorRecordAndCheck).not.toHaveBeenCalled();
+    expect(deps.runLoopMonitorJudge).not.toHaveBeenCalled();
+    expect(deps.commitTransition).toHaveBeenCalledWith({
+      kind: 'next_step',
+      nextStep: 'reviewers',
+    });
+  });
 });

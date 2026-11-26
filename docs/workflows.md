@@ -1111,6 +1111,8 @@ loop_monitors:
 
 `ignore_steps` excludes intermediate steps from cycle matching. Use it when a logical cycle has optional verification or retry steps; an ignored step cannot also appear in `cycle`.
 
+`min_trigger_visits` (optional positive integer) delays a monitor until the last step of its `cycle` has completed that many visits in this workflow engine run. A completed visit is one that ended in a non-terminal transition; retries of the same visit do not count. The count is not cleared when a judge runs, starts from zero in each subworkflow call, and starts from zero when a run is resumed. TAKT versions that predate this key ignore it.
+
 `loop_monitors.judge` does not accept provider, model, or provider-options settings. It uses the
 runtime target `provider.targets.internal_agents.loop-judge` when configured, otherwise the normal
 runtime routing and triggering-step fallback.
@@ -1136,9 +1138,10 @@ steps:
 - `stop_on_repeated_verdict` compares only which rule matched, not the reason in the output. It aborts when the step matches the same rule as on its previous visit and that rule is not terminal (a transition back to the same step counts too). Terminal results (`COMPLETE`, `ABORT`, `return`) are never compared. When the reason matters, use a `loop_monitors` judge instead.
 - The stop reason is a single line in the run's abort reason (`meta.json` `reason` and the `workflow_abort` log entry).
 - `max_visits` can be changed without editing the workflow: `workflow_overrides.steps.<step>.max_visits` in `.takt/config.yaml` (project) or `~/.takt/config.yaml` (global) replaces the YAML value; project wins over global. An override cannot remove the limit; set a larger number instead. Parallel sub-steps do not take `max_visits`.
+- A visit limit wins over `loop_monitors`. When the next step has already reached its `max_visits`, the run aborts with `Visit limit reached` before any loop monitor is checked, so no judge runs and a judge rule that would route elsewhere (for example to an `escalate` step) is not used. Below the limit, judges behave as before.
 - TAKT versions that predate these keys ignore them, and saving the config with such a version drops `max_visits`.
 
-The builtin development workflows set `max_visits: 4` on `replan`, `fix-replan`, and `verification-replan`. In `development-core`, the `[replan, peer-review]` loop monitor ignores `implement` and has `threshold: 1` (the first review comes from `plan`, so the second consecutive replan request completes 1 `[replan, peer-review]` cycle): when the independent review asks for a replan twice in a row, the judge compares the last two review results and stops only when the same findings repeat without a new diff. In a week of measured runs, successful runs entered a replan step at most 2 times per run and failed runs at most 4 times; every long failed run ended with the independent review returning BLOCKED twice in a row.
+The builtin development workflows set `max_visits: 4` on `replan`, `fix-replan`, and `verification-replan`. In `development-core`, the `[replan, peer-review]` loop monitor ignores `implement` and has `threshold: 1` and `min_trigger_visits: 2`: the judge runs only after `peer-review` has completed twice in this run, whichever step the run started or resumed from, and whether or not `implement` went straight to `replan`. When the independent review asks for a replan again, the judge compares the last two review results and stops only when the same findings repeat without a new diff. In a week of measured runs, successful runs entered a replan step at most 2 times per run and failed runs at most 4 times; every long failed run ended with the independent review returning BLOCKED twice in a row.
 
 ### `subworkflow`
 

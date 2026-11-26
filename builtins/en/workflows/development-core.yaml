@@ -195,15 +195,17 @@ loop_monitors:
         - condition: No feasible remedy exists that satisfies the requirements
           next: ABORT
   # The replan → implement → peer-review → replan lap passes through implement, so ignore it when counting.
-  # The first peer-review comes from plan (0 [replan, peer-review] cycles). When peer-review asks for a replan
-  # a second time in a row, [replan, peer-review] reaches 1 cycle (threshold: 1) and the judge compares the last
-  # two review results, stopping when the same findings repeat without a new diff.
+  # With min_trigger_visits: 2, the judge does not run until peer-review has completed twice in this run,
+  # whichever step the run started or resumed from and whether or not implement went straight to replan.
+  # From the 2nd peer-review completion on, [replan, peer-review] reaches 1 cycle (threshold: 1) and the judge
+  # compares the last two review results, stopping when the same findings repeat without a new diff.
   - cycle:
       - replan
       - peer-review
     ignore_steps:
       - implement
     threshold: 1
+    min_trigger_visits: 2
     judge:
       input_reports:
         - from_step: replan

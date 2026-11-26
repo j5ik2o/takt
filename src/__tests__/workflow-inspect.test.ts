@@ -2548,4 +2548,42 @@ steps:
     expect(output).toContain('default-step');
     expect(output).not.toContain('other-step');
   });
+
+  it('loop_monitors の min_trigger_visits を表示する', async () => {
+    const workflowPath = writeFile(projectDir, '.takt/workflows/min-trigger-inspect.yaml', `name: min-trigger-inspect
+initial_step: a
+max_steps: 5
+loop_monitors:
+  - cycle: [a, b]
+    threshold: 1
+    min_trigger_visits: 2
+    judge:
+      instruction: judge loop
+      rules:
+        - condition: healthy
+          next: a
+        - condition: stop
+          next: ABORT
+steps:
+  - name: a
+    instruction: step a
+    rules:
+      - condition: next
+        next: b
+  - name: b
+    instruction: step b
+    rules:
+      - condition: back
+        next: a
+      - condition: done
+        next: COMPLETE
+`);
+
+    await expect(inspectWorkflowCommand(workflowPath, projectDir)).resolves.toBeUndefined();
+
+    const output = renderedOutput();
+    const loopMonitorBlock = output.slice(output.indexOf('loopMonitors:'));
+    expectField(loopMonitorBlock, 'threshold', '1');
+    expectField(loopMonitorBlock, 'minTriggerVisits', '2');
+  });
 });

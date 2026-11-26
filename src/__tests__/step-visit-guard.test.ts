@@ -86,6 +86,16 @@ describe('StepLoopGuard stop_on_repeated_verdict', () => {
     expect(guard.recordCompletion(target, undefined)).toBeUndefined();
     expect(complete(guard, plain, [0, 0, 0])).toEqual([undefined, undefined, undefined]);
   });
+
+  it('clears the previous verdict on a rule-less non-terminal completion (e.g. wait.on_timeout) while still counting visits', () => {
+    const guard = new StepLoopGuard();
+    const target = step({ maxVisits: 3, stopOnRepeatedVerdict: true });
+
+    expect(guard.recordCompletion(target, 0)).toBeUndefined();
+    expect(guard.recordCompletion(target, undefined)).toBeUndefined();
+    expect(guard.recordCompletion(target, 0)).toBeUndefined();
+    expect(guard.checkEntry(target)).toMatch(/already completed 3 times \(max_visits: 3\)/);
+  });
 });
 
 describe('step schema lower bounds', () => {

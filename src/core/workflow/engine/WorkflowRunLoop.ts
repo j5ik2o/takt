@@ -1211,22 +1211,24 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
         break;
       }
 
-      const cycleCheck = deps.cycleDetectorRecordAndCheck(step.name, nextStep);
-      if (cycleCheck.triggered && cycleCheck.monitor) {
-        log.info('Loop monitor cycle threshold reached', {
-          cycle: cycleCheck.monitor.cycle,
-          cycleCount: cycleCheck.cycleCount,
-          threshold: cycleCheck.monitor.threshold,
-        });
-        if (observabilityEnabled) {
-          recordWorkflowCycleDetectedMetric({
-            runId: deps.options.observabilityRunId,
-            workflowName: deps.getWorkflowName(),
-            stepName: step.name,
+      if (deps.stepVisitCheckEntry(deps.getStep(nextStep)) === undefined) {
+        const cycleCheck = deps.cycleDetectorRecordAndCheck(step.name, nextStep);
+        if (cycleCheck.triggered && cycleCheck.monitor) {
+          log.info('Loop monitor cycle threshold reached', {
+            cycle: cycleCheck.monitor.cycle,
+            cycleCount: cycleCheck.cycleCount,
+            threshold: cycleCheck.monitor.threshold,
           });
+          if (observabilityEnabled) {
+            recordWorkflowCycleDetectedMetric({
+              runId: deps.options.observabilityRunId,
+              workflowName: deps.getWorkflowName(),
+              stepName: step.name,
+            });
+          }
+          deps.emit('step:cycle_detected', cycleCheck.monitor, cycleCheck.cycleCount);
+          nextStep = await deps.runLoopMonitorJudge(cycleCheck.monitor, cycleCheck.cycleCount, step, stepRuntime, nextStep);
         }
-        deps.emit('step:cycle_detected', cycleCheck.monitor, cycleCheck.cycleCount);
-        nextStep = await deps.runLoopMonitorJudge(cycleCheck.monitor, cycleCheck.cycleCount, step, stepRuntime, nextStep);
       }
 
       const monitoredTerminal = handleTerminalTransition(deps, nextStep);
