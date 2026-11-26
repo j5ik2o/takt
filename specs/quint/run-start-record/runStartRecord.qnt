@@ -229,7 +229,8 @@ module runStartRecord {
     reasonHasLookup: false,
   }
 
-  // Execution failure/abort in finally: activeRun.finish writes status=failed + workflow_abort.
+  // Execution failure in finally: activeRun.finish writes status=failed + workflow_abort
+  // (user-initiated abort -> status=aborted is out of scope).
   pure def applyFinishFailure(r: RunRecord): RunRecord = {
     ...r,
     phase: Exited,
@@ -514,12 +515,13 @@ module runStartRecord {
       r.phase == Exited implies r.meta != MetaRunning
     })
 
-  // 5. beginRun only reserves an empty directory; meta.json and logs are not created yet.
+  // 5. beginRun only reserves an empty directory; meta.json, logs, and reports/ are not created yet.
   val beginRunLeavesNoRecordYet: bool =
     RUN_IDS.forall(id => {
       val r = runs.get(id)
       (r.phase == DirReserved or r.phase == PrepFailed or r.phase == BootstrapFailed) implies and {
         r.dirReserved,
+        not(r.hasReports),
         r.meta == NoMeta,
         r.metaPublishCount == 0,
         r.logStartCount == 0,

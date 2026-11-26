@@ -46,7 +46,7 @@ PR: [j5ik2o/takt#167](https://github.com/j5ik2o/takt/pull/167)（マージ済み
   - `quint test runStartRecord_test.qnt --main prepareFirstTest`: 2 passing
   - `quint run beginFirst.qnt --main beginFirst --invariant invariant --witnesses ... --max-steps 16 --max-samples 10000`: 違反なし。全 9 witness が到達（到達割合は seed 依存。例: `--seed=0xea3c76d41854305d` で 0.59%〜45.86%）。
   - `quint run prepareFirst.qnt --main prepareFirst`: `failureIsRecorded`・`unresolvedReasonExplains`・`resumePreservesIntegrity` の 3 つが期待どおり違反。
-- モデル対象外（`README.md` に明記）: `beginRun` 前の `resolveAvailableSourceLineage` での `OperationRecoveryError`、`beginRun` 自体の失敗（`resolveRunSlug` の同 slug 例外を含む）、`terminalizeBootstrapFailure` の 2 段階書き込み途中の I/O 失敗／強制停止、`createWorkflowExecutionBootstrap` 内で `initNdjsonLog` 実行後に失敗した際の `workflow_start` 二重追記、`createWorkflowExecutionBootstrap` 成功後・`WorkflowEngine` が `reports/` を作る前の実行失敗、operation journal の系譜共有追記、並行 run の slug 競合（実装では `mkdirSync` + `EEXIST` リトライ）。
+- モデル対象外（`README.md` に明記）: `beginRun` 前の `resolveAvailableSourceLineage` での `OperationRecoveryError`、`beginRun` 自体の失敗（`resolveRunSlug` の同 slug 例外を含む）、`terminalizeBootstrapFailure` の 2 段階書き込み途中の I/O 失敗／強制停止、`createWorkflowExecutionBootstrap` 内で `initNdjsonLog` 実行後に失敗した際の `workflow_start` 二重追記、`createWorkflowExecutionBootstrap` 成功後・`WorkflowEngine` が `reports/` を作る前の実行失敗、利用者の中断（Ctrl+C・入力キャンセルによる `meta.json` の `status: aborted`）、operation journal の系譜共有追記、並行 run の slug 競合（実装では `mkdirSync` + `EEXIST` リトライ）。
 
 ## 性質のテスト（PBT）
 
@@ -120,7 +120,7 @@ PR: [j5ik2o/takt#167](https://github.com/j5ik2o/takt/pull/167)（マージ済み
 - **M1b（`try` 外出し変異）**: `prepareWorkflowExecutionBundle` を `beginRun` の後・`try` の外へ置く → 追加する単体テスト（(d) `initNdjsonLog`・(e) `mockProjectTerminal`）で失敗する。
 - **M2（終端化スキップ変異）**: `terminalizeBootstrapFailure` の `activeRun.finish` を飛ばす → 既存および追加の単体テスト・E2E の両方で失敗する。
 - **M3（理由欠落変異）**: `terminalizeBootstrapFailure` が `meta.json` / NDJSON に書く `reason` を汎用文言へ差し替える → 単体テストと強化後の E2E の両方で失敗する。
-- **M4（resume 系譜欠落変異）**: `terminalizeBootstrapFailure` が `publishRunMeta` へ渡す `resumeSource` または `options`（`operationJournalRunSlug` / `operationClaimToken`）を落とす → 追加する resume 単体テストと Quint（`resumePreservesIntegrity`）の両方で失敗する。
+- **M4（resume 系譜欠落変異）**: `terminalizeBootstrapFailure` が `publishRunMeta` へ渡す `resumeSource` または `options`（`operationJournalRunSlug` / `operationClaimToken`）を落とす → 追加する resume 単体テストで両方の欠落を検出し、Quint（`resumePreservesIntegrity`）では `source_run_slug` の欠落を検出する（`operationJournalRunSlug`・`operationClaimToken` はモデル対象外）。
 - **resume・境界・長さ・並行**: 上記「壊しうる入力」および Quint `resumePreservesIntegrity` / `noResumeCompletionWithoutSourceReports` / `noDuplicateRecords` / `noFailureOnSuccess` / `beginRunLeavesNoRecordYet` で整理・検証する。
 
 ### 設計レビュー（2回目）指摘のトリアージ
