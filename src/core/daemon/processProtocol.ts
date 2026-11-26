@@ -9,6 +9,11 @@ import type { AcceptedEvent, WatchObservation, HumanCommand, TurnEvent } from '.
 import type { ConversationChange, ConversationTurnState, TurnIdentity, TurnOutcome, TurnStart } from './messages.js';
 
 export const TURN_PROTOCOL_VERSION = 1;
+/**
+ * shutdown を頼んでから、ターン用プロセスの終了を待つ時間。
+ * 親はこの時間の後にプロセスグループごと SIGKILL する。子も同じ時間で自分から終わるので、親が先に落ちていても子は残らない。
+ */
+export const TURN_SHUTDOWN_GRACE_MS = 5_000;
 export { MAX_PROCESS_PROGRESS_BYTES };
 
 const id = z.string().min(1).max(128);
