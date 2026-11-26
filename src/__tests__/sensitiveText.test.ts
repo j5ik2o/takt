@@ -75,13 +75,14 @@ describe('sensitiveText', () => {
     expect(sanitizeSensitiveTextWithKnownValues('echoed p@55-word', { command: text })).toBe('echoed [REDACTED]');
   });
 
-  // Known limits of reading the password up to the last `@` of the authority. Both err on the
-  // side of hiding the host; the second leaves a value readable that follows that `@`.
+  // Known limits of reading the password up to the last `@` of the authority: both err on the
+  // side of hiding the host. In the second, the `token=` value runs past that `@` and is hidden
+  // with it.
   it.each([
     ['hides the host when `;` separates a later address',
       'url=https://u:p@db.internal;owner=ops@example.test', 'url=https://[REDACTED]@example.test'],
     ['reads an assignment between two @ as the password and what follows as the host',
-      'https://u:p@token=@SECRET/path', 'https://[REDACTED]@SECRET/path'],
+      'https://u:p@token=@SECRET/path', 'https://[REDACTED]'],
   ])('%s', (_name, text, expected) => {
     expect(sanitizeSensitiveText(text)).toBe(expected);
   });

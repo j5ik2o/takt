@@ -1,0 +1,7 @@
+# Frozen copies of the previous redaction (#151). Their SHA-256 is fixed by
+# src/__tests__/sensitive-text-legacy.hash.test.ts; keep LF so the hash does not change.
+src/shared/utils/sensitive-text-legacy.ts eol=lf
+src/__tests__/helpers/legacy-sensitive-text.ts eol=lf
+src/__tests__/helpers/legacy-sensitive-value.ts eol=lf
+src/__tests__/helpers/legacy-sensitive-stream.ts eol=lf
+src/__tests__/helpers/legacy-phase1-execution-log.ts eol=lf
