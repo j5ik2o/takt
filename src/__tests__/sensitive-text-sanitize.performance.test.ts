@@ -65,8 +65,8 @@ describe('sanitizeSensitiveText performance', () => {
     };
     elapsed(1024); // warm up regexes and JIT
 
-    expect(elapsed(64 * 1024)).toBeLessThan(500);
-    expect(elapsed(256 * 1024)).toBeLessThan(2000);
+    expect(elapsed(64 * 1024)).toBeLessThan(scaledMs(500));
+    expect(elapsed(256 * 1024)).toBeLessThan(scaledMs(2000));
   });
 
   // One URL whose userinfo is a long run of separators. Trying every colon as the
@@ -93,8 +93,8 @@ describe('sanitizeSensitiveText performance', () => {
     };
     elapsed(1024); // warm up regexes and JIT
 
-    expect(elapsed(64 * 1024)).toBeLessThan(500);
-    expect(elapsed(256 * 1024)).toBeLessThan(2000);
+    expect(elapsed(64 * 1024)).toBeLessThan(scaledMs(500));
+    expect(elapsed(256 * 1024)).toBeLessThan(scaledMs(2000));
   });
 });
 

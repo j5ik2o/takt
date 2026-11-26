@@ -240,6 +240,7 @@ describe('#175: a URL password with a `,` right after an `@` is hidden to its la
     ['https://user:pass@例え,admin@example.test', 'https://[REDACTED]@例え,admin@example.test'],
     ['https://user:pass@bücher.test,admin@example.test', 'https://[REDACTED]@bücher.test,admin@example.test'],
     ['https://u:p@x@١٢٣,admin@example.test', 'https://[REDACTED]@١٢٣,admin@example.test'],
+    ['https://user:pass@𠀀,admin@example.test', 'https://[REDACTED]@𠀀,admin@example.test'],
   ])('keeps the host and the address in %j', (text, expected) => {
     expect(sanitizeSensitiveText(text)).toBe(expected);
     expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(expected);

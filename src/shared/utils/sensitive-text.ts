@@ -357,7 +357,8 @@ function urlUserinfos(text: string): SensitiveRange[] {
     let hostChar = false;
     let passedComma = false;
     for (let cursor = end + 1; cursor < text.length; cursor++) {
-      const char = text[cursor]!;
+      const codePoint = text.codePointAt(cursor)!;
+      const char = String.fromCodePoint(codePoint);
       if (URL_TAIL_HARD_STOP.test(char)) break;
       if (char === '@') { end = cursor; hostChar = false; passedComma = false; continue; }
       if (char === ',') {
@@ -366,6 +367,7 @@ function urlUserinfos(text: string): SensitiveRange[] {
         continue;
       }
       if (/[\p{L}\p{N}]/u.test(char)) hostChar = true;
+      if (char.length > 1) cursor += 1;
     }
     pattern.lastIndex = end + 1;
     if (!crossesQuotedListItem(text, match.index, start, end)) userinfos.push({ start, end });
