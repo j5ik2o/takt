@@ -10,6 +10,7 @@ import { validateWorkflowCallTrustBoundary } from './workflowTrustBoundary.js';
 import { annotateWorkflowConfigFragmentError } from './workflowRawParser.js';
 import { withWorkflowConfigErrorPath as withWorkflowStepErrorPath } from '../../../core/workflow/workflow-config-error.js';
 import { findWorkflowStepLocation } from '../../../core/workflow/workflow-step-location.js';
+import { explainNamedWorkflowLookup } from './workflowLookupDirectories.js';
 
 export interface WorkflowCallParentContext {
   workflowSystemCommandsPolicy?: WorkflowSystemCommandsConfig;
@@ -75,4 +76,28 @@ export function resolveWorkflowCallTarget(
   } catch (error) {
     throw decorateParentError(error);
   }
+}
+
+/**
+ * Lists the call, the cwd, the searched candidates, and the excluded candidates of an unresolved workflow_call.
+ * Kept on one line because terminal output escapes newlines.
+ */
+export function describeUnresolvedWorkflowCall(input: {
+  readonly parentWorkflow: WorkflowConfig;
+  readonly call: string;
+  readonly projectCwd: string;
+  readonly lookupCwd: string;
+}): string {
+  const parts = [`call: ${input.call}`, `cwd: ${input.lookupCwd}`, `project: ${input.projectCwd}`];
+  if (isScopeRef(input.call)) {
+    parts.push('searched: installed repertoire packages');
+  } else if (isWorkflowPath(input.call)) {
+    const parentSourcePath = getWorkflowSourcePath(input.parentWorkflow);
+    parts.push(`searched: path relative to ${parentSourcePath ? dirname(parentSourcePath) : input.lookupCwd}`);
+  } else {
+    const { searched, excluded } = explainNamedWorkflowLookup(input.call, input.projectCwd);
+    parts.push(`searched: ${searched.join(', ')}`);
+    if (excluded.length > 0) parts.push(`excluded: ${excluded.join(', ')}`);
+  }
+  return parts.join('; ');
 }

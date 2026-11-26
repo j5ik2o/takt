@@ -276,6 +276,23 @@ function preserveInstructionRef(
   });
 }
 
+type StepLoopGuard = Pick<WorkflowCallStep, 'maxVisits' | 'stopOnRepeatedVerdict'>;
+
+/** Config `workflow_overrides.steps.<name>.max_visits` replaces the YAML value (project over global). */
+function normalizeStepLoopGuard(
+  step: RawStep,
+  projectOverrides: WorkflowOverrides | undefined,
+  globalOverrides: WorkflowOverrides | undefined,
+): StepLoopGuard {
+  const maxVisits = projectOverrides?.steps?.[step.name]?.maxVisits
+    ?? globalOverrides?.steps?.[step.name]?.maxVisits
+    ?? step.max_visits;
+  return {
+    ...(maxVisits !== undefined ? { maxVisits } : {}),
+    ...(step.stop_on_repeated_verdict === true ? { stopOnRepeatedVerdict: true } : {}),
+  };
+}
+
 export function normalizeStepFromRaw(
   step: RawStep,
   workflowDir: string,
@@ -295,6 +312,7 @@ export function normalizeStepFromRaw(
     normalizeStepField(stepPath, ['rules', index], () => normalizeRule(rule))
   );
   const kind: WorkflowStepKind = getWorkflowStepKind(step);
+  const loopGuard = normalizeStepLoopGuard(step, projectOverrides, globalOverrides);
   const isSystemStep = kind === 'system';
   const isWorkflowCallStep = kind === 'workflow_call';
   if ((isSystemStep || isWorkflowCallStep) && (step.capabilities !== undefined || step.mcp !== undefined)) {
@@ -410,6 +428,7 @@ export function normalizeStepFromRaw(
       personaDisplayName: resolvedPersonaDisplayName,
       instruction: '',
       rules,
+      ...loopGuard,
     };
     return normalizedStep;
   }
@@ -432,6 +451,7 @@ export function normalizeStepFromRaw(
       effects: normalizeWorkflowEffects(step.effects),
       rules,
       passPreviousResponse: step.pass_previous_response ?? true,
+      ...loopGuard,
     };
     return normalizedStep;
   }
@@ -520,6 +540,7 @@ export function normalizeStepFromRaw(
     knowledgeContents,
     companion,
     completionRetry,
+    ...loopGuard,
   };
 
   // parallel 親の capabilities は sub-step の既定になる（sub-step 自身の宣言が置換する）。

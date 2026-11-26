@@ -40,6 +40,7 @@ import { canonicalJson } from '../../../shared/utils/canonical-json.js';
 import { isSensitiveKeyName } from '../../../shared/utils/sensitiveText.js';
 import { extractPersonaName } from '../../../agents/persona-spec.js';
 import { loadAgentPrompt, loadCustomAgents } from '../../../infra/config/loaders/agentLoader.js';
+import { describeUnresolvedWorkflowCall } from '../../../infra/config/loaders/workflowCallResolver.js';
 
 const BUNDLE_VERSION = 1;
 const RESOURCE_REF_PREFIX = 'bundle-resource:sha256:';
@@ -660,7 +661,13 @@ export function prepareWorkflowExecutionBundle(input: {
         lookupCwd: input.lookupCwd,
       });
       if (child === null) {
-        throw new Error(`Workflow bundle could not resolve call "${node.config.name}/${originalCall.step.name}"`);
+        const reason = describeUnresolvedWorkflowCall({
+          parentWorkflow: node.original,
+          call: originalCall.step.call,
+          projectCwd: input.projectCwd,
+          lookupCwd: input.lookupCwd,
+        });
+        throw new Error(`Workflow bundle could not resolve call "${node.config.name}/${originalCall.step.name}" (${reason})`);
       }
       const preparedChild = prepareNode(child, buildBinding(originalCall.step), undefined, {
         parentWorkflowRef: node.originalWorkflowRef,

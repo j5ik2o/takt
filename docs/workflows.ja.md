@@ -1100,6 +1100,26 @@ loop-monitor judge は常に新しい provider session で実行されます。�
 
 rate-limit fallback も `runtime.yaml`（または既存の global/project `config.yaml` legacy mode）で設定します。workflow YAML には記述できません。
 
+### step の `max_visits` と `stop_on_repeated_verdict`
+
+進まない往復を、judge を呼ばずに止める step 単位の設定です。
+
+```yaml
+steps:
+  - name: replan
+    max_visits: 4                  # 5 回目の visit を始めずに止める
+  - name: verify
+    stop_on_repeated_verdict: true # 同じ判定を 2 回続けて返したら止める
+```
+
+- `max_visits` は正の整数です（`0`・負の数・小数は拒否します）。1 つの workflow engine の実行の中で、遷移まで終わった visit を数えます。同じ visit のやり直し（`blocked` のあとのユーザー入力、quality gate の失敗、rate-limit の fallback）は数えません。サブワークフローは呼び出しごとに、再開した run は 0 から数え直します。上限に達したあとで visit を始めようとすると、`Visit limit reached: step "replan" already completed 4 times (max_visits: 4); ...` を理由に run を止めます。
+- `stop_on_repeated_verdict` が比べるのは、どの rule に一致したかだけで、出力に書かれた理由は比べません。その step が前回と同じ rule に一致し、その rule が終端でない場合（同じ step へ戻る遷移も含む）に run を止めます。終端（`COMPLETE`・`ABORT`・`return`）は比べません。理由の中身で判断したいときは `loop_monitors` の judge を使ってください。
+- 止めた理由は 1 行で run の中断理由（`meta.json` の `reason` と `workflow_abort` ログ）に残ります。
+- `max_visits` は workflow を書き換えずに変えられます。`.takt/config.yaml`（プロジェクト）または `~/.takt/config.yaml`（グローバル）の `workflow_overrides.steps.<step>.max_visits` が YAML の値を置き換えます。プロジェクトがグローバルより優先です。上限を外すことはできないので、大きな数を指定してください。parallel の sub-step には `max_visits` を付けられません。
+- これらのキーより前の TAKT はキーを無視します。その版で config を保存し直すと `max_visits` が消えます。
+
+builtin の開発 workflow は `replan`・`fix-replan`・`verification-replan` に `max_visits: 4` を設定しています。`development-core` の `[replan, peer-review]` の loop monitor は `implement` を数えずに `threshold: 1` で動きます（初回は `plan` から来るため 0 周で、独立レビューが 2 回続けて再計画を求めた時点で 1 周に達します）。その時点で judge が直近 2 回のレビュー結果を比べ、同じ指摘が新しい差分なしに繰り返されているときだけ止めます。1 週間ぶんの実測では、成功した run が replan 系 step に入ったのは 1 run あたり最大 2 回、失敗した run は最大 4 回で、長引いた失敗 run はどれも独立レビューが BLOCKED を 2 回続けて返して終わっていました。
+
 ### `subworkflow`
 
 その workflow を「親 workflow の `workflow_call` からパラメータを受け取るサブワークフロー」として宣言します。サブワークフローは workflow 選択 UI には現れません。

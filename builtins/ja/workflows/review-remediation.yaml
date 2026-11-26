@@ -138,6 +138,7 @@ steps:
       - condition: 必要な作業をプロジェクト内で進める手段がなく、その根拠と必要な外部操作または両立不能な条件が確認されている
         next: ABORT
   - name: fix-replan
+    max_visits: 4
     input_reports:
       - from_step: fix
         reports: [fix-report.md]
@@ -164,6 +165,7 @@ steps:
       - condition: 必要な作業をプロジェクト内で進める手段がなく、その根拠と必要な外部操作または両立不能な条件が確認されている
         next: ABORT
   - name: verification-replan
+    max_visits: 4
     input_reports:
       - from_step: fix-verifier
         reports: [fix-verification.md]

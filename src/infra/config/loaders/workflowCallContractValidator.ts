@@ -2,6 +2,7 @@ import { dirname } from 'node:path';
 import type { WorkflowSystemCommandsConfig } from '../../../core/models/config-types.js';
 import type {
   WorkflowCallArgValue,
+  WorkflowCallStep,
   WorkflowConfig,
 } from '../../../core/models/index.js';
 import { canonicalJson } from '../../../shared/utils/canonical-json.js';
@@ -29,6 +30,8 @@ interface ValidateWorkflowCallContractsDeps {
     projectCwd: string,
     options: WorkflowCallValidationLookupOptions,
   ) => WorkflowConfig | null;
+  /** Called for a named or scoped call that resolves to no workflow; unset means such calls are skipped. */
+  onUnresolvedCall?: (workflow: WorkflowConfig, step: WorkflowCallStep) => void;
 }
 
 interface WorkflowCallContractValidationOptions {
@@ -102,6 +105,7 @@ function validateWorkflowCallContractsRecursive(
         workflowSystemCommandsPolicy,
       });
       if (!childWorkflow) {
+        deps.onUnresolvedCall?.(workflow, step);
         continue;
       }
 

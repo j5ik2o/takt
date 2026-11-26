@@ -138,6 +138,7 @@ steps:
       - condition: No project-local action can advance required work, with evidence identifying the necessary external action or incompatible requirements
         next: ABORT
   - name: fix-replan
+    max_visits: 4
     input_reports:
       - from_step: fix
         reports: [fix-report.md]
@@ -164,6 +165,7 @@ steps:
       - condition: No project-local action can advance required work, with evidence identifying the necessary external action or incompatible requirements
         next: ABORT
   - name: verification-replan
+    max_visits: 4
     input_reports:
       - from_step: fix-verifier
         reports: [fix-verification.md]
