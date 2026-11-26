@@ -136,19 +136,47 @@ describe('#151 fixed examples: leak 2 and the phase 1 composition', () => {
   });
 });
 
-// Design 9.5: a cookie value without a name. The tracked value is `Zq34Zq; path=/`, which is not
-// split, so `echoed Zq34Zq` shows the secret. This leak predates #151 (the previous implementation
-// shows it as well) and is fixed by a follow-up PR, which turns this example into "hidden".
-describe('#151 known leak (since before #151): a cookie value without a name', () => {
-  it('shows the secret in later output (known leak, design 9.5)', () => {
-    const source = UNNAMED_COOKIE;
-    expect(sanitizeSensitiveTextWithKnownValues('echoed Zq34Zq', source)).toContain('Zq34Zq');
-    for (const output of Object.values(shownOnItsOwn(source))) expect(output).not.toContain('Zq34Zq');
+// Design 9.5 of #151: a cookie value without a name. It was a known leak since before #151 (the
+// tracked value `Zq34Zq; path=/` was not split); #175 closes it (takt-175 DESIGN.md, 4).
+describe('#175: a cookie value without a name is hidden in later output', () => {
+  it.each([
+    [UNNAMED_COOKIE, 'Zq34Zq'],
+    ['Cookie: Zq37Zq; path=/', 'Zq37Zq'],
+    ['Set-Cookie: Zq38Zq; Path=/; HttpOnly; Secure', 'Zq38Zq'],
+    ['set-cookie:Zq39Zq;Max-Age=60', 'Zq39Zq'],
+    // R175-2: Base64 padding puts `=` into a value without a name.
+    ['Cookie: Zq34Zq==; path=/', 'Zq34Zq=='],
+    ['Set-Cookie: Zq40Zqab=cd; Path=/', 'Zq40Zqab=cd'],
+  ])('%j', (source, secret) => {
+    for (const [path, output] of [...Object.entries(shownOnItsOwn(source)), ...Object.entries(shownLater(source, `echoed ${secret}`))]) {
+      for (const marker of markersIn(secret)) expect(output, path).not.toContain(marker);
+    }
   });
 
   it('hides a named cookie value in the same place', () => {
     const source = NAMED_COOKIE;
     for (const output of Object.values(shownLater(source, 'echoed Zq36Zq'))) expect(output).not.toContain('Zq36Zq');
+  });
+
+  // Known over-masking (R175-2, case c): the first part is tracked whole, with or without `=`, so a
+  // named cookie is hidden with its name where it is printed again.
+  it('hides a named first cookie with its name where it is printed again', () => {
+    const source = NAMED_COOKIE;
+    for (const [path, output] of Object.entries(shownLater(source, 'echoed sid=Zq36Zq'))) {
+      if (path === 'phase1') expect(output, path).toContain('echoed [REDACTED]');
+      else expect(output, path).toBe('echoed [REDACTED]');
+    }
+  });
+
+  // Over-masking bound: only the part before the first `;` is a value. The attributes after it are
+  // not tracked, so later output naming them stays readable.
+  it('keeps the cookie attributes readable in later output', () => {
+    const source = 'Set-Cookie: Zq38Zq; Path=/; HttpOnly; Secure';
+    const later = 'flags: HttpOnly Secure SameSite';
+    for (const [path, output] of Object.entries(shownLater(source, later))) {
+      if (path === 'phase1') expect(output, path).toContain(later);
+      else expect(output, path).toBe(later);
+    }
   });
 });
 
@@ -163,19 +191,130 @@ const KNOWN_STREAM_LEAKS: ReadonlyArray<{ input: string; later?: string; leaked:
   { input: PHASE1_COMPOSITION[1]!, leaked: ['Zq0Zq', 'Zq1Zq'] },
 ];
 
-// Leaks since before #151 that the review of #165 found; the previous implementation shows them as
-// well, and follow-up PRs close them (then these examples turn into "hidden").
-describe('#151 known leaks (since before #151) found in review', () => {
-  it('a URL password with a `,` after an `@` shows its rest', () => {
-    const text = 'https://:Zq50Zq@,Zq51Zq@host';
-    expect(sanitizeSensitiveText(text)).not.toContain('Zq50Zq');
-    expect(sanitizeSensitiveText(text)).toContain('Zq51Zq');
+// Leaks since before #151 that the review of #165 found (#175). The previous implementation shows
+// them as well; #175 closes them (takt-175 DESIGN.md, 1 and 2).
+describe('#175: a URL password with a `,` right after an `@` is hidden to its last `@`', () => {
+  // The display and the range path show exactly the URL with its userinfo hidden: the host stays.
+  it.each([
+    ['https://:Zq50Zq@,Zq51Zq@host', 'https://[REDACTED]@host'],
+    ['https://u:Zq53Zq@,,Zq54Zq@host/repo.git', 'https://[REDACTED]@host/repo.git'],
+    ['redis://:Zq55Zq@-,Zq56Zq@db:6379/0', 'redis://[REDACTED]@db:6379/0'],
+    ['https://u:Zq57Zq@,Zq58Zq@,Zq59Zq@host', 'https://[REDACTED]@host'],
+    ['clone https://u:Zq60Zq@x@,Zq61Zq@host failed', 'clone https://[REDACTED]@host failed'],
+    // R175-1: once a `,` was skipped, later `,` before the next `@` do not end the URL either.
+    ['https://:Zq50Zq@,Zq51Zq,Zq52Zq@host', 'https://[REDACTED]@host'],
+    ['https://u:Zq69Zq@,Zq70Zq,Zq71Zq,@host', 'https://[REDACTED]@host'],
+    ['https://u:Zq72Zq@,Zq73Zq;Zq74Zq,Zq75Zq@db:5432/x', 'https://[REDACTED]@db:5432/x'],
+  ])('%j', (text, expected) => {
+    expect(sanitizeSensitiveText(text)).toBe(expected);
+    expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(expected);
+    for (const [path, output] of Object.entries(shownOnItsOwn(text))) {
+      for (const marker of markersIn(text)) expect(output, path).not.toContain(marker);
+    }
   });
 
-  it('a value between two keys inside one value is not tracked on its own', () => {
+  it('hides the whole password where it is echoed later', () => {
+    const source = 'https://:Zq50Zq@,Zq51Zq@host';
+    for (const [path, output] of Object.entries(shownLater(source, 'echoed Zq50Zq@,Zq51Zq'))) {
+      expect(output, path).not.toContain('Zq51Zq');
+    }
+  });
+
+  // Over-masking bound: a `,` after a host still ends the URL, so a later address stays readable.
+  it.each([
+    'https://user:pass@host,admin@example.test',
+    'https://u:p@h,admin@example.test',
+    'https://u:p@1,admin@example.test',
+    'https://u:p@x@host,admin@example.test',
+    '["https://user:pass@host","admin@example.test"]',
+    "['https://user:pass@host', 'admin@example.test']",
+  ])('keeps the address after %j readable', (text) => {
+    for (const [path, output] of Object.entries(shownOnItsOwn(text))) {
+      expect(output, path).toContain('admin@example.test');
+      expect(output, path).toContain('[REDACTED]');
+    }
+  });
+
+  // R175-3: a host may be letters or digits of any script, as before #175.
+  it.each([
+    ['https://user:pass@例え,admin@example.test', 'https://[REDACTED]@例え,admin@example.test'],
+    ['https://user:pass@bücher.test,admin@example.test', 'https://[REDACTED]@bücher.test,admin@example.test'],
+    ['https://u:p@x@١٢٣,admin@example.test', 'https://[REDACTED]@١٢٣,admin@example.test'],
+    ['https://user:pass@𠀀,admin@example.test', 'https://[REDACTED]@𠀀,admin@example.test'],
+  ])('keeps the host and the address in %j', (text, expected) => {
+    expect(sanitizeSensitiveText(text)).toBe(expected);
+    expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(expected);
+  });
+
+  // Known leak, kept (open point 1): a `,` after letters or digits may follow a host, as in
+  // `user:pass@host,admin@example.test`, so `@x,Zq77Zq@host` still shows its rest.
+  it('still shows the rest after a `,` that follows letters or digits (known leak)', () => {
+    expect(sanitizeSensitiveText('https://u:Zq76Zq@x,Zq77Zq@host')).toBe('https://[REDACTED]@x,Zq77Zq@host');
+  });
+});
+
+describe('#175: a value between two keys inside one value is tracked on its own', () => {
+  it.each([
+    ['token=first;password=Zq52Zq;token=last', 'Zq52Zq'],
+    ['TOKEN=a&password=Zq62Zq&token=z', 'Zq62Zq'],
+    ['token=a|secret=Zq63Zq|api_key=z', 'Zq63Zq'],
+    ['--token=first;--password=Zq64Zq;--token=last', 'Zq64Zq'],
+    ['token=a;password=Zq65Zq;secret=Zq66Zq;token=z', 'Zq65Zq'],
+    ['token=a;password=Zq65Zq;secret=Zq66Zq;token=z', 'Zq66Zq'],
+  ])('%j then echoed %s', (source, secret) => {
+    expect(sanitizeSensitiveText(source)).not.toContain(secret);
+    for (const [path, output] of Object.entries(shownLater(source, `echoed ${secret}`))) {
+      expect(output, path).not.toContain(secret);
+    }
+  });
+
+  // Over-masking bound: what is tracked ends at the separator, so the next key is not a value.
+  it('keeps later output that names the keys readable', () => {
     const source = 'token=first;password=Zq52Zq;token=last';
-    expect(sanitizeSensitiveText(source)).not.toContain('Zq52Zq');
-    expect(sanitizeSensitiveTextWithKnownValues('echoed Zq52Zq', source)).toContain('Zq52Zq');
+    const later = 'the token and password keys are set';
+    for (const [path, output] of Object.entries(shownLater(source, later))) {
+      if (path === 'phase1') expect(output, path).toContain(later);
+      else expect(output, path).toBe(later);
+    }
+  });
+});
+
+// #151 design 9th edition, 11 #3 and #4 (open point 1, decided as (b)): `Bearer` right after a word
+// character is not read, on every path, since before #151. #175 reads a capital `Bearer` there.
+const GLUED_BEARER: ReadonlyArray<readonly [source: string, secret: string]> = [
+  [PHASE1_COMPOSITION[0]!, 'Zq1Zqabcdefgh12'],
+  [PHASE1_COMPOSITION[1]!, 'Zq1Zqabcdefgh12'],
+  ['Zq0ZqBearer Zq1Zqabcdefgh12', 'Zq1Zqabcdefgh12'],
+  // An escaped line break in serialized JSON puts an `n` right before the scheme.
+  ['{"error":"401\\nBearer Zq67Zqabcdefgh12 rejected"}', 'Zq67Zqabcdefgh12'],
+  ['headers=Accept\\tBearer Zq68Zqabcdefgh12', 'Zq68Zqabcdefgh12'],
+];
+
+describe('#175: a capital `Bearer` right after a word character is read', () => {
+  it.each(GLUED_BEARER.map(([source, secret]) => [source, secret] as const))('%j', (source, secret) => {
+    for (const [path, output] of [...Object.entries(shownOnItsOwn(source)), ...Object.entries(shownLater(source, `echoed ${secret}`))]) {
+      for (const marker of markersIn(secret)) expect(output, path).not.toContain(marker);
+    }
+  });
+
+  // Over-masking bound: a lowercase `bearer` inside a word stays prose, as do words without a digit.
+  it.each([
+    'the torchbearer 12345678 arrived',
+    'pallbearer abc12345',
+    'Bearer authentication is required',
+    'useBearer authentication',
+  ])('keeps %j readable', (text) => {
+    expect(sanitizeSensitiveText(text)).toBe(text);
+    expect(maskSensitiveRanges(text, sensitiveTextRanges(text, new Set()))).toBe(text);
+  });
+});
+
+// Open point 6 (DECISIONS-after-review.md): the glued `Bearer` of #3 and #4 also shows through the
+// stream, which is still the previous stream. #175 does not change the stream; this stays a known
+// leak until the stream reads the new reading (second PR of #151), which turns it into "hidden".
+describe('#175 known leak (stream): a capital `Bearer` right after a word character', () => {
+  it.each(PHASE1_COMPOSITION.map((input) => [input]))('the stream shows Zq1Zq of %j', (input) => {
+    expect(streamedAlone(input)).toContain('Zq1Zq');
   });
 });
 
