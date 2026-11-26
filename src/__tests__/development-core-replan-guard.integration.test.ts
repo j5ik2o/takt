@@ -206,12 +206,87 @@ describe('development-core stops laps that make no progress', () => {
     const { result, stepStarts, judges, abortReasons } = await runAndRecord(config, placement);
 
     expect(result.status).toBe('aborted');
-    expect(judges).toHaveLength(4);
+    expect(judges).toHaveLength(3);
     expect(stepStarts).toEqual([
       'plan', 'write_tests', 'implement', 'peer-review',
       ...[1, 2, 3, 4].flatMap(() => ['replan', 'implement', 'peer-review']),
     ]);
     expect(abortReasons).toContainEqual(expect.stringMatching(/replan" already completed 4 times \(max_visits: 4\)/));
+  });
+
+  it.each(cases)('$language $placement: does not fire the peer-review judge on the first peer-review after implement -> replan', async ({ language, placement }) => {
+    const config = load(language);
+    script([
+      { label: semanticLabel(config, 'plan', 'write_tests') },
+      { label: semanticLabel(config, 'write_tests', 'implement') },
+      { label: semanticLabel(config, 'implement', 'replan') },
+      { label: semanticLabel(config, 'replan', 'implement') },
+      { label: semanticLabel(config, 'implement', 'peer-review') },
+      { label: semanticLabel(config, 'peer-review', 'replan') },
+      // Second peer-review -> replan triggers the judge
+      { label: semanticLabel(config, 'replan', 'implement') },
+      { label: semanticLabel(config, 'implement', 'peer-review') },
+      { label: semanticLabel(config, 'peer-review', 'replan') },
+      { judge: judgeLabel(config, 'ABORT', 0) },
+    ]);
+
+    const { result, stepStarts, judges } = await runAndRecord(config, placement);
+
+    expect(result.status).toBe('aborted');
+    expect(stepStarts).toEqual([
+      'plan', 'write_tests', 'implement',
+      'replan', 'implement', 'peer-review',
+      'replan', 'implement', 'peer-review',
+    ]);
+    expect(judges).toEqual(['_loop_judge_replan_peer-review']);
+  });
+
+  it.each(cases)('$language $placement: resuming at replan does not fire the peer-review judge on the first peer-review', async ({ language, placement }) => {
+    const config = load(language);
+    script([
+      { label: semanticLabel(config, 'replan', 'implement') },
+      { label: semanticLabel(config, 'implement', 'peer-review') },
+      { label: semanticLabel(config, 'peer-review', 'replan') },
+      // Second peer-review -> replan triggers the judge
+      { label: semanticLabel(config, 'replan', 'implement') },
+      { label: semanticLabel(config, 'implement', 'peer-review') },
+      { label: semanticLabel(config, 'peer-review', 'replan') },
+      { judge: judgeLabel(config, 'ABORT', 0) },
+    ]);
+
+    const { result, stepStarts, judges } = await runAndRecord(config, placement, { initialStep: 'replan' });
+
+    expect(result.status).toBe('aborted');
+    expect(stepStarts).toEqual([
+      'replan', 'implement', 'peer-review',
+      'replan', 'implement', 'peer-review',
+    ]);
+    expect(judges).toEqual(['_loop_judge_replan_peer-review']);
+  });
+
+  it.each(cases)('$language $placement: with replan max_visits: 1, skips the peer-review judge and aborts with Visit limit reached', async ({ language, placement }) => {
+    const config = load(language, 'workflow_overrides:\n  steps:\n    replan:\n      max_visits: 1\n');
+    script([
+      { label: semanticLabel(config, 'plan', 'write_tests') },
+      { label: semanticLabel(config, 'write_tests', 'implement') },
+      { label: semanticLabel(config, 'implement', 'peer-review') },
+      { label: semanticLabel(config, 'peer-review', 'replan') },
+      { label: semanticLabel(config, 'replan', 'implement') },
+      { label: semanticLabel(config, 'implement', 'peer-review') },
+      { label: semanticLabel(config, 'peer-review', 'replan') },
+      // Only consumed if the bug invokes the judge before checking replan max_visits
+      { judge: judgeLabel(config, 'ABORT', 0) },
+    ]);
+
+    const { result, stepStarts, judges, abortReasons } = await runAndRecord(config, placement);
+
+    expect(result.status).toBe('aborted');
+    expect(judges).toHaveLength(0);
+    expect(stepStarts).toEqual([
+      'plan', 'write_tests', 'implement', 'peer-review',
+      'replan', 'implement', 'peer-review',
+    ]);
+    expect(abortReasons).toContainEqual(expect.stringMatching(/Visit limit reached: step "replan" already completed 1 times \(max_visits: 1\)/));
   });
 
   it.each(cases)('$language $placement: replan stops at its visit limit, which config.yaml can change', async ({ language, placement }) => {

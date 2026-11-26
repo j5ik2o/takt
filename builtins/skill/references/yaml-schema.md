@@ -274,6 +274,7 @@ loop_monitors:
   - cycle: [step_a, step_b]           # 監視対象の step 名のサイクル
     ignore_steps: [verification]       # サイクル照合から除外する任意の中間 step
     threshold: 3                       # 発動閾値（サイクル回数）
+    min_trigger_visits: 2              # cycle 末尾の step がこの回数完了するまで発動を遅らせる（任意の正の整数）
     judge:
       persona: supervisor              # ペルソナキー参照
       instruction: |                   # 判定用指示
@@ -286,7 +287,7 @@ loop_monitors:
           next: alternative_step
 ```
 
-特定の step 間のサイクルが閾値に達した場合、judge が介入して遷移先を判断する。`ignore_steps` は任意回数の検証・再修正などを照合から除外する。`cycle` と同じ step は指定できない。
+特定の step 間のサイクルが閾値に達した場合、judge が介入して遷移先を判断する。`ignore_steps` は任意回数の検証・再修正などを照合から除外する。`cycle` と同じ step は指定できない。`min_trigger_visits`（任意の正の整数）を指定すると、`cycle` 末尾の step がこの workflow engine の実行で指定回数完了するまで monitor の発動を遅らせる。
 
 ## allowed_tools について
 

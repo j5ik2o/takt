@@ -163,8 +163,8 @@ codex exec --full-auto - < "$tmp_prompt_file_2"
 詳細は references/engine.md の「レポートの抽出と保存」を参照。
 
 **Loop Monitor チェック**（ワークフローに `loop_monitors` がある場合のみ）:
-`step_history` に current_step の名前を追加する。
-遷移履歴が loop_monitor の `cycle` パターンに `threshold` 回以上マッチした場合、judge サブエージェントを起動して遷移先をオーバーライドする。
+`step_history` に current_step の名前を追加し、完了回数を記録する。
+遷移履歴が loop_monitor の `cycle` パターンに `threshold` 回以上マッチし、`min_trigger_visits` が指定されている場合は `cycle` 末尾の step がこの実行で `min_trigger_visits` 回以上完了しているとき、judge サブエージェントを起動して遷移先をオーバーライドする。
 詳細は references/engine.md の「Loop Monitors」を参照。
 
 ### 手順 6: Rule 評価

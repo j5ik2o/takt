@@ -727,6 +727,9 @@ function displayLoopMonitors(indent: string, workflow: WorkflowConfig, context: 
       printYamlLike(`${indent}    `, 'ignoreSteps', monitor.ignoreSteps);
     }
     printScalar(`${indent}    `, 'threshold', monitor.threshold);
+    if (monitor.minTriggerVisits !== undefined) {
+      printScalar(`${indent}    `, 'minTriggerVisits', monitor.minTriggerVisits);
+    }
     info(`${indent}    judge:`);
     printFacetReference(
       `${indent}      `,

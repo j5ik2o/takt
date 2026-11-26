@@ -31,11 +31,16 @@ export class StepLoopGuard {
   /**
    * Counts one completed visit and records its verdict. Returns the stop reason
    * when the verdict repeats the step's previous one under `stop_on_repeated_verdict`.
-   * `matchedRuleIndex` is undefined for terminal transitions, which are never compared.
+   * `matchedRuleIndex` is undefined for terminal transitions and rule-less non-terminal
+   * completions (such as `system` step `wait.on_timeout`), which clear `lastRuleIndex`.
    */
   recordCompletion(step: WorkflowStep, matchedRuleIndex: number | undefined): string | undefined {
     this.completedVisits.set(step.name, (this.completedVisits.get(step.name) ?? 0) + 1);
-    if (step.stopOnRepeatedVerdict !== true || matchedRuleIndex === undefined) {
+    if (matchedRuleIndex === undefined) {
+      this.lastRuleIndex.delete(step.name);
+      return undefined;
+    }
+    if (step.stopOnRepeatedVerdict !== true) {
       return undefined;
     }
     const previous = this.lastRuleIndex.get(step.name);
