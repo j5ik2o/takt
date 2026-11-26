@@ -1,5 +1,4 @@
 import { inspect } from 'node:util';
-import fc from 'fast-check';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   executeStructuredAgent,
@@ -241,12 +240,6 @@ describe('executeStructuredAgent', () => {
   });
 });
 
-const PBT_NUM_RUNS = (() => {
-  const parsed = Number.parseInt(process.env.TAKT_PBT_NUM_RUNS ?? '', 10);
-  if (Number.isInteger(parsed) && parsed > 0) return parsed;
-  return process.env.CI ? 100 : 500;
-})();
-
 const SECRET_LIKE_OUTPUT = { complete: 'leaked-rationale-6f1c' };
 
 function terminalRejection(options: { outputSchema?: Record<string, unknown> }): AgentResponse {
@@ -366,15 +359,37 @@ function baselineFailure(response: AgentResponse): { readonly type: 'failure' | 
   };
 }
 
-const failureCategoryArb = fc.option(
-  fc.constantFrom(...Object.values(AGENT_FAILURE_CATEGORIES) as AgentFailureCategory[]),
-  { nil: undefined },
-);
-const textArb = fc.oneof(fc.constant(''), fc.constant('   '), fc.string({ maxLength: 40 }));
-const rejectedOutputArb = fc.option(
-  fc.dictionary(fc.string({ maxLength: 8 }), fc.jsonValue({ maxDepth: 2 }), { maxKeys: 3 }),
-  { nil: undefined },
-);
+const STATUSES: readonly AgentResponse['status'][] = ['error', 'blocked', 'rate_limited'];
+const FAILURE_CATEGORIES: readonly (AgentFailureCategory | undefined)[] = [
+  undefined,
+  ...Object.values(AGENT_FAILURE_CATEGORIES),
+];
+const REJECTED_OUTPUTS: readonly (Record<string, unknown> | undefined)[] = [
+  undefined,
+  {},
+  { selected_ids: ['coding'], rationale: 'x' },
+  { nested: { list: [1, null, 'v'] }, '': 'empty key' },
+];
+const TEXTS: readonly string[] = ['', '   ', 'detail', '{"selected_ids":["coding"]}', 'é ‮'];
+
+/**
+ * Every combination of the fields the non-done branches read. The fields are finite apart from
+ * the two strings, and those are sampled at the boundaries the branches test (empty, whitespace,
+ * JSON-looking, non-ASCII).
+ */
+function nonDoneResponses(): AgentResponse[] {
+  return STATUSES.flatMap((status) => FAILURE_CATEGORIES.flatMap((failureCategory) => REJECTED_OUTPUTS.flatMap(
+    (rejectedStructuredOutput) => TEXTS.flatMap((error) => TEXTS.map((content): AgentResponse => ({
+      persona: 'judge',
+      status,
+      content,
+      error,
+      timestamp: new Date(),
+      ...(failureCategory === undefined ? {} : { failureCategory }),
+      ...(rejectedStructuredOutput === undefined ? {} : { rejectedStructuredOutput }),
+    }))),
+  )));
+}
 
 describe('executeStructuredAgent property: a non-done response', () => {
   beforeEach(() => {
@@ -382,57 +397,44 @@ describe('executeStructuredAgent property: a non-done response', () => {
   });
 
   it('always throws, and only a rejected provider_error (or uncategorized) failure changes class', async () => {
-    await fc.assert(fc.asyncProperty(
-      fc.constantFrom<AgentResponse['status']>('error', 'blocked', 'rate_limited'),
-      failureCategoryArb,
-      rejectedOutputArb,
-      textArb,
-      textArb,
-      async (status, failureCategory, rejectedStructuredOutput, error, content) => {
-        const response: AgentResponse = {
-          persona: 'judge',
-          status,
-          content,
-          error,
-          timestamp: new Date(),
-          ...(failureCategory === undefined ? {} : { failureCategory }),
-          ...(rejectedStructuredOutput === undefined ? {} : { rejectedStructuredOutput }),
-        };
-        vi.mocked(executeAgent).mockResolvedValueOnce(response);
+    const responses = nonDoneResponses();
+    expect(responses).toHaveLength(STATUSES.length * FAILURE_CATEGORIES.length * REJECTED_OUTPUTS.length * TEXTS.length ** 2);
+    for (const response of responses) {
+      vi.mocked(executeAgent).mockResolvedValueOnce(response);
+      const { status, failureCategory, rejectedStructuredOutput } = response;
 
-        const failure = await rejectionOf(executeStructuredAgent('review', schema, {
-          name: 'judge',
-          cwd: '/repo',
-          resolution: { provider: 'claude-terminal' },
-        }));
+      const failure = await rejectionOf(executeStructuredAgent('review', schema, {
+        name: 'judge',
+        cwd: '/repo',
+        resolution: { provider: 'claude-terminal' },
+      }));
 
-        expect(failure).toBeInstanceOf(Error);
-        const baseline = baselineFailure(response);
-        const becomesRejected = status !== 'rate_limited'
-          && rejectedStructuredOutput !== undefined
-          && (failureCategory === undefined || failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR);
-        if (becomesRejected) {
-          expect(failure).toBeInstanceOf(StructuredOutputRejectedError);
-          const rejected = failure as StructuredOutputRejectedError;
-          expect(rejected.failureCategory).toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR);
-          expect(rejected.message).toBe(createAgentResponseFailureError(
-            { ...response, failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR },
-            '',
-          ).message);
-          expect(rejected.rejectedStructuredOutput).toBe(rejectedStructuredOutput);
-          expect(Object.keys(rejected)).not.toContain('rejectedStructuredOutput');
-          return;
-        }
-        expect(failure).not.toBeInstanceOf(StructuredOutputRejectedError);
-        expect((failure as Error).constructor).toBe(baseline.error.constructor);
-        expect((failure as Error).message).toBe(baseline.error.message);
-        if (baseline.type === 'failure') {
-          expect((failure as AgentFailureError).failureCategory).toBe(failureCategory);
-        } else {
-          expect((failure as StructuredAgentResponseError).response.status).toBe(status);
-        }
-      },
-    ), { numRuns: PBT_NUM_RUNS });
+      const label = JSON.stringify({ status, failureCategory, rejectedStructuredOutput, error: response.error, content: response.content });
+      expect(failure, label).toBeInstanceOf(Error);
+      const becomesRejected = status !== 'rate_limited'
+        && rejectedStructuredOutput !== undefined
+        && (failureCategory === undefined || failureCategory === AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR);
+      if (becomesRejected) {
+        expect(failure, label).toBeInstanceOf(StructuredOutputRejectedError);
+        const rejected = failure as StructuredOutputRejectedError;
+        expect(rejected.failureCategory, label).toBe(AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR);
+        expect(rejected.message, label).toBe(createAgentResponseFailureError(
+          { ...response, failureCategory: AGENT_FAILURE_CATEGORIES.PROVIDER_ERROR },
+          '',
+        ).message);
+        expect(rejected.rejectedStructuredOutput, label).toBe(rejectedStructuredOutput);
+        expect(Object.keys(rejected), label).not.toContain('rejectedStructuredOutput');
+        continue;
+      }
+      const baseline = baselineFailure(response);
+      expect(failure, label).not.toBeInstanceOf(StructuredOutputRejectedError);
+      expect((failure as Error).constructor, label).toBe(baseline.error.constructor);
+      expect((failure as Error).message, label).toBe(baseline.error.message);
+      if (baseline.type === 'failure') {
+        expect((failure as AgentFailureError).failureCategory, label).toBe(failureCategory);
+      } else {
+        expect((failure as StructuredAgentResponseError).response.status, label).toBe(status);
+      }
+    }
   });
 });
-

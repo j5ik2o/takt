@@ -55,7 +55,9 @@ Quint の不変条件（9つ）はこれをそのまま写したもの。対応�
 
 ## PBT の性質
 
-structured-agent-transport.test.ts に fast-check で足す。done でない応答の全体（status は error／blocked／rate_limited、failureCategory は無し／`AGENT_FAILURE_CATEGORIES` の全部、`rejectedStructuredOutput` は有り／無し、error・content は空白だけや空を含む任意の文字列）について：
+structured-agent-transport.test.ts に足す。done でない応答の全体（status は error／blocked／rate_limited、failureCategory は無し／`AGENT_FAILURE_CATEGORIES` の全部、`rejectedStructuredOutput` は無し／空／selector の形／入れ子、error・content は空・空白だけ・普通の文・JSON に見える文・非 ASCII）について：
+
+実装の途中で、base の integration/takt-mcp で #160 が revert され、fast-check が依存から外れた。そこで乱数で選ぶのをやめ、上の組み合わせを全部（3 × 8 × 4 × 5 × 5 = 2,400 件）流す形にした。文字列以外の項目は有限なので、乱数より取りこぼしが少ない。性質そのものは変えていない。
 
 - transport は必ず投げる（resolve しない）。
 - status が rate_limited なら、返った出力があっても前と同じ分類（category が無ければ `StructuredAgentResponseError`）。`StructuredOutputRejectedError` にはならない。
@@ -103,6 +105,6 @@ structured-agent-transport.test.ts に fast-check で足す。done でない応�
 | 2 | 中 | 直す | (a) 不変条件 `nonDoneNeverReturns`（done でない応答は返さない）を足した。Quint に変異 M7 の instance（`m7`）を置き、この不変条件で落ちることを確かめた。(b) 届かなかった枝は、どんな応答でも返す provider `AnyAdapter` を足して状態空間に入れた（category 無し＋返った出力、rate_limited＋返った出力、stream parse＋返った出力、done＋返った出力）。それぞれの quint test を足した。 |
 | 3 | 中 | 直す | 返った出力は列挙されないプロパティにする（直し方 2）。`JSON.stringify`・`Object.keys`・`util.inspect` に出ないことを単体テストで確かめる。既にある `StructuredAgentContractError.response`（列挙される）は #162 の前からのもので、この修正では変えない。 |
 | 4 | 中 | 直す | (a) PBT の status に rate_limited を入れた。(b) `describeSelectorError` の単体テストを計画に入れた（テスト 3）。(c) engine-loop-monitors のテストで、mock から本物の normalizer を返すことと、step_error・provider_error を確かめることを明記した（テスト 6）。(d) AI judge と Team Leader は agent-usecases.test.ts の単体テスト（テスト 5）、dynamic parallel の Claude Terminal 経路は coordinator のテスト（テスト 4）で確かめる。 |
-| 5 | 低 | 直す | 壊しうる入力に (a)〜(e) を足した。(a)(b) は分岐の順（直し方 3）で前と同じ例外のままにし、PBT で全 category を回す。(e) のキーの伏せ字は直し方 5 で直す。 |
+| 5 | 低 | 直す | 壊しうる入力に (a)〜(e) を足した。(a)(b) は分岐の順（直し方 3）で前と同じ例外のままにし、PBT で全 category を回す。(e) のキーの伏せ字は直し方 5 で直す。 実装のあとの CodeRabbit の指摘で、秘密のキー（password など）の下にある配列やオブジェクトも、キーの伏せ字の前に `sanitizeSensitiveValue` で丸ごと伏せるようにした。 |
 | 6 | 低 | 別件 | モックが本物に抜ける経路を塞ぐのはこの PR の範囲外。issue にする中身を上の「別の issue にするときの中身」に書いた。issue を作るかどうかは副元帥に任せる。 |
 | 7 | 軽微 | 採らない（記録） | selector の失敗のときの `recordAgentUsageEvent` の providerUsage と、判定 Stage 1 の記録が #162 の前（undefined）に戻る。Claude Terminal はもともと `usageMissing: true` なので害はない。#162 の前と同じに戻ることなので、直さない。 |
