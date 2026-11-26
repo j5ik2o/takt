@@ -148,9 +148,16 @@ function tryAcquirePrivateFileLock(lockPath: string): AcquiredPrivateFileLock | 
   return undefined;
 }
 
+/** The lock was not acquired before its deadline; nothing ran under it. */
+export class PrivateFileLockTimeoutError extends Error {
+  constructor(readonly lockPath: string) {
+    super(`Timed out waiting for private file lock: ${lockPath}`);
+  }
+}
+
 function assertLockDeadline(lockPath: string, deadline: number): void {
   if (Date.now() >= deadline) {
-    throw new Error(`Timed out waiting for private file lock: ${lockPath}`);
+    throw new PrivateFileLockTimeoutError(lockPath);
   }
 }
 

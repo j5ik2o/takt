@@ -148,6 +148,7 @@ export async function runWithWorkerPool(
   let preparationFailure: { error: unknown } | undefined;
   let claimRetryAt: number | undefined;
   let claimRetryCode: TaskClaimLockUnavailableError['code'] | undefined;
+  let claimRetryLock: TaskClaimLockUnavailableError['lock'] = 'tasks.yaml';
 
   const reportPreparationFailure = (error: unknown): void => {
     preparationFailure = { error };
@@ -172,7 +173,9 @@ export async function runWithWorkerPool(
         if (attempted) {
           claimRetryAt = undefined;
           if (claimRetryCode === 'TIMEOUT') {
-            info('Task claiming resumed after the task store lock became available.');
+            info(claimRetryLock === 'goal-execution'
+              ? 'Task claiming resumed after the goal execution lock became available.'
+              : 'Task claiming resumed after the task store lock became available.');
             log.info('Task claiming resumed after lock timeout');
           } else {
             info('Task claiming resumed after disk space became available.');
@@ -186,18 +189,23 @@ export async function runWithWorkerPool(
       if (schedulingSignal.aborted && error === schedulingSignal.reason) return;
       const code = error instanceof TaskClaimLockUnavailableError
         ? error.code : isClaimLockTimeoutFailure(error) ? 'TIMEOUT' : undefined;
+      const lock = error instanceof TaskClaimLockUnavailableError ? error.lock : 'tasks.yaml';
       if (code !== undefined) {
         if (claimRetryAt === undefined) {
-          if (code === 'TIMEOUT') {
+          if (code === 'TIMEOUT' && lock === 'goal-execution') {
+            warn('Cannot claim pending tasks because the goal execution lock is held. Waiting to retry.');
+            log.warn('Goal execution lock acquisition timed out during task claim; waiting to retry', { error: sanitizeSensitiveText(getErrorMessage(error)) });
+          } else if (code === 'TIMEOUT') {
             warn('Cannot claim pending tasks because the task store lock is held. Waiting to retry.');
             log.warn('Task claim lock acquisition timed out; waiting to retry', { error: sanitizeSensitiveText(getErrorMessage(error)) });
           } else {
             warn('Cannot claim pending tasks because the disk is full. Waiting to retry.');
-            log.warn('Task claim lock creation failed with ENOSPC; waiting to retry');
+            log.warn('Task claim lock creation failed with ENOSPC; waiting to retry', { error: sanitizeSensitiveText(getErrorMessage(error)) });
           }
         }
         claimRetryAt = Date.now() + CLAIM_RETRY_INTERVAL_MS;
         claimRetryCode = code;
+        claimRetryLock = lock;
       } else {
         reportPreparationFailure(error);
       }

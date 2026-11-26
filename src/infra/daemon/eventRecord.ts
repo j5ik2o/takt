@@ -129,15 +129,17 @@ const version = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const text = z.string();
 export const ConversationChangeSchema = z.object({
   operationId: id, expectedVersion: version,
-  session: z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), contextKey: id.optional(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict().optional(),
+  session: z.object({ provider: id, model: text.nullable(), sessionId: text.nullable(), contextKey: id.optional(), imageAttachmentIds: z.array(z.uuid()).optional(), agentOverrides: ConversationAgentOverridesSchema.optional() }).strict().optional(),
   proposal: z.object({ revision: version, pending: PendingSummarySchema.nullable() }).strict().optional(),
   approval: ApprovalSchema.nullable().optional(),
   interruptedMessage: text.nullable().optional(),
+  interruptedImageAttachmentIds: z.array(z.uuid()).optional(),
 }).strict().refine((value) => value.session !== undefined || value.proposal !== undefined || value.approval !== undefined
   || value.interruptedMessage !== undefined) satisfies z.ZodType<ConversationChange>;
 const operationResult = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('reply'), message: text }).strict(),
   z.object({ kind: z.literal('notice'), message: text }).strict(),
+  z.object({ kind: z.literal('proposal_created'), proposal: z.object({ revision: version, repositoryDirectory: text }).strict(), message: text }).strict(),
   z.object({ kind: z.literal('goal_registered'), goal: GoalSchema }).strict(),
   z.object({ kind: z.literal('answer_saved'), answerSaved: z.boolean(), message: text }).strict(),
   z.object({ kind: z.literal('error'), code: id, message: text, answerSaved: z.boolean().optional(), permissionAppended: z.boolean().optional() }).strict()

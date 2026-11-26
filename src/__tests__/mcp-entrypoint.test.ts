@@ -6,7 +6,12 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { stringify as stringifyYaml } from 'yaml';
-import { createTaktMcpServer, TAKT_MCP_MANAGER_TOOL_NAMES } from '../app/mcp/server.js';
+import {
+  createTaktMcpServer,
+  TAKT_MCP_DEPRECATED_ALIAS_TOOL_NAMES,
+  TAKT_MCP_MANAGER_TOOL_NAMES,
+  TAKT_MCP_READ_ONLY_TOOL_NAMES,
+} from '../app/mcp/server.js';
 import type { SessionContext } from '../features/interactive/aiCaller.js';
 import { createConversationSession } from '../features/interactive/conversationSession.js';
 import { getTaktRun, listTaktTasks } from '../features/mcp/operations.js';
@@ -1074,9 +1079,9 @@ describe('MCP package entrypoint', () => {
 
       expect(tools.tools.map((tool) => tool.name).sort()).toEqual([
         'takt_get_goal',
-        'takt_get_goal_registration_proposal',
+        'takt_get_goal_proposal',
         'takt_get_run',
-        'takt_list_goal_registration_proposals',
+        'takt_list_goal_proposals',
         'takt_list_goals',
         'takt_list_tasks',
       ]);
@@ -2251,5 +2256,69 @@ describe('workflow detail MCP', () => {
       expect(names).not.toContain('takt_list_workflows');
       expect(names).not.toContain('takt_get_workflow');
     } finally { await client.close(); await server.close(); }
+  });
+});
+
+// The fork's MCP clients (takt-dash) call the goal registration tools by the names they had before
+// upstream #2083 renamed them. The old names stay as aliases of the new tools, but only in the tool
+// sets those clients use, and never in the tool allowlists handed to takt's own agents.
+describe('deprecated goal registration tool aliases', () => {
+  const aliases = {
+    takt_list_goal_registration_proposals: 'takt_list_goal_proposals',
+    takt_get_goal_registration_proposal: 'takt_get_goal_proposal',
+    takt_approve_goal_registration: 'takt_approve_goal_proposal',
+    takt_reject_goal_registration: 'takt_reject_goal_proposal',
+  } as const;
+  const readAliases = ['takt_get_goal_registration_proposal', 'takt_list_goal_registration_proposals'];
+  const writeAliases = ['takt_approve_goal_registration', 'takt_reject_goal_registration'];
+
+  async function withServer<T>(toolSet: 'all' | 'read-only' | 'manager' | undefined, use: (client: Client) => Promise<T>): Promise<T> {
+    const server = createTaktMcpServer({}, toolSet === undefined ? {} : { toolSet, allowedProjectRoot: process.cwd() });
+    const client = new Client({ name: `alias-${toolSet ?? 'default'}`, version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverTransport);
+      await client.connect(clientTransport);
+      return await use(client);
+    } finally { await client.close(); await server.close(); }
+  }
+
+  it.each([
+    [undefined, [...readAliases, ...writeAliases]],
+    ['all', [...readAliases, ...writeAliases]],
+    ['manager', readAliases],
+    ['read-only', []],
+  ] as const)('registers the aliases the fork registered for tool set %s', async (toolSet, expected) => {
+    const names = await withServer(toolSet, async (client) => (await client.listTools()).tools.map(({ name }) => name));
+    expect(names.filter((name) => name in aliases).sort()).toEqual([...expected].sort());
+  });
+
+  it('gives each alias the input schema of its new tool and points its description at the new name', async () => {
+    await withServer('all', async (client) => {
+      const tools = (await client.listTools()).tools;
+      for (const [alias, current] of Object.entries(aliases)) {
+        const aliasTool = tools.find(({ name }) => name === alias)!;
+        const currentTool = tools.find(({ name }) => name === current)!;
+        expect(aliasTool.inputSchema).toEqual(currentTool.inputSchema);
+        expect(aliasTool.description).toContain(`Deprecated alias of ${current}`);
+      }
+    });
+  });
+
+  it('answers an alias call the same as the new tool', async () => {
+    await withServer('all', async (client) => {
+      const args = { cwd: process.cwd() };
+      const fromAlias = await client.callTool({ name: 'takt_list_goal_registration_proposals', arguments: args });
+      const fromCurrent = await client.callTool({ name: 'takt_list_goal_proposals', arguments: args });
+      expect(fromAlias).toEqual(fromCurrent);
+    });
+  });
+
+  it('keeps the aliases out of the tool allowlists of takt agents', () => {
+    expect([...TAKT_MCP_DEPRECATED_ALIAS_TOOL_NAMES].sort()).toEqual(Object.keys(aliases).sort());
+    for (const alias of Object.keys(aliases)) {
+      expect(TAKT_MCP_READ_ONLY_TOOL_NAMES).not.toContain(alias);
+      expect(TAKT_MCP_MANAGER_TOOL_NAMES).not.toContain(alias);
+    }
   });
 });

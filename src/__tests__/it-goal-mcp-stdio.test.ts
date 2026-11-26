@@ -1033,7 +1033,12 @@ describe('manager questions, answers and notifications through production bounda
   it('exposes the manager question and notification tools while preserving the read-only tool set', async () => {
     const added = ['takt_ask_goal_question', 'takt_list_goal_questions', 'takt_get_goal_question', 'takt_withdraw_goal_question', 'takt_notify_goal'];
     const names = (await client.listTools()).tools.map(({ name }) => name).sort();
-    expect(names).toEqual(TAKT_MCP_MANAGER_TOOL_NAMES.filter((name) => name !== 'takt_wait_command').sort());
+    // The manager tool set also serves the read aliases kept for the fork's MCP clients (item 201);
+    // they are added to the exact list, and stay out of TAKT_MCP_MANAGER_TOOL_NAMES.
+    expect(names).toEqual([
+      ...TAKT_MCP_MANAGER_TOOL_NAMES.filter((name) => name !== 'takt_wait_command'),
+      'takt_list_goal_registration_proposals', 'takt_get_goal_registration_proposal',
+    ].sort());
     expect(names).toEqual(expect.arrayContaining(added));
     const server = createTaktMcpServer({}, { toolSet: 'read-only', allowedProjectRoot: cwd });
     const reader = new Client({ name: 'question-read-only-test', version: '1.0.0' });
@@ -1042,8 +1047,8 @@ describe('manager questions, answers and notifications through production bounda
       await server.connect(b);
       await reader.connect(a);
       expect((await reader.listTools()).tools.map(({ name }) => name).sort()).toEqual([
-        'takt_list_tasks', 'takt_get_run', 'takt_list_goals', 'takt_get_goal', 'takt_list_goal_registration_proposals',
-        'takt_get_goal_registration_proposal',
+        'takt_list_tasks', 'takt_get_run', 'takt_list_goals', 'takt_get_goal', 'takt_list_goal_proposals',
+        'takt_get_goal_proposal',
       ].sort());
     } finally { try { await reader.close(); } finally { await server.close(); } }
   });
@@ -1372,10 +1377,8 @@ describe('manager questions, answers and notifications through production bounda
 describe('default stdio manager runtime assignment candidates', () => {
   let root: string;
   let cwd: string;
-  let globalConfigDirectory: string;
   let originalCwd: string;
   let originalArgv: string[];
-  let originalConfigDir: string | undefined;
   let client: Client | undefined;
   let transport: { close: () => Promise<void> } | undefined;
 
@@ -1434,15 +1437,11 @@ describe('default stdio manager runtime assignment candidates', () => {
   beforeEach(async () => {
     originalCwd = process.cwd();
     originalArgv = [...process.argv];
-    originalConfigDir = process.env.TAKT_CONFIG_DIR;
     vi.mocked(ensureDaemon).mockReset().mockResolvedValue(undefined);
     vi.spyOn(autoRun, 'ensureManagerRun').mockResolvedValue(undefined);
     root = realpathSync(mkdtempSync(join(process.cwd(), '.tmp', 'default-stdio-runtime-')));
     cwd = join(root, 'project');
-    globalConfigDirectory = join(root, 'global-config');
     mkdirSync(cwd, { recursive: true });
-    mkdirSync(globalConfigDirectory, { recursive: true });
-    process.env.TAKT_CONFIG_DIR = globalConfigDirectory;
     initializeGitFixture(cwd, []);
     mkdirSync(join(cwd, '.takt', 'workflows'), { recursive: true });
     writeFileSync(join(cwd, '.takt', 'workflows', 'safe.yaml'), [
@@ -1463,8 +1462,6 @@ describe('default stdio manager runtime assignment candidates', () => {
       transport = undefined;
       process.chdir(originalCwd);
       process.argv = originalArgv;
-      if (originalConfigDir === undefined) delete process.env.TAKT_CONFIG_DIR;
-      else process.env.TAKT_CONFIG_DIR = originalConfigDir;
       stdioTransport.mockReset();
       vi.restoreAllMocks();
       invalidateResolvedConfigCache(cwd);
