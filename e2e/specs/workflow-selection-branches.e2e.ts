@@ -190,10 +190,12 @@ describe('E2E: Workflow selection branch coverage', () => {
         env: isolatedEnv.env,
       });
       const output = `${result.stdout}\n${result.stderr}`;
+      const candidatePath = join(testRepo.path, '.takt', 'workflows', 'development-core.yaml');
 
+      expect(result.exitCode).not.toBe(0);
       expect(output).toContain('Workflow bundle could not resolve call "builtin-caller/develop"');
       expect(output).toContain('call: development-core');
-      expect(output).toContain(join(testRepo.path, '.takt', 'workflows', 'development-core.yaml'));
+      expect(output).toContain(candidatePath);
       expect(output).toContain('excluded because enable_builtin_workflows is false');
 
       const runsDir = join(testRepo.path, '.takt', 'runs');
@@ -201,9 +203,31 @@ describe('E2E: Workflow selection branch coverage', () => {
       const runSlugs = readdirSync(runsDir);
       expect(runSlugs).toHaveLength(1);
       const runDir = join(runsDir, runSlugs[0]!);
-      const meta = JSON.parse(readFileSync(join(runDir, 'meta.json'), 'utf-8')) as { status?: string };
+      const meta = JSON.parse(readFileSync(join(runDir, 'meta.json'), 'utf-8')) as {
+        status?: string;
+        reason?: string;
+      };
       expect(meta.status).toBe('failed');
-      expect(readdirSync(join(runDir, 'logs')).length).toBeGreaterThan(0);
+      expect(meta.reason).toContain('Workflow bundle could not resolve call "builtin-caller/develop"');
+      expect(meta.reason).toContain('call: development-core');
+      expect(meta.reason).toContain(candidatePath);
+      expect(meta.reason).toContain('excluded because enable_builtin_workflows is false');
+
+      const logsDir = join(runDir, 'logs');
+      const jsonlFiles = readdirSync(logsDir).filter((file) => file.endsWith('.jsonl'));
+      expect(jsonlFiles.length).toBeGreaterThan(0);
+      const records = readFileSync(join(logsDir, jsonlFiles[0]!), 'utf-8')
+        .trim()
+        .split('\n')
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as { type?: string; reason?: string });
+      expect(records.some((record) => record.type === 'workflow_start')).toBe(true);
+      const abortRecord = records.find((record) => record.type === 'workflow_abort');
+      expect(abortRecord).toBeDefined();
+      expect(abortRecord?.reason).toContain('Workflow bundle could not resolve call "builtin-caller/develop"');
+      expect(abortRecord?.reason).toContain('call: development-core');
+      expect(abortRecord?.reason).toContain(candidatePath);
+      expect(abortRecord?.reason).toContain('excluded because enable_builtin_workflows is false');
     }, 240_000);
 
     it('makes workflow doctor report the unresolved call instead of OK', () => {
