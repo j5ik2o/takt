@@ -46,7 +46,7 @@ PR: [j5ik2o/takt#167](https://github.com/j5ik2o/takt/pull/167)（マージ済み
   - `quint test runStartRecord_test.qnt --main prepareFirstTest`: 2 passing
   - `quint run beginFirst.qnt --main beginFirst --invariant invariant --witnesses ... --max-steps 16 --max-samples 10000`: 違反なし。全 9 witness が到達（到達割合は seed 依存。例: `--seed=0xea3c76d41854305d` で 0.59%〜45.86%）。
   - `quint run prepareFirst.qnt --main prepareFirst`: `failureIsRecorded`・`unresolvedReasonExplains`・`resumePreservesIntegrity` の 3 つが期待どおり違反。
-- モデル対象外（`README.md` に明記）: `beginRun` 前の `resolveAvailableSourceLineage` での `OperationRecoveryError`、`beginRun` 自体の失敗（`resolveRunSlug` の同 slug 例外を含む）、`terminalizeBootstrapFailure` の 2 段階書き込み途中の I/O 失敗／強制停止、`createWorkflowExecutionBootstrap` 内で `initNdjsonLog` 実行後に失敗した際の `workflow_start` 二重追記、operation journal の系譜共有追記、並行 run の slug 競合（実装では `mkdirSync` + `EEXIST` リトライ）。
+- モデル対象外（`README.md` に明記）: `beginRun` 前の `resolveAvailableSourceLineage` での `OperationRecoveryError`、`beginRun` 自体の失敗（`resolveRunSlug` の同 slug 例外を含む）、`terminalizeBootstrapFailure` の 2 段階書き込み途中の I/O 失敗／強制停止、`createWorkflowExecutionBootstrap` 内で `initNdjsonLog` 実行後に失敗した際の `workflow_start` 二重追記、`createWorkflowExecutionBootstrap` 成功後・`WorkflowEngine` が `reports/` を作る前の実行失敗、operation journal の系譜共有追記、並行 run の slug 競合（実装では `mkdirSync` + `EEXIST` リトライ）。
 
 ## 性質のテスト（PBT）
 
@@ -87,7 +87,7 @@ PR: [j5ik2o/takt#167](https://github.com/j5ik2o/takt/pull/167)（マージ済み
 
 1. **単体テストの追加（`src/__tests__/workflow-execution-canonical.test.ts`）**:
    - **順序と bootstrap 失敗終端化（M1 / M1b / M3 対策）**: `createWorkflowRunLifecycle` の `beginRun` と `prepareWorkflowExecutionBundle` の呼び出し順を記録しつつ、`prepareWorkflowExecutionBundle` が未解決 `workflow_call` のエラーを投げたときに、(a) `beginRun` → `prepareWorkflowExecutionBundle` の順に呼ばれること、(b) 元のエラーで reject されること、(c) `WorkflowEngine` が呼ばれないこと、(d) `initNdjsonLog` が呼ばれること、(e) `mockProjectTerminal` が `status: 'failed'`, `iterations: 0`, かつ探索理由を含む `reason` で呼ばれることを検証する。
-   - **resume 準備失敗時の系譜保持（M4 対策）**: `RunMetaManager` モックの constructor 引数を記録し、有効な operation lineage（`operation_journal_run_slug` と `operation_claim_token` を持つ再開元 `meta.json`）がある `resumeSource`（`sourceRunSlug` 付き）を渡した状態で `prepareWorkflowExecutionBundle` が投げたときに、`RunMetaManager` の constructor へ `resumeSource`（`sourceRunSlug`）と `options`（`operationJournalRunSlug`・`operationClaimToken`）が渡されることを検証する。
+   - **resume 準備失敗時の系譜保持（M4 対策）**: `RunMetaManager` モックの constructor 引数を記録し、`workflow-execution-canonical.test.ts` は `run-paths.js` をモックしているため `resolveWorkflowExecutionResumeSourceLineage` を `vi.spyOn` で差し替えて有効な operation lineage（`operationJournalRunSlug`・`operationClaimToken`・`publishedResumeSource`）を返させ、`resumeSource`（`sourceRunSlug` 付き）を渡した状態で `prepareWorkflowExecutionBundle` が投げたときに、`RunMetaManager` の constructor へ `resumeSource`（`sourceRunSlug`）と `options`（`operationJournalRunSlug`・`operationClaimToken`）が渡されることを検証する。
    - 実装時に、M1（`prepareWorkflowExecutionBundle` を `beginRun` の前へ戻す）・M1b（`beginRun` の後だが `try` の外へ置く）・M4（`terminalizeBootstrapFailure` で `publishRunMeta` へ渡す `resumeSource` / `options` を落とす）をそれぞれ入れて単体テストが失敗することを確かめてから元に戻す。
 2. **E2E テストの検証強化（`e2e/specs/workflow-selection-branches.e2e.ts`）**:
    - `fails with the lookup reason and still records the run` に次の検証を追加する:
@@ -136,3 +136,11 @@ PR: [j5ik2o/takt#167](https://github.com/j5ik2o/takt/pull/167)（マージ済み
 | 低-4 | 低 | Quint の `isSourceDistinct` / `isSourceExited` / `run1Snapshot` はモデル構造上つねに成り立ち、`resolveRunSlug` の同 slug 例外は未表現 | **直す** | Quint `README.md` に、構造上成り立つ範囲（ただし `RUN_1` 書き換え変異の検出には効くこと）と同 slug 例外経路が対象外であることを明記した。 |
 | 低-5 | 低 | witness の割合は seed 依存。`quint verify` 結果の追記も検討 | **直す** | 設計書・`README.md` の割合表記を「全 9 witness 到達（割合は seed 依存、`--seed=...` の実測例）」へ改め、`quint verify --max-steps 12` は任意の参考コマンドとして `README.md` に添えた（標準検証は `quint test`・`quint run`）。 |
 | 低-6 | 低 | 古い順序（`prepareFirst`）で破れる不変条件に `unresolvedReasonExplains` も含まれる | **直す** | `prepareFirst` で `unresolvedReasonExplains` の違反を実測確認し、設計書・`README.md`・`prepareFirstTest` に 3 不変条件（`failureIsRecorded`・`unresolvedReasonExplains`・`resumePreservesIntegrity`）の違反を明記した。 |
+
+### 設計レビュー（3回目）指摘のトリアージ
+
+| # | 重さ | 指摘の要点 | 判定 | 対応内容 |
+|---|---|---|---|---|
+| 低-A | 低 | `createWorkflowExecutionBootstrap` 成功後・`WorkflowEngine` が `reports/` を作る前の実行失敗が未モデル | **直す** | Quint `README.md` の「What is NOT modelled」と本設計書の「モデル対象外」に 1 行追記した。 |
+| 低-B | 低 | いまのコードが作る `meta.json` は常に lineage を書くため、`lineageAvailable = false` の意味を明記する | **直す** | Quint `README.md` の `resolveWorkflowExecutionResumeLineage` の項に、`false` は古い形または壊れた `meta.json`（lineage 欄なし）を表す旨を追記した。 |
+| 低-C | 低 | `workflow-execution-canonical.test.ts` は `run-paths.js` をモックしているため M4 テストの lineage 準備に注意が必要 | **直す** | 本設計書の M4 テスト計画に、`resolveWorkflowExecutionResumeSourceLineage` を `vi.spyOn` で差し替えて lineage を用意する手順を明記し、実装もその形にした。 |
