@@ -90,6 +90,14 @@ module beginFirstTest {
       .then(beginRun)
       .expect(runs.get(RUN_1).meta == NoMeta and runs.get(RUN_1).logStartCount == 0)
       .then(prepareInBootstrap)
+      .expect(
+        runs.get(RUN_1).phase == Prepared
+        and runs.get(RUN_1).dirReserved
+        and not(runs.get(RUN_1).hasReports)
+        and runs.get(RUN_1).meta == NoMeta
+        and runs.get(RUN_1).logStartCount == 0
+        and invariant
+      )
       .then(createBootstrap)
       .expect(
         runs.get(RUN_1).phase == Bootstrapped
@@ -187,6 +195,48 @@ module beginFirstTest {
         and runs.get(RUN_2).recordedSource == FromRun(RUN_1)
         and not(runs.get(RUN_2).reasonHasLookup)
         and runs.get(RUN_2).logTerminalKind == LogAbort
+        and runs.get(RUN_2).stepsRun == 0
+        and persistedOf(runs.get(RUN_1)) == run1Snapshot
+        and invariant
+      )
+
+  // Resuming from a run that has reports/, where a pre-inherit step (e.g.
+  // validateWorkflowReportReferences or stageTaskSpecForExecution) fails before
+  // inheritResumeReportSnapshot runs: RUN_2 exits failed without inheriting reports/.
+  run resumedRunPreInheritBootstrapFailureLeavesNoReportsTest =
+    initWith(PrepOk, BootOk)
+      .then(beginRun)
+      .then(prepareInBootstrap)
+      .then(createBootstrap)
+      .then(runStep)
+      .then(finishExecutionFailure)
+      .expect(runs.get(RUN_1).hasReports)
+      .then(startResumeRun(PrepOk, BootFailed, true))
+      .then(beginRun)
+      .then(prepareInBootstrap)
+      .expect(
+        runs.get(RUN_2).phase == Prepared
+        and runs.get(RUN_2).dirReserved
+        and not(runs.get(RUN_2).hasReports)
+        and runs.get(RUN_2).meta == NoMeta
+        and invariant
+      )
+      .then(bootstrapPreMetaFail)
+      .expect(
+        runs.get(RUN_2).phase == BootstrapFailed
+        and not(runs.get(RUN_2).hasReports)
+        and runs.get(RUN_2).meta == NoMeta
+        and invariant
+      )
+      .then(terminalizeBootstrapStart)
+      .then(terminalizeBootstrapFinish)
+      .expect(
+        runs.get(RUN_2).phase == Exited
+        and runs.get(RUN_2).meta == MetaFailed
+        and not(runs.get(RUN_2).hasReports)
+        and runs.get(RUN_2).recordedSource == FromRun(RUN_1)
+        and runs.get(RUN_2).logTerminalKind == LogAbort
+        and not(runs.get(RUN_2).reasonHasLookup)
         and runs.get(RUN_2).stepsRun == 0
         and persistedOf(runs.get(RUN_1)) == run1Snapshot
         and invariant
@@ -291,6 +341,14 @@ module prepareFirstTest {
   run resumedUnresolvedCallLosesLineageTest =
     initWith(PrepOk, BootOk)
       .then(prepareBeforeBegin)
+      .expect(
+        runs.get(RUN_1).phase == Prepared
+        and not(runs.get(RUN_1).dirReserved)
+        and not(runs.get(RUN_1).hasReports)
+        and runs.get(RUN_1).meta == NoMeta
+        and runs.get(RUN_1).logStartCount == 0
+        and beginRunLeavesNoRecordYet
+      )
       .then(beginRun)
       .then(createBootstrap)
       .then(runStep)

@@ -380,7 +380,8 @@ module runStartRecord {
 
   // Post-prep, pre-meta failure inside bootstrap try:
   //   - non-resumed pre-meta failure (hasReports remains false)
-  //   - resumed inheritResumeReportSnapshot failure when source has no reports/ (hasReports remains false)
+  //   - resumed pre-inherit failure (e.g. validateWorkflowReportReferences / stageTaskSpec,
+  //     or inheritResumeReportSnapshot missing source reports/; hasReports remains false)
   //   - resumed post-inheritance pre-meta failure (hasReports remains true)
   action bootstrapPreMetaFail: bool = {
     val r = activeRun
@@ -389,7 +390,7 @@ module runStartRecord {
       else (r.phase == DirReserved and r.prepDone)
     val failBeforeInherit =
       readyBeforeInherit and (
-        (r.sourceRun == NoSource and r.boot == BootFailed)
+        r.boot == BootFailed
         or (r.sourceRun != NoSource and not(sourceHasReports(r.sourceRun)))
       )
     val failAfterInherit =
@@ -586,6 +587,17 @@ module runStartRecord {
           r.logTerminalKind == NoTerminalLog,
           r.finishCount == 0,
         },
+        (r.phase == Prepared) implies and {
+          if (ORDER == "BeginFirst") r.dirReserved else not(r.dirReserved),
+          not(r.hasReports),
+          not(r.bootDone),
+          r.meta == NoMeta,
+          r.metaPublishCount == 0,
+          r.logStartCount == 0,
+          r.logTerminalCount == 0,
+          r.logTerminalKind == NoTerminalLog,
+          r.finishCount == 0,
+        },
         (r.phase == ReportsInherited) implies and {
           r.dirReserved,
           r.hasReports,
@@ -732,6 +744,17 @@ module runStartRecord {
     and not(runs.get(RUN_2).lineageAvailable)
     and runs.get(RUN_2).meta != NoMeta
     and runs.get(RUN_2).recordedSource == NoSource
+
+  val witnessedResumedPreInheritBootstrapFailure: bool =
+    runs.get(RUN_2).phase == Exited
+    and runs.get(RUN_2).sourceRun == FromRun(RUN_1)
+    and runs.get(RUN_1).hasReports
+    and not(runs.get(RUN_2).hasReports)
+    and runs.get(RUN_2).prep == PrepOk
+    and runs.get(RUN_2).boot == BootFailed
+    and runs.get(RUN_2).meta == MetaFailed
+    and runs.get(RUN_2).logTerminalKind == LogAbort
+    and runs.get(RUN_2).stepsRun == 0
 
   val witnessedResumedPostInheritBootstrapFailure: bool =
     runs.get(RUN_2).phase == Exited

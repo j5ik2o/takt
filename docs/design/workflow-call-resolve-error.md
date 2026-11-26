@@ -24,7 +24,7 @@ PR: [j5ik2o/takt#167](https://github.com/j5ik2o/takt/pull/167)（マージ済み
 ## 守る不変条件
 
 - `beginRun` 直後は空の run ディレクトリ予約のみで、`meta.json` と logs はまだ作られない（正常系は `createWorkflowExecutionBootstrap`、異常系は `terminalizeBootstrapFailure` で作成する）。
-- 準備（呼び出しの解決を含む）・pre-meta bootstrap・実行に失敗した run は、必ず `meta.json`（`failed`）と logs（開始・終了の記録）を残す。
+- 準備（呼び出しの解決を含む）・pre-meta bootstrap・実行に失敗した run は、終端書き込みが成功した場合に `meta.json`（`failed`）と logs（開始・終了の記録）を残す（`terminalizeBootstrapFailure` の 2 段階書き込みや `fileWorkflowRunTerminalPublisher` での `meta.json` 更新〜`workflow_abort` 追記の途中に I/O 失敗・強制停止が起きた場合は部分書き込みになり得て、下の対象外に含む）。
 - 解決できない呼び出しの理由には、呼び出し名・cwd・探した候補・外した候補と理由が入る。
 - 準備と bootstrap が済むまで、ステップは1つも動かない。
 - 終わった run の `meta.json` が `running` のまま残らない。
@@ -39,14 +39,14 @@ PR: [j5ik2o/takt#167](https://github.com/j5ik2o/takt/pull/167)（マージ済み
 
 `specs/quint/run-start-record/`（`runStartRecord.qnt`・`beginFirst.qnt`・`prepareFirst.qnt`・`runStartRecord_test.qnt`・`README.md`）。
 
-- 実コードに合わせて `beginRun` は空ディレクトリ予約のみとし、準備後の再開元 `reports/` 継承（`inheritResumeReports`）・pre-meta bootstrap 失敗（`inheritResumeReportSnapshot` での `reports/` 欠如や継承後の `publishRunMeta` 前失敗を含む）・正常系 `createWorkflowExecutionBootstrap`（`bootDone` 設定）・異常系 `terminalizeBootstrapFailure`（`publishRunMeta` + `initNdjsonLog` → `activeRun.finish` の 2 段階）をモデル化した。
-- 成功終了（`MetaCompleted`・`LogComplete`）・実行失敗（`ExecFailed`・`LogAbort`）・失敗 run からの 2 試行目 resume（`RUN_1` → `RUN_2`、lineage 取得可否 `lineageAvailable` の分岐と再開元 `hasReports` による `inheritResumeReportSnapshot` 成否および継承後の pre-meta 失敗時の `hasReports` 保持を含む）を表現し、9 つの不変条件（`failureIsRecorded`, `unresolvedReasonExplains`, `noStepWithoutBundle`, `noRunningAfterExit`, `beginRunLeavesNoRecordYet`, `noFailureOnSuccess`, `noDuplicateRecords`, `resumePreservesIntegrity`, `noResumeCompletionWithoutSourceReports`）と 10 個の到達性 witness を定義した。
+- 実コードに合わせて `beginRun` は空ディレクトリ予約のみとし、準備後の再開元 `reports/` 継承（`inheritResumeReports`）・pre-meta bootstrap 失敗（再開元に `reports/` がある場合の `validateWorkflowReportReferences` 等による継承前失敗、`inheritResumeReportSnapshot` での `reports/` 欠如、および継承後の `publishRunMeta` 前失敗を含む）・正常系 `createWorkflowExecutionBootstrap`（`bootDone` 設定）・異常系 `terminalizeBootstrapFailure`（`publishRunMeta` + `initNdjsonLog` → `activeRun.finish` の 2 段階）をモデル化した。
+- 成功終了（`MetaCompleted`・`LogComplete`）・実行失敗（`ExecFailed`・`LogAbort`）・失敗 run からの 2 試行目 resume（`RUN_1` → `RUN_2`、lineage 取得可否 `lineageAvailable` の分岐と再開元 `hasReports` による `inheritResumeReportSnapshot` 成否、継承前の pre-meta 失敗および継承後の pre-meta 失敗時の `hasReports` 保持を含む）を表現し、9 つの不変条件（`failureIsRecorded`, `unresolvedReasonExplains`, `noStepWithoutBundle`, `noRunningAfterExit`, `beginRunLeavesNoRecordYet`, `noFailureOnSuccess`, `noDuplicateRecords`, `resumePreservesIntegrity`, `noResumeCompletionWithoutSourceReports`）と 11 個の到達性 witness を定義した。
 - 2 試行 resume の最長非 stutter 経路が 12 ステップのため `--max-steps 16` で検査した。
-  - `quint test runStartRecord_test.qnt --main beginFirstTest`: 9 passing
+  - `quint test runStartRecord_test.qnt --main beginFirstTest`: 10 passing
   - `quint test runStartRecord_test.qnt --main prepareFirstTest`: 2 passing
-  - `quint run beginFirst.qnt --main beginFirst --invariant invariant --witnesses ... --max-steps 16 --max-samples 10000`: 違反なし。全 10 witness が到達（到達割合は seed 依存。例: `--seed=0x6a8ac4d9d65827b7` で 0.58%〜45.88%）。
-  - `quint run prepareFirst.qnt --main prepareFirst`: `failureIsRecorded`・`unresolvedReasonExplains`・`resumePreservesIntegrity` の 3 つが期待どおり違反。
-- モデル対象外（`README.md` に明記）: `beginRun` 前の `resolveAvailableSourceLineage` での `OperationRecoveryError`、`beginRun` 自体の失敗（`resolveRunSlug` の同 slug 例外を含む）、`terminalizeBootstrapFailure` の 2 段階書き込み途中の I/O 失敗／強制停止、`createWorkflowExecutionBootstrap` 内で `initNdjsonLog` 実行後に失敗した際の `workflow_start` 二重追記、`createWorkflowExecutionBootstrap` 成功後・`WorkflowEngine` が `reports/` を作る前の実行失敗、利用者の中断（Ctrl+C・入力キャンセルによる `meta.json` の `status: aborted`）、operation journal の系譜共有追記、並行 run の slug 競合（実装では `mkdirSync` + `EEXIST` リトライ）。
+  - `quint run beginFirst.qnt --main beginFirst --invariant invariant --witnesses ... --max-steps 16 --max-samples 10000`: 違反なし。全 11 witness が到達（到達割合は seed 依存。例: `--seed=0x2e8b1bddb2e882f3` で 0.70%〜46.21%）。
+  - `quint run prepareFirst.qnt --main prepareFirst --invariant <条件> --max-steps 16 --max-samples 10000`（`<条件>` に `failureIsRecorded`・`unresolvedReasonExplains`・`resumePreservesIntegrity` を個別に指定。再現コマンドは `specs/quint/run-start-record/README.md` 参照）: 3 つとも期待どおり違反。
+- モデル対象外（`README.md` に明記）: `beginRun` 前の `resolveAvailableSourceLineage` での `OperationRecoveryError`、`beginRun` 自体の失敗（`resolveRunSlug` の同 slug 例外を含む）、終端書き込み途中の I/O 失敗／強制停止（`terminalizeBootstrapFailure` の 2 段階書き込み途中、および `fileWorkflowRunTerminalPublisher` での `meta.json` 更新と `workflow_abort` 追記の間の部分書き込み）、`createWorkflowExecutionBootstrap` 内で `initNdjsonLog` 実行後に失敗した際の `workflow_start` 二重追記、`createWorkflowExecutionBootstrap` 成功後・`WorkflowEngine` が `reports/` を作る前の実行失敗、利用者の中断（Ctrl+C・入力キャンセルによる `meta.json` の `status: aborted`）、operation journal の系譜共有追記、並行 run の slug 競合（実装では `mkdirSync` + `EEXIST` リトライ）。
 
 ## 性質のテスト（PBT）
 
