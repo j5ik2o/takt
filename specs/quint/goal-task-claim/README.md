@@ -18,8 +18,12 @@ processes share one `tasks.yaml`. Design: `docs/design/goal-task-claim-setup-fai
   `tasks.yaml` under `goal-execution.lock` and `tasks.yaml.lock`. A runnable pending task becomes
   `running` with the claimer as owner; a goal task in `SETUP_BROKEN` becomes `failed`.
 - `claimPreparedTasks` (`src/features/tasks/execute/parallelExecution.ts`): a claim error
-  classified as retryable returns the process to `Idle`; any other error sets
-  `preparationFailure` (`Stopped`), and the process never claims again.
+  classified as retryable returns the process to `Idle` and sets `claimRetryAt` (`retrying`); any
+  other error sets `preparationFailure` (`Stopped`), and the process never claims again. A later
+  claim attempt that completes clears `claimRetryAt`.
+- The end of `takt run` (`runWithWorkerPool`, mode `run`): the loop leaves as a normal end when no
+  task is active, `claimRetryAt` is unset and the queue is empty after a claim attempt (`endRun`,
+  phase `Ended`). `runAllTasks` then reports the counts, or "No pending tasks" when both are 0.
 
 | `DESIGN` | Code |
 |---|---|
@@ -48,8 +52,13 @@ unchanged); task execution itself (`runTask` only moves a queued task to `Done`)
 | `noFalseSetupReport` | Only a task that a claim saved as a setup failure is reported. |
 | `noMissedSetupReport` | Once the claim that saved a setup failure has finished, its hook has fired once, and its event was written or its write failure was logged. |
 | `claimingNeverStops` | A lock failure or a failed event write never stops claiming for the rest of the run. |
+| `noFalseCleanEnd` | `takt run` never ends normally while a task it saved as `running` has not run. |
 
-`safety` is the conjunction of all six.
+`safety` is the conjunction of all seven.
+
+Each process may end (`takt run` mode); a state where both processes have ended is a terminal
+state by design, so traces shorter than `--max-steps` are expected. `takt watch` never ends and is
+covered by `noOrphanRunning` alone.
 
 ## Record
 
@@ -70,19 +79,24 @@ quint run goalTaskClaim.qnt --main <merged|forkP1|fixed> --invariant <name> \
 | `noFalseSetupReport` | ok | ok | ok |
 | `noMissedSetupReport` | violation | violation | ok |
 | `claimingNeverStops` | violation | violation | ok |
+| `noFalseCleanEnd` | violation | ok | ok |
+
+`forkP1` keeps `noFalseCleanEnd` only because its orphaning path also stops claiming
+(`preparationFailure`), so the run ends as an error instead of a normal end.
 
 ### `fixed`: simulation
 
 ```sh
 quint run goalTaskClaim.qnt --main fixed --invariant safety \
-  --witnesses wSetupReported wLateTaskSetupReported wTaskRan wPublishLogged wGoalLockRetried wTransientRetried wOtherProcReported \
+  --witnesses wSetupReported wLateTaskSetupReported wTaskRan wPublishLogged wGoalLockRetried wTransientRetried wOtherProcReported wRunEnded wRunEndedAfterWork \
   --max-samples 10000 --max-steps 15 --seed 0x2a
 ```
 
-Result: 10,000 samples, no violation of `safety`; every trace has 16 states. Witnesses (traces out
-of 10,000): `wSetupReported` 9,881, `wLateTaskSetupReported` 7,982, `wTaskRan` 5,206,
-`wPublishLogged` 5,812, `wGoalLockRetried` 8,345, `wTransientRetried` 8,323, `wOtherProcReported`
-1,900.
+Result: 10,000 samples, no violation of `safety`; traces have 9 to 16 states (the short ones end
+with both processes `Ended`). Witnesses (traces out of 10,000): `wSetupReported` 9,875,
+`wLateTaskSetupReported` 8,223, `wTaskRan` 5,698, `wPublishLogged` 5,864, `wGoalLockRetried`
+7,946, `wTransientRetried` 7,937, `wOtherProcReported` 1,895, `wRunEnded` 5,119,
+`wRunEndedAfterWork` 2,822.
 
 ### `fixed`: bounded model check
 
@@ -90,20 +104,23 @@ of 10,000): `wSetupReported` 9,881, `wLateTaskSetupReported` 7,982, `wTaskRan` 5
 quint verify goalTaskClaim.qnt --main fixed --invariant safety --max-steps 8
 ```
 
-Result: `[ok] No violation found` (Apalache, 8 steps, 107 s).
+Result: `[ok] No violation found` (Apalache, 8 steps, 87 s).
 
 ### Scenario tests
 
 ```sh
-quint test goalTaskClaim_test.qnt --main mergedTest   # 5 passing
+quint test goalTaskClaim_test.qnt --main mergedTest   # 6 passing
 quint test goalTaskClaim_test.qnt --main forkP1Test   # 3 passing
-quint test goalTaskClaim_test.qnt --main fixedTest    # 6 passing
+quint test goalTaskClaim_test.qnt --main fixedTest    # 9 passing
 ```
 
 `mergedTest` pins the review findings: `rereadTimeoutOrphansClaimedTaskTest` (Critical),
-`orphanIsNotReclaimedTest`, `duplicateReportTest` (High 2a), `lateTaskReportMissedTest`
-(High 2b), `goalLockTimeoutStopsTest` (Medium). `forkP1Test.publishFailureOrphansClaimedTaskTest`
-is the gap left in PR #50.
+`orphanIsNotReclaimedTest`, `rereadTimeoutEndsRunAsCleanTest` (Critical: `takt run` ends as a
+normal end with the task still running), `duplicateReportTest` (High 2a),
+`lateTaskReportMissedTest` (High 2b), `goalLockTimeoutStopsTest` (Medium).
+`forkP1Test.publishFailureOrphansClaimedTaskTest` is the gap left in PR #50. `fixedTest` also
+checks that `takt run` cannot end while a claimed task is queued or a claim retry is waiting
+(`runDoesNotEndWithQueuedTaskTest`, `runDoesNotEndWhileRetryingTest`).
 
 ## When to update
 

@@ -28,6 +28,17 @@ module mergedTest {
       .then(snapshot("A")).then(claimSaved("A", false)).then(rereadOk("A"))
       .expect(procs.get("A").queue == Set() and not(noOrphanRunning))
 
+  // Critical, continued: after the orphaned claim, the next tick claims nothing, the retry clears,
+  // and `takt run` ends normally with t1 still running and never executed.
+  run rereadTimeoutEndsRunAsCleanTest =
+    init.then(snapshot("A")).then(claimSaved("A", false)).then(rereadFails("A"))
+      .then(snapshot("A")).then(claimSaved("A", false)).then(rereadOk("A")).then(endRun("A"))
+      .expect(and {
+        procs.get("A").phase == Ended,
+        tasks.get("t1") == { status: Running, owner: "A" },
+        not(noFalseCleanEnd),
+      })
+
   // High 2a: both read t2 as pending; B saves its setup failure; A's second read reports it too.
   run duplicateReportTest =
     init.then(snapshot("A")).then(snapshot("B")).then(claimSaved("B", false)).then(rereadOk("B"))
@@ -61,10 +72,11 @@ module forkP1Test {
     init.then(snapshot("A")).then(addTask("t3")).then(claimSaved("A", false))
       .expect(hooks.get("t3") == 1 and safety)
 
-  // A failed manager-event write in onSetupFailed escapes the claim after the write: t1 is orphaned.
+  // A failed manager-event write in onSetupFailed escapes the claim after the write: t1 is orphaned
+  // and claiming stops (preparationFailure: the run ends as an error, not as a normal end).
   run publishFailureOrphansClaimedTaskTest =
     init.then(snapshot("A")).then(claimSaved("A", true))
-      .expect(not(noOrphanRunning) and not(claimingNeverStops))
+      .expect(not(noOrphanRunning) and not(claimingNeverStops) and noFalseCleanEnd)
 }
 
 // The fix.
@@ -95,6 +107,18 @@ module fixedTest {
         hooks.get("t2") == 1, events.get("t2") == 0, publishLogged.get("t2") == 1,
         safety,
       })
+
+  // `takt run` cannot end while a claimed task is still queued, and ends once it has run.
+  run runEndsOnlyAfterClaimedTasksRanTest =
+    init.then(snapshot("A")).then(claimSaved("A", false)).then(runTask("A", "t1")).then(endRun("A"))
+      .expect(procs.get("A").phase == Ended and tasks.get("t1").status == Done and safety)
+
+  run runDoesNotEndWithQueuedTaskTest =
+    init.then(snapshot("A")).then(claimSaved("A", false)).then(endRun("A")).fail()
+
+  // A claim retry is waiting: `takt run` does not end.
+  run runDoesNotEndWhileRetryingTest =
+    init.then(snapshot("A")).then(claimFails("A", TasksLockTransient)).then(endRun("A")).fail()
 
   run goalLockTimeoutRetriesTest =
     init.then(snapshot("A")).then(claimFails("A", GoalLockTimeout)).then(snapshot("A")).then(claimSaved("A", false))

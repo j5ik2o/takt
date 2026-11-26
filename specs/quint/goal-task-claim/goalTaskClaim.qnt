@@ -27,13 +27,17 @@ module goalTaskClaim {
   // Idle: waiting for the next poll tick. Snapped: the first listTaskStateItems() has returned.
   // AwaitReread: (Merged only) claimNextTasks() has returned, afterClaim is not read yet.
   // Stopped: preparationFailure is set; this process never claims again.
-  type Phase = Idle | Snapped | AwaitReread | Stopped
+  // Ended: `takt run` left the worker pool loop as a normal end (no active task, empty queue, no
+  // claim retry waiting) and reports its success/fail counts.
+  type Phase = Idle | Snapped | AwaitReread | Stopped | Ended
 
   type Local = {
     phase: Phase,
     snapPending: Set[TaskId],  // pending goal tasks in the first read (Merged uses it)
     inFlight: Set[TaskId],     // claimed (saved as running) but not yet in the queue
     queue: Set[TaskId],
+    retrying: bool,            // claimRetryAt is set
+    attempted: bool,           // the last claim attempt completed (claimAvailableTasks returned)
   }
 
   // A claim fails before it writes anything: a tasks.yaml.lock timeout or ENOSPC while pending
@@ -80,7 +84,7 @@ module goalTaskClaim {
 
   action init = all {
     tasks' = TASKS.mapBy(t => { status: if (ADDED_LATER.contains(t)) Absent else Pending, owner: NONE }),
-    procs' = PROCS.mapBy(_ => { phase: Idle, snapPending: Set(), inFlight: Set(), queue: Set() }),
+    procs' = PROCS.mapBy(_ => { phase: Idle, snapPending: Set(), inFlight: Set(), queue: Set(), retrying: false, attempted: false }),
     hooks' = TASKS.mapBy(_ => 0),
     events' = TASKS.mapBy(_ => 0),
     publishLogged' = TASKS.mapBy(_ => 0),
@@ -98,7 +102,7 @@ module goalTaskClaim {
   // First listTaskStateItems(). A failed read writes nothing and is retried: no state change.
   action snapshot(p: Proc): bool = all {
     procs.get(p).phase == Idle,
-    procs' = procs.setBy(p, l => { ...l, phase: Snapped, snapPending: pendingIn(tasks) }),
+    procs' = procs.setBy(p, l => { ...l, phase: Snapped, snapPending: pendingIn(tasks), attempted: false }),
     tasks' = tasks, hooks' = hooks, events' = events, publishLogged' = publishLogged,
     setupFailedBy' = setupFailedBy, lastAction' = "snapshot",
   }
@@ -106,7 +110,7 @@ module goalTaskClaim {
   // claimNextTasks() fails before writing tasks.yaml.
   action claimFails(p: Proc, kind: LockFailure): bool = all {
     procs.get(p).phase == Snapped,
-    procs' = procs.setBy(p, l => { ...l, phase: claimFailurePhase(kind) }),
+    procs' = procs.setBy(p, l => { ...l, phase: claimFailurePhase(kind), retrying: true }),
     tasks' = tasks, hooks' = hooks, events' = events, publishLogged' = publishLogged,
     setupFailedBy' = setupFailedBy,
     lastAction' = match kind { | TasksLockTransient => "claimFailsTransient" | GoalLockTimeout => "claimFailsGoalLock" },
@@ -136,7 +140,7 @@ module goalTaskClaim {
         lastAction' = "claimSavedPublishEscaped",
       } else all {
         // onSetupFailed: record the name (finish hook) and write the event, or log its failure.
-        procs' = procs.setBy(p, l => { ...l, phase: Idle, queue: l.queue.union(claimed) }),
+        procs' = procs.setBy(p, l => { ...l, phase: Idle, queue: l.queue.union(claimed), retrying: false, attempted: true }),
         hooks' = inc(hooks, failed),
         events' = if (publishThrows) events else inc(events, failed),
         publishLogged' = if (publishThrows) inc(publishLogged, failed) else publishLogged,
@@ -153,7 +157,7 @@ module goalTaskClaim {
     all {
       DESIGN == "Merged",
       l.phase == AwaitReread,
-      procs' = procs.set(p, { ...l, phase: Idle, queue: l.queue.union(l.inFlight), inFlight: Set() }),
+      procs' = procs.set(p, { ...l, phase: Idle, queue: l.queue.union(l.inFlight), inFlight: Set(), retrying: false, attempted: true }),
       hooks' = inc(hooks, reported),
       events' = inc(events, reported),
       tasks' = tasks, publishLogged' = publishLogged, setupFailedBy' = setupFailedBy,
@@ -166,7 +170,7 @@ module goalTaskClaim {
   action rereadFails(p: Proc): bool = all {
     DESIGN == "Merged",
     procs.get(p).phase == AwaitReread,
-    procs' = procs.setBy(p, l => { ...l, phase: Idle, inFlight: Set() }),
+    procs' = procs.setBy(p, l => { ...l, phase: Idle, inFlight: Set(), retrying: true }),
     tasks' = tasks, hooks' = hooks, events' = events, publishLogged' = publishLogged,
     setupFailedBy' = setupFailedBy, lastAction' = "rereadFails",
   }
@@ -177,6 +181,20 @@ module goalTaskClaim {
     procs' = procs.setBy(p, l => { ...l, queue: l.queue.exclude(Set(t)) }),
     hooks' = hooks, events' = events, publishLogged' = publishLogged,
     setupFailedBy' = setupFailedBy, lastAction' = "runTask",
+  }
+
+  // `takt run` ends normally: the loop condition of runWithWorkerPool (active.size === 0,
+  // claimRetryAt === undefined, queue.length === 0) after a claim attempt. Running tasks of this
+  // process are its active executions; an empty queue with none of them active is modelled as
+  // "every task it queued has run" (runTask), so the guard needs only the queue.
+  action endRun(p: Proc): bool = {
+    val l = procs.get(p)
+    all {
+      l.phase == Idle, l.attempted, not(l.retrying), l.queue == Set(), l.inFlight == Set(),
+      procs' = procs.set(p, { ...l, phase: Ended }),
+      tasks' = tasks, hooks' = hooks, events' = events, publishLogged' = publishLogged,
+      setupFailedBy' = setupFailedBy, lastAction' = "endRun",
+    }
   }
 
   action step = {
@@ -192,6 +210,7 @@ module goalTaskClaim {
       rereadOk(p),
       rereadFails(p),
       runTask(p, t),
+      endRun(p),
     }
   }
 
@@ -224,9 +243,14 @@ module goalTaskClaim {
   // A transient failure never stops claiming for the rest of the run.
   val claimingNeverStops: bool = PROCS.forall(p => procs.get(p).phase != Stopped)
 
+  // `takt run` never ends normally while a task it saved as running has not run: such an end
+  // reports success 0 / fail 0 ("No pending tasks") and leaves the task running in tasks.yaml.
+  val noFalseCleanEnd: bool = PROCS.forall(p =>
+    procs.get(p).phase == Ended implies TASKS.forall(t => tasks.get(t) != { status: Running, owner: p }))
+
   val safety: bool = and {
     noOrphanRunning, queuedByOwnerOnly, noDuplicateSetupReport, noFalseSetupReport,
-    noMissedSetupReport, claimingNeverStops,
+    noMissedSetupReport, claimingNeverStops, noFalseCleanEnd,
   }
 
   // ---------- witnesses ----------
@@ -236,6 +260,8 @@ module goalTaskClaim {
   val wPublishLogged: bool = TASKS.exists(t => publishLogged.get(t) == 1)
   val wGoalLockRetried: bool = lastAction == "claimFailsGoalLock" and PROCS.forall(p => procs.get(p).phase != Stopped)
   val wTransientRetried: bool = lastAction == "claimFailsTransient"
+  val wRunEnded: bool = PROCS.exists(p => procs.get(p).phase == Ended)
+  val wRunEndedAfterWork: bool = lastAction == "endRun" and tasks.get("t1").status == Done
   val wOtherProcReported: bool = TASKS.exists(t => setupFailedBy.get(t) == "B") and TASKS.exists(t => setupFailedBy.get(t) == "A")
 }
 
