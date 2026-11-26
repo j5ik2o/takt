@@ -102,7 +102,7 @@ const CURL_SHORT_USER_COMPACT_PREFIX_REGEX = /(?:^|(?<=\s))-u/gi;
 // characters, so that prose such as "Bearer authentication" stays readable.
 const BEARER_VALUE_PATTERN = String.raw`[A-Za-z0-9._~+/=-]`;
 const BARE_BEARER_VALUE_REGEX = new RegExp(
-  String.raw`(\b[Bb]earer\s+)((?=${BEARER_VALUE_PATTERN}*\d|${BEARER_VALUE_PATTERN}{20})${BEARER_VALUE_PATTERN}{8,})`,
+  String.raw`((?:\b[Bb]|B)earer\s+)((?=${BEARER_VALUE_PATTERN}*\d|${BEARER_VALUE_PATTERN}{20})${BEARER_VALUE_PATTERN}{8,})`,
   'g',
 );
 const KNOWN_TOKEN_REGEX = new RegExp(
@@ -130,6 +130,7 @@ export interface SensitiveRange {
 }
 
 interface HttpHeaderValue {
+  readonly keyStart: number;
   start: number;
   credentialStart: number;
   end: number;
@@ -346,11 +347,27 @@ function* optionValues(text: string): Generator<KeyedValue> {
   }
 }
 
+const URL_TAIL_HARD_STOP = /[/?#\s"'`<>()[\]{}]/;
 function urlUserinfos(text: string): SensitiveRange[] {
   const userinfos: SensitiveRange[] = [];
-  for (const match of text.matchAll(URL_USERINFO_CREDENTIALS_REGEX)) {
+  const pattern = new RegExp(URL_USERINFO_CREDENTIALS_REGEX.source, 'g');
+  for (let match = pattern.exec(text); match !== null; match = pattern.exec(text)) {
     const start = match.index + match[1]!.length;
-    const end = match.index + match[0].length - 1;
+    let end = match.index + match[0].length - 1;
+    let hostChar = false;
+    let passedComma = false;
+    for (let cursor = end + 1; cursor < text.length; cursor++) {
+      const char = text[cursor]!;
+      if (URL_TAIL_HARD_STOP.test(char)) break;
+      if (char === '@') { end = cursor; hostChar = false; passedComma = false; continue; }
+      if (char === ',') {
+        if (hostChar && !passedComma) break;
+        passedComma = true;
+        continue;
+      }
+      if (/[\p{L}\p{N}]/u.test(char)) hostChar = true;
+    }
+    pattern.lastIndex = end + 1;
     if (!crossesQuotedListItem(text, match.index, start, end)) userinfos.push({ start, end });
   }
   return userinfos;
@@ -592,6 +609,8 @@ function collectNewEmbeddedValues(text: string, values: Set<string>, visited = n
     const inner = stripMatchingQuotes(quotedValue);
     if (!visited.has(inner)) collectNewEmbeddedValues(inner, values, visited);
   });
+  addValuesBetweenKeys(text, matches.assignments, values);
+  addValuesBetweenKeys(text, matches.options, values);
   for (const value of outermostAndInnermost(matches.assignments)) {
     const assigned = text.slice(value.valueStart, value.valueEnd);
     addSensitiveValue(values, assigned);
@@ -612,10 +631,14 @@ function collectNewEmbeddedValues(text: string, values: Set<string>, visited = n
     addSensitiveValue(values, text.slice(value.valueStart, value.valueEnd));
   }
   for (const { valueStart, valueEnd } of matches.bearers) addSensitiveValue(values, text.slice(valueStart, valueEnd));
-  for (const { start, end } of matches.headers) {
+  for (const { keyStart, start, end } of matches.headers) {
     const value = text.slice(start, end);
     addSensitiveValue(values, value);
     addCredentialComponents(values, value);
+    if (/^(?:set-)?cookie/i.test(text.slice(keyStart, keyStart + 10))) {
+      const first = value.split(';')[0]!.trim();
+      if (first.length > 0) addSensitiveValue(values, first);
+    }
   }
   for (const { start, end } of matches.userinfos) addUserinfoValues(values, text.slice(start, end));
   for (const { valueStart, valueEnd } of matches.curlUsers) {
@@ -639,6 +662,17 @@ function outermostAndInnermost(values: readonly KeyedValue[]): KeyedValue[] {
     if (startsGroup || endsGroup) kept.push(value);
   }
   return kept;
+}
+
+function addValuesBetweenKeys(text: string, group: readonly KeyedValue[], values: Set<string>): void {
+  const separatorAt = forwardFinder(text, /[;&|]/);
+  for (let index = 0; index + 1 < group.length; index++) {
+    const value = group[index]!;
+    const next = group[index + 1]!;
+    if (next.valueEnd !== value.valueEnd) continue;
+    const separator = separatorAt(value.valueStart);
+    if (separator > value.valueStart && separator < next.keyStart) addSensitiveValue(values, text.slice(value.valueStart, separator));
+  }
 }
 
 function addShellStatementValue(values: Set<string>, value: string): void {
