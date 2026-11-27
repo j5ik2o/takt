@@ -237,6 +237,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/builtin-workflow-categories-path.test.ts',
   'src/__tests__/central-task-repository.test.ts',
   'src/__tests__/central-worker.test.ts',
+  'src/__tests__/claim-lock-release.pbt.test.ts',
   'src/__tests__/claude-headless-client.test.ts',
   'src/__tests__/claude-mcp-config.test.ts',
   'src/__tests__/claude-mcp-runtime.test.ts',
@@ -314,6 +315,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/pathBoundary.test.ts',
   'src/__tests__/pi-client.test.ts',
   'src/__tests__/policy-persona.test.ts',
+  'src/__tests__/private-file-lock-orphan.pbt.test.ts',
   'src/__tests__/probe-codex-reasoning-stream.test.ts',
   'src/__tests__/projectBoundaryError.test.ts',
   'src/__tests__/promotion-schema-normalizer.test.ts',
@@ -428,6 +430,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-cli-entrypoint-required-option-errors.test.ts',
   'src/__tests__/it-daemon-projects.test.ts',
   'src/__tests__/it-declared-report-inputs.test.ts',
+  'src/__tests__/it-enqueue-lock-release-after-write.test.ts',
   'src/__tests__/it-goal-task-claim.test.ts',
   'src/__tests__/it-goal-task-stop.test.ts',
   'src/__tests__/it-handoff-progress.test.ts',
@@ -436,6 +439,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-list-esc-menu-routes.test.ts',
   'src/__tests__/it-list-task-stop.test.ts',
   'src/__tests__/it-live-intervention-task-spec.test.ts',
+  'src/__tests__/it-lock-release-after-write.test.ts',
   'src/__tests__/it-manager-compact-display.test.ts',
   'src/__tests__/it-manager-conversation-plan.test.ts',
   'src/__tests__/it-manager-goal-specifications.test.ts',
@@ -502,6 +506,10 @@ export const heavyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-daemon-worktree-run-log.test.ts',
   'src/__tests__/it-mcp-goal-specification-verification-real.test.ts',
   'src/__tests__/it-mcp-goal-specification-verification.test.ts',
+  // Runs a real finish hook command (a Node child process) after a lock release failure (#169).
+  'src/__tests__/it-lock-release-finish-hook.test.ts',
+  // Runs `takt run` in a real child process with a preload that fails one lock release (#169).
+  'src/__tests__/it-claim-lock-release-run.test.ts',
   ...legacyParallelIntegrationTestFiles,
   ...auditedIntegrationBoundaryTestFiles,
   // Runs real `git init` / `git remote` processes for repository identity.

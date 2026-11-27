@@ -74,6 +74,7 @@ export async function saveEnqueuedTaskFile(
   const summary = firstLine(taskContent);
   const publish = (preparedSpec: PreparedEnqueuedTaskSpec) => {
     let created;
+    let written = false;
     try {
       throwIfTaskSaveAborted(abortSignal);
       created = runner.addTask(taskContent, {
@@ -82,9 +83,12 @@ export async function saveEnqueuedTaskFile(
         slug,
         summary,
         deduplicateActiveTargets: options?.deduplicateActiveTargets,
+        onWritten: () => { written = true; },
       });
     } catch (error) {
-      if (publicationScope === undefined) cleanupTaskSpecDirectory(preparedSpec.taskDir);
+      // #169: tasks.yaml already holds the task when only the lock release after
+      // the write failed; removing its instruction files would strand that task.
+      if (!written && publicationScope === undefined) cleanupTaskSpecDirectory(preparedSpec.taskDir);
       throw error;
     }
     const tasksFile = path.join(cwd, '.takt', 'tasks.yaml');

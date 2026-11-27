@@ -160,7 +160,7 @@ function writeAtomic(path: string, initialContent: string | Buffer, mode: number
     }
     published = true;
   }, () => {
-    if (created) {
+    if (created && (!published || rejectExisting)) {
       try { unlinkSync(temporary); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
     }
   });

@@ -11,7 +11,7 @@ vi.mock('../infra/task/process.js', async (importOriginal) => ({
   getSelfProcessIdentity: vi.fn(), getProcessIdentity: vi.fn(), isProcessAlive: vi.fn(),
 }));
 
-import { withFileLock } from '../infra/fs/file-lock.js';
+import { isFileLockTimeoutError, withFileLock } from '../infra/fs/file-lock.js';
 import { getProcessIdentity, getSelfProcessIdentity, isProcessAlive } from '../infra/task/process.js';
 
 const lockPath = resolve('test.lock');
@@ -22,6 +22,16 @@ let content: string | undefined;
 let stat: fs.Stats;
 let temporaryContent: string | undefined;
 let temporaryStat: fs.Stats;
+// Faults on the lock file itself (#169). `reads` is consumed one entry per read of the lock file
+// (an open for reading, then the read): 'open' fails the open with EACCES, 'openEIO' fails the open
+// with EIO, 'read' fails the read with EIO, 'ok' lets it through. Once `reads` is empty, `readForever` applies to every read.
+const faults = {
+  unlink: 0,
+  unlinkCode: 'EIO',
+  reads: [] as ('open' | 'openEIO' | 'read' | 'ok')[],
+  readForever: undefined as 'open' | 'read' | undefined,
+  pendingRead: false,
+};
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -29,6 +39,11 @@ beforeEach(() => {
   vi.setSystemTime(100_000);
   content = undefined;
   temporaryContent = undefined;
+  faults.unlink = 0;
+  faults.unlinkCode = 'EIO';
+  faults.reads = [];
+  faults.readForever = undefined;
+  faults.pendingRead = false;
   stat = { dev: 1, ino: 1, mtimeMs: Date.now() } as fs.Stats;
   vi.mocked(getSelfProcessIdentity).mockReturnValue(identity);
   vi.mocked(getProcessIdentity).mockReturnValue(identity);
@@ -41,10 +56,21 @@ beforeEach(() => {
     } else if (content === undefined) {
       throw Object.assign(new Error('missing'), { code: 'ENOENT' });
     }
+    const read = faults.reads.shift() ?? faults.readForever ?? 'ok';
+    if (read === 'open') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+    if (read === 'openEIO') throw Object.assign(new Error('i/o error, open'), { code: 'EIO' });
+    faults.pendingRead = read === 'read';
     return 42;
   });
+  vi.mocked(fs.statSync).mockImplementation(() => content === undefined ? undefined : stat);
   vi.mocked(fs.fstatSync).mockImplementation((fd) => fd === 43 ? temporaryStat : stat);
-  vi.mocked(fs.readFileSync).mockImplementation(() => content!);
+  vi.mocked(fs.readFileSync).mockImplementation(() => {
+    if (faults.pendingRead) {
+      faults.pendingRead = false;
+      throw Object.assign(new Error('i/o error'), { code: 'EIO' });
+    }
+    return content!;
+  });
   vi.mocked(fs.writeFileSync).mockImplementation((_fd, value) => { temporaryContent = String(value); });
   vi.mocked(fs.linkSync).mockImplementation(() => {
     if (content !== undefined) throw Object.assign(new Error('exists'), { code: 'EEXIST' });
@@ -52,6 +78,10 @@ beforeEach(() => {
     stat = temporaryStat;
   });
   vi.mocked(fs.unlinkSync).mockImplementation((path) => {
+    if (path === lockPath && faults.unlink > 0) {
+      faults.unlink -= 1;
+      throw Object.assign(new Error(`${faults.unlinkCode}: unlink`), { code: faults.unlinkCode });
+    }
     if (path === lockPath) content = undefined;
     else temporaryContent = undefined;
   });
@@ -232,7 +262,10 @@ describe('withFileLock', () => {
     expect(content).toBe(otherContent);
     expect(action).not.toHaveBeenCalled();
     stat = { ...stat, mtimeMs: Date.now() - 30_001 } as fs.Stats;
-    expect(withFileLock(lockPath, () => 'recovered')).toBe('recovered');
+    const recovered = vi.fn(() => 'recovered');
+    // #169 3-1 (設計レビュー 高-2): 解放で読めない自分のファイルは、黙って残さずに読みの例外を投げる。
+    expect(() => withFileLock(lockPath, recovered)).toThrow(expect.objectContaining({ code: 'EIO' }));
+    expect(recovered).toHaveBeenCalledOnce();
     // The new owner's readable content must be confirmed before release.
     expect(content).toBe(selfContent);
     expect(vi.mocked(fs.unlinkSync).mock.calls.filter(([path]) => path === lockPath)).toHaveLength(1);
@@ -295,4 +328,174 @@ describe('withFileLock', () => {
       expect(action).not.toHaveBeenCalled();
     },
   );
+});
+
+// #169: a lock file this process failed to release names a live owner (this process). The process
+// records it and removes it the next time it takes the same lock, instead of waiting for itself.
+// Design: docs/design/claim-lock-release-failure.md (3-1). Model: specs/quint/claim-lock-release/.
+describe('a lock this process failed to release (#169)', () => {
+  const releaseFailures = [
+    ['unlink fails with EIO', () => { faults.unlink = 1; faults.unlinkCode = 'EIO'; }, 'EIO'],
+    ['unlink fails with EACCES', () => { faults.unlink = 1; faults.unlinkCode = 'EACCES'; }, 'EACCES'],
+    ['the lock file cannot be opened (EACCES)', () => { faults.reads = ['open']; }, 'EACCES'],
+    ['the lock file cannot be read (EIO)', () => { faults.reads = ['read']; }, 'EIO'],
+  ] as const;
+
+  function lockUnlinks(): number {
+    return vi.mocked(fs.unlinkSync).mock.calls.filter(([path]) => path === lockPath).length;
+  }
+
+  function waits(): number {
+    return vi.mocked(Atomics.wait).mock.calls.length;
+  }
+
+  /** Takes the lock and fails its release once, leaving this process's lock file on disk. */
+  function failRelease(): void {
+    expect(() => withFileLock(lockPath, () => { faults.unlink = 1; faults.unlinkCode = 'EIO'; }))
+      .toThrow(expect.objectContaining({ code: 'EIO' }));
+    expect(content).toBe(selfContent);
+  }
+
+  it.each(releaseFailures)('throws when %s, then removes the file on the next acquisition without waiting', (_label, arm, code) => {
+    const saved = vi.fn(() => { arm(); return 'saved'; });
+    expect(() => withFileLock(lockPath, saved)).toThrow(expect.objectContaining({ code }));
+    expect(saved).toHaveBeenCalledOnce();
+    expect(content).toBe(selfContent);
+
+    const before = waits();
+    const next = vi.fn(() => content);
+    expect(withFileLock(lockPath, next, { timeoutMs: 0 })).toBe(selfContent);
+    expect(next).toHaveBeenCalledOnce();
+    expect(waits()).toBe(before);
+    expect(content).toBeUndefined();
+  });
+
+  it.each([
+    [['open']], [['read']], [['open', 'open']], [['read', 'read', 'read']],
+    // The read right after a matching read fails: the file is not taken as removed (再レビュー 中-A).
+    [['ok', 'read']], [['ok', 'open']],
+  ] as const)('keeps waiting while its recorded file cannot be read (%j), then removes it on the first readable round', (reads) => {
+    failRelease();
+    faults.reads = [...reads];
+    const started = Date.now();
+    const next = vi.fn(() => { faults.reads = []; return 'next'; });
+
+    expect(withFileLock(lockPath, next, { timeoutMs: 1_000 })).toBe('next');
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(content).toBeUndefined();
+  });
+
+  // CodeRabbit (PR #182): an EIO on opening the recorded file is a failed read like EACCES, so one
+  // failed open must not throw out of the acquisition (再レビュー 中-B, design 3-1).
+  it('keeps waiting when opening its recorded file fails once with EIO, then removes it and runs the action once', () => {
+    failRelease();
+    faults.reads = ['openEIO'];
+    const before = waits();
+    const next = vi.fn(() => 'next');
+
+    expect(withFileLock(lockPath, next, { timeoutMs: 1_000 })).toBe('next');
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(waits()).toBeGreaterThan(before);
+    expect(content).toBeUndefined();
+  });
+
+  it.each(['open', 'read'] as const)('times out without removing its recorded file while it cannot be read (%s), and keeps the record', (kind) => {
+    failRelease();
+    faults.readForever = kind;
+    const action = vi.fn();
+
+    for (const timeoutMs of [0, 5_000]) {
+      const error = (() => { try { withFileLock(lockPath, action, { timeoutMs }); } catch (caught) { return caught; } return undefined; })();
+      expect(isFileLockTimeoutError(error)).toBe(true);
+    }
+    expect(action).not.toHaveBeenCalled();
+    expect(content).toBe(selfContent);
+
+    faults.readForever = undefined;
+    expect(withFileLock(lockPath, () => 'next', { timeoutMs: 0 })).toBe('next');
+    expect(content).toBeUndefined();
+  });
+
+  it('throws the unlink error on the next acquisition while its file cannot be removed, without running the action or timing out', () => {
+    failRelease();
+    faults.unlink = Number.POSITIVE_INFINITY;
+    faults.unlinkCode = 'EACCES';
+    const action = vi.fn();
+    const started = Date.now();
+
+    const error = (() => { try { withFileLock(lockPath, action); } catch (caught) { return caught; } return undefined; })();
+
+    expect(error).toMatchObject({ code: 'EACCES' });
+    expect(isFileLockTimeoutError(error)).toBe(false);
+    expect(Date.now()).toBe(started);
+    expect(action).not.toHaveBeenCalled();
+    expect(content).toBe(selfContent);
+
+    faults.unlink = 0;
+    expect(withFileLock(lockPath, () => 'next', { timeoutMs: 0 })).toBe('next');
+  });
+
+  it('throws an AggregateError of the action error and the release error', () => {
+    const actionError = new Error('update failed');
+    let thrown: unknown;
+    try {
+      withFileLock(lockPath, () => { faults.unlink = 1; throw actionError; });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(AggregateError);
+    expect((thrown as AggregateError).errors).toEqual([actionError, expect.objectContaining({ code: 'EIO' })]);
+  });
+
+  it('does not remove an unrecorded lock file that names this process', () => {
+    // A direct acquisition first, so no record from an earlier test is left for this path.
+    withFileLock(lockPath, vi.fn());
+    content = selfContent;
+    stat = { ...stat, ino: 900 } as fs.Stats;
+    const unlinks = lockUnlinks();
+    const action = vi.fn();
+
+    expect(() => withFileLock(lockPath, action, { timeoutMs: 25 })).toThrow(/timed out/);
+
+    expect(action).not.toHaveBeenCalled();
+    expect(content).toBe(selfContent);
+    expect(lockUnlinks()).toBe(unlinks);
+  });
+
+  it.each([
+    ['a lock that names this process', () => selfContent],
+    ['a live owner', () => otherContent],
+  ])('does not remove a file that replaced its failed lock: %s', (_label, replacement) => {
+    failRelease();
+    const unlinks = lockUnlinks();
+    content = replacement();
+    stat = { ...stat, ino: stat.ino + 100 } as fs.Stats;
+    const action = vi.fn();
+
+    expect(() => withFileLock(lockPath, action, { timeoutMs: 25 })).toThrow(/timed out/);
+
+    expect(action).not.toHaveBeenCalled();
+    expect(content).toBe(replacement());
+    expect(lockUnlinks()).toBe(unlinks);
+  });
+
+  it('forgets the record once the path is taken directly after the file was deleted', () => {
+    failRelease();
+    const recordedIno = stat.ino;
+    content = undefined;
+    expect(withFileLock(lockPath, () => 'direct')).toBe('direct');
+
+    // A later file with the same inode and this process's content is not the one it failed to release.
+    content = selfContent;
+    stat = { ...stat, ino: recordedIno } as fs.Stats;
+    const unlinks = lockUnlinks();
+    const action = vi.fn();
+    expect(() => withFileLock(lockPath, action, { timeoutMs: 25 })).toThrow(/timed out/);
+    expect(action).not.toHaveBeenCalled();
+    expect(content).toBe(selfContent);
+    expect(lockUnlinks()).toBe(unlinks);
+  });
 });
