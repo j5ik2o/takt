@@ -19,21 +19,40 @@ export function reconcileLostRun(observation: Extract<WatchObservation, { kind: 
   const result: GoalTaskResult = { success: false, interrupted: true, workflowResult: 'error', failureReason,
     shaUnavailableReason: failureReason };
   let recovered = false;
-  withGoalExecutionLock(reference.repositoryDirectory, () => {
-    new TaskStore(reference.repositoryDirectory).update((current) => {
-      signal.throwIfAborted();
-      const task = current.tasks.find((task) => task.name === reference.taskName);
-      if (task === undefined || task.status !== 'running' || task.goal_id !== reference.goalId || task.run_slug !== reference.runSlug
-        || task.execution_id !== reference.executionId || task.owner_pid !== observation.pid || (task.owner_start_time ?? null) !== observation.startTime
-        || !recordedProcessLost(observation.pid, observation.startTime)) return undefined;
-      recovered = true;
-      return { tasks: current.tasks.map((value) => value !== task ? value : {
-        ...value, status: 'failed' as const, completed_at: new Date().toISOString(), owner_pid: null, owner_start_time: null,
-        failure: { error: failureReason }, completion: result,
-      }) };
+  let written = false;
+  let releaseError: unknown;
+  let releaseFailed = false;
+  try {
+    withGoalExecutionLock(reference.repositoryDirectory, () => {
+      new TaskStore(reference.repositoryDirectory).update((current) => {
+        signal.throwIfAborted();
+        const task = current.tasks.find((task) => task.name === reference.taskName);
+        if (task === undefined || task.status !== 'running' || task.goal_id !== reference.goalId || task.run_slug !== reference.runSlug
+          || task.execution_id !== reference.executionId || task.owner_pid !== observation.pid || (task.owner_start_time ?? null) !== observation.startTime
+          || !recordedProcessLost(observation.pid, observation.startTime)) return undefined;
+        recovered = true;
+        return { tasks: current.tasks.map((value) => value !== task ? value : {
+          ...value, status: 'failed' as const, completed_at: new Date().toISOString(), owner_pid: null, owner_start_time: null,
+          failure: { error: failureReason }, completion: result,
+        }) };
+      }, { onWritten: () => { written = true; } });
     });
-  });
-  if (recovered) saveManagerEvent(reference.repositoryDirectory, { kind: 'completion', goalId: reference.goalId,
-    taskName: reference.taskName, runSlug: reference.runSlug, result });
+  } catch (error) {
+    if (!written) throw error;
+    releaseError = error;
+    releaseFailed = true;
+  }
+  if (recovered) {
+    try {
+      saveManagerEvent(reference.repositoryDirectory, { kind: 'completion', goalId: reference.goalId,
+        taskName: reference.taskName, runSlug: reference.runSlug, result });
+    } catch (saveError) {
+      if (releaseFailed) {
+        throw new AggregateError([saveError, releaseError], 'Manager event save and lock release both failed');
+      }
+      throw saveError;
+    }
+  }
+  if (releaseFailed) throw releaseError;
   return recovered;
 }

@@ -432,8 +432,10 @@ describe('task finish hook', () => {
 
     const claimed = claimTasksWithGoalCompletions(project.runner, 1, project.dir, new AbortController().signal);
 
-    expect(claimed).toEqual({ tasks: [], setupFailedTaskNames: [task.name] });
-    await runTaskFinishHooks(project.dir, project.runner, claimed.setupFailedTaskNames, { emitStatusLog: false });
+    // #169: the claim returns the saved states instead of the names; the names checked are the same.
+    expect(claimed.tasks).toEqual([]);
+    expect(claimed.setupFailedTasks.map((item) => item.name)).toEqual([task.name]);
+    await runTaskFinishHooks(project.dir, project.runner, claimed.setupFailedTasks.map((item) => item.name), { emitStatusLog: false });
     expect(hookCalls(project).map((call) => [call.env.TAKT_FINISH_TASK_NAME, call.env.TAKT_FINISH_STATUS]))
       .toEqual([[task.name, 'failed']]);
   });
@@ -451,8 +453,10 @@ describe('task finish hook', () => {
 
     const claimed = claimTasksWithGoalCompletions(project.runner, 1, project.dir, new AbortController().signal);
 
-    expect(claimed).toEqual({ tasks: [], setupFailedTaskNames: [task.name] });
-    await runTaskFinishHooks(project.dir, project.runner, claimed.setupFailedTaskNames, { emitStatusLog: false });
+    // #169: the claim returns the saved states instead of the names; the names checked are the same.
+    expect(claimed.tasks).toEqual([]);
+    expect(claimed.setupFailedTasks.map((item) => item.name)).toEqual([task.name]);
+    await runTaskFinishHooks(project.dir, project.runner, claimed.setupFailedTasks.map((item) => item.name), { emitStatusLog: false });
     expect(hookCalls(project).map((call) => [call.env.TAKT_FINISH_TASK_NAME, call.env.TAKT_FINISH_STATUS]))
       .toEqual([[task.name, 'failed']]);
   });

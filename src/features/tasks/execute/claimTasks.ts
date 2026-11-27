@@ -31,8 +31,8 @@ export class TaskClaimLockUnavailableError extends Error {
 export function claimTasksWithGoalCompletions(
   taskRunner: TaskRunner, count: number, cwd: string, signal: AbortSignal,
   goalTasksOnly = false,
-): { tasks: TaskInfo[]; setupFailedTaskNames: string[] } {
-  if (count <= 0 || signal.aborted) return { tasks: [], setupFailedTaskNames: [] };
+): { tasks: TaskInfo[]; setupFailedTasks: TaskState[] } {
+  if (count <= 0 || signal.aborted) return { tasks: [], setupFailedTasks: [] };
   let taskStates: TaskState[];
   try {
     taskStates = taskRunner.listTaskStateItems();
@@ -44,16 +44,16 @@ export function claimTasksWithGoalCompletions(
   try {
     // Goal tasks saved as failed while being claimed never reach an execution; the caller runs their
     // finish hook. The claim reports exactly the setup failures it saved, so tasks.yaml is not read again.
-    const setupFailedTaskNames: string[] = [];
+    const setupFailedTasks: TaskState[] = [];
     const tasks = taskRunner.claimNextTasks(
       count,
       createRuntimeAssignmentSetupGuard(cwd),
       (task) => {
-        setupFailedTaskNames.push(task.name);
+        setupFailedTasks.push(task);
         publishSetupFailure(cwd, task);
       },
     );
-    return { tasks, setupFailedTaskNames };
+    return { tasks, setupFailedTasks };
   } catch (error) {
     if (hasPending || isClaimLockTimeoutFailure(error)) throw classifyClaimLockFailure(error);
     throw error;

@@ -25,6 +25,7 @@ import type { Goal } from '../../infra/goals/schema.js';
 import { hasGoalRegistrationArtifacts, registerReservedGoal, reverifyReservedGoal } from '../../infra/goals/service.js';
 import { validateGoalBranchReferences } from '../../infra/goals/git.js';
 import { setGoalExecutionStatus } from '../../infra/goals/execution.js';
+import { GoalExecutionSavedError, throwGoalExecutionSavedError } from '../../infra/goals/goalExecutionSavedError.js';
 import { deleteFinishedGoal } from '../../infra/goals/deletion.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import { ensureManagerRun } from './autoRun.js';
@@ -323,7 +324,22 @@ export function createConversationTurnService(configDirectory: string, runtime: 
           case 'pause_goal': case 'resume_goal': case 'abort_goal': {
             const repository = await findAssignedGoalRepository(command.goalId, assignment);
             const status = command.kind === 'pause_goal' ? 'paused' : command.kind === 'resume_goal' ? 'active' : 'aborted';
-            await setGoalExecutionStatus(repository, command.goalId, status, io.signal, 'human');
+            try {
+              await setGoalExecutionStatus(repository, command.goalId, status, io.signal, 'human');
+            } catch (error) {
+              if (!(error instanceof GoalExecutionSavedError)) throw error;
+              // #169: the goal was saved and only the lock release afterwards
+              // failed, so the steps after the save run before the release
+              // error is reported.
+              const followUpErrors: unknown[] = [];
+              try {
+                if (status === 'aborted') await invalidatePendingGoalTasksWithFinishHook(repository, new TaskRunner(repository), command.goalId);
+                if (status === 'active') await ensureManagerRun(repository);
+              } catch (followUpError) {
+                followUpErrors.push(followUpError);
+              }
+              throwGoalExecutionSavedError(error, followUpErrors);
+            }
             if (status === 'aborted') await invalidatePendingGoalTasksWithFinishHook(repository, new TaskRunner(repository), command.goalId);
             if (status === 'active') await ensureManagerRun(repository);
             result = { kind: 'notice', message: getLabel(status === 'paused' ? 'manager.goalPaused' : status === 'active' ? 'manager.goalResumed' : 'manager.goalAborted', language, { goalId: command.goalId }) };
