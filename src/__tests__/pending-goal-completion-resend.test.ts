@@ -29,6 +29,7 @@ const save = vi.hoisted(() => vi.fn());
 vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: save }));
 
 import { TaskRunner } from '../infra/task/index.js';
+import { getSelfProcessIdentity } from '../infra/task/process.js';
 import { TaskStore } from '../infra/task/store.js';
 import type { GoalTaskSetupGuard } from '../infra/task/goalTaskSetupGuard.js';
 import { claimTasksWithGoalCompletions, failInterruptedTasksWithGoalEvents } from '../features/tasks/execute/claimTasks.js';
@@ -307,7 +308,8 @@ describe('a deletion reservation decides whether the mark may be cleared', () =>
     const h = await open();
     finishGoal(h);
     // A reservation held by this live process: its owner has not finished the deletion yet.
-    const live = { id: '5a0e8400-e29b-41d4-a716-446655440002', owner_pid: process.pid, owner_start_time: 'darwin-start-v2:1' };
+    const live = { id: '5a0e8400-e29b-41d4-a716-446655440002', owner_pid: process.pid,
+      owner_start_time: getSelfProcessIdentity()!.startTime };
     writeTasks(h.project, [failedGoalTask('live-deletion', { deletion: live })]);
     const before = readFileSync(tasksPath(h.project), 'utf8');
     expect(await h.source.hasWork(h.files)).toBe(true);
@@ -514,7 +516,13 @@ describe('the minimal rewrite does not delete a neighbouring task', () => {
       'tasks:',
       '  - name: marked-task',
       '    status: failed',
+      '    content: work for marked-task',
       `    goal_id: ${defaultGoalId}`,
+      '    created_at: 2026-11-27T00:00:00.000Z',
+      '    started_at: 2026-11-27T00:00:00.000Z',
+      '    completed_at: 2026-11-27T00:00:00.000Z',
+      '    failure:',
+      '      error: boom',
       '    run_slug: run-marked',
       '    completion_publication_pending: true',
       '    deletion:',
@@ -522,6 +530,10 @@ describe('the minimal rewrite does not delete a neighbouring task', () => {
       '      owner_pid: 999999',
       '  - name: next-task',
       '    status: pending',
+      '    content: work for next-task',
+      '    created_at: 2026-11-27T00:00:00.000Z',
+      '    started_at: null',
+      '    completed_at: null',
       '',
     ].join('\n');
     writeFileSync(tasksPath(h.project), source, 'utf8');
@@ -540,7 +552,7 @@ describe('the minimal rewrite does not delete a neighbouring task', () => {
 
   it('keeps a flow-style record when the mark and the task share one line', async () => {
     const h = await open();
-    const source = `tasks: [{name: marked-task, status: failed, goal_id: ${defaultGoalId}, run_slug: run-marked, completion_publication_pending: true, deletion: {id: 5a0e8400-e29b-41d4-a716-446655440000, owner_pid: 999999}}, {name: next-task, status: pending}]\n`;
+    const source = `tasks: [{name: marked-task, status: failed, content: work for marked-task, goal_id: ${defaultGoalId}, created_at: 2026-11-27T00:00:00.000Z, started_at: 2026-11-27T00:00:00.000Z, completed_at: 2026-11-27T00:00:00.000Z, failure: {error: boom}, run_slug: run-marked, completion_publication_pending: true, deletion: {id: 5a0e8400-e29b-41d4-a716-446655440000, owner_pid: 999999}}, {name: next-task, status: pending, content: work for next-task, created_at: 2026-11-27T00:00:00.000Z, started_at: null, completed_at: null}]\n`;
     writeFileSync(tasksPath(h.project), source, 'utf8');
 
     const published = await h.files.markGoalTaskCompletionPublished(h.project, {

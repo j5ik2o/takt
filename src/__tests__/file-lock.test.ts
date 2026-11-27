@@ -207,7 +207,7 @@ describe('withFileLock', () => {
     expect(withFileLock(lockPath, action)).toBe(selfContent);
 
     expect(action).toHaveBeenCalledOnce();
-    expect(content).toBe(selfContent);
+    expect(content).toBeUndefined();
     expect(fs.unlinkSync).toHaveBeenCalledWith(lockPath);
   });
 

@@ -68,7 +68,7 @@ describe('an invalid completion_publication_pending mark is dropped on read, not
     { label: 'no goal_id', status: 'failed', goal_id: undefined },
     { label: 'no completion', status: 'failed', completion: undefined },
     { label: 'no run_slug and no execution_id', status: 'failed', run_slug: undefined },
-  ])('drops true for a record with $label', ({ status, ...rest }) => {
+  ])('drops true for a record with $label', ({ label: _label, status, ...rest }) => {
     const parsed = parse(record({ status, ...rest, completion_publication_pending: true }));
     expect(parsed.completion_publication_pending).toBeUndefined();
     expect(parsed).not.toHaveProperty('completion_publication_pending');
