@@ -299,18 +299,26 @@ const TaskRecordObjectSchema = buildTaskSchema(
   }
 });
 
-export const TaskRecordSchema = TaskRecordObjectSchema.transform((value) => {
+/**
+ * The read-side record shape: a single object type whose mark is `true` when present.
+ * The transform below returns this shape on both paths, so readers and writers never
+ * face a union of a with-mark record and a without-mark record.
+ */
+export type TaskRecord = Omit<z.infer<typeof TaskRecordObjectSchema>, 'completion_publication_pending'> & {
+  completion_publication_pending?: true;
+};
+
+export const TaskRecordSchema = TaskRecordObjectSchema.transform((value): TaskRecord => {
   const mark = value.completion_publication_pending;
+  const { completion_publication_pending: _dropped, ...rest } = value;
   if (mark === true && isValidCompletionPublicationPending(value)) {
-    return { ...value, completion_publication_pending: true as const };
+    return { ...rest, completion_publication_pending: true };
   }
   if (mark !== undefined) {
     log.warn(`Dropping invalid completion_publication_pending for task ${sanitizeTerminalText(String(value.name))}: the mark is only valid on a terminal goal task with a completion and a run_slug or execution_id.`);
   }
-  const { completion_publication_pending: _dropped, ...rest } = value;
   return rest;
 });
-export type TaskRecord = z.infer<typeof TaskRecordSchema>;
 
 export const TasksFileSchema = z.object({
   tasks: z.array(TaskRecordSchema),

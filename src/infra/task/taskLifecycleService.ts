@@ -522,8 +522,9 @@ export class TaskLifecycleService {
           && task.completion_publication_pending === true
           && task.deletion === undefined) {
           changed = true;
-          cleared = { ...task, completion_publication_pending: undefined };
-          return cleared;
+          const clearedRecord: TaskRecord = { ...task, completion_publication_pending: undefined };
+          cleared = clearedRecord;
+          return clearedRecord;
         }
         return task;
       });
