@@ -24,9 +24,9 @@ function differentStartTime(startTime: string): string {
 }
 
 describe('inspectDeletionOwner does not trust a reused PID', () => {
-  it('does not report a live PID as alive when its recorded start time differs', () => {
+  it('does not report a live PID as alive when its recorded start time differs', async () => {
     expect(self).toBeDefined();
-    const owner = inspectDeletionOwner({
+    const owner = await inspectDeletionOwner({
       owner_pid: process.pid,
       owner_start_time: differentStartTime(self!.startTime),
     });
@@ -34,11 +34,11 @@ describe('inspectDeletionOwner does not trust a reused PID', () => {
     expect(owner).not.toBe('alive');
   });
 
-  it('keeps a live PID without a recorded start time unknown', () => {
-    expect(inspectDeletionOwner({ owner_pid: process.pid })).toBe('unknown');
+  it('keeps a live PID without a recorded start time unknown', async () => {
+    expect(await inspectDeletionOwner({ owner_pid: process.pid })).toBe('unknown');
   });
 
-  it('reports a missing PID as dead', () => {
-    expect(inspectDeletionOwner({ owner_pid: 999_999 })).toBe('dead');
+  it('reports a missing PID as dead', async () => {
+    expect(await inspectDeletionOwner({ owner_pid: 999_999 })).toBe('dead');
   });
 });
