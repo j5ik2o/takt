@@ -7,6 +7,8 @@ import { getExecutionSecrets } from '../../shared/utils/execution-secrets.js';
 import { normalizeProviderEventValue } from '../../shared/utils/logMetadata.js';
 import {
   collectTrackedEmbeddedSensitiveValues,
+  previousDisplayRanges,
+  previousSensitiveTextRanges,
   REDACTED_VALUE,
   sensitiveTextRanges,
   substringSensitiveRanges,
@@ -44,10 +46,15 @@ function maskTextFragments(chunks: readonly string[]): string[] {
   const tracked = { legacy: new Set<string>(), all: new Set<string>() };
   collectTrackedEmbeddedSensitiveValues(fullText, tracked);
   const masked = maskedCharacters(fullText, sensitiveTextRanges(fullText, new Set(getExecutionSecrets())), tracked.all);
-  if (masked === undefined) return [...chunks];
-  const hidden = masked;
+  const previous = maskedCharacters(fullText, previousSensitiveTextRanges(fullText), tracked.legacy);
+  if (masked === undefined && previous === undefined) return [...chunks];
+  const hidden = masked ?? new Uint8Array(fullText.length);
   let offset = 0;
   return chunks.map((chunk) => {
+    const previousSpans = previous === undefined ? [] : maskedSpans(previous, offset, chunk.length);
+    if (previousSpans.length > 0) {
+      for (const range of previousDisplayRanges(chunk, previousSpans)) hidden.fill(1, offset + range.start, offset + range.end);
+    }
     let output = '';
     let inMaskedSpan = false;
     for (let index = 0; index < chunk.length; index++) {
@@ -62,6 +69,21 @@ function maskTextFragments(chunks: readonly string[]): string[] {
     offset += chunk.length;
     return output;
   });
+}
+
+/** The masked runs of `masked` within [offset, offset + length), as ranges on that fragment. */
+function maskedSpans(masked: Uint8Array, offset: number, length: number): SensitiveRange[] {
+  const spans: SensitiveRange[] = [];
+  for (let index = 0; index < length;) {
+    if (masked[offset + index] !== 1) {
+      index++;
+      continue;
+    }
+    const start = index;
+    while (index < length && masked[offset + index] === 1) index++;
+    spans.push({ start, end: index });
+  }
+  return spans;
 }
 
 /** Characters of `fullText` covered by a pattern range or by an occurrence of a value, or undefined if none. */
