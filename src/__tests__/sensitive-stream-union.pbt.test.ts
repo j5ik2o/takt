@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import fc from 'fast-check';
 import { scaledMs } from '../../scripts/test-time-factor.mjs';
 import { describe, expect, it } from 'vitest';
@@ -6,7 +7,9 @@ import {
   SensitiveTextStreamBuffer, type SensitiveTextCommit, type SensitiveTextStreamBufferLike, type SensitiveTextStreamRedactor,
 } from '../shared/utils/sensitive-stream.js';
 import { classifyToolResult } from '../shared/tool-activity/result.js';
-import { maskSensitiveRanges, REDACTED_VALUE, sensitiveTextRanges, type SensitiveRange } from '../shared/utils/sensitive-text.js';
+import {
+  maskSensitiveRanges, previousSensitiveTextRanges, REDACTED_VALUE, sensitiveTextRanges, type SensitiveRange,
+} from '../shared/utils/sensitive-text.js';
 import { createBoundedSensitiveValues, type BoundedSensitiveValues } from '../shared/utils/sensitive-value.js';
 import * as legacyStream from './helpers/legacy-sensitive-stream.js';
 import * as legacyValue from './helpers/legacy-sensitive-value.js';
@@ -544,6 +547,30 @@ describe('#151 2a fixed examples (design 8)', () => {
     expectHiddenEverywhere(chunks, ['Zq6Zq']);
   });
 
+  // 14th edition, point 2 (design 7.1, rules 3a and 3b): at the cap the held run is cut non-forced at
+  // the last boundary where the new reading is closed, and the rest is forced only while it is still
+  // over the cap. The open line below is under the cap after that cut, so it stays held. A stream
+  // that forces every held unit at the cap, or that forces the rest after the non-forced cut, commits
+  // the open line in this write.
+  it('A3 (v) at the cap the cut is non-forced at the last closed boundary and the rest under it stays held', () => {
+    const plain = ('p'.repeat(99) + '\n').repeat(100);
+    const commit = new SensitiveTextStreamBuffer().write(plain + "--password=''a'\n", undefined);
+    expect(commit.text).toBe(plain);
+    expect(commit.text.length).toBe(10_000);
+  });
+
+  // 14th edition, point 2 (design 7.1, rules 3a and 3b): the rest is forced only when it is still over
+  // the cap. Here the open new value itself is longer than the cap after the non-forced cut, so the
+  // remaining held run is committed under force (the documented last resort, 9.3) and the write ends
+  // with nothing pending.
+  it('A3 (vi) the rest after the non-forced cut is forced while it is still over the cap', () => {
+    const plain = ('p'.repeat(99) + '\n').repeat(100);
+    const commit = new SensitiveTextStreamBuffer().write(plain + "--password=''a'\n" + 'q'.repeat(10_020) + '\n', undefined);
+    expect(commit.text.startsWith(plain)).toBe(true);
+    expect(commit.text.length).toBeGreaterThan(plain.length);
+    expect(commit.text).not.toContain('q');
+  });
+
   it('A3 (ii) 20,000 plain characters in one write after a 200 character hold', () => {
     const held = "--password=''a'\n" + 'q'.repeat(183) + '\n';
     expectBufferProperties(runBuffer(writes(held, ('p'.repeat(99) + '\n').repeat(200))));
@@ -679,5 +706,69 @@ describe('#151 2a: the outer guard is the new reading (a) alone (14th edition)',
     const text = 'https://cookie:a@host ';
     expect(holdsAtTheEnd(module.newReadingRanges!, text), 'the new reading (a)').toBe(false);
     expect(holdsAtTheEnd((value) => sensitiveTextRanges(value, new Set()), text), 'the union ((a), (b), (c))').toBe(true);
+  });
+
+  // The outer hold is built from the new reading (a), not from the previous range path (c): this line
+  // is closed to the copy's range path (and to the first PR's `pendingSensitiveValueRanges`), but the
+  // new reading keeps the quote after `a` open, so the outer stream must hold the line.
+  it('the outer hold keeps a line the new reading keeps open and the previous range path closes', () => {
+    const line = "--password=''a'\n";
+    expect(QUOTES.some((quote) => previousSensitiveTextRanges(line + 'x' + quote)
+      .some((range) => range.end > line.length)), 'the previous range path (c)').toBe(false);
+    expect(new SensitiveTextStreamBuffer().write(line, undefined).text).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// 14th edition, point 3 (design 7, line 34): an open PEM block is `inPemBlock`; the design does not
+// name it `pemLabel`. The name is what the rules 3a/3b and preview read, so the source must say it.
+
+describe('#151 2a: an open PEM block is inPemBlock (14th edition)', () => {
+  it('sensitive-stream.ts names the open PEM state inPemBlock and does not use pemLabel', () => {
+    const source = readFileSync(new URL('../shared/utils/sensitive-stream.ts', import.meta.url), 'utf8');
+    expect(source).toMatch(/\binPemBlock\b/u);
+    expect(source).not.toMatch(/\bpemLabel\b/u);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// 14th edition, point 5 (design 7.2): the model has nine invariants, and `unionSafety` is their
+// conjunction, not a tenth entry; it has eight mutations, `capCutAtHeldEnd` among them, and each
+// broken model has a witness test.
+
+const UNION_SPEC = new URL('../../specs/quint/sensitive-stream-buffer/sensitiveStreamUnion.qnt', import.meta.url);
+const UNION_TEST_SPEC = new URL('../../specs/quint/sensitive-stream-buffer/sensitiveStreamUnion_test.qnt', import.meta.url);
+
+describe('#151 2a: the Quint model states nine invariants and eight mutations (14th edition)', () => {
+  it('unionSafety is the conjunction of the nine invariants, not a tenth entry', () => {
+    const source = readFileSync(UNION_SPEC, 'utf8');
+    const marker = 'val unionSafety =';
+    const start = source.indexOf(marker);
+    expect(start, marker).toBeGreaterThanOrEqual(0);
+    const lines: string[] = [];
+    for (const raw of source.slice(start + marker.length).split('\n')) {
+      const line = raw.trim();
+      if (line === '}') break;
+      if (line !== '') lines.push(line);
+    }
+    const names = lines.flatMap((line) => [...line.matchAll(/\b([A-Za-z][A-Za-z0-9]*)\b/gu)]
+      .map((match) => match[1]!)).filter((name) => name !== 'and');
+    expect(names).toEqual([
+      'capCutsOutsideNewValues', 'conservation', 'boundedPending', 'boundariesSubset', 'unitHidesLegacy',
+      'unitHidesLegacyDisplay', 'unitHidesExtra', 'noSplitNew', 'noSplitLegacy',
+    ]);
+    expect(names).not.toContain('unionSafety');
+  });
+
+  it('there are eight mutations, including capCutAtHeldEnd, each with a witness test', () => {
+    const source = readFileSync(UNION_SPEC, 'utf8');
+    const block = source.slice(source.indexOf('const mutation: str'), source.indexOf('val ALPHABET'));
+    const mutations = [...block.matchAll(/"([^"]+)"/gu)].map((match) => match[1]!).filter((name) => name !== 'none');
+    expect(mutations).toEqual([
+      'cutAtWriteEnd', 'rereadJoined', 'noNewGuard', 'newGuardOnly',
+      'dropHeldHidden', 'dropDisplayTrace', 'dropEarlierExtra', 'capCutAtHeldEnd',
+    ]);
+    const tests = readFileSync(UNION_TEST_SPEC, 'utf8');
+    for (const mutation of mutations) expect(tests, mutation).toContain(`run ${mutation}WitnessTest`);
   });
 });

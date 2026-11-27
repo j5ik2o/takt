@@ -180,6 +180,25 @@ describe('#151 known leak (since before #151): `Bearer` right after a word chara
   });
 });
 
+// 14th edition, point 6 (design 9.5 and 11, R9-8): the stream-specific leaks of the first PR are
+// closed on the stream paths by the second PR: `Zq4Zq` of #1 and `Zq0Zq` of #2, #3 and #4. `Zq1Zq`
+// is not a stream leak: it leaks on every path since before #151 (a word character before `Bearer`),
+// and it is fixed by a follow-up PR (#175, item 423). This test fixes that leak; it does not hide it.
+describe('#151 2a: the stream paths close the first PR stream leaks and keep the Zq1Zq leak', () => {
+  it.each([
+    [LEAK_2[0]!, 'Zq4Zq'],
+    [LEAK_2[1]!, 'Zq0Zq'],
+    [PHASE1_COMPOSITION[0]!, 'Zq0Zq'],
+    [PHASE1_COMPOSITION[1]!, 'Zq0Zq'],
+  ])('%j hides %s on every stream path', (input, secret) => {
+    for (const [path, shown] of STREAM_PATHS) expect(shown([input]), path).not.toContain(secret);
+  });
+
+  it.each(PHASE1_COMPOSITION.map((input) => [input]))('%j still shows Zq1Zq on every stream path', (input) => {
+    for (const [path, shown] of STREAM_PATHS) expect(shown([input]), path).toContain('Zq1Zq');
+  });
+});
+
 // Leaks since before #151 that the review of #165 found; the previous implementation shows them as
 // well, and follow-up PRs close them (then these examples turn into "hidden").
 describe('#151 known leaks (since before #151) found in review', () => {
