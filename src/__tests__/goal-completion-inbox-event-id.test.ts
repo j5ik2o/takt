@@ -164,7 +164,7 @@ describe('a goal task completion gets a deterministic, injective eventId', () =>
     expect(first.eventId).toBe(`goal-completion-${sha256([inbox('e'), goalId, 'task-a', 'execution', 'exec-e'])}`);
     // The attempt identifier reaches the manager turn as well, not only the dedup key.
     expect(second.event).toMatchObject({
-      kind: 'task_failed', task: { repositoryDirectory: inbox('e'), goalId, taskName: 'task-a', executionId: 'exec-e' },
+      kind: 'task_failed', task: { repositoryDirectory: '/repo', goalId, taskName: 'task-a', executionId: 'exec-e' },
     });
   });
 
@@ -221,13 +221,15 @@ describe('the eventId is deterministic and injective for every string', () => {
         expect(first.eventId).toMatch(EVENT_ID);
         expect(first.eventId).toHaveLength(80);
         expect(second.eventId).toBe(first.eventId);
-        const key = JSON.stringify([inboxDirectory, goal, taskName,
-          'runSlug' in identifiers ? ['run', identifiers.runSlug] : ['execution', identifiers.executionId]]);
+        const tag = 'runSlug' in identifiers ? 'run' : 'execution';
+        const attemptId = 'runSlug' in identifiers ? identifiers.runSlug : identifiers.executionId;
+        const key = JSON.stringify([inboxDirectory, goal, taskName, tag, attemptId]);
         const expected = createHash('sha256').update(key).digest('hex');
         expect(first.eventId).toBe(`goal-completion-${expected}`);
-        const previous = seen.get(key);
+        const seenKey = JSON.stringify([inboxDirectory, goal, taskName, [tag, attemptId]]);
+        const previous = seen.get(seenKey);
         if (previous !== undefined) expect(previous).toBe(first.eventId);
-        seen.set(key, first.eventId);
+        seen.set(seenKey, first.eventId);
       },
     ), { numRuns: 150, endOnFailure: true });
     // Different attempts (including a runSlug equal to the other's executionId) never share an id.

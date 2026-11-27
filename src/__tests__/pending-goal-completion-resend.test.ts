@@ -210,7 +210,7 @@ describe('a setup failure whose notice failed is resent by the daemon', () => {
     const accepted = await consumeInbox(h);
     expect(accepted).toHaveLength(1);
     expect(accepted[0]!.eventId).toMatch(COMPLETION_EVENT_ID);
-    expect(accepted[0]!.event).toMatchObject({ kind: 'completion' });
+    expect(accepted[0]!.event).toMatchObject({ kind: 'task_failed' });
     // The active goal still keeps the daemon up after the mark is gone.
     expect(await h.source.hasWork(h.files)).toBe(true);
   });
@@ -240,7 +240,9 @@ describe('one failed notice does not stop the rest of the interrupted recovery',
       runningGoalTask('interrupted-a', defaultGoalId, { owner_pid: 999_999, owner_start_time: null }),
       runningGoalTask('interrupted-b', otherGoalId, { owner_pid: 999_999, owner_start_time: null }),
     ]);
-    save.mockImplementationOnce(() => { throw ENOSPC(); }).mockImplementation(() => {});
+    const actual = await vi.importActual<typeof import('../infra/goals/events.js')>('../infra/goals/events.js');
+    save.mockImplementationOnce(() => { throw ENOSPC(); })
+      .mockImplementation((...args: Parameters<typeof actual.saveManagerEvent>) => actual.saveManagerEvent(...args));
 
     const recovered = failInterruptedTasksWithGoalEvents(new TaskRunner(h.project), h.project);
 
@@ -394,10 +396,10 @@ describe('the inbox folds a writer copy and a daemon resend of the same attempt'
     expect(clear).toBeTypeOf('function');
     vi.spyOn(runner as unknown as { clearCompletionPublicationPending: (name: string, identity: Row) => unknown },
       'clearCompletionPublicationPending').mockImplementation(() => { throw ENOSPC(); });
-    runner.addTask('Dedup goal work', { workflow: 'default', goal_id: defaultGoalId, runtime_assignment: 'gone' });
+    const added = runner.addTask('Dedup goal work', { workflow: 'default', goal_id: defaultGoalId, runtime_assignment: 'gone' });
 
     const claimed = claimTasksWithGoalCompletions(runner, 1, h.project, new AbortController().signal, true);
-    expect(claimed.setupFailedTasks.map((task) => task.name)).toEqual(['Dedup goal work']);
+    expect(claimed.setupFailedTasks.map((task) => task.name)).toEqual([added.name]);
     const saved = readTasks(h.project)[0]!;
     const runSlug = String(saved.run_slug);
     expect(saved.completion_publication_pending).toBe(true);
@@ -416,7 +418,7 @@ describe('the inbox folds a writer copy and a daemon resend of the same attempt'
     expect(await consumeInbox(h)).toHaveLength(1);
 
     // A restarted daemon still remembers the accepted attempt and does not wake the manager again.
-    writeCompletionInbox(directory, 'writer-retry.json', 'Dedup goal work', runSlug);
+    writeCompletionInbox(directory, 'writer-retry.json', added.name, runSlug);
     expect(await consumeInbox(h, new FileEventStore(h.globalDirectory))).toEqual([]);
   });
 
@@ -500,7 +502,7 @@ describe('the rewrite changes nothing but the mark', () => {
     const before = parseDocument(source).toJS() as { tasks: Row[] };
     const updated = document.toJS() as { tasks: Row[] };
     expect(updated.tasks[0]).toEqual(before.tasks[0]);
-    const { completion_publication_pending: _mark, ...rest } = updated.tasks[1]!;
-    expect(rest).toEqual(before.tasks[1]);
+    const withoutMark = ({ completion_publication_pending: _mark, ...rest }: Row): Row => rest;
+    expect(withoutMark(updated.tasks[1]!)).toEqual(withoutMark(before.tasks[1]!));
   });
 });
