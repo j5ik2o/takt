@@ -229,6 +229,21 @@ module fixedSingleIterationTest {
         and loopDetectorChecks == 1
         and safety
       )
+
+  // CodeRabbit #187: the parent's max_steps entry check is skipped in `single` mode, but a child
+  // workflow_call still inherits the shared budget and can stop at max_steps. The parent then applies
+  // its ABORT rule; here ABORT propagates, so exceeded is saved exactly as in full mode.
+  run singleIterationChildWorkflowCallPropagatesIterationLimitTest =
+    initAt(StepA, 2)
+      .then(enterStep(false)).then(completeNonTerminal(StepCall, JudgeContinue))
+      .then(enterStep(false)).then(childWorkflowCallIterationLimit(ChildAbortPropagate))
+      .expect(
+        status == AbortedIterationLimit
+        and currentStep == StepCall
+        and exceededInfoRecorded
+        and exceededSaved
+        and safety
+      )
 }
 
 module beforeFullExceededTest {

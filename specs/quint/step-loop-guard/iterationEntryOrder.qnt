@@ -536,9 +536,14 @@ module iterationEntryOrder {
   }
 
   // Child workflow_call inside StepCall exhausts the shared root max_steps budget.
-  // Models WorkflowCallExecutor.ts:595-598 (child inherits parent onIterationLimit):
+  // Models WorkflowCallExecutor.ts:595-598 (child inherits parent onIterationLimit) and
+  // WorkflowCallExecutor.ts:665-679 (child runs with maxStepsOverride = shared root budget):
   //   - In non-interactive takt run, child sets eventBridge.state.exceededInfo (exceededInfoRecorded' = true)
   //     and aborts with abortKind = 'iteration_limit'.
+  //   - The child's own entry check is not the parent's: `runSingleWorkflowIterationCore` skips the
+  //     parent's max_steps check, but the child engine still inherits the shared budget and stops at it.
+  //     So this path is modelled in BOTH MODE values; only `enterStep`'s parent max_steps check is
+  //     gated on MODE == "full". (CodeRabbit #187: MODE == "full" used to exclude single mode here.)
   //   - Parent handles child ABORT according to its workflow_call step rules:
   //       ChildAbortPropagate  : ABORT -> ABORT or no rule (propagates iteration_limit -> AbortedIterationLimit)
   //       ChildAbortToComplete : ABORT -> COMPLETE (finalState.status = Completed; design 中-2)
@@ -547,7 +552,6 @@ module iterationEntryOrder {
     status == Running,
     phase == InStep,
     currentStep == StepCall,
-    MODE == "full",
     not(IGNORE_ITERATION_LIMIT),
     val nextIter = if (iteration < maxSteps) maxSteps else iteration
     val nextExceededInfo = if (not(INTERACTIVE_EXTEND)) true else exceededInfoRecorded
@@ -775,8 +779,17 @@ module iterationEntryOrder {
   val witnessAbortedInterrupt = status == AbortedInterrupt
   val witnessAbortedUserInput = status == AbortedUserInput
   val witnessAbortedLoopDetector = status == AbortedLoopDetector
+  // Both limits "reached" at the same entry: visit limit wins and the run stops. This counts only
+  // when the iteration limit is actually effective (full mode, not ignoreIterationLimit); in single
+  // mode the parent does not evaluate max_steps, and with IGNORE_ITERATION_LIMIT = true
+  // (fixedFullIgnoreLimit, StepA -> StepA at iteration == maxSteps == 1) there is no iteration limit.
+  // (CodeRabbit #187)
   val witnessBothLimitsSimultaneous =
-    status == AbortedVisitLimit and consumesBudget(currentStep) and iteration >= maxSteps
+    MODE == "full"
+    and not(IGNORE_ITERATION_LIMIT)
+    and status == AbortedVisitLimit
+    and consumesBudget(currentStep)
+    and iteration >= maxSteps
   val witnessExtended = extendedCount > 0
   val witnessJudgeRan = judgeCalls > 0
   val witnessCompleted = status == Completed
