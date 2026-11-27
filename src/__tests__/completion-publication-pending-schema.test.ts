@@ -6,7 +6,7 @@
  *   `run_slug` or `execution_id`.
  * - Any other `true` (`pending` / `running`, no `goal_id`, no `completion`, no attempt identifier)
  *   and any non-`true` value (`false`, a string, a number, `null`) becomes `undefined` without an
- *   exception. The warning is not required; when it exists it is a `warn` log.
+ *   exception, with a `warn` log that names the task. A valid mark is not warned about.
  * - A record whose `completion` carries an unknown column is still rejected as a whole. That is the
  *   behaviour of `GoalTaskResultSchema` (`.strict()`) today and this change keeps it.
  */
@@ -78,6 +78,19 @@ describe('an invalid completion_publication_pending mark is dropped on read, not
     ['false', false], ['the string true', 'true'], ['a number', 1], ['null', null], ['an object', { pending: true }],
   ])('drops a mark written as %s', (_label, pending) => {
     expect(parse(record({ completion_publication_pending: pending })).completion_publication_pending).toBeUndefined();
+  });
+
+  it('warns while normalizing an invalid mark, and stays silent for a valid one', () => {
+    parse(record({ completion_publication_pending: true }));
+    expect(log.warn).not.toHaveBeenCalled();
+
+    parse(record({ status: 'pending', started_at: null, completed_at: null, failure: undefined, completion_publication_pending: true }));
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(log.warn.mock.calls[0]!.map(String).join(' ')).toContain('task-a');
+
+    log.warn.mockClear();
+    parse(record({ completion_publication_pending: 'true' }));
+    expect(log.warn).toHaveBeenCalledTimes(1);
   });
 });
 

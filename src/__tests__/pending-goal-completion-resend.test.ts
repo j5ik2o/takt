@@ -13,6 +13,9 @@
  * - A live `deletion` reservation blocks the rewrite; a dead owner is recovered and the mark and the
  *   reservation are both removed; an `unknown` owner is left alone and is not work for the daemon.
  * - A late clear of the first attempt never removes the second attempt's mark.
+ * - A writer copy and a daemon resend of the same attempt are one manager turn, including after a
+ *   daemon restart; two normal completions with different `runSlug`s stay two turns.
+ * - A `tasks.yaml` over 256 KiB and a `goal.json` over 4 MiB still resend and clear the mark.
  * - The YAML rewrite changes nothing but the mark.
  */
 
@@ -54,6 +57,7 @@ type Row = Record<string, unknown>;
 
 interface Harness {
   project: string;
+  globalDirectory: string;
   source: FileDaemonWatchSource;
   files: DaemonPersistedFiles;
   store: FileEventStore;
@@ -101,11 +105,17 @@ async function open(goalIds: readonly string[] = [defaultGoalId]): Promise<Harne
     await conversations.close();
     vi.unstubAllEnvs();
   });
-  return { project, source, files: new DaemonPersistedFiles(globalDirectory), store, conversations, errors };
+  return { project, globalDirectory, source, files: new DaemonPersistedFiles(globalDirectory), store, conversations, errors };
 }
 
 function tasksPath(project: string): string {
   return join(project, '.takt', 'tasks.yaml');
+}
+
+/** A finished goal keeps the goal loop out of `hasWork`, so only the mark and deletion decide. */
+function finishGoal(h: Harness): void {
+  writeFileSync(join(h.project, '.takt', 'goals', defaultGoalId, 'goal.json'),
+    JSON.stringify({ ...goalRecord(), executionStatus: 'aborted' }));
 }
 
 function readTasks(project: string): Row[] {
@@ -114,6 +124,14 @@ function readTasks(project: string): Row[] {
 
 function writeTasks(project: string, tasks: readonly Row[]): void {
   writeFileSync(tasksPath(project), stringifyYaml({ tasks }), 'utf8');
+}
+
+/** A completion the writer already put in the inbox, with its own file name. */
+function writeCompletionInbox(directory: string, name: string, taskName: string, runSlug: string): void {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  writeFileSync(join(directory, name), JSON.stringify({
+    kind: 'completion', goalId: defaultGoalId, createdAt: CREATED, taskName, runSlug, result: completion(),
+  }), 'utf8');
 }
 
 function completion(): Row {
@@ -147,18 +165,22 @@ async function taskCompletionsPass(source: FileDaemonWatchSource): Promise<void>
 
 /**
  * Empties the manager inbox through `receiveInboxChange` into a real `FileEventStore`, the way the
- * daemon consumes it, and returns the inputs the daemon accepted.
+ * daemon consumes it, and returns the inputs that started a new manager turn. A duplicate is
+ * reported back as accepted, like `DaemonDispatcher` does, but does not count as a new turn.
  */
-async function consumeInbox(h: Harness): Promise<EventInput[]> {
+async function consumeInbox(h: Harness, store: FileEventStore = h.store): Promise<EventInput[]> {
   const directory = await h.files.inboxDirectory(h.project);
   const accepted: EventInput[] = [];
   for (const entry of await listWatchEntries(directory)) {
     if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-    const change: WatchFileChange = { path: join(directory, entry.name), removed: false,
-      target: { kind: 'inbox', targetId: h.project, directory, conversationId: '' } };
+    const change: WatchFileChange = { path: join(directory, entry.name), generation: 'g', value: undefined, removed: false,
+      target: { kind: 'inbox', targetId: h.project, generation: 'g', directory, conversationId: '' } };
     await receiveInboxChange(change, h.files, h.conversations, { async accept(input) {
-      const admission = await h.store.accept({ ...input, operationId: input.eventId, acceptedSequence: accepted.length + 1, lane: 'other' });
-      if (admission.kind !== 'stored' && admission.kind !== 'duplicate') return admission;
+      const admission = await store.accept({ ...input, operationId: input.eventId, acceptedSequence: accepted.length + 1, lane: 'other' });
+      if (admission.kind === 'duplicate') {
+        return { kind: 'accepted', eventId: admission.event.eventId, operationId: admission.event.operationId,
+          acceptedSequence: admission.event.acceptedSequence };
+      }
       accepted.push(input);
       return { kind: 'accepted', eventId: input.eventId, operationId: input.eventId, acceptedSequence: accepted.length };
     } });
@@ -189,12 +211,14 @@ describe('a setup failure whose notice failed is resent by the daemon', () => {
     expect(accepted).toHaveLength(1);
     expect(accepted[0]!.eventId).toMatch(COMPLETION_EVENT_ID);
     expect(accepted[0]!.event).toMatchObject({ kind: 'completion' });
-    expect(await h.source.hasWork(h.files)).toBe(false);
+    // The active goal still keeps the daemon up after the mark is gone.
+    expect(await h.source.hasWork(h.files)).toBe(true);
   });
 
   it('still sends the notice at once when the writer can write it', async () => {
     const h = await open();
-    save.mockImplementation(() => {});
+    const actual = await vi.importActual<typeof import('../infra/goals/events.js')>('../infra/goals/events.js');
+    save.mockImplementation((...args: Parameters<typeof actual.saveManagerEvent>) => actual.saveManagerEvent(...args));
     const runner = new TaskRunner(h.project);
     runner.addTask('Broken goal work', { workflow: 'default', goal_id: defaultGoalId, runtime_assignment: 'gone' });
 
@@ -245,7 +269,8 @@ describe('one failed notice does not stop the rest of the interrupted recovery',
 describe('a lost run stays recoverable after its notice failed', () => {
   it.each([
     ['with a runSlug', { run_slug: 'run-lost' }],
-    ['without a runSlug', {}],
+    // The base record sets a run_slug, so the no-runSlug case has to remove it explicitly.
+    ['without a runSlug', { run_slug: undefined }],
   ])('reconciles a running task %s and leaves a valid mark for the daemon', async (_label, identifiers) => {
     const h = await open();
     // The owner identity recorded on the task differs from the live process: the run is lost.
@@ -254,8 +279,8 @@ describe('a lost run stays recoverable after its notice failed', () => {
     const reference = { repositoryDirectory: h.project, goalId: defaultGoalId, taskName: 'lost-run',
       ...(identifiers.run_slug === undefined ? {} : { runSlug: identifiers.run_slug }) };
 
-    const attempt = () => reconcileLostRun({ kind: 'run_process_lost', targetId: 't', generation: 'g', conversationId: 'c',
-      task: reference, owner: { pid: process.pid, startTime: recorded }, pid: process.pid, startTime: recorded }, new AbortController().signal);
+    const attempt = () => reconcileLostRun({ kind: 'run_process_lost', targetId: 't', generation: 'g',
+      observedAt: CREATED, task: reference, pid: process.pid, startTime: recorded }, new AbortController().signal);
     // Today a failed notice is thrown out of the reconciliation; the design reports it and keeps
     // the mark, so a throwing call is recorded and the mark is still checked below.
     const thrown = (() => { try { return attempt(); } catch (error) { return error; } })();
@@ -278,6 +303,7 @@ describe('a lost run stays recoverable after its notice failed', () => {
 describe('a deletion reservation decides whether the mark may be cleared', () => {
   it('leaves a mark guarded by a live owner untouched and counts it as work', async () => {
     const h = await open();
+    finishGoal(h);
     // A reservation held by this live process: its owner has not finished the deletion yet.
     const live = { id: '5a0e8400-e29b-41d4-a716-446655440002', owner_pid: process.pid, owner_start_time: 'darwin-start-v2:1' };
     writeTasks(h.project, [failedGoalTask('live-deletion', { deletion: live })]);
@@ -292,6 +318,7 @@ describe('a deletion reservation decides whether the mark may be cleared', () =>
 
   it('recovers a reservation whose owner died and clears the mark with it', async () => {
     const h = await open();
+    finishGoal(h);
     const dead = { id: '5a0e8400-e29b-41d4-a716-446655440000', owner_pid: 999_999 };
     writeTasks(h.project, [failedGoalTask('dead-deletion', { deletion: dead })]);
 
@@ -300,12 +327,14 @@ describe('a deletion reservation decides whether the mark may be cleared', () =>
     const task = readTasks(h.project)[0]!;
     expect(task.completion_publication_pending).toBeUndefined();
     expect(task.deletion).toBeUndefined();
-    expect(await consumeInbox(h)).toHaveLength(1);
+    // The goal is finished, so the recovered mark is cleared without waking the manager.
+    expect(await consumeInbox(h)).toEqual([]);
     expect(await h.source.hasWork(h.files)).toBe(false);
   });
 
   it('leaves a reservation whose owner is unknown untouched and does not count it as work', async () => {
     const h = await open();
+    finishGoal(h);
     // A live pid without a recorded start time cannot be checked: the daemon neither rewrites nor waits.
     const unknown = { id: '5a0e8400-e29b-41d4-a716-446655440001', owner_pid: process.pid };
     writeTasks(h.project, [failedGoalTask('unknown-deletion', { deletion: unknown })]);
@@ -350,6 +379,79 @@ describe('a late clear of the first attempt never removes the second attempt mar
     clear!.call(runner, 'retried', { goalId: defaultGoalId, status: 'failed', runSlug: 'run-1', executionId: 'exec-1' });
 
     expect(readTasks(h.project)[0]!.completion_publication_pending).toBeUndefined();
+  });
+});
+
+describe('the inbox folds a writer copy and a daemon resend of the same attempt', () => {
+  it('wakes once when the writer sent the notice but could not clear its mark, including after a restart', async () => {
+    const h = await open();
+    const actual = await vi.importActual<typeof import('../infra/goals/events.js')>('../infra/goals/events.js');
+    save.mockImplementation((...args: Parameters<typeof actual.saveManagerEvent>) => actual.saveManagerEvent(...args));
+    const runner = new TaskRunner(h.project);
+    const clear = (runner as unknown as {
+      clearCompletionPublicationPending?: (name: string, identity: Row) => unknown;
+    }).clearCompletionPublicationPending;
+    expect(clear).toBeTypeOf('function');
+    vi.spyOn(runner as unknown as { clearCompletionPublicationPending: (name: string, identity: Row) => unknown },
+      'clearCompletionPublicationPending').mockImplementation(() => { throw ENOSPC(); });
+    runner.addTask('Dedup goal work', { workflow: 'default', goal_id: defaultGoalId, runtime_assignment: 'gone' });
+
+    const claimed = claimTasksWithGoalCompletions(runner, 1, h.project, new AbortController().signal, true);
+    expect(claimed.setupFailedTasks.map((task) => task.name)).toEqual(['Dedup goal work']);
+    const saved = readTasks(h.project)[0]!;
+    const runSlug = String(saved.run_slug);
+    expect(saved.completion_publication_pending).toBe(true);
+    expect(runSlug).not.toBe('undefined');
+    const directory = await h.files.inboxDirectory(h.project);
+    const inboxCopies = async (): Promise<string[]> => (await listWatchEntries(directory))
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.json')).map((entry) => entry.name);
+    // The writer wrote the notice before the clear failed.
+    expect(await inboxCopies()).toHaveLength(1);
+
+    await taskCompletionsPass(h.source);
+
+    expect(readTasks(h.project)[0]!.completion_publication_pending).toBeUndefined();
+    // The daemon wrote its own copy for the same attempt.
+    expect(await inboxCopies()).toHaveLength(2);
+    expect(await consumeInbox(h)).toHaveLength(1);
+
+    // A restarted daemon still remembers the accepted attempt and does not wake the manager again.
+    writeCompletionInbox(directory, 'writer-retry.json', 'Dedup goal work', runSlug);
+    expect(await consumeInbox(h, new FileEventStore(h.globalDirectory))).toEqual([]);
+  });
+
+  it('keeps two normal completions with different runSlugs as two separate turns', async () => {
+    const h = await open();
+    const directory = await h.files.inboxDirectory(h.project);
+    writeCompletionInbox(directory, 'run-1.json', 'task-a', 'run-1');
+    writeCompletionInbox(directory, 'run-2.json', 'task-a', 'run-2');
+
+    expect(await consumeInbox(h)).toHaveLength(2);
+  });
+});
+
+describe('the daemon reads the mark and the goal beyond the projection limits', () => {
+  it('resends and clears a mark in a tasks.yaml larger than 256 KiB', async () => {
+    const h = await open();
+    writeTasks(h.project, [failedGoalTask('large-tasks', { content: 'x'.repeat(300 * 1024) })]);
+
+    expect(await h.source.hasWork(h.files)).toBe(true);
+    await taskCompletionsPass(h.source);
+
+    expect(readTasks(h.project)[0]!.completion_publication_pending).toBeUndefined();
+    expect(await consumeInbox(h)).toHaveLength(1);
+  });
+
+  it('resends and clears a mark whose goal.json is larger than 4 MiB', async () => {
+    const h = await open();
+    writeTasks(h.project, [failedGoalTask('large-goal')]);
+    const goalPath = join(h.project, '.takt', 'goals', defaultGoalId, 'goal.json');
+    writeFileSync(goalPath, `${JSON.stringify(goalRecord())}${' '.repeat(4 * 1024 * 1024)}`, 'utf8');
+
+    await taskCompletionsPass(h.source);
+
+    expect(readTasks(h.project)[0]!.completion_publication_pending).toBeUndefined();
+    expect(await consumeInbox(h)).toHaveLength(1);
   });
 });
 

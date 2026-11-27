@@ -12,6 +12,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import fc from 'fast-check';
 import { stringify as stringifyYaml } from 'yaml';
 import { readWatchTasks } from '../infra/task/taskStateReader.js';
 import { readPendingGoalTaskCompletions } from '../infra/task/taskStateReader.js';
@@ -128,8 +129,66 @@ describe('one invalid pending completion does not stop readWatchTasks or the run
 
     const completions = await readPendingGoalTaskCompletions(project, recorded);
 
-    expect(completions.map((value) => value.name)).toEqual(['goal-task-valid']);
+    expect(completions.map((value: { name: string }) => value.name)).toEqual(['goal-task-valid']);
     expect(recorded.invalids.map(({ key }) => key)).toEqual([expect.stringContaining('goal-task-string')]);
+  });
+});
+
+describe('the two readers separate a bad record from the rest for every shape', () => {
+  const status = fc.constantFrom('pending', 'running', 'completed', 'failed', 'exceeded', 'pr_failed');
+  const terminal = fc.constantFrom('completed', 'failed', 'exceeded', 'pr_failed');
+  const mark = fc.constantFrom(true, false, 'true', 1, null, undefined);
+
+  function generated(name: string, values: {
+    status: string; hasGoal: boolean; hasCompletion: boolean; hasRunSlug: boolean;
+    hasExecutionId: boolean; unknownColumn: boolean; mark: unknown;
+  }): Record<string, unknown> {
+    return pendingMarked({
+      name,
+      status: values.status,
+      started_at: values.status === 'pending' ? null : created,
+      completed_at: values.status === 'pending' || values.status === 'running' ? null : created,
+      failure: values.status === 'failed' || values.status === 'pr_failed' ? { error: 'boom' } : undefined,
+      goal_id: values.hasGoal ? GOAL_ID : undefined,
+      completion: values.hasCompletion
+        ? { ...completion(), ...(values.unknownColumn ? { unknownColumn: 1 } : {}) }
+        : undefined,
+      run_slug: values.hasRunSlug ? 'run-subject' : undefined,
+      execution_id: values.hasRunSlug ? undefined : values.hasExecutionId ? 'exec-subject' : undefined,
+      completion_publication_pending: values.mark,
+    });
+  }
+
+  it('returns every task from readWatchTasks whatever the mark and completion hold', async () => {
+    await fc.assert(fc.asyncProperty(status, fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(), mark,
+      async (value, hasGoal, hasCompletion, hasRunSlug, hasExecutionId, unknownColumn, pending) => {
+        writeTasks([generated('goal-task-subject', { status: value, hasGoal, hasCompletion, hasRunSlug, hasExecutionId, unknownColumn, mark: pending }),
+          pendingMarked({ name: 'goal-task-valid' })]);
+
+        const tasks = await readWatchTasks(project);
+
+        expect(tasks.map((task) => task.name)).toEqual(['goal-task-subject', 'goal-task-valid']);
+      }), { numRuns: 40 });
+  });
+
+  it('reports only the invalid pending completion once and returns every valid one', async () => {
+    await fc.assert(fc.asyncProperty(terminal, fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(),
+      async (value, hasGoal, hasCompletion, hasRunSlug, hasExecutionId, unknownColumn) => {
+        const subject = generated('goal-task-subject', { status: value, hasGoal, hasCompletion, hasRunSlug, hasExecutionId, unknownColumn, mark: true });
+        writeTasks([subject, pendingMarked({ name: 'goal-task-valid' })]);
+        const recorded = reports();
+        const valid = hasGoal && hasCompletion && !unknownColumn && (hasRunSlug || hasExecutionId);
+
+        const completions = await readPendingGoalTaskCompletions(project, recorded);
+
+        expect(completions.map((task: { name: string }) => task.name)).toEqual(valid
+          ? ['goal-task-subject', 'goal-task-valid'] : ['goal-task-valid']);
+        expect(recorded.invalids).toHaveLength(valid ? 0 : 1);
+        if (!valid) expect(recorded.invalids[0]!.key).toContain('goal-task-subject');
+
+        await readPendingGoalTaskCompletions(project, recorded);
+        expect(recorded.invalids).toHaveLength(valid ? 0 : 1);
+      }), { numRuns: 40 });
   });
 });
 
@@ -147,7 +206,7 @@ describe('readPendingGoalTaskCompletions reports the invalid record and returns 
 
     const completions = await readPendingGoalTaskCompletions(project, recorded);
 
-    expect(completions.map((value) => value.name)).toEqual(['goal-task-a', 'goal-task-b']);
+    expect(completions.map((value: { name: string }) => value.name)).toEqual(['goal-task-a', 'goal-task-b']);
     expect(recorded.invalids).toHaveLength(1);
     expect(recorded.invalids[0]!.key).toContain('goal-task-unknown');
   });
@@ -185,7 +244,7 @@ describe('readPendingGoalTaskCompletions reports the invalid record and returns 
 
     const completions = await readPendingGoalTaskCompletions(project, recorded);
 
-    expect(completions.map((value) => value.name)).toEqual(['goal-task-a']);
+    expect(completions.map((value: { name: string }) => value.name)).toEqual(['goal-task-a']);
     expect(recorded.invalids).toEqual([]);
   });
 

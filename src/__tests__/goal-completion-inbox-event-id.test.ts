@@ -28,6 +28,7 @@ import { goalId } from './helpers/goal-fixtures.js';
 const EVENT_ID = /^goal-completion-[a-f0-9]{64}$/;
 
 const sha256 = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const sha256Text = (value: string): string => createHash('sha256').update(value).digest('hex');
 
 /** The manager inbox record for an already accepted `kind: 'completion'` event. */
 interface SavedCompletion {
@@ -97,7 +98,8 @@ async function receive(inboxDir: string, path: string, event: SavedCompletion): 
       return { kind: 'accepted' as const, eventId: input.eventId, operationId: input.eventId, acceptedSequence: consumptions };
     },
   };
-  const change: WatchFileChange = { path, removed: false, target: { kind: 'inbox', targetId: '/repo', directory: inboxDir, conversationId: 'c' } };
+  const change: WatchFileChange = { path, generation: 'g', value: undefined, removed: false,
+    target: { kind: 'inbox', targetId: '/repo', generation: 'g', directory: inboxDir, conversationId: 'c' } };
   await receiveInboxChange(change, entry.files, fakeConversations() as unknown as DaemonConversations, ingress);
   return { eventId: recording.eventIds.at(-1)!, requestId: '', conversationId: '', source: 'run', occurredAt: '2026-11-27T00:00:00.000Z',
     event: recording.events.at(-1)! };
@@ -160,13 +162,17 @@ describe('a goal task completion gets a deterministic, injective eventId', () =>
     expect(first.eventId).toMatch(EVENT_ID);
     expect(first.eventId).toBe(second.eventId);
     expect(first.eventId).toBe(`goal-completion-${sha256([inbox('e'), goalId, 'task-a', 'execution', 'exec-e'])}`);
+    // The attempt identifier reaches the manager turn as well, not only the dedup key.
+    expect(second.event).toMatchObject({
+      kind: 'task_failed', task: { repositoryDirectory: inbox('e'), goalId, taskName: 'task-a', executionId: 'exec-e' },
+    });
   });
 
   it('keeps the inbox-<sha256(path)> id only for a completion with neither identifier', async () => {
     const path = join(inbox('f'), 'inbox-legacy.json');
     const legacy = await receive(inbox('f'), path, completionEvent({ taskName: 'task-a' }));
 
-    expect(legacy.eventId).toBe(`inbox-${sha256(path)}`);
+    expect(legacy.eventId).toBe(`inbox-${sha256Text(path)}`);
     expect(legacy.eventId).toMatch(/^inbox-[a-f0-9]{64}$/);
     const otherPath = await receive(inbox('f'), join(inbox('f'), 'inbox-other.json'), completionEvent({ taskName: 'task-a' }));
     expect(otherPath.eventId).not.toBe(legacy.eventId);
@@ -177,7 +183,8 @@ describe('a goal task completion gets a deterministic, injective eventId', () =>
     const entry = fakeFiles(inbox('g'));
     filesByDirectory.set(inbox('g'), entry);
 
-    await receiveInboxChange({ path, removed: false, target: { kind: 'inbox', targetId: '/repo', directory: inbox('g'), conversationId: 'c' } },
+    await receiveInboxChange({ path, generation: 'g', value: undefined, removed: false,
+      target: { kind: 'inbox', targetId: '/repo', generation: 'g', directory: inbox('g'), conversationId: 'c' } },
       entry.files, fakeConversations() as unknown as DaemonConversations, { async accept() { throw new Error('must not accept a missing file'); } });
     expect(consumptions).toBe(0);
     expect(existsSync(path)).toBe(false);
@@ -187,7 +194,7 @@ describe('a goal task completion gets a deterministic, injective eventId', () =>
 describe('the eventId is deterministic and injective for every string', () => {
   /** Separators, Unicode, NUL, quotes and long text inside the identifiers. */
   const identifier = fc.string({ minLength: 1, maxLength: 24 })
-    .map((value, index) => (index === 0 ? `${value}" , [ ] / \n \t \u0000 ✓ ゴール 🎯 ${'x'.repeat(300)}` : value));
+    .map((value) => `${value}" , [ ] / \n \t \u0000 ✓ ゴール 🎯 ${'x'.repeat(300)}`);
 
   const attempt = fc.oneof(
     fc.record({ runSlug: identifier, executionId: fc.option(identifier, { nil: undefined }) }, { requiredKeys: ['runSlug'] }),
@@ -215,7 +222,7 @@ describe('the eventId is deterministic and injective for every string', () => {
         expect(first.eventId).toHaveLength(80);
         expect(second.eventId).toBe(first.eventId);
         const key = JSON.stringify([inboxDirectory, goal, taskName,
-          identifiers.runSlug !== undefined ? ['run', identifiers.runSlug] : ['execution', identifiers.executionId]]);
+          'runSlug' in identifiers ? ['run', identifiers.runSlug] : ['execution', identifiers.executionId]]);
         const expected = createHash('sha256').update(key).digest('hex');
         expect(first.eventId).toBe(`goal-completion-${expected}`);
         const previous = seen.get(key);

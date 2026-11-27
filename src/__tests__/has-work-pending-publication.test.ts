@@ -6,7 +6,8 @@
  * - While a valid pending completion exists, `hasWork()` is `true`.
  * - `aborted`, `completed` and deleted (`goal.json` gone) goals keep the mark unsettled: `hasWork()`
  *   stays `true` until `taskCompletions()` drops the mark without writing to the inbox, then it is
- *   `false`.
+ *   `false`. An `active` or `paused` goal still gets the inbox record.
+ * - A `deletion` reservation whose owner is `unknown` is not work, and its report happens once.
  * - A `tasks.yaml` that cannot be read is not work; the failure is reported once.
  */
 
@@ -32,6 +33,8 @@ import { invalidateAllResolvedConfigCache } from '../infra/config/index.js';
 import { goalId as defaultGoalId, goalRecord } from './helpers/goal-fixtures.js';
 
 const CREATED = '2026-11-27T00:00:00.000Z';
+/** A finished goal keeps the existing goal loop out of the answer, so only the mark decides. */
+const finishedGoal = { executionStatus: 'aborted' } as const;
 const completion = (): Record<string, unknown> => ({
   success: false, interrupted: true, workflowResult: 'error', failureReason: 'Execution process stopped before saving its result',
 });
@@ -108,7 +111,7 @@ async function inboxFiles(h: Harness): Promise<string[]> {
 
 describe('hasWork() counts a pending goal task completion', () => {
   it('is true while a valid mark exists and false once the task settles', async () => {
-    const h = await open();
+    const h = await open(finishedGoal);
     writeTasks(h.project, [failedGoalTask()]);
 
     expect(await h.source.hasWork(h.files)).toBe(true);
@@ -118,24 +121,45 @@ describe('hasWork() counts a pending goal task completion', () => {
   });
 
   it('is false for a mark without an attempt identifier', async () => {
-    const h = await open();
+    const h = await open(finishedGoal);
     writeTasks(h.project, [failedGoalTask({ run_slug: undefined, execution_id: undefined })]);
 
     expect(await h.source.hasWork(h.files)).toBe(false);
   });
 
   it('is false for a mark written as a string', async () => {
-    const h = await open();
+    const h = await open(finishedGoal);
     writeTasks(h.project, [failedGoalTask({ completion_publication_pending: 'true' })]);
 
     expect(await h.source.hasWork(h.files)).toBe(false);
   });
+
+  it('is false for an unknown deletion owner and reports it once', async () => {
+    const h = await open(finishedGoal);
+    // A live pid without a recorded start time cannot be checked: the daemon must not wait forever.
+    writeTasks(h.project, [failedGoalTask({ deletion: { id: '5a0e8400-e29b-41d4-a716-446655440001', owner_pid: process.pid } })]);
+
+    expect(await h.source.hasWork(h.files)).toBe(false);
+    await taskCompletionsPass(h.source);
+    expect(await h.source.hasWork(h.files)).toBe(false);
+    await taskCompletionsPass(h.source);
+
+    expect(h.errors).toHaveLength(1);
+    expect(await inboxFiles(h)).toEqual([]);
+  });
 });
 
 describe('hasWork() keeps the daemon alive until a finished goal drops its mark', () => {
+  const sha = 'a'.repeat(40);
+  const completionEvidence = {
+    goalBranch: 'main', goalSha: sha, targetBranch: 'main', summary: 'done',
+    changeSummary: { filesChanged: 0, additions: 0, deletions: 0, files: [], truncated: false, totalsTruncated: false },
+    instructions: [], targetSha: sha,
+  };
+
   it.each([
     ['aborted', { executionStatus: 'aborted' }],
-    ['completed', { status: 'completed', executionStatus: 'completed' }],
+    ['completed', { status: 'completed', executionStatus: 'active', completion: completionEvidence }],
     ['deleted', 'deleted'],
   ] as const)('settles a %s goal without writing the inbox', async (_label, goal) => {
     const h = await open(goal as Record<string, unknown> | 'deleted');
@@ -146,26 +170,30 @@ describe('hasWork() keeps the daemon alive until a finished goal drops its mark'
 
     await taskCompletionsPass(h.source);
 
-    const task = new TaskStore(h.project).read().tasks[0]!;
+    const task = new TaskStore(h.project).read().tasks[0]! as unknown as Record<string, unknown>;
     expect(task.completion_publication_pending).toBeUndefined();
     expect(await inboxFiles(h)).toEqual([]);
     expect(await h.source.hasWork(h.files)).toBe(false);
   });
 
-  it('still writes the inbox for an active goal', async () => {
-    const h = await open();
+  it.each([
+    ['active', { executionStatus: 'active' }],
+    ['paused', { executionStatus: 'paused' }],
+  ] as const)('still writes the inbox for an %s goal', async (_label, goal) => {
+    const h = await open(goal as Record<string, unknown>);
     writeTasks(h.project, [failedGoalTask()]);
 
     await taskCompletionsPass(h.source);
 
     expect(await inboxFiles(h)).toHaveLength(1);
-    expect(await h.source.hasWork(h.files)).toBe(false);
+    // The goal itself is not finished, so the daemon stays up after the mark is gone.
+    expect(await h.source.hasWork(h.files)).toBe(true);
   });
 });
 
 describe('hasWork() treats an unreadable tasks.yaml as no work and reports it once', () => {
   it('reports a broken tasks.yaml once across repeated checks', async () => {
-    const h = await open();
+    const h = await open(finishedGoal);
     writeFileSync(join(h.project, '.takt', 'tasks.yaml'), 'tasks: [', 'utf8');
 
     expect(await h.source.hasWork(h.files)).toBe(false);
@@ -175,12 +203,16 @@ describe('hasWork() treats an unreadable tasks.yaml as no work and reports it on
     expect(h.errors.filter((error) => String(error).includes('tasks.yaml')).length).toBeLessThanOrEqual(1);
   });
 
-  it('treats a symbolic link as no work instead of following it', async () => {
-    const h = await open();
+  it('treats a symbolic link as no work instead of following it, and reports it once', async () => {
+    const h = await open(finishedGoal);
     const target = join(h.project, 'elsewhere.yaml');
     writeFileSync(target, stringifyYaml({ tasks: [failedGoalTask()] }), 'utf8');
     symlinkSync(target, join(h.project, '.takt', 'tasks.yaml'));
 
     expect(await h.source.hasWork(h.files)).toBe(false);
+    expect(await h.source.hasWork(h.files)).toBe(false);
+    await taskCompletionsPass(h.source);
+
+    expect(h.errors.filter((error) => String(error).includes('tasks.yaml'))).toHaveLength(1);
   });
 });
