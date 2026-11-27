@@ -514,8 +514,14 @@ export const heavyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-lock-release-finish-hook.test.ts',
   // Runs `takt run` in a real child process with a preload that fails one lock release (#169).
   'src/__tests__/it-claim-lock-release-run.test.ts',
+  // Runs the real `takt merge` path, which starts Git (clone, fetch, remote) before the finish hook (#171).
+  'src/__tests__/task-finish-hook-notice.test.ts',
+  // Starts a real MCP stdio server process and speaks JSON-RPC to it (#171).
+  'src/__tests__/it-finish-hook-notice-mcp-stdio.test.ts',
   ...legacyParallelIntegrationTestFiles,
   ...auditedIntegrationBoundaryTestFiles,
+  // Compares every #176 iteration-entry tuple against the model oracle in both run loops (~280k cases).
+  'src/__tests__/workflow-run-loop-entry-order.pbt.test.ts',
   // Runs real `git init` / `git remote` processes for repository identity.
   'src/__tests__/workflowExecution-session-loading.test.ts',
   // Measured slow suites dominate the serial light gate; CI shards this gate.
