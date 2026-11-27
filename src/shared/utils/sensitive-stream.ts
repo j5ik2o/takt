@@ -146,7 +146,8 @@ interface LegacyUnit {
 class LegacyStreamUnits {
   readonly sensitiveValues = createBoundedSensitiveValues();
   private pending = '';
-  private pemLabel: string | undefined;
+  inPemBlock = false;
+  private pemClosingLine = '';
 
   get pendingText(): string {
     return this.pending;
@@ -154,10 +155,6 @@ class LegacyStreamUnits {
 
   get pendingLength(): number {
     return this.pending.length;
-  }
-
-  get inPemBlock(): boolean {
-    return this.pemLabel !== undefined;
   }
 
   write(text: string, source: unknown, substringValues: readonly string[] = []): LegacyUnit[] {
@@ -168,8 +165,8 @@ class LegacyStreamUnits {
       units.push(this.take(end, substringValues, forced));
     };
     while (this.pending !== '') {
-      if (this.pemLabel !== undefined) {
-        const closing = `-----END ${this.pemLabel}-----`;
+      if (this.inPemBlock) {
+        const closing = this.pemClosingLine;
         const end = this.pending.indexOf(closing);
         if (end < 0) break;
         take(end + closing.length, false);
@@ -182,7 +179,8 @@ class LegacyStreamUnits {
       const line = newline < 0 ? this.pending : this.pending.slice(0, newline + 1);
       const begin = PEM_BEGIN.exec(line);
       if (begin !== null) {
-        this.pemLabel = begin[1]!;
+        this.inPemBlock = true;
+        this.pemClosingLine = `-----END ${begin[1]!}-----`;
         continue;
       }
       if (newline >= 0) { take(newline + 1, false); continue; }
@@ -229,7 +227,7 @@ class LegacyStreamUnits {
   preview(source: unknown): string {
     if (this.pending === '') return '';
     this.sensitiveValues.collect(source);
-    if (this.pemLabel !== undefined && this.pending.length > MAX_PENDING_SENSITIVE_LINE_LENGTH) return REDACTED_VALUE;
+    if (this.inPemBlock && this.pending.length > MAX_PENDING_SENSITIVE_LINE_LENGTH) return REDACTED_VALUE;
     const text = this.pending;
     // 左端で切れた秘密値も漏らさないため、保留中の文字列全体をマスクしてから切る。
     // previewだけの発見を、確定済みの候補へ持ち越さない。
@@ -246,7 +244,8 @@ class LegacyStreamUnits {
   private take(end: number, substringValues: readonly string[], forced: boolean): LegacyUnit {
     const text = this.pending.slice(0, end);
     this.pending = this.pending.slice(end);
-    this.pemLabel = undefined;
+    this.inPemBlock = false;
+    this.pemClosingLine = '';
     const masking = maskingRangesAndFinds(text, this.sensitiveValues);
     return {
       text,
@@ -330,6 +329,10 @@ export class SensitiveTextStreamBuffer implements SensitiveTextStreamBufferLike 
   private pendingExtraRanges: SensitiveRange[] = [];
   /** The held length when rule 2 last asked the new guard and found it open (design 7.1). */
   private checkedLength = 0;
+  /** The held run starts inside a still-open new value whose opening unit a last-resort
+   * cut already committed (design 7.1, A3 (vi)): the new reading over the run alone
+   * cannot see that value, so no cut at the cap may release the run. */
+  private heldStartsInOpenValue = false;
   /** A preview whose tail the new guard hides from inside the held run (design 7.1, R12-2). */
   private previewMemo: { masked: string; fullLength: number; valuesSize: number } | undefined;
 
@@ -356,11 +359,64 @@ export class SensitiveTextStreamBuffer implements SensitiveTextStreamBufferLike 
     // The cut at the cap (design 7.1, R12-1): commit up to the last previous boundary the
     // new reading's guard does not straddle, as a non-forced boundary; only if the run is
     // still over the caller's limit afterwards, force the rest out (the last resort, for a
-    // single open new value as long as the cap itself).
-    const cutAtCap = (stillOver: () => boolean): void => {
+    // single open new value as long as the cap itself). Rule 3a's last resort stops before
+    // a unit that only continues the still-open new value (it lies inside the guard's open
+    // range and closes no value of its own); that unit stays held, and the run is marked
+    // as starting inside the open value so later cuts in this and later writes leave it to
+    // rule 2 or flush. Rule 3b's last resort is not stopped: its excess is the inner tail,
+    // and the held units before it are committed whole (A8).
+    const cutAtCap = (stillOver: () => boolean, protectContinuation: boolean): void => {
+      if (this.heldStartsInOpenValue) return;
       const count = this.closedHeldUnitCount();
       if (count > 0) emit(this.commitHeld(substringValues, count));
-      if (this.held.length > 0 && stillOver()) emit(this.commitHeld(substringValues));
+      if (this.held.length === 0 || !stillOver()) return;
+      if (!protectContinuation) {
+        // Rule 3b's excess is the inner tail: the held units before it are forced out
+        // whole (A8).
+        emit(this.commitHeld(substringValues));
+        return;
+      }
+      const heldText = this.heldText();
+      const readings = newReadingGuardReadings(heldText);
+      const openRanges = pendingNewReadingRanges(heldText);
+      if (count === 0 && openRanges.length > 0) {
+        // No non-forced boundary was available, and the run still holds a unit that
+        // ends before the open new value starts: the cut the non-forced step should
+        // have made is inside this run, so the last resort forces the run out whole,
+        // with the opening unit still in the same batch as what follows it (R12-1).
+        // A run of only the opening unit and its continuation takes the protected
+        // path below instead (A3 (vi)).
+        const firstOpenStart = Math.min(...openRanges.map((range) => range.start));
+        let end = 0;
+        let hasUnitBeforeOpenValue = false;
+        for (const unit of this.held) {
+          end += unit.text.length;
+          if (end <= firstOpenStart) hasUnitBeforeOpenValue = true;
+        }
+        if (hasUnitBeforeOpenValue) {
+          emit(this.commitHeld(substringValues));
+          return;
+        }
+      }
+      let offset = 0;
+      while (this.held.length > 0 && stillOver()) {
+        const unit = this.held[0]!;
+        const unitStart = offset;
+        const unitEnd = offset + unit.text.length;
+        const insideOpenRange = openRanges.some((range) => range.start <= unitStart && unitEnd <= range.end);
+        const closesOwnValue = readings.some(
+          (range) => range.start >= unitStart && range.end <= unitEnd && range.end <= heldText.length,
+        );
+        if (insideOpenRange && !closesOwnValue) {
+          // The mark is for the rest that is the open value itself (a single unit,
+          // design 9.3); a rest of several units is cut by the usual rules, whose
+          // readings over the rest see no open value.
+          if (this.held.length === 1) this.heldStartsInOpenValue = true;
+          return;
+        }
+        emit(this.commitHeld(substringValues, 1));
+        offset = unitEnd;
+      }
     };
     units.forEach((unit, index) => {
       this.hold(unit, substringValues);
@@ -384,13 +440,13 @@ export class SensitiveTextStreamBuffer implements SensitiveTextStreamBufferLike 
       // Rule 3a: the held run itself is past the cap (the write's unprocessed rest and the
       // inner tail are not added here).
       if (!committedByRule && this.heldLength > MAX_PENDING_SENSITIVE_LINE_LENGTH) {
-        cutAtCap(() => this.heldLength > MAX_PENDING_SENSITIVE_LINE_LENGTH);
+        cutAtCap(() => this.heldLength > MAX_PENDING_SENSITIVE_LINE_LENGTH, true);
       }
     });
     // Rule 3b: after the write's units, the held run plus the inner tail is past the cap;
     // cut inside the held run only, never inside the inner tail.
     if (this.held.length > 0 && this.heldLength + this.inner.pendingLength > MAX_PENDING_SENSITIVE_LINE_LENGTH) {
-      cutAtCap(() => this.heldLength + this.inner.pendingLength > MAX_PENDING_SENSITIVE_LINE_LENGTH);
+      cutAtCap(() => this.heldLength + this.inner.pendingLength > MAX_PENDING_SENSITIVE_LINE_LENGTH, false);
     }
     return { text: committed, ranges };
   }
@@ -516,6 +572,7 @@ export class SensitiveTextStreamBuffer implements SensitiveTextStreamBufferLike 
     if (this.held.length === 0) return undefined;
     const units = this.held.slice(0, count);
     this.held = this.held.slice(units.length);
+    if (this.held.length === 0) this.heldStartsInOpenValue = false;
     this.heldLength -= units.reduce((total, unit) => total + unit.text.length, 0);
     this.checkedLength = 0;
     this.previewMemo = undefined;
