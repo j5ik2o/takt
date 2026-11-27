@@ -267,9 +267,17 @@ function expectBufferProperties(run: BufferRun): void {
   for (const pending of run.pendingAfterWrite) expect(pending).toBeLessThanOrEqual(MAX_PENDING);
 }
 
+// R12-4: operations on which a commit that applies neither the units' previous ranges (s1) nor their
+// trace (s2) leaves a position the previous stream hid unhidden (found by the mutant in
+// `sensitive-stream-union.mutants.mjs`). The property runs them first.
+const BUFFER_EXAMPLES: BufferOp[][] = [
+  [{"kind": "write", "text": "?tok", "source": {"kind": "peer", "texts": ["https://proxy-authorization:a@h Authorization: Basic Zq0Zq"]}, "substrings": [], "extra": []}, {"kind": "write", "text": "en=''", "source": {"kind": "value", "value": "https://token:p@host-uZq0Zq\nhttps://user:pa,Zq900Zq@host"}, "substrings": ["Zq136Zq", "Zq43Zq", "Zq5Zq"], "extra": [{"start": 0, "end": 1}]}, {"kind": "write", "text": "Zx2Zx\"\n[TOKEN=Zq136Zq|#🔑286)\n", "source": {"kind": "value", "value": "--user=\":\nZq0Zq\"--user=\":Zq0Zq\"\nhttps://user:pa,Zq900Zq@host"}, "substrings": [], "extra": [{"start": 0, "end": 5}]}, {"kind": "write", "text": "Zx3Zx\",\"[https://proxy-authorization:a@h Authorization", "source": {"kind": "none"}, "substrings": ["Zq136Zq", "Zq43Zq", "Zq5Zq"], "extra": [{"start": 0, "end": 5}]}, {"kind": "write", "text": ": Basic \"gq3\\Zq43Zq", "source": {"kind": "newFull"}, "substrings": [], "extra": [{"start": 0, "end": 1}]}, {"kind": "write", "text": "@@@@@@@@ -u-u\n\nZq5Zq\" rest\n", "source": {"kind": "none"}, "substrings": ["Zq136Zq", "Zq43Zq", "Zq5Zq"], "extra": [{"start": 0, "end": 1}]}, {"kind": "flush", "source": {"kind": "peer", "texts": ["--token Zq0Zq\nhttps://user:pa,Zq900Zq@host"]}, "substrings": []}],
+];
+
 describe('#151 2a: the buffer stage hides at least what the inner-only stream hides', () => {
   it('cuts, ranges, the fourth argument, previews, the legacy bound and the held length (R7-4, R9-3, R9-5)', () => {
-    fc.assert(fc.property(bufferOps, (steps) => expectBufferProperties(runBuffer(steps))), runs);
+    fc.assert(fc.property(bufferOps, (steps) => expectBufferProperties(runBuffer(steps))),
+      { ...runs, examples: BUFFER_EXAMPLES.map((steps) => [steps] as [BufferOp[]]) });
   }, TIMEOUT);
 
   // R10-2: a unit that the inner pending tail carries across writes gets the third argument of the
