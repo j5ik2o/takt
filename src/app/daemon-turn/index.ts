@@ -25,9 +25,14 @@ process.on('message', (message: unknown) => {
 });
 // 後片付けが済んだら、閉じ忘れたハンドルが残っていても終了する。イベントループが空になるのを待つと、SIGTERM でも終わらないプロセスが残る。
 // 中断に応じないターンでは後片付けが終わらないので、親と同じ猶予で打ち切って失敗として終わる。親が先に落ちていると、誰も SIGKILL しない。
+const signalOwnGroup = (): void => {
+  if (process.platform === 'win32') return;
+  if (process.listenerCount('SIGTERM') === 0) process.on('SIGTERM', () => {});
+  try { process.kill(-process.pid, 'SIGTERM'); } catch { /* not a leader */ }
+};
 const exitAfter = (cleanup: Promise<void>): void => {
-  setTimeout(() => { process.stderr.write('Turn process cleanup timed out\n'); process.exit(1); }, TURN_SHUTDOWN_GRACE_MS);
-  void cleanup.catch(fatal).finally(() => { process.exit(); });
+  setTimeout(() => { process.stderr.write('Turn process cleanup timed out\n'); signalOwnGroup(); process.exit(1); }, TURN_SHUTDOWN_GRACE_MS);
+  void cleanup.catch(fatal).finally(() => { signalOwnGroup(); process.exit(); });
 };
 process.on('disconnect', () => { exitAfter(runtime.transportClosed()); });
 process.on('SIGTERM', () => { exitAfter(runtime.disconnect().finally(() => { if (process.connected) process.disconnect(); })); });
