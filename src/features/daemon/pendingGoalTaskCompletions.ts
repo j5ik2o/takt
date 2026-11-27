@@ -22,7 +22,7 @@ export async function publishPendingGoalTaskCompletions(
   const files = new DaemonPersistedFiles(configDirectory);
   for (const completion of completions) {
     try {
-      if (completion.deletion !== undefined && inspectDeletionOwner(completion.deletion) !== 'dead') {
+      if (completion.deletion !== undefined && (await inspectDeletionOwner(completion.deletion)) !== 'dead') {
         // A live owner finishes or cancels the deletion first; an unknown owner is left
         // alone (and already reported by the watch source) instead of being waited on.
         continue;

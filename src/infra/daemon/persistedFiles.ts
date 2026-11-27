@@ -14,7 +14,7 @@ import { readDisplayFile } from './displayFiles.js';
 import { hasCode, readEntirePrivateFile, readPrivateFile, writePrivateFile } from './privateFile.js';
 import { readInboxJson } from './inboxFiles.js';
 import { parseInquiryFile, type InvalidInquiryFileReports } from '../goals/inquiry-files.js';
-import { getProcessIdentity, hasProcessIdentityMismatch, isProcessAlive } from '../task/process.js';
+import { observeProcess } from './process.js';
 
 const MAX_PROJECTION_BYTES = 256 * 1024;
 // 業務 schema の値 import は run の同期読取まで到達するため、ここでは保存形式だけを検証する。
@@ -47,13 +47,12 @@ export interface GoalTaskCompletionIdentity {
  * A live PID without a recorded start time stays `unknown`: PID reuse can never be ruled
  * out for it, so the daemon must neither rewrite the record nor wait for it forever.
  */
-export function inspectDeletionOwner(deletion: { owner_pid: number; owner_start_time?: string }): 'alive' | 'dead' | 'unknown' {
-  if (!isProcessAlive(deletion.owner_pid)) return 'dead';
-  if (deletion.owner_start_time === undefined) return 'unknown';
-  const current = getProcessIdentity(deletion.owner_pid);
-  if (current === undefined) return 'unknown';
-  // A live PID whose start time differs is a reused PID: the recorded owner is gone.
-  return hasProcessIdentityMismatch({ startTime: deletion.owner_start_time }, current) ? 'dead' : 'alive';
+export async function inspectDeletionOwner(deletion: { owner_pid: number; owner_start_time?: string }): Promise<'alive' | 'dead' | 'unknown'> {
+  const observed = await observeProcess(
+    { pid: deletion.owner_pid, startTime: deletion.owner_start_time ?? null },
+    { signal: new AbortController().signal, timeoutMs: 5000 },
+  );
+  return observed.kind;
 }
 
 /** The end offset of a node's own content, recursing into a collection's last item. */
@@ -276,7 +275,7 @@ export class DaemonPersistedFiles {
         if (deletion === null || typeof deletion !== 'object'
           || typeof deletion.owner_pid !== 'number' || !Number.isInteger(deletion.owner_pid) || deletion.owner_pid <= 0
           || (deletion.owner_start_time !== undefined && typeof deletion.owner_start_time !== 'string')) return false;
-        const owner = inspectDeletionOwner({
+        const owner = await inspectDeletionOwner({
           owner_pid: deletion.owner_pid,
           ...(typeof deletion.owner_start_time === 'string' ? { owner_start_time: deletion.owner_start_time } : {}),
         });
