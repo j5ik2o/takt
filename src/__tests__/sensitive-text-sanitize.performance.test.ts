@@ -292,6 +292,12 @@ describe('the second PR stream stays linear on A3 (write + flush, write + previe
       expect(median(pairs.map((pair) => pair.large / pair.small)), `${stream}: 256 KiB / 64 KiB`).toBeLessThan(6);
       expect(median(pairs.map((pair) => pair.large)), stream).toBeLessThan(scaledMs(20_000));
     }
+    // Design 6 (14th edition, points 4): the record is A3 613 ms against 193 ms (about 3.2 times), so
+    // "within 2 times" is not the pass line. The line is 4 times the inner-only stream at 256 KiB;
+    // past it the numbers go to the marshal before the merge.
+    const inner = table['first PR (inner only)']!['256 KiB']!;
+    const second = table['second PR']!['256 KiB']!;
+    expect(second / Math.max(1, inner), `256 KiB: second PR ${second} ms against ${inner} ms`).toBeLessThan(4);
     console.info(`#151 2a stream, ${name} (ms, median of 3):`, JSON.stringify(table));
   }, scaledMs(300_000));
 });

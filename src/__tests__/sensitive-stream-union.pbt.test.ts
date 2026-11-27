@@ -6,7 +6,7 @@ import {
   SensitiveTextStreamBuffer, type SensitiveTextCommit, type SensitiveTextStreamBufferLike, type SensitiveTextStreamRedactor,
 } from '../shared/utils/sensitive-stream.js';
 import { classifyToolResult } from '../shared/tool-activity/result.js';
-import { maskSensitiveRanges, REDACTED_VALUE, type SensitiveRange } from '../shared/utils/sensitive-text.js';
+import { maskSensitiveRanges, REDACTED_VALUE, sensitiveTextRanges, type SensitiveRange } from '../shared/utils/sensitive-text.js';
 import { createBoundedSensitiveValues, type BoundedSensitiveValues } from '../shared/utils/sensitive-value.js';
 import * as legacyStream from './helpers/legacy-sensitive-stream.js';
 import * as legacyValue from './helpers/legacy-sensitive-value.js';
@@ -657,5 +657,27 @@ describe('#151 2a fixed examples (design 8)', () => {
     const preview = buffer.preview(undefined);
     expect(preview.endsWith(REDACTED_VALUE)).toBe(true);
     expect(preview).not.toContain('MIIB');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// 14th edition, point 1 (design 7.1, line 719): the outer hold-back guard reads the new reading (a)
+// alone. The union (`sensitiveTextRanges`, which also carries the previous display's trace (b) and
+// the previous range path (c)) would still hold a URL whose host the new reading has closed. A guard
+// built by adding (b) and (c) holds the run below, so this test fails then.
+
+describe('#151 2a: the outer guard is the new reading (a) alone (14th edition)', () => {
+  const QUOTES = ['', '"', "'", '\\"', '@'] as const;
+  const holdsAtTheEnd = (read: (text: string) => readonly SensitiveRange[], text: string): boolean =>
+    QUOTES.some((quote) => read(text + 'x' + quote).some((range) => range.end > text.length));
+
+  it('newReadingRanges (a) is closed where the union still holds the URL', async () => {
+    const module = await import('../shared/utils/sensitive-text.js') as unknown as {
+      newReadingRanges?: (text: string) => readonly SensitiveRange[];
+    };
+    expect(module.newReadingRanges, 'newReadingRanges is exported (design 7.1)').toBeTypeOf('function');
+    const text = 'https://cookie:a@host ';
+    expect(holdsAtTheEnd(module.newReadingRanges!, text), 'the new reading (a)').toBe(false);
+    expect(holdsAtTheEnd((value) => sensitiveTextRanges(value, new Set()), text), 'the union ((a), (b), (c))').toBe(true);
   });
 });
