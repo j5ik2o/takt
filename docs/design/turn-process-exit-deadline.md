@@ -225,6 +225,16 @@ macOS（XNU `bsd/kern/kern_sig.c` の `killpg1`）では、プロセスグルー
   - 既存の 3 件は `spawn` を `detached` なしで呼んでいるので、グループを率いない場合（`ESRCH` を握って終了する）の確認を兼ねる。終了コードの検証（1 のまま）で、自分に届く SIGTERM が終了を変えないことも確かめる。
 - `src/__tests__/managed-spawn.test.ts` に macOS `EPERM` 待機（ゾンビ専用グループで `EPERM` のあと `ESRCH` に遷移したらエラーにせず完了すること、期限まで `EPERM` が続く本物の権限エラーは `EPERM` を再送出すること）の確認を足し、既存の 69–72 行目の `EPERM` 許容も不要になったことを確認する。
 
+足した回帰テスト（2026-11-27、実装の前に red を確かめた。TEST_TIME_FACTOR に従う）:
+
+- `daemon-turn-process.integration.test.ts`: `signals its own process group before exiting when the parent is gone and …（#177）` の 3 件。フィクスチャ `src/__tests__/fixtures/descendant-spawning-turn-business.ts` が子を起こして PID を `descendant:<pid>` の進捗で知らせる。中断に応じない（期限切れ）、中断に応じるが後片付けが失敗する（期限より前）、SIGTERM のリスナーを外した（低2 の保険。`{ code: 1, signal: null }` のまま）の 3 通り。ターン用プロセスは `detached: true`、`cwd` と設定ディレクトリは `tmpdir()` 配下の `takt-test-global-*`、tsx は絶対 URL で読み込む。
+- `managed-spawn.test.ts`:
+  - 実 OS（perl の親が回収しない子でゾンビだけのグループを作る）: ゾンビだけのグループでは、回収後に macOS は `false`（`EPERM`、SIGKILL を送らない）、Linux は `true`（送信が成功する。低5）。子が SIGTERM で終わって回収を待つ間に猶予後の SIGKILL が当たる場合は、両 OS で `true`（低7）。
+  - `process.platform` と `kill(-pgid)` の結果を差し替えた 4 件: macOS の SIGTERM の `EPERM` → `ESRCH` で `false`、SIGKILL の `EPERM` → `ESRCH` で `true`、`EPERM` が 2 秒続けば `EPERM` を投げる、Linux の `EPERM` は 2 秒待たずに投げる。
+  - 既存の `should terminate a process group after its leader exits normally` から `EPERM` の許容を外した。
+- `leftover-turn-processes.integration.test.ts`: 各テストは自分の `fixtureRoot()` を `isolationRoot` として渡す（低3）。主が抜けたグループの子孫、ゾンビの主のグループの子孫、`cwd` が `takt-test-global-*` でない子孫（低4。隔離ルートの配下だけで判定する）を報告して止める。別の隔離ルートの子孫は止めない。SIGTERM を無視する主を SIGKILL するとグループごと止まる。検出から送信までの間に範囲から外れたプロセスには送らない（低1。待ちの間に隔離ルートの外へ `chdir` させて表す）。報告の行は `kind`（`'turn'`・`'descendant'`）と `pgid` を持つ。
+- 低2（`run-heavy-it-parallel.mjs` が受け継いだ `TEST_USER_ISOLATION_ROOT` を消す）は、スクリプトがトップレベルで Vitest を起こすので、この段では試験にしていない。
+
 ## 壊しうる入力・状況の一覧
 
 | 状況・入力 | 扱い | 確認手段 |

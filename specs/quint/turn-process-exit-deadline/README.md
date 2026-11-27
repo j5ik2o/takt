@@ -177,8 +177,8 @@ Witnesses (out of 10,000 traces):
 - `wParentSigkill`: 286 (2.86%)
 - `wDoubleTriggerTimeout`: 3,240 (32.40%)
 - `wShutdownMsgThenParentCrashTimeout`: 3,655 (36.55%)
-- `wOrphanDescendantGoneAfterTimeout`: 541 (5.41%)
-- `wOrphanDescendantGoneAfterFailedCleanup`: 243 (2.43%)
+- `wOrphanDescendantGoneAfterTimeout`: 524 (5.24%)
+- `wOrphanDescendantGoneAfterFailedCleanup`: 211 (2.11%)
 - `wOrphanIgnoringDescendantLeft`: 693 (6.93%)
 - `wParentSweepAfterExit`: 140 (1.40%)
 - `wParentCrashAfterExitSignalled`: 118 (1.18%)
@@ -187,6 +187,23 @@ Witnesses (out of 10,000 traces):
 - `wParentCrashAfterDisconnect`: 2,488 (24.88%)
 
 The same `safety` run with seeds `0x1`, `0x7`, and `0xbeef` (20,000 samples, 20 steps) found no violation.
+
+`wOrphanDescendantGoneAfterTimeout` and `wOrphanDescendantGoneAfterFailedCleanup` also require `sweep == SweepIdle`: the parent never swept the group, so the descendant ended on the turn process's own SIGTERM (`descendantExitOnTerm`), not on a sweep the parent ran before it crashed. With `descendantExitOnTerm` removed from `step` (a mutant), both are witnessed in 0 of 10,000 traces; without the `sweep` condition they were still reached (17 and 43) through that parent-sweep-then-crash path.
+
+### `fixed`: the zombie-reap race (`quint run`)
+
+`wParentSweepWaitsZombieReap` is rare under `init` / `step` (2 of 10,000 above). `initParentAliveHonoringDescendant` fixes the configuration that can reach it (initialized, the turn process leads its group, one descendant that honors SIGTERM) and `stepParentAlive` leaves out the parent-crash actions:
+
+```sh
+quint run turnProcessExitDeadline.qnt --main fixed \
+  --init initParentAliveHonoringDescendant --step stepParentAlive \
+  --invariant safety --witnesses wParentSweepWaitsZombieReap wParentSweepAfterExit \
+  --max-samples 10000 --max-steps 15 --seed 0x2a
+```
+
+Result: no violation of `safety`; trace length min=4, max=15, average=7.49. `wParentSweepWaitsZombieReap`: 1,649 (16.49%), `wParentSweepAfterExit`: 4,959 (49.59%). With `descendantExitOnTerm` removed from `stepParentAlive` (a mutant), `wParentSweepWaitsZombieReap` drops to 0.
+
+The same focused run on `everyExitWithoutEpermFix` with `--invariant noSpuriousParentSweepError` finds the violation: `ipcDisconnectWhileParentAlive` → `receiveSigterm` → `tick` × 2 → `childDeadlineFire` → `descendantExitOnTerm` → `parentSweepAfterExit`.
 
 ## When to update
 

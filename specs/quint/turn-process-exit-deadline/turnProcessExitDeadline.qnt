@@ -480,6 +480,32 @@ module turnProcessExitDeadline {
     s' = applyDescendantReaped(s),
   }
 
+  // Focused runs for the zombie-reap race (`wParentSweepWaitsZombieReap` is rare under `init` / `step`):
+  // the parent stays alive, and the turn process leads a group with a descendant that honors SIGTERM.
+  action initParentAliveHonoringDescendant: bool = {
+    nondet turn = Set(true, false).oneOf()
+    nondet stall = Set(StallNone, StallTurn, StallClose, StallInit).oneOf()
+    nondet holds = Set(true, false).oneOf()
+    nondet closeErr = Set(true, false).oneOf()
+    initWithGroup(true, turn, stall, holds, closeErr, DescHonorsTerm, true)
+  }
+
+  action stepParentAlive: bool = any {
+    receiveShutdownMsg,
+    receiveSigterm,
+    ipcDisconnectWhileParentAlive,
+    cleanupResolve,
+    cleanupReject,
+    eventLoopDrain,
+    childDeadlineFire,
+    parentSigkill,
+    tick,
+    parentSweepAfterExit,
+    parentSweepFinishAfterReap,
+    descendantExitOnTerm,
+    descendantReaped,
+  }
+
   action step: bool = any {
     receiveShutdownMsg,
     receiveSigterm,
@@ -615,12 +641,15 @@ module turnProcessExitDeadline {
     s.status == ExitedOne and s.timedOutMsg and s.parent == ParentDead and s.inExitAfter
 
   // #177 witnesses
+  // `sweep == SweepIdle`: the parent never swept the group, so the descendant ended on the turn process's
+  // own SIGTERM (`descendantExitOnTerm`), not on a sweep the parent ran before it crashed.
   val wOrphanDescendantGoneAfterTimeout: bool =
     s.timedOutMsg and s.parent == ParentDead and s.desc == DescHonorsTerm and s.groupLeader and not(s.descAlive)
+      and s.sweep == SweepIdle
 
   val wOrphanDescendantGoneAfterFailedCleanup: bool =
     s.cleanup == CleanupFailed and not(s.timedOutMsg) and s.parent == ParentDead
-      and s.desc == DescHonorsTerm and s.groupLeader and not(s.descAlive)
+      and s.desc == DescHonorsTerm and s.groupLeader and not(s.descAlive) and s.sweep == SweepIdle
 
   // Known residual: a descendant that ignores SIGTERM stays once the parent is gone.
   val wOrphanIgnoringDescendantLeft: bool =
