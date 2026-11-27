@@ -60,6 +60,7 @@ export class TaskExceedService {
         owner_pid: null,
         owner_start_time: null,
         failure: undefined,
+        completion_publication_pending: undefined,
         ...(target.run_slug ? { source_run_slug: target.run_slug } : {}),
         resume_mode: 'requeue',
         ...(options?.retryNote === undefined ? {} : { retry_note: options.retryNote }),

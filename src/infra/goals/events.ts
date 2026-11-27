@@ -9,7 +9,7 @@ import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalIdSchema, GoalTaskResu
 
 const common = { goalId: GoalIdSchema, createdAt: z.iso.datetime() };
 export const ManagerEventSchema = z.discriminatedUnion('kind', [
-  z.object({ ...common, kind: z.literal('completion'), taskName: z.string().min(1), runSlug: z.string().min(1).optional(), result: GoalTaskResultSchema }).strict(),
+  z.object({ ...common, kind: z.literal('completion'), taskName: z.string().min(1), runSlug: z.string().min(1).optional(), executionId: z.string().min(1).optional(), result: GoalTaskResultSchema }).strict(),
   z.object({ ...common, kind: z.literal('answer'), goalId: GoalIdSchema.nullable(), questionId: z.uuid(),
     questionBody: z.string().optional(), answer: GoalAnswerSchema }).strict(),
   z.object({ ...common, kind: z.literal('pr_failed'), expectedSha: z.string(), reason: z.string() }).strict(),

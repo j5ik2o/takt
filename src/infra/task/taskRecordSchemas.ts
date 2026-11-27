@@ -5,6 +5,25 @@ import { TaskExecutionConfigObjectSchema } from './taskExecutionSchemas.js';
 import { buildTaskSchema, serializeTaskConfig } from './taskConfigSerialization.js';
 import { RUN_RESUME_MODES } from '../../core/workflow/run/run-meta.js';
 import { boundPersistedFailureText } from '../../shared/utils/persistedFailureText.js';
+import { createLogger, sanitizeTerminalText } from '../../shared/utils/index.js';
+
+const log = createLogger('task-record-schema');
+
+const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set(['completed', 'failed', 'exceeded', 'pr_failed']);
+
+/**
+ * The four conditions under which a `completion_publication_pending` mark is valid (#170):
+ * a goal task, in a terminal status, with a saved completion and an attempt identifier.
+ * Anything else is normalized away on read instead of rejecting the whole tasks.yaml.
+ */
+export function isValidCompletionPublicationPending(record: unknown): boolean {
+  if (typeof record !== 'object' || record === null) return false;
+  const value = record as Record<string, unknown>;
+  return value.goal_id !== undefined
+    && value.completion !== undefined
+    && typeof value.status === 'string' && TERMINAL_TASK_STATUSES.has(value.status)
+    && (value.run_slug !== undefined || value.execution_id !== undefined);
+}
 
 export const TaskStatusSchema = z.enum(['pending', 'running', 'completed', 'failed', 'exceeded', 'pr_failed']);
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
@@ -19,7 +38,7 @@ export const TaskFailureSchema = z.object({
 }).strict();
 export type TaskFailure = z.infer<typeof TaskFailureSchema>;
 
-export const TaskRecordSchema = buildTaskSchema(
+const TaskRecordObjectSchema = buildTaskSchema(
   TaskExecutionConfigObjectSchema.extend({
     name: z.string().min(1),
     status: TaskStatusSchema,
@@ -50,8 +69,9 @@ export const TaskRecordSchema = buildTaskSchema(
     owner_start_time: z.string().min(1).nullable().optional(),
     failure: TaskFailureSchema.optional(),
     completion: GoalTaskResultSchema.optional(),
+    completion_publication_pending: z.unknown().optional(),
     auto_requeue_count: z.number().int().min(0).optional(),
-  }),
+  }).strip(),
 ).superRefine((value, ctx) => {
   const sourceFields = [value.content, value.content_file, value.task_dir].filter((field) => field !== undefined);
   if (sourceFields.length === 0) {
@@ -277,6 +297,18 @@ export const TaskRecordSchema = buildTaskSchema(
       });
     }
   }
+});
+
+export const TaskRecordSchema = TaskRecordObjectSchema.transform((value) => {
+  const mark = value.completion_publication_pending;
+  if (mark === true && isValidCompletionPublicationPending(value)) {
+    return { ...value, completion_publication_pending: true as const };
+  }
+  if (mark !== undefined) {
+    log.warn(`Dropping invalid completion_publication_pending for task ${sanitizeTerminalText(String(value.name))}: the mark is only valid on a terminal goal task with a completion and a run_slug or execution_id.`);
+  }
+  const { completion_publication_pending: _dropped, ...rest } = value;
+  return rest;
 });
 export type TaskRecord = z.infer<typeof TaskRecordSchema>;
 

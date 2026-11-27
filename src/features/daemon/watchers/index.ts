@@ -13,6 +13,7 @@ export interface DaemonWatchSource {
   run(targetId: string): Promise<RunWatchTarget | undefined>;
   pullRequests(): Promise<readonly PullRequestWatchTarget[]>;
   inquiries(): Promise<void>;
+  taskCompletions?(): Promise<void>;
   launches(): Promise<readonly LaunchWatchTarget[]>;
   directories(): Promise<readonly DirectoryWatchTarget[]>;
 }
@@ -57,6 +58,11 @@ export function startDaemonWatchers(dependencies: {
     observePullRequest(target, dependencies.commands, observations, { signal, timeoutMs: WATCH_INTERVALS.long }));
   loops.push(startWatchLoop(WATCH_INTERVALS.files, () => dependencies.source.inquiries(),
     (error) => dependencies.onError(null, error)));
+  if (dependencies.source.taskCompletions !== undefined) {
+    const taskCompletions = dependencies.source.taskCompletions.bind(dependencies.source);
+    loops.push(startWatchLoop(WATCH_INTERVALS.files, () => taskCompletions(),
+      (error) => dependencies.onError(null, error)));
+  }
   register('launch', WATCH_INTERVALS.launch, () => dependencies.source.launches(), (checks, target) => checks.launch(target));
   loops.push(startDirectoryWatcher({ targets: () => dependencies.source.directories(), changed: dependencies.filesChanged,
     onError: (error) => dependencies.onError(null, error) }));

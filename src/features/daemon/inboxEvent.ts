@@ -8,7 +8,8 @@ export function managerInboxTurnEvent(directory: string, saved: ManagerEvent): T
     case 'completion': return {
       kind: saved.result.success ? 'task_completed' : 'task_failed',
       task: { repositoryDirectory: directory, goalId: saved.goalId, taskName: saved.taskName,
-        ...(saved.runSlug === undefined ? {} : { runSlug: saved.runSlug }) },
+        ...(saved.runSlug === undefined ? {} : { runSlug: saved.runSlug }),
+        ...(saved.executionId === undefined ? {} : { executionId: saved.executionId }) },
       result: saved.result,
     };
     case 'pr_failed': return { kind: 'goal_pr_failed', repositoryDirectory: directory,
