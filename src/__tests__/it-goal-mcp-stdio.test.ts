@@ -32,6 +32,7 @@ import { readManagerEvents, saveManagerEvent } from '../infra/goals/events.js';
 import { GoalAbortMonitor, GoalAbortedError, GoalPausedError } from '../features/tasks/execute/goalAbortMonitor.js';
 import { resetScenario,setMockScenario } from '../infra/mock/index.js';
 import { TaskRunner } from '../infra/task/runner.js';
+import { getSelfProcessIdentity } from '../infra/task/process.js';
 import { getLabel } from '../shared/i18n/index.js';
 import { initializeGitFixture } from './helpers/git-fixture.js';
 import { goalId,goalRecord } from './helpers/goal-fixtures.js';
@@ -546,8 +547,6 @@ describe('manager goal execution tools through MCP', () => {
   });
 
   it.each([
-    { toolSet: 'all', connected: false },
-    { toolSet: 'all', connected: true },
     { toolSet: 'read-only', connected: false },
     { toolSet: 'read-only', connected: true },
     { toolSet: 'manager', connected: false },
@@ -568,6 +567,135 @@ describe('manager goal execution tools through MCP', () => {
       }
       expect((await store.get(goalId)).executionStatus).toBe('active');
     } finally { try { await reader.close(); } finally { await restricted.close(); } }
+  });
+
+  async function connectExternalGoalServer(connected = false) {
+    const externalServer = createTaktMcpServer({}, {
+      toolSet: 'all', allowedProjectRoot: cwd, ...(connected ? { goalExecutionConnection: confirmation } : {}),
+    });
+    const externalClient = new Client({ name: 'external-goal-execution-test', version: '1' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    await externalServer.connect(b);
+    await externalClient.connect(a);
+    return {
+      client: externalClient,
+      close: async () => { try { await externalClient.close(); } finally { await externalServer.close(); } },
+    };
+  }
+
+  function goalExecutionArguments(name: string, extra: Record<string, unknown> = {}) {
+    return {
+      cwd, goalId,
+      ...(['takt_abort_goal', 'takt_finish_goal'].includes(name) ? { reason: '作業を取りやめます' } : {}),
+      ...extra,
+    };
+  }
+
+  it.each([{ connected: false }, { connected: true }])(
+    'exposes the four goal execution tools to an external all server with the manager definitions (connected: $connected)',
+    async ({ connected }) => {
+      const external = await connectExternalGoalServer(connected);
+      try {
+        const [managerTools, externalTools] = await Promise.all([client.listTools(), external.client.listTools()]);
+        const managerByName = new Map(managerTools.tools.map((tool) => [tool.name, tool]));
+        const externalByName = new Map(externalTools.tools.map((tool) => [tool.name, tool]));
+        for (const name of names) {
+          const managerTool = managerByName.get(name);
+          const externalTool = externalByName.get(name);
+          expect(managerTool, name).toBeDefined();
+          expect(externalTool, name).toBeDefined();
+          expect(externalTool!.title).toBe(managerTool!.title);
+          expect(externalTool!.description).toBe(managerTool!.description);
+          expect(externalTool!.inputSchema).toEqual(managerTool!.inputSchema);
+        }
+      } finally { await external.close(); }
+    },
+  );
+
+  it('pauses, resumes, aborts and finishes through an external all server with the manager results', async () => {
+    const external = await connectExternalGoalServer();
+    const invoke = async (name: string) => {
+      const result = await external.client.callTool({ name, arguments: goalExecutionArguments(name) });
+      expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+      return JSON.parse(firstTextContent(result.content)) as Record<string, unknown>;
+    };
+    try {
+      expect(await invoke('takt_pause_goal')).toEqual({ goalId, executionStatus: 'paused' });
+      expect((await store.get(goalId)).executionStatus).toBe('paused');
+      expect(await invoke('takt_resume_goal')).toEqual({ goalId, executionStatus: 'active' });
+      expect(ensureDaemon).toHaveBeenCalledTimes(1);
+      expect(autoRun.ensureManagerRun).toHaveBeenCalledExactlyOnceWith(cwd);
+      expect(await invoke('takt_abort_goal')).toEqual({ goalId, executionStatus: 'aborted' });
+      expect((await store.get(goalId)).workLog).toEqual([]);
+      const finished = await invoke('takt_finish_goal');
+      expect(Object.keys(finished).sort()).toEqual(['goal', 'targetSha', 'workLogEntryId']);
+      expect(finished).toMatchObject({
+        targetSha: execFileSync('git', ['rev-parse', goalRecord().branch], { cwd, encoding: 'utf8' }).trim(),
+        goal: { id: goalId, status: 'completed', executionStatus: 'aborted' },
+      });
+      expect((await store.get(goalId)).status).toBe('completed');
+    } finally { await external.close(); }
+  });
+
+  it('pauses an external goal while a task for it is running', async () => {
+    const startedAt = new Date().toISOString();
+    writeFileSync(join(cwd, '.takt', 'tasks.yaml'), JSON.stringify({ tasks: [{
+      name: 'running-goal-task', content: '実行中の作業', status: 'running', goal_id: goalId,
+      created_at: startedAt, started_at: startedAt, completed_at: null,
+    }] }));
+    const external = await connectExternalGoalServer();
+    try {
+      const result = await external.client.callTool({
+        name: 'takt_pause_goal', arguments: goalExecutionArguments('takt_pause_goal'),
+      });
+      expect(result.isError, firstTextContent(result.content)).not.toBe(true);
+      expect(JSON.parse(firstTextContent(result.content))).toEqual({ goalId, executionStatus: 'paused' });
+      expect(new TaskRunner(cwd).listTaskStateItems()).toEqual([
+        expect.objectContaining({ name: 'running-goal-task', status: 'running' }),
+      ]);
+    } finally { await external.close(); }
+  });
+
+  it('refuses external goal operations while the manager connection is changing the same goal', async () => {
+    const identity = getSelfProcessIdentity();
+    const startedAt = new Date().toISOString();
+    const leasePath = join(cwd, '.takt', 'goals', goalId, 'driver.json');
+    const external = await connectExternalGoalServer();
+    try {
+      for (const name of names) {
+        writeFileSync(leasePath, JSON.stringify({
+          driver: 'manager', operation: name.slice('takt_'.length, -'_goal'.length), pid: process.pid,
+          ...(identity === undefined ? {} : { processStartTime: identity.startTime }),
+          startedAt, token: crypto.randomUUID(),
+        }), { mode: 0o600 });
+        const result = await external.client.callTool({ name, arguments: goalExecutionArguments(name) });
+        const text = firstTextContent(result.content);
+        expect(result.isError, `${name}: ${text}`).toBe(true);
+        expect(text, name).toContain(`Goal ${goalId} is already being changed by the manager connection`);
+        expect(text, name).toContain(`PID ${process.pid}`);
+        expect((await store.get(goalId)).executionStatus).toBe('active');
+      }
+      expect(ensureDaemon).not.toHaveBeenCalled();
+      expect(autoRun.ensureManagerRun).not.toHaveBeenCalled();
+    } finally { await external.close(); }
+  });
+
+  it('exposes goal execution tools through the external stdio entrypoint with --tool-set all', async () => {
+    const originalArgv = process.argv;
+    const reader = new Client({ name: 'external-public-goal-execution-test', version: '1' });
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    stdioTransport.mockImplementationOnce(function StdioServerTransport() { return b; });
+    try {
+      vi.stubEnv(MANAGER_ASSIGNMENT_ENV, undefined);
+      process.argv = [...originalArgv.slice(0, 2), '--tool-set', 'all'];
+      await connectTaktMcpServerToStdio();
+      await reader.connect(a);
+      const tools = (await reader.listTools()).tools.map(({ name }) => name);
+      for (const name of names) expect(tools).toContain(name);
+    } finally {
+      process.argv = originalArgv;
+      try { await reader.close(); } finally { await b.close(); }
+    }
   });
 
   it('pauses, resumes and aborts the same goal while preserving its records and branch', async () => {

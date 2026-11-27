@@ -19,6 +19,17 @@ vi.mock('../shared/utils/bounded-command-runner.js', async (original) => ({
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = doubles.invalidate; listTaskStateItems = doubles.list; } }));
 vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: doubles.daemon }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.run }));
+// #179: the lease owns the filesystem, so the operation runs the action directly here.
+vi.mock('../infra/goals/driver-lease.js', () => ({
+  withGoalDriverLease: (
+    _cwd: string,
+    _goalId: string,
+    _driver: unknown,
+    _operation: unknown,
+    _signal: AbortSignal,
+    action: () => Promise<unknown> | unknown,
+  ) => action(),
+}));
 vi.mock('../features/mcp/operations.js', async (original) => ({
   ...await original<typeof import('../features/mcp/operations.js')>(),
   assertCwdAllowedByMcpRoot: doubles.boundary,
