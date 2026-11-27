@@ -142,22 +142,35 @@ export async function runTaskFinishHooks(
   }
 }
 
+/** Call the hook for saved terminal states handed over directly, without re-reading tasks.yaml. Never throws. */
+export async function runTaskFinishHooksForStates(
+  projectCwd: string,
+  states: readonly TaskState[],
+  options?: TaskFinishHookOptions,
+): Promise<void> {
+  if (states.length === 0) return;
+  try {
+    const hook = loadProjectConfig(projectCwd).taskFinishHook;
+    if (hook === undefined) return;
+    const terminal = states.filter(isTerminal);
+    await Promise.all(terminal.map((state) => callHook(projectCwd, hook, state, options)));
+  } catch (error) {
+    log.error('Task finish hook could not run', { taskNames: states.map((state) => state.name), error: getErrorMessage(error) });
+  }
+}
+
 /** Fail the pending tasks of an aborted goal, then call the hook for each task this saved as failed. */
 export async function invalidatePendingGoalTasksWithFinishHook(
   projectCwd: string,
   taskRunner: TaskRunner,
   goalId: string,
 ): Promise<void> {
-  let pendingNames: string[] = [];
+  const invalidated: TaskState[] = [];
   try {
-    pendingNames = taskRunner.listTaskStateItems()
-      .filter((item) => item.status === 'pending' && item.goalId === goalId)
-      .map((item) => item.name);
-  } catch (error) {
-    log.error('Task state was unreadable before goal task invalidation', { goalId, error: getErrorMessage(error) });
+    taskRunner.invalidatePendingGoalTasks(goalId, (state) => { invalidated.push(state); });
+  } finally {
+    await runTaskFinishHooksForStates(projectCwd, invalidated);
   }
-  taskRunner.invalidatePendingGoalTasks(goalId);
-  await runTaskFinishHooks(projectCwd, taskRunner, pendingNames);
 }
 
 /**

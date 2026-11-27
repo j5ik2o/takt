@@ -113,9 +113,10 @@ describe('IT: runtime assignment removed from runtime.yaml', () => {
     addTask(runner, 'unrelated pending', { workflow: 'preflight-it' });
 
     const signal = new AbortController().signal;
-    const { tasks, setupFailedTaskNames } = claimTasksWithGoalCompletions(runner, 1, projectDir, signal);
+    const { tasks, setupFailedTasks } = claimTasksWithGoalCompletions(runner, 1, projectDir, signal);
 
-    expect(setupFailedTaskNames).toEqual([goalTask]);
+    // #169: the claim returns the saved states instead of the names; the names checked are the same.
+    expect(setupFailedTasks.map((task) => task.name)).toEqual([goalTask]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(goalTask);
     expect(warnings[0]).toContain(EXPECTED);
@@ -142,9 +143,10 @@ describe('IT: runtime assignment removed from runtime.yaml', () => {
     const runner = new TaskRunner(projectDir);
     const task = addTask(runner, 'ordinary task', { runtime_assignment: VANISHED });
 
-    const { tasks, setupFailedTaskNames } = claimTasksWithGoalCompletions(runner, 1, projectDir, new AbortController().signal);
+    const { tasks, setupFailedTasks } = claimTasksWithGoalCompletions(runner, 1, projectDir, new AbortController().signal);
 
-    expect(setupFailedTaskNames).toEqual([]);
+    // #169: the claim returns the saved states instead of the names; the names checked are the same.
+    expect(setupFailedTasks.map((item) => item.name)).toEqual([]);
     expect(tasks.map((info) => info.name)).toEqual([task]);
     const state = runner.listTaskStateItems().find((item) => item.name === task);
     expect(state?.status).toBe('running');

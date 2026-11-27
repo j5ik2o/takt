@@ -6,13 +6,34 @@ const isKeyChar = (char: string | undefined): boolean => char !== undefined && /
 const isSpace = (char: string | undefined): boolean => char === ' ' || char === '\n' || char === '\t' || char === '\r';
 const KEY_WORDS = ['apikey', 'api_key', 'api-key', 'token', 'password', 'secret'];
 const endsUserOrPasswordHead = (char: string | undefined): boolean => char === undefined || '/?#@'.includes(char) || isSpace(char);
-const endsTail = (char: string | undefined): boolean => char === undefined || '/?#"\'`,<>()[]{}'.includes(char) || isSpace(char);
+const endsTail = (char: string | undefined): boolean => char === undefined || '/?#"\'`<>()[]{}'.includes(char) || isSpace(char);
 const endsAssignedValue = (char: string | undefined): boolean => char === undefined || '"\'[{,}]'.includes(char) || isSpace(char);
 
-/** The last `@` at or after `from` before the tail ends, or -1. */
+/**
+ * The last `@` at or after `from` before the tail ends, or -1. The tail starts right after an `@`.
+ * A `,` ends it only after a letter or digit (of any script) since the latest `@`, which could be
+ * a host (#175): `@host,admin@example.test` ends at the `,`, `@,secret@host` does not. Once a `,`
+ * was passed, later ones up to the next `@` do not end it either (`@,a,b@host`, R175-1).
+ */
 function lastAtInTail(text: string, from: number): number {
   let last = -1;
-  for (let index = from; !endsTail(text[index]); index++) if (text[index] === '@') last = index;
+  let hostChar = false;
+  let passedComma = false;
+  for (let index = from; !endsTail(text[index]); index++) {
+    const codePoint = text.codePointAt(index)!;
+    const char = String.fromCodePoint(codePoint);
+    if (char === '@') {
+      last = index;
+      hostChar = false;
+      passedComma = false;
+    } else if (char === ',') {
+      if (hostChar && !passedComma) break;
+      passedComma = true;
+    } else if (/^[\p{L}\p{N}]$/u.test(char)) {
+      hostChar = true;
+    }
+    if (char.length > 1) index += 1;
+  }
   return last;
 }
 

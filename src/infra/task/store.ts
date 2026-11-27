@@ -39,7 +39,7 @@ export class TaskStore {
 
   update(
     mutator: (current: TasksFileData) => TasksFileData | undefined,
-    options?: { deletionId?: string; onAcquisitionError?: FileLockAcquisitionErrorHandler },
+    options?: { deletionId?: string; onAcquisitionError?: FileLockAcquisitionErrorHandler; onWritten?: () => void },
   ): TasksFileData {
     return this.withLock(() => {
       const current = this.clearStaleDeletions(this.readUnsafe());
@@ -48,6 +48,7 @@ export class TaskStore {
       const updated = TasksFileSchema.parse(mutation);
       this.assertDeletionsUnchanged(current, updated, options?.deletionId);
       this.writeUnsafe(updated);
+      options?.onWritten?.();
       return updated;
     }, options?.onAcquisitionError);
   }
