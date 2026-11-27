@@ -95,6 +95,7 @@ import { resolveAssignedProjectRoot, resolveCurrentManagerAssignment, type Manag
 import { resolveGitRepositoryDirectory } from '../../infra/task/repositoryDirectory.js';
 import { addManagerRepository, removeManagerRepository, renameManagerWorkspace } from '../manager/workspaceOperations.js';
 import type { ManagerMcpConnection } from '../manager/managerMcpConnection.js';
+import type { GoalDriver } from '../../infra/goals/driver-lease.js';
 import { managerImageDirectory } from '../manager/imageAttachments.js';
 import { conversationId } from '../../infra/conversations/identity.js';
 
@@ -272,6 +273,44 @@ export function createTaktMcpServer(
       return jsonResult({ id: reply.id });
     }, false));
   }
+  const GOAL_EXECUTION_TOOL_DEFINITIONS = {
+    pause: {
+      title: 'Pause goal execution',
+      description: 'Pause the selected goal. Running work is interrupted and pending work waits. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
+      inputSchema: goalWriteInputSchema,
+    },
+    resume: {
+      title: 'Resume goal execution',
+      description: 'Resume the selected paused goal. Aborted goals cannot resume. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
+      inputSchema: goalWriteInputSchema,
+    },
+    abort: {
+      title: 'Abort goal execution',
+      description: 'Abort the selected goal with a required reason. Abort cannot be undone; goal records and branches remain. Pending work is invalidated and running work is interrupted. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
+      inputSchema: abortGoalInputSchema,
+    },
+    finish: {
+      title: 'Finish an aborted goal',
+      description: 'Move an aborted goal with status created or awaiting_merge to the completed state with a required reason, which is saved in the work log. The reason becomes the completion summary only when the goal has no completion record; an existing completion summary is preserved. A saved unmerged, closed pull request does not block finishing. This rejects goals that are not aborted, and goals with running work or an unintegrated result. A result is any task with status completed or pr_failed, or a saved completion SHA or workflowResult completed; it is unintegrated when its SHA is not included in the integration branch tip by ancestry or identical content. Pending tasks do not block finishing because takt_abort_goal already marks them failed. It does not query the pull request, delete tasks, or change executionStatus. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
+      inputSchema: finishGoalInputSchema,
+    },
+  } as const;
+  const registerGoalExecutionTools = (driver: GoalDriver, connection?: ManagerMcpConnection): void => {
+    const goalOperation = (cwd: string, errorContext: string, action: (deps: McpOperationDependencies) => Promise<CallToolResult>) =>
+      operation(cwd, errorContext, async (deps) => {
+        if (connection !== undefined) await connection.assertConnected();
+        return action(deps);
+      }, false);
+    server.registerTool('takt_pause_goal', { ...GOAL_EXECUTION_TOOL_DEFINITIONS.pause },
+      (input, extra) => goalOperation(input.cwd, 'Goal pause failed', (deps) => pauseTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal), driver)));
+    server.registerTool('takt_resume_goal', { ...GOAL_EXECUTION_TOOL_DEFINITIONS.resume },
+      (input, extra) => goalOperation(input.cwd, 'Goal resume failed', (deps) => resumeTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal), driver)));
+    server.registerTool('takt_abort_goal', { ...GOAL_EXECUTION_TOOL_DEFINITIONS.abort },
+      (input, extra) => goalOperation(input.cwd, 'Goal abort failed', (deps) => abortTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal), driver)));
+    server.registerTool('takt_finish_goal', { ...GOAL_EXECUTION_TOOL_DEFINITIONS.finish },
+      (input, extra) => goalOperation(input.cwd, 'Goal finish failed', (deps) => finishTaktAbortedGoal(projectInput(input, deps), deps, turnSignal(extra.signal), driver)));
+  };
+  if (options.toolSet === 'all') registerGoalExecutionTools('external');
   if (options.toolSet === 'manager') {
     registerEpicTools(server, { globalConfigDirectory, currentAssignment, withTurn, turnSignal,
       changed: options.requestDaemon === undefined ? undefined : async (workspaceId, epicId, reason) => {
@@ -280,33 +319,7 @@ export function createTaktMcpServer(
         if (reply.kind !== 'epic_events_published') throw new Error('Unexpected Epic event reply');
       } });
     const connection = options.goalExecutionConnection;
-    if (connection !== undefined) {
-      const goalOperation = (cwd: string, errorContext: string, action: (deps: McpOperationDependencies) => Promise<CallToolResult>) =>
-        operation(cwd, errorContext, async (deps) => {
-          await connection.assertConnected();
-          return action(deps);
-        }, false);
-      server.registerTool('takt_pause_goal', {
-        title: 'Pause goal execution',
-        description: 'Pause the selected goal. Running work is interrupted and pending work waits. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
-        inputSchema: goalWriteInputSchema,
-      }, (input, extra) => goalOperation(input.cwd, 'Goal pause failed', (deps) => pauseTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))));
-      server.registerTool('takt_resume_goal', {
-        title: 'Resume goal execution',
-        description: 'Resume the selected paused goal. Aborted goals cannot resume. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
-        inputSchema: goalWriteInputSchema,
-      }, (input, extra) => goalOperation(input.cwd, 'Goal resume failed', (deps) => resumeTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))));
-      server.registerTool('takt_abort_goal', {
-        title: 'Abort goal execution',
-        description: 'Abort the selected goal with a required reason. Abort cannot be undone; goal records and branches remain. Pending work is invalidated and running work is interrupted. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
-        inputSchema: abortGoalInputSchema,
-      }, (input, extra) => goalOperation(input.cwd, 'Goal abort failed', (deps) => abortTaktGoal(projectInput(input, deps), deps, turnSignal(extra.signal))));
-      server.registerTool('takt_finish_goal', {
-        title: 'Finish an aborted goal',
-        description: 'Move an aborted goal with status created or awaiting_merge to the completed state with a required reason, which is saved in the work log. The reason becomes the completion summary only when the goal has no completion record; an existing completion summary is preserved. A saved unmerged, closed pull request does not block finishing. This rejects goals that are not aborted, and goals with running work or an unintegrated result. A result is any task with status completed or pr_failed, or a saved completion SHA or workflowResult completed; it is unintegrated when its SHA is not included in the integration branch tip by ancestry or identical content. Pending tasks do not block finishing because takt_abort_goal already marks them failed. It does not query the pull request, delete tasks, or change executionStatus. Use takt_list_goals to identify the target and ask the human if it is ambiguous.',
-        inputSchema: finishGoalInputSchema,
-      }, (input, extra) => goalOperation(input.cwd, 'Goal finish failed', (deps) => finishTaktAbortedGoal(projectInput(input, deps), deps, turnSignal(extra.signal))));
-    }
+    if (connection !== undefined) registerGoalExecutionTools('manager', connection);
     server.registerTool('takt_tell_run', {
       title: 'Send an instruction to running goal work',
       description: 'Send an additional instruction to the running task selected by goalId and taskName, and save its original text in the goal work log. Responses fit 64 KiB, with explicit truncation. Read saved instructions with takt_get_run, runSlug and view instructions using offset/limit (1-50), or select instructionId and offset/maxBytes for forward UTF-8 text. Follow nextOffset for continuation. Read the saved work log with takt_get_goal path workLog.summary, recordId and textOffset/maxBytes.',
