@@ -18,9 +18,9 @@
 //   "Before"                   — current code: no completion_publication_pending mark, no daemon
 //                                republisher, no pending hasWork, random per-file inbox eventId.
 //   "FixedNoRepublisher"       — adds completion_publication_pending, hasWork, dedup, checked clear,
-//                                and stale-deletion recovery, but disables daemon republishing
-//                                (proves quiescentDelivery catches missing delivery, unlike
-//                                noUnrecoverableLoss alone).
+//                                and stale-deletion recovery, but disables daemon republishing.
+//                                quiescentDelivery fails here only because the flag also enters
+//                                republisherAccepts; drainedDelivery fails because no action delivers.
 //   "FixedNoHasWork"           — full fix except hasWork ignores pendingPub, allowing premature
 //                                daemon idle exit while pendingPub remains unsettled.
 //   "FixedStaleDeletionBlocks" — full fix except daemon treats a dead deletion owner as blocking
@@ -34,6 +34,15 @@
 //                                stale-deletion recovery, deterministic eventId per (task, attempt),
 //                                attempt-matched clear, live-deletion guard, and aborted/deleted
 //                                goal settlement.
+//
+// Two ways to check delivery:
+//   safety (init/step)          — seven state invariants. quiescentDelivery reads the same guard
+//                                 expressions the actions use, so it cannot see an action that keeps
+//                                 its guard but stops doing its work.
+//   drainedDelivery (initD/stepD) — after a drain phase that only allows forward progress actions,
+//                                 the actions themselves must have delivered or settled every notice.
+//                                 Run: quint run --init initD --step stepD --invariant drainedDelivery
+//                                      --max-steps 70
 module goalTaskCompletionPublication {
   const DESIGN: str
 
@@ -759,6 +768,74 @@ module goalTaskCompletionPublication {
     }
   }
 
+  // ---------- drain phase (bounded progress check) ----------
+  // stepD runs the ordinary step until it nondeterministically enters the drain phase. From then on,
+  // failures (publish/clear failures, crashes) and outside changes (new tasks, requeue, pause, abort,
+  // delete, new deletion reservations) stop, and only actions that move a notice forward may run.
+  // Each drain step may also stutter, so the simulator never deadlocks once everything is settled.
+  // drainedDelivery then checks the effect of the actions, not their guards: if an action keeps its
+  // guard but stops publishing or clearing, the notice is never delivered or settled.
+  var drain: bool
+  var dsteps: int
+
+  pure val DRAIN_STEPS: int = 40
+
+  action initD: bool = all { init, drain' = false, dsteps' = 0 }
+
+  action unchangedModel: bool = all {
+    tasks' = tasks, goal' = goal, writer' = writer, daemon' = daemon, daemonRunning' = daemonRunning,
+    inbox' = inbox, nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred,
+    wakes' = wakes, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+    writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+    staleDeletionRecovered' = staleDeletionRecovered, lastAction' = lastAction,
+  }
+
+  action progress: bool = {
+    nondet t = TASKS.oneOf()
+    any {
+      writerPublishOk,
+      writerClearOk,
+      daemonReadPending(t),
+      daemonPublishOk,
+      daemonClearOk,
+      daemonIdleExit,
+      consumeAnyInbox,
+      deliverAnyDeferred,
+      cancelDeletion(t),
+      finishDeletion(t),
+      deletionOwnerCrash(t),
+      resumeGoal,
+    }
+  }
+
+  action stepD: bool = any {
+    all { not(drain), step, drain' = false, dsteps' = 0 },
+    all { not(drain), unchangedModel, drain' = true, dsteps' = 0 },
+    all { drain, progress, drain' = true, dsteps' = dsteps + 1 },
+    all { drain, unchangedModel, drain' = true, dsteps' = dsteps + 1 },
+  }
+
+  val drainSettled: bool = TASKS.forall(t => {
+    val rec = tasks.get(t)
+    and {
+      (goal == Active and rec.status == Failed and rec.hasCompletion) implies wakes.get((t, rec.attempt)) >= 1,
+      (goal == Aborted or goal == Deleted) implies not(rec.pendingPub),
+    }
+  })
+
+  // 8. Drained delivery: DRAIN_STEPS drain steps after the drain began, every failed goal task with
+  //    completion under an Active goal has woken the manager, and no pendingPub mark remains under an
+  //    Aborted or Deleted goal. (A Paused goal is resumed by resumeGoal during the drain.)
+  val drainedDelivery: bool = (drain and dsteps >= DRAIN_STEPS) implies drainSettled
+
+  // Drain witnesses: the drain reached DRAIN_STEPS after a delivery, after a daemon-only delivery,
+  // and after an Aborted/Deleted settlement with the daemon idle-exited.
+  val wDrainedWoke: bool = drain and dsteps >= DRAIN_STEPS and ATTEMPT_KEYS.exists(p => wakes.get(p) == 1)
+  val wDrainedDaemonOnlyWoke: bool = drain and dsteps >= DRAIN_STEPS
+    and ATTEMPT_KEYS.exists(p => wakes.get(p) == 1 and daemonRepublished.contains(p) and not(writerPublished.contains(p)))
+  val wDrainedSettledExit: bool = drain and dsteps >= DRAIN_STEPS and not(daemonRunning)
+    and (goal == Aborted or goal == Deleted) and failedAttempts != Set()
+
   // ---------- properties ----------
 
   // 1. At-most-once manager wake per (task, attempt).
@@ -807,11 +884,13 @@ module goalTaskCompletionPublication {
       }),
     }
 
-  // 7. Quiescent delivery (progress/delivery property):
-  //    True when a recovery, delivery, or live-deletion step is enabled for task t.
-  //    Note: does NOT assume not(rec.pendingPub); if pendingPub is set but no republisher can
-  //    pick it up (e.g., republisher removed, daemon exited early, or dead deletion blocks it),
-  //    taskRecoveryEnabled becomes false and quiescentDelivery fails.
+  // 7. Quiescent delivery (state property):
+  //    taskRecoveryEnabled is true when a recovery, delivery, or live-deletion guard holds for task t.
+  //    It does NOT assume not(rec.pendingPub): if pendingPub is set but no republisher guard accepts it
+  //    (daemon exited early, or a dead deletion blocks it), quiescentDelivery fails.
+  //    Limit: taskRecoveryEnabled copies the action guards (e.g. republisherAccepts). An action that
+  //    keeps its guard but stops doing its work (daemonReadPending never firing, daemonClearOk not
+  //    clearing) still passes. drainedDelivery covers that case.
   pure def taskRecoveryEnabled(
     design: str,
     dRunning: bool,

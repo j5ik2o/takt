@@ -38,6 +38,7 @@ daemon の `runs()` は `status === 'running'` のタスクしか見ない（`sr
       4. `run_slug !== undefined || execution_id !== undefined`（試行識別子が必ずあること）
     - `normalizeTaskConfig` で `completion_publication_pending !== undefined && completion_publication_pending !== true`（例: `false` や型違い）を警告のうえ削除し、`TaskRecordSchema` 末尾の `.transform(...)` で `completion_publication_pending === true && !isValidCompletionPublicationPending(value)` の場合に警告のうえ `completion_publication_pending: undefined` へ正規化する。
     - 出力型は `completion_publication_pending?: true` を維持し、不変条件 `pendingPubSchemaValid` は書き手の実装と PBT で担保する。
+    - 正規化するのは印だけである。`completion` は今の `GoalTaskResultSchema.optional()`（`.strict()`、`taskRecordSchemas.ts:52`）のまま変えないので、`completion` に未知の列があるレコードを含む `tasks.yaml` は、従来どおり `TaskStore.readUnsafe` がファイル全体を拒む（低 1。本件で変える振る舞いではない）。
 - `src/infra/task/types.ts`・`src/infra/task/mapper.ts`: `TaskState` に `completionPublicationPending?: true` を追加し、`toTaskState` で写す。
 - `src/infra/task/taskRecordMutations.ts`・`src/infra/task/taskExceedService.ts`:
   - `buildClaimedTaskRecord`・`buildRetryTaskRecord`・`requeueExceededTask` で `completion_publication_pending: undefined` を明示的に外す（再キューや再 claim で古い印が残らないことを書き手側で保証する）。
@@ -87,10 +88,11 @@ daemon 本体（`src/features/daemon/`・`src/infra/daemon/`）は `daemon-reach
 
 - `src/infra/task/taskStateReader.ts`:
   - **`WatchTaskSchema` は現行の寛容な形を保つ**: `readWatchTasks` は `runs()`・`hasWork()`・`patrolGoalIds()`・`launches()`・`hasTaskDirectory()` の共通読み取りであり、`GoalTaskResultSchema`（`.strict()`）や `superRefine` を `WatchTaskSchema` へ足すと、版ずれで `completion` に 1 列増えた場合や 1 件の印が不正なだけで、そのリポジトリの消失 run 検出（`run_process_lost` → `reconcileLostRun`）まで止まる。そのため `WatchTaskSchema` 自体は厳格化しない。
-  - 代わりに、未送信完了だけを 1 件ずつ検証する専用読み取り `readPendingGoalTaskCompletions(repositoryDirectory, onError)` を追加する（`listPendingInquiryAnswerPublications` の「読めない 1 件は報告して飛ばす」と同じ流儀、`persistedFiles.ts:42-65`）:
+  - 代わりに、未送信完了だけを 1 件ずつ検証する専用読み取り `readPendingGoalTaskCompletions(repositoryDirectory, reports)` を追加する（`listPendingInquiryAnswerPublications` の「読めない 1 件は報告して飛ばす」と同じ流儀、`persistedFiles.ts:42-65`。`reports` は 4 節の報告の記録で、同じ記録の報告を 1 回にまとめる）:
     - `readEntirePrivateFile`（256 KiB の `MAX_PROJECTION_BYTES` 制限なし、`O_NOFOLLOW` でシンボリックリンク拒否）＋ `parseDocument(text)` ＋ `document.toJS({ maxAliasCount: 0 })` で `.takt/tasks.yaml` を読む（`ENOENT` なら `[]`）。
     - `tasks` 配列を 1 件ずつ走査し、`completion_publication_pending !== true` のレコードは即座に飛ばす（通常レコードの `completion` は解析しない）。
-    - `completion_publication_pending === true` のレコードだけを `PendingGoalTaskCompletionSchema.safeParse(record)` で検証する（終端 `status`・`goal_id`・`completion: GoalTaskResultSchema`・`run_slug || execution_id`・任意の `deletion: WatchTaskDeletionSchema`）。失敗した 1 件だけを `onError` へ報告して飛ばし、他の有効なレコードの処理と `runs()` を止めない。
+    - `completion_publication_pending === true` のレコードだけを `PendingGoalTaskCompletionSchema.safeParse(record)` で検証する（終端 `status`・`goal_id`・`completion: GoalTaskResultSchema`・`run_slug || execution_id`・任意の `deletion: WatchTaskDeletionSchema`）。失敗した 1 件だけを報告して飛ばし、他の有効なレコードの処理と `runs()` を止めない。
+    - `completion` に未知の列がある印は `GoalTaskResultSchema`（`.strict()`）で失敗するので、報告されるだけで届かずに残る。`GoalTaskResultSchema` は `goal.json` でも使うため緩めない（低 1）。
 - `src/infra/daemon/persistedFiles.ts`:
   - `saveInboxEvent` を共通化し、`saveGoalTaskCompletion(repositoryDirectory, input)` を追加する（`saveManagerEvent` と同じファイル名・権限 `0o600`・原子配置）。
   - `markGoalTaskCompletionPublished(repositoryDirectory, identity, processes?)` を追加する:
@@ -102,15 +104,17 @@ daemon 本体（`src/features/daemon/`・`src/infra/daemon/`）は `daemon-reach
 - `src/features/daemon/pendingGoalTaskCompletions.ts`（新規、`pendingInquiryAnswers.ts` と対称）:
   - `publishPendingGoalTaskCompletions(configDirectory, completions, readGoal, processes, onError)`:
     - 1 件ずつ `try/catch` で処理し、1 件の失敗で残りのタスクを止めない。
-    - 対象に `deletion` がある場合は `processes.inspect(...)` で持ち主を確認し、`kind !== 'dead'`（生存中または不明）ならこの tick では送信も書き換えもせずスキップする。`kind === 'dead'` なら死んだ予約として処理を続行する。
+    - 対象に `deletion` がある場合は `processes.inspect(...)` で持ち主を確認し、`kind !== 'dead'`（生存中または不明）ならこの tick では送信も書き換えもせずスキップする。`kind === 'dead'` なら死んだ予約として処理を続行する。`unknown` は後述の報告の記録で 1 回だけ `onError` へ報告する（毎 tick 繰り返さない）。
     - `readGoal(repositoryDirectory, goalId)`（`WatchGoalReader` 経由、4 MiB 超の `goal.json` も読める）でゴールを読む:
-      - `executionStatus === 'aborted'` または `isMissing(error)`（`ENOENT`、削除済みゴール）のとき: 受信箱へは書かず、`markGoalTaskCompletionPublished` で印（および死んだ `deletion`）だけ外す。
+      - `isGoalFinished(goal)`（`executionStatus === 'aborted'` または `status === 'completed'`、`activity.ts`）または `isMissing(error)`（`ENOENT`、削除済みゴール）のとき: 受信箱へは書かず、`markGoalTaskCompletionPublished` で印（および死んだ `deletion`）だけ外す。終わったゴールの manager を起こしても次の仕事は無く、`hasWork` のゴール判定（`isGoalFinished`）とも揃う。Quint では `completed` を `Aborted` と同じ枝として扱う（README の `Not modelled`）。
       - その他の読み取りエラー（破損 JSON、スキーマ不正、権限エラー、タイムアウト）のとき: `onError` に報告し、印は残す（次回再試行）。
       - `active` または `paused` のとき: `saveGoalTaskCompletion` で受信箱へ書き、成功したら `markGoalTaskCompletionPublished` で印を外す（`paused` の完了イベントは `conversationService.ts:141` が `deferred` にして再開時に処理する。既存の `saveManagerEvent` と同じ振る舞い）。
 - `src/features/daemon/watchSource.ts`・`src/features/daemon/watchers/index.ts`:
-  - `FileDaemonWatchSource.hasWork(files)`: 既存の `readWatchTasks`（`pending` / `running`）に加え、`readPendingGoalTaskCompletions(project.repositoryDirectory, this.onError)` が 1 件以上の有効な未送信完了を返せば `true` を返す。
-    - 有効な未送信完了は `deletion` 予約が付いていても仕事として数える（生存中なら完了／取消まで待機し、死亡済みなら次回 `taskCompletions()` で回収して収束する）。
-    - 不正な印のレコードは `readPendingGoalTaskCompletions` 内で `onError` 報告＋除外されるため、壊れた 1 件で daemon が永久に終了できなくなることはない（`listPendingInquiryAnswerPublications` と同じ規則）。
+  - `FileDaemonWatchSource.hasWork(files)`: 既存の `readWatchTasks`（`pending` / `running`）に加え、`readPendingGoalTaskCompletions(project.repositoryDirectory, reports)` が 1 件以上の仕事として数える未送信完了を返せば `true` を返す。
+    - **読む順（低 3）**: プロジェクトごとに「ゴール → 未送信完了の印 → 受信箱 → タスク」の順に読む。印の確認を受信箱の確認より前に置く。`runDaemon.ts` の `idle()` は `watchers.drain()` の後に別ループの `taskCompletions()` が走り出すことを止めないため、`hasWork` と再送は交互に起こり得る。再送は「受信箱へ書く → 印を外す」の順なので、印の読み取りで印が見えなければ、受信箱への書き込みはその前に済んでおり、後から読む受信箱の確認で見つかる。`taskCompletions()` が動いている間 `idle()` を偽にする案は、状態を 1 つ増やすので採らない。この順により、Quint の `daemonIdleExit` を「`daemon.phase == DaemonIdle` のときの 1 回の検査」として扱える（README の `daemonIdleExit`）。
+    - **`deletion` 予約つきの印（低 4）**: `processes.inspect` の結果が `alive`（完了か取消まで待つ）か `dead`（次の `taskCompletions()` で回収する）のときだけ仕事として数える。`unknown`（`owner_start_time` が無く、PID が存在する）は数えず、1 回だけ報告する。PID が再利用されていると `unknown` は解けず、数えると daemon が永久に終わらないためである。印は `tasks.yaml` に残り、次に daemon が起きたときに再び確かめる。
+    - **不正な印とファイル全体の読み取り失敗（低 5）**: 不正な印のレコードは `readPendingGoalTaskCompletions` 内で報告して除外し、仕事に数えない。`tasks.yaml` 全体が読めないとき（構文エラー、シンボリックリンク、権限エラー）も報告して仕事なし（`false` 側）とする。今の `readWatchTasks` の失敗の扱いと同じで、壊れたファイルで daemon が永久に終われなくなることを避ける。印はファイルに残り、ファイルが直った後の次の daemon で再送される。
+    - **報告の重複の抑え（低 5）**: `hasWork`（500 ms ごと）と `taskCompletions()`（5 秒ごと）が同じ記録を毎回報告しないよう、`FileDaemonWatchSource` が 1 つの報告の記録（`InvalidInquiryFileReports` と同じ形。`tasks.yaml` の `ino`・`size`・`mtimeMs` と対象の鍵を覚え、内容が変わるまで 1 回だけ `onError` を呼ぶ）を持ち、両方から共有する。鍵はファイル全体の失敗なら `tasks.yaml` のパス、1 件の不正な印や `unknown` の `deletion` ならパスとタスク名の組とする。読めるようになったら記録を消し、次に壊れたときにまた報告する。
   - `FileDaemonWatchSource.taskCompletions()` を追加し、`startDaemonWatchers` に `WATCH_INTERVALS.files`（5 秒）の独立ループとして登録する（`DaemonWatchSource` では `taskCompletions?(): Promise<void>` とし、`runs()` は `run(targetId)` の純粋な再確認に使うため副作用を入れない）。
 
 ### 変えないこと・範囲の外
@@ -136,6 +140,19 @@ daemon 本体（`src/features/daemon/`・`src/infra/daemon/`）は `daemon-reach
 | 死んだ持ち主の `deletion` 予約が印を塞ぎ、ゴール終了後に daemon がアイドル終了して残り得る | 低 5 | **直す** | 4 節で `hasWork` が `deletion` 付きの有効な印も仕事として数え、`taskCompletions()` と `markGoalTaskCompletionPublished` が `AsyncProcess.inspect` で `dead` の予約を回収（`deletion` も削除）する設計に変更。Quint にも `DeletionState`（`DelNone`/`DelAlive`/`DelDead`）・`deletionOwnerCrash`・負対照 `fixedStaleDeletionBlocks`・witness `wStaleDeletionRecovered` を追加して検証。 |
 | PBT 3 の「書き込み後クラッシュ」を実プロセス終了で作ると heavy IT 扱いになる | 低 6 | **直す** | 「PBT の性質」3 番で、クラッシュを「印の永続化直後に即時送信をスキップ／例外注入」で作り light IT に収めること、新規 IT は `scripts/test-classification.mjs` と `tsconfig.tests.json` に登録して `releaseVerificationWiring.test.ts` を単独実行することを明記。 |
 
+### 再レビュー指摘の扱い
+
+再レビュー（`~/.orca/bots/takt/memory/reports/2026-11-27-170-design-rereview.md`、高 0・中 1・低 5）の指摘に対する扱いと反映先を整理する。
+
+| 指摘 | 重要度 | 扱い | 反映内容（節・ファイル） |
+|---|---|---|---|
+| `quiescentDelivery` が出し直しの動作そのものを見ていない。`taskRecoveryEnabled` が動作の条件の式を書き写しており、`daemonReadPending` の条件に `false` を足す（P1）、`daemonClearOk` が印を外さない（P3）のどちらも `safety` を通る | 中 1 | **直す** | Quint に出し切りの段（`drain`・`dsteps`・`initD`・`stepD`・`progress`）と不変条件 `drainedDelivery`、witness 3 本を足した。P1・P2・P3 を、旗でなく動作を外す負対照として `actionAblations.sh` と README に載せ、`safety` は P1・P3 を通すが `drainedDelivery` は 3 つとも反例を出すことを確かめた。`quiescentDelivery` が「届かないことを捕まえる」とした言い過ぎを、本設計「守る不変条件」「Quint の仕様と検査結果」、README、`.qnt` の注釈で直した。 |
+| 回帰テスト 5 と PBT 2 の「未知の列つき `completion` でも `TaskRecordSchema` が全体を読み込める」は、`GoalTaskResultSchema` が `.strict()` なので今のコードでは成り立たない | 低 1 | **直す** | `GoalTaskResultSchema` は緩めない。1 節と 4 節に「未知の列つき `completion` の印は報告されるだけで届かずに残る。`TaskStore` は従来どおりファイル全体を拒む」と書き、PBT 2 と回帰テスト 5 の対象を `readWatchTasks` と `readPendingGoalTaskCompletions` に絞った。 |
+| ゴールが `completed` のときの扱いが README（受信箱を飛ばす）と設計（受信箱へ書く）で食い違う | 低 2 | **直す** | `isGoalFinished(goal)` が真（`aborted` または `completed`）か `ENOENT` なら、受信箱へ書かずに印だけ外すと決めた（4 節）。README の `Not modelled` と `daemonPublishOk` の説明もこれに揃えた。回帰テスト 6 に `completed` を足した。 |
+| `idle()` は `taskCompletions` の途中かを見ず、`hasWork` が「ゴール → 受信箱 → タスク」の順だと、印の確認を後ろに足したとき受信箱にファイルを残したまま終わり得る | 低 3 | **直す** | `hasWork` の読む順を「ゴール → 印 → 受信箱 → タスク」と決め、再送が「受信箱へ書く → 印を外す」の順であることと合わせて、モデルの `daemonIdleExit` の guard との対応を 4 節と README に書いた。`idle()` に条件を足す案は採らない。 |
+| 生死が `unknown` の `deletion` 予約つきの印を `hasWork` に数えると、PID の再利用で daemon が永久に終わらない | 低 4 | **直す** | `hasWork` は `alive` と `dead` だけを数え、`unknown` は数えずに 1 回だけ報告する（4 節）。モデルに `unknown` は足さず、README の `Not modelled` に前提として書いた。 |
+| 不正な印の報告が tick ごとに繰り返される。`tasks.yaml` 全体が読めないときの `hasWork` の値が決まっていない | 低 5 | **直す** | `InvalidInquiryFileReports` と同じ形の報告の記録を `hasWork` と `taskCompletions()` で共有し、内容が変わるまで 1 回だけ報告する（4 節）。ファイル全体が読めないときは報告して仕事なし（`false`）とする。「壊しうる入力・状況の一覧」も直した。 |
+
 ## 守る不変条件
 
 Quint 仕様（`specs/quint/goal-task-completion-publication/goalTaskCompletionPublication.qnt`）の `safety` は次の 7 つの連言で、`fixed` において違反なし。
@@ -146,7 +163,13 @@ Quint 仕様（`specs/quint/goal-task-completion-publication/goalTaskCompletionP
 4. **`noPhantomWake`**: 書き手が `Failed` として保存していない `(task, attempt)` では manager は起きない。
 5. **`noDeferredWhenAbortedOrDeleted`**: ゴールが `Aborted` または `Deleted` になったら `deferred` に残らない。
 6. **`noDaemonExitWithWork`**: daemon がアイドル終了した状態（`not(daemonRunning)`）では、ゴールは `Aborted` または `Deleted` であり、`inbox`・`deferred` は空で、`Pending`・`Running` および `pendingPub == true` のタスクは 1 件も残らない。
-7. **`quiescentDelivery`**（到達・進捗の性質）: タスク `t` に実行可能な回復・配信・生存中の削除ステップが無い静止状態（`not(taskRecoveryEnabled)` — `not(pendingPub)` は仮定しない）では、(a) ゴールが `Active` かつ `Failed`・`completion` ありなら必ず `wakes >= 1`、(b) ゴールが `Paused` かつ `Failed`・`completion` ありなら必ず `wakes >= 1` または `deferred` に積まれている、(c) ゴールが `Aborted` / `Deleted` なら `pendingPub == false` である。daemon の再送を外した版（`fixedNoRepublisher`）、`hasWork` から印を外した版（`fixedNoHasWork`）、死んだ `deletion` 予約を塞いだままにする版（`fixedStaleDeletionBlocks`）はいずれもこの性質で即座に反例が出る。
+7. **`quiescentDelivery`**（状態の性質）: タスク `t` について回復・配信・生存中の削除のどの動作の条件も成り立たない状態（`not(taskRecoveryEnabled)` — `not(pendingPub)` は仮定しない）では、(a) ゴールが `Active` かつ `Failed`・`completion` ありなら必ず `wakes >= 1`、(b) ゴールが `Paused` かつ `Failed`・`completion` ありなら必ず `wakes >= 1` または `deferred` に積まれている、(c) ゴールが `Aborted` / `Deleted` なら `pendingPub == false` である。
+   - 限界: `taskRecoveryEnabled` は動作の条件の式（`republisherAccepts` など）を書き写したものなので、言えるのは「条件が偽なら、もう届いている」ことだけである。条件を残したまま動作が働かなくなっても（P1: `daemonReadPending` が起きない、P3: `daemonClearOk` が印を外さない）この性質は通る。`fixedNoRepublisher` で反例が出るのは、旗 `usesRepublisher` が `republisherAccepts` にも入っているためである。
+   - `hasWork` から印を外した版（`fixedNoHasWork`）と死んだ `deletion` 予約を塞いだままにする版（`fixedStaleDeletionBlocks`）では、条件が偽になったまま印が残るので、この性質で反例が出る。
+
+`safety` とは別の入口（`--init initD --step stepD`）で、次も確かめる。
+
+8. **`drainedDelivery`**（限られた手数での到達）: 通常の `step` の途中で出し切りの段に入ると、失敗の動作（送信・印の解除の失敗、クラッシュ）と外からの変化（新しいタスク、再キュー、一時停止、中止、削除、新しい削除予約）が止まり、前に進む動作（書き手の送信と解除、daemon の読み取り・送信・解除・アイドル終了、受信箱の受け付け、`deferred` の配信、削除予約の取消・完了・持ち主の死亡、ゴールの再開）だけが動く（各手で足踏みもあり得る）。出し切りの段に入って 40 手の後に、`Active` のゴールの `Failed`・`completion` ありのタスクは必ず `wakes >= 1`、`Aborted` / `Deleted` のゴールには `pendingPub` が残っていない。動作の条件ではなく動作の結果を見るので、P1・P3 のように条件を残して動作だけ止めた形でも反例が出る。シミュレーションでの有限の検査であり、活性の証明ではない。
 
 実装側ではさらに次を守る。
 
@@ -170,9 +193,9 @@ Quint 仕様（`specs/quint/goal-task-completion-publication/goalTaskCompletionP
 2. **スキーマ正規化と 1 件単位の障害分離（`fast-check`、ユニットテスト）**
    - 生成入力: 任意の `status` × `goal_id` 有無 × `completion` 有無（および未知列付き `completion`）× `run_slug` 有無 × `execution_id` 有無 × `completion_publication_pending`（`undefined` / `true` / `false` / 文字列等の不正値）。
    - 性質:
-     - `TaskRecordSchema.parse` は `completion_publication_pending` の値や組み合わせを理由に例外を投げない。4 条件（終端・`goal_id` あり・`completion` あり・`run_slug || execution_id` あり）を満たす `true` のみ `true` を保持し、それ以外は `undefined` に正規化して警告を出し、同じ `tasks.yaml` 内の他レコードの読み取りを止めない。
+     - `TaskRecordSchema.parse` は、`completion` が `GoalTaskResultSchema` を満たすレコードについて、`completion_publication_pending` の値や組み合わせを理由に例外を投げない。4 条件（終端・`goal_id` あり・`completion` あり・`run_slug || execution_id` あり）を満たす `true` のみ `true` を保持し、それ以外は `undefined` に正規化して警告を出す。未知列付き `completion` のレコードは従来どおり拒まれる（本件で変えない振る舞いで、性質の対象に入れない）。
      - `readWatchTasks` は任意のレコードの不正な `completion_publication_pending` や `completion` の未知列に影響されず全タスクを返す。
-     - `readPendingGoalTaskCompletions` は不正な印の 1 件だけを `onError` に報告してスキップし、同一ファイル内の他の有効な未送信完了をすべて返す。
+     - `readPendingGoalTaskCompletions` は不正な印の 1 件（未知列付き `completion` を含む）だけを報告してスキップし、同一ファイル内の他の有効な未送信完了をすべて返す。同じ内容の `tasks.yaml` を何度読んでも、同じ記録の報告は 1 回だけである。
 3. **実ファイル結合での状態遷移の組み合わせ（light IT、本物の `TaskRunner`・`DaemonPersistedFiles`・`FileDaemonWatchSource`・`receiveInboxChange`・`FileEventStore`）**
    - テスト層の扱い: 「書き込み後クラッシュ」は実プロセス終了（heavy IT 相当）ではなく「印の永続化直後に即時送信をスキップ／例外注入する」ことで再現し、子プロセス起動を伴わない軽量な実ファイル結合テスト（light IT）に収める。新規 IT ファイルは `scripts/test-classification.mjs` と `tsconfig.tests.json` に登録し、追加後に `npm test -- src/__tests__/releaseVerificationWiring.test.ts` を単独で実行する。
    - 軸: 失敗経路 4 通り（`setupFail`・`interruptedFail`・`reconcileLostRun` `runSlug` あり・`reconcileLostRun` `runSlug` なし）× 障害 4 通り（なし・`saveManagerEvent` 例外・書き込み直後の送信スキップ／例外注入・印解除失敗）× 状態・競合 5 通り（通常回復・書き手と daemon の同時送信・再キュー後の 2 回目失敗と古い印解除・ゴール状態 `active`/`paused→resumed`/`aborted`/`deleted`・`deletion` 予約の生存中／取消／完了／持ち主死亡）。
@@ -185,23 +208,32 @@ Quint 仕様（`specs/quint/goal-task-completion-publication/goalTaskCompletionP
 同じ状態遷移モデルを `DESIGN` で 7 通り（修正前 + 単一除去の負対照 5 種 + 完全版）に切り替えて検査した。
 
 - `before`: 修正前（印なし・daemon 再送なし・`hasWork` に印なし・重複排除なし）。
-- `fixedNoRepublisher`: 印・`hasWork`・重複排除・試行照合・死んだ予約回収を入れ、daemon 再送だけ外した版（中 1 の探り。`noUnrecoverableLoss` は通るが `quiescentDelivery` で違反）。
+- `fixedNoRepublisher`: 印・`hasWork`・重複排除・試行照合・死んだ予約回収を入れ、daemon 再送だけ旗で外した版（`noUnrecoverableLoss` は通る。`quiescentDelivery` の違反は旗が `republisherAccepts` にも入っているため。`drainedDelivery` でも違反）。
 - `fixedNoHasWork`: `hasWork` から `pendingPub` だけ外した版（ゴール終了後に未処理の印を残したままアイドル終了し、`noDaemonExitWithWork` と `quiescentDelivery` で違反）。
 - `fixedStaleDeletionBlocks`: 死んだ持ち主の `deletion` 予約を回収せず一律スキップする版（低 5。`quiescentDelivery` で違反）。
 - `fixedNoDedup`: `inbox.ts` の決定的な重複排除だけ省いた版（`noDuplicateManagerWake` で違反）。
 - `fixedUncheckedClear`: 印解除の試行識別子照合だけ省いた版（`noUnrecoverableLoss` と `quiescentDelivery` で違反）。
 - `fixed`: 本設計の全体。
 
+これとは別に、旗でなく動作を外す負対照 P1〜P3 を `actionAblations.sh` で作る（モデルの写しの 1 行を書き換え、`fixed` で流す）。
+
+- P1: `daemonReadPending` の条件に `false` を足す（`republisherAccepts` はそのまま）。
+- P2: `daemonPublishOk` が受信箱へ書かずに常に飛ばす枝を通り、その後に印が外れる。
+- P3: `daemonClearOk` が印を外さない（`tasks' = tasks`）。
+
 | 検査 | 結果 |
 |---|---|
 | `quint typecheck`（本体・テスト） | どちらも成功 |
 | `quint test`（7 モジュール計 22 件） | `beforeTest` 4 件、`fixedNoRepublisherTest` 2 件、`fixedNoHasWorkTest` 1 件、`fixedStaleDeletionBlocksTest` 1 件、`fixedNoDedupTest` 1 件、`fixedUncheckedClearTest` 1 件、`fixedTest` 12 件、すべて通過 |
-| `quint run`（7 不変条件 × 7 版、3,000 標本・16 ステップ、seed `0x2a`） | `before` は `noUnrecoverableLoss`（82 ms）・`quiescentDelivery`（71 ms）で違反。`fixedNoRepublisher` は `noUnrecoverableLoss` を通過しつつ `quiescentDelivery`（60 ms）で違反（中 1 の空振り防止を確認）。`fixedNoHasWork` は `noDaemonExitWithWork`（70 ms）・`quiescentDelivery`（71 ms）で違反。`fixedStaleDeletionBlocks` は `quiescentDelivery`（46 ms）で違反。`fixedNoDedup` は `noDuplicateManagerWake`（182 ms）で違反。`fixed` は 7 本すべて違反なし |
-| `quint run`（`fixedUncheckedClear`, 50,000 標本・25 ステップ、seed `0x2a`） | 9,656 標本目で `noUnrecoverableLoss`（10,105 ms）・`quiescentDelivery`（7,824 ms）の両方で違反を検出 |
-| `quint run --main fixed --invariant safety`（10,000 標本・20 ステップ、seed `0x2a`、witness 13 本） | 違反 0 件（11,872 ms）。全 13 本の witness が到達（`wDaemonSoleRepublishWoke` 13 本、`wSecondAttemptWoke` 25 本、`wReconcileWithoutRunSlugWoke` 29 本、`wDeferredDelivered` 45 本、`wDaemonRepublished` 84 本、`wStaleDeletionRecovered` 307 本、`wDaemonIdleExitedAfterSettle` 437 本など） |
-| `quint run --main fixed --invariant safety`（20,000 標本・25 ステップ × 3 seed: `0x2a`・`0x1`・`0xbeef`） | 計 60,000 標本すべて違反 0 件（21,003 ms・20,064 ms・14,516 ms） |
+| `quint run`（7 不変条件 × 7 版、3,000 標本・16 ステップ、seed `0x2a`） | `before` は `noUnrecoverableLoss`（33 ms）・`quiescentDelivery`（32 ms）で違反。`fixedNoRepublisher` は `noUnrecoverableLoss` を通過しつつ `quiescentDelivery`（34 ms）で違反（旗が `republisherAccepts` に入っているため）。`fixedNoHasWork` は `noDaemonExitWithWork`（38 ms）・`quiescentDelivery`（39 ms）で違反。`fixedStaleDeletionBlocks` は `quiescentDelivery`（36 ms）で違反。`fixedNoDedup` は `noDuplicateManagerWake`（93 ms）で違反。`fixed` は 7 本すべて違反なし |
+| `quint run`（`fixedUncheckedClear`, 50,000 標本・25 ステップ、seed `0x2a`） | `noUnrecoverableLoss`（4,192 ms）・`quiescentDelivery`（4,634 ms）の両方で違反を検出 |
+| `quint run --main fixed --invariant safety`（10,000 標本・20 ステップ、seed `0x2a`、witness 13 本） | 違反 0 件（5,793 ms）。全 13 本の witness が到達（`wDaemonSoleRepublishWoke` 13 本、`wSecondAttemptWoke` 25 本、`wReconcileWithoutRunSlugWoke` 29 本、`wDeferredDelivered` 45 本、`wDaemonRepublished` 84 本、`wStaleDeletionRecovered` 307 本、`wDaemonIdleExitedAfterSettle` 437 本など） |
+| `quint run --main fixed --invariant safety`（20,000 標本・25 ステップ × 3 seed: `0x2a`・`0x1`・`0xbeef`） | 計 60,000 標本すべて違反 0 件（10,500 ms・11,210 ms・10,532 ms） |
+| `quint run --init initD --step stepD --invariant drainedDelivery`（7 版、5,000 標本・70 ステップ、seed `0x2a`） | `before`（69 ms）・`fixedNoRepublisher`（96 ms）・`fixedNoHasWork`（1,343 ms）・`fixedStaleDeletionBlocks`（254 ms）で違反。`fixedNoDedup`・`fixedUncheckedClear`・`fixed` は違反なし（重複起動と古い解除は進み方の性質ではなく 1・2 番で捕まえる） |
+| `quint run --main fixed --init initD --step stepD --invariant drainedDelivery`（10,000 標本・70 ステップ × 3 seed、witness 3 本） | 計 30,000 標本すべて違反 0 件（19,661 ms・18,618 ms・18,759 ms）。seed `0x2a` で `wDrainedWoke` 1,353 本、`wDrainedDaemonOnlyWoke` 190 本、`wDrainedSettledExit` 10 本が到達 |
+| `actionAblations.sh`（P1〜P3 を `fixed` で、`safety`・`quiescentDelivery` は 10,000 標本・20 ステップ、`drainedDelivery` は 5,000 標本・70 ステップ） | P1・P3 は `safety` と `quiescentDelivery` を通り、`drainedDelivery` で違反（95 ms・244 ms）。P2 は 3 つすべてで違反（132 ms・121 ms・55 ms） |
 
-なお、モデルの前提とモデル外とした要素（`RunKey`/`ExecKey` が試行番号をそのまま鍵にしているため実物の一意性・書き手と daemon の一致は PBT 1 で担保すること、単一書き手・単一 daemon、ゴールの `completed`、`Active` から直接の削除、`MAX_FILES = 32` 上限など）は `specs/quint/goal-task-completion-publication/README.md` の `Not modelled` に明記している。
+なお、モデルの前提とモデル外とした要素（`RunKey`/`ExecKey` が試行番号をそのまま鍵にしているため実物の一意性・書き手と daemon の一致は PBT 1 で担保すること、単一書き手・単一 daemon、ゴールの `completed`（`Aborted` と同じ枝）、`Active` から直接の削除、`deletion` の生死 `unknown`、不正な印とファイル全体の読み取り失敗、`MAX_FILES = 32` 上限など）は `specs/quint/goal-task-completion-publication/README.md` の `Not modelled` に明記している。
 
 ## 壊しうる入力・状況の一覧
 
@@ -215,11 +247,14 @@ Quint 仕様（`specs/quint/goal-task-completion-publication/goalTaskCompletionP
 | 長さ | `eventId` の上限（`EventInputSchema` 128 文字） | `goal-completion-`（16）+ SHA-256 hex（64）= 80 文字固定 |
 | 並行 | 書き手と daemon が同時に同じ失敗を送信する、または書き手が送信後・印解除前に死ぬ | どちらも同じ `eventId` になり、`FileEventStore.accept` が `duplicate` として吸収する |
 | 並行 | daemon が試行 1 を読んだ直後にタスクが再キューされ、試行 2 が失敗して即時送信も失敗する | 試行 1 の印解除は `(name, goal_id, status, run_slug, execution_id)` が一致せず無操作になり、試行 2 の印が残る |
-| 並行 | タスクに `deletion` 予約がある間に daemon または書き手が印解除を試みる（生存中／持ち主死亡） | 生存中・生死不明は変更せず待機（`hasWork() === true` を維持）。持ち主死亡（`dead`）は `TaskStore.clearStaleDeletions` と同じく死んだ予約として回収し、印と `deletion` を外す |
+| 並行 | タスクに `deletion` 予約がある間に daemon または書き手が印解除を試みる（生存中／持ち主死亡） | 生存中は変更せず待機（`hasWork() === true` を維持）。持ち主死亡（`dead`）は `TaskStore.clearStaleDeletions` と同じく死んだ予約として回収し、印と `deletion` を外す |
+| 並行 | `deletion` 予約の持ち主の生死が `unknown`（`owner_start_time` が無く PID が存在、PID 再利用を含む） | 変更しない。`hasWork()` は仕事に数えず、1 回だけ報告する。印は残り、次の daemon で再び確かめる |
+| 並行 | `hasWork()` の読み取りと `taskCompletions()` の再送が交互に起こる | `hasWork()` は印を受信箱より先に読み、再送は受信箱へ書いてから印を外すので、どちらかで必ず見つかる |
 | 並行・再開 | ゴールが `paused` の間に失敗通知が再送される | 受信箱へ書き、印を外す。`conversationService` が `deferred` にして再開時に 1 回だけ実行する |
-| 並行・再開 | ゴールが `aborted` または削除済み（`goal.json` が `ENOENT`） | `hasWork()` が印の残存を検知して daemon を維持し、受信箱へ書かずに印だけ外した後 `hasWork()` が `false` へ収束してアイドル終了できる |
+| 並行・再開 | ゴールが `aborted`・`completed` または削除済み（`goal.json` が `ENOENT`） | `hasWork()` が印の残存を検知して daemon を維持し、受信箱へ書かずに印だけ外した後 `hasWork()` が `false` へ収束してアイドル終了できる |
 | 障害・破損 | `goal.json` が破損 JSON / スキーマ不正 / EACCES / タイムアウト、または受信箱書き込みが ENOSPC | `onError` へ報告し、印は外さない。復旧後の次回 tick で再送される |
-| 障害・破損 | `.takt/tasks.yaml` がシンボリックリンク・YAML エイリアス爆弾・構文エラー | `O_NOFOLLOW`・`maxAliasCount: 0` で拒否して `onError` へ報告し、ファイルを書き換えない |
+| 障害・破損 | `.takt/tasks.yaml` がシンボリックリンク・YAML エイリアス爆弾・構文エラー | `O_NOFOLLOW`・`maxAliasCount: 0` で拒否し、内容が変わるまで 1 回だけ報告し、ファイルを書き換えない。`hasWork()` はこの理由では仕事に数えない（`readWatchTasks` の失敗と同じ） |
+| 障害・破損 | 不正な印や未知列付き `completion` の印が残り続ける | 1 件ずつ報告して飛ばす。`hasWork()`（500 ms ごと）と `taskCompletions()`（5 秒ごと）で共有する報告の記録により、内容が変わるまで 1 回だけ報告する |
 | 再開 | daemon 再起動をまたいだ重複配信 | `FileEventStore` が `daemon-events/<sha256(eventId)>.json` を永続化しているため、再起動後も `duplicate` で止まる |
 | 互換・版ずれ | 旧形式の `tasks.yaml`、アップグレード前の受信箱ファイル、旧 daemon / 旧 CLI の混在やロールバック | 過去タスクは印が無いため再送しない。既存の `runSlug` 付き受信箱ファイルは新 `eventId` に切り替わる（受領後・削除前クラッシュの狭い窓のみ 1 回重複起動し得る）。旧 daemon は `executionId` を `.strict()` で拒むが再起動で解消、旧 `TaskStore.update` は未知列の印を落とすが次試行で収束する |
 
@@ -245,8 +280,8 @@ Quint 仕様（`specs/quint/goal-task-completion-publication/goalTaskCompletionP
 2. `failInterruptedTasksWithGoalEvents` で 1 件目の `saveManagerEvent` が投げても 2 件目が送信され、1 件目は daemon が再送して印を外すこと（修正前は例外で止まり失敗）。
 3. `reconcileLostRun`（`runSlug` あり／なし両方）で `saveManagerEvent` 失敗または書き込み直後の送信スキップの後、daemon が再送して印を外すこと（修正前は失敗）。
 4. 書き手が受信箱へ書いた後に印解除に失敗／スキップし、daemon が再送しても `receiveInboxChange` が同じ `eventId` に丸め、`FileEventStore` が daemon 再起動後を含めて 1 回だけ受け付けること。あわせて通常完了で別々の `runSlug` を持つ 2 回の完了が別々の `eventId` になりまとめられないこと（修正前は前者が 2 回起動して失敗）。
-5. 不正な `completion_publication_pending` を含む 1 件や未知列付き `completion` が `tasks.yaml` に混ざっていても、`TaskRecordSchema` が警告＋正規化で全体を読み込め、`readWatchTasks` / `runs()` が止まらず、`readPendingGoalTaskCompletions` が他の有効な未送信完了を処理できること。
-6. 再キュー後の 2 回目失敗に対する古い印解除が 2 回目の印を消さないこと、`aborted` / 削除済みゴールで `hasWork() === true` を保ったまま受信箱へ書かずに印だけ外れて `hasWork() === false` に収束すること、生存中 `deletion` 予約中は書き換えず死亡済み `deletion` 予約は回収して印と `deletion` を外すこと、YAML 書き戻し前後で対象以外の記録・列・コメント・書式が変わらないこと、`tasks.yaml` > 256 KiB・`goal.json` > 4 MiB でも動作すること。
+5. 不正な `completion_publication_pending` を含む 1 件や未知列付き `completion` の印が `tasks.yaml` に混ざっていても、`readWatchTasks` / `runs()` が止まらず、`readPendingGoalTaskCompletions` が他の有効な未送信完了を処理できること。未知列付き `completion` の印は報告されるだけで届かずに残り、報告は tick をまたいで 1 回だけであること。あわせて、`completion` が正しく印だけが不正なレコードは `TaskRecordSchema` が警告＋正規化で読み込めること（未知列付き `completion` のファイルを `TaskStore` が拒むのは従来どおりで、このテストの対象外）。
+6. 再キュー後の 2 回目失敗に対する古い印解除が 2 回目の印を消さないこと、`aborted` / `completed` / 削除済みゴールで `hasWork() === true` を保ったまま受信箱へ書かずに印だけ外れて `hasWork() === false` に収束すること、`hasWork` が印を受信箱より先に読むこと、生死 `unknown` の `deletion` 予約つきの印と `tasks.yaml` 全体の読み取り失敗では `hasWork()` が仕事に数えず報告が 1 回だけであること、生存中 `deletion` 予約中は書き換えず死亡済み `deletion` 予約は回収して印と `deletion` を外すこと、YAML 書き戻し前後で対象以外の記録・列・コメント・書式が変わらないこと、`tasks.yaml` > 256 KiB・`goal.json` > 4 MiB でも動作すること。
 7. `daemon-reachability.integration.test.ts` を通して同期 FS 到達が無いこと、および新規 IT を `scripts/test-classification.mjs`・`tsconfig.tests.json` へ登録して `npm test -- src/__tests__/releaseVerificationWiring.test.ts` が通ること。
 
 ## 相対見積もり
