@@ -39,8 +39,9 @@
 //   safety (init/step)          — seven state invariants. quiescentDelivery reads the same guard
 //                                 expressions the actions use, so it cannot see an action that keeps
 //                                 its guard but stops doing its work.
-//   drainedDelivery (initD/stepD) — after a drain phase that only allows forward progress actions,
-//                                 the actions themselves must have delivered or settled every notice.
+//   drainedDelivery (initD/stepD) — after a drain phase that only allows forward progress actions
+//                                 (and stutters only while nothing can progress), the actions
+//                                 themselves must have delivered or settled every notice.
 //                                 Run: quint run --init initD --step stepD --invariant drainedDelivery
 //                                      --max-steps 70
 module goalTaskCompletionPublication {
@@ -256,6 +257,36 @@ module goalTaskCompletionPublication {
       writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
       staleDeletionRecovered' = staleDeletionRecovered,
       lastAction' = "startTask",
+    }
+  }
+
+  // A tasks.yaml record written by an older version can still be Running with neither run_slug nor
+  // execution_id: the process died before updateRunningTaskExecution recorded the attempt identifiers
+  // (or the record predates them). Adopting it as a Running attempt makes the execution_id issuance in
+  // writeReconcileFailure reachable; without it every Running would carry an id from startTask.
+  action adoptLegacyRunningTask(t: TaskId): bool = {
+    val rec = tasks.get(t)
+    val nextAttempt = rec.attempt + 1
+    all {
+      goal == Active,
+      rec.status == Pending,
+      rec.deletion != DelAlive,
+      nextAttempt <= MAX_ATTEMPTS,
+      tasks' = tasks.set(t, {
+        status: Running,
+        attempt: nextAttempt,
+        hasCompletion: false,
+        pendingPub: false,
+        deletion: DelNone,
+        hasRunSlug: false,
+        hasExecId: false,
+      }),
+      goal' = goal, writer' = writer, daemon' = daemon, daemonRunning' = daemonRunning,
+      inbox' = inbox, nextFileId' = nextFileId, acceptedKeys' = acceptedKeys, deferred' = deferred,
+      wakes' = wakes, failedAttempts' = failedAttempts, attemptKind' = attemptKind,
+      writerPublished' = writerPublished, daemonRepublished' = daemonRepublished,
+      staleDeletionRecovered' = staleDeletionRecovered,
+      lastAction' = "adoptLegacyRunningTask",
     }
   }
 
@@ -740,6 +771,7 @@ module goalTaskCompletionPublication {
     nondet withRunSlug = Set(true, false).oneOf()
     any {
       startTask(t, withRunSlug),
+      adoptLegacyRunningTask(t),
       writeSetupFailure(t),
       writeInterruptedFailure(t),
       writeReconcileFailure(t),
@@ -770,9 +802,11 @@ module goalTaskCompletionPublication {
 
   // ---------- drain phase (bounded progress check) ----------
   // stepD runs the ordinary step until it nondeterministically enters the drain phase. From then on,
-  // failures (publish/clear failures, crashes) and outside changes (new tasks, requeue, pause, abort,
-  // delete, new deletion reservations) stop, and only actions that move a notice forward may run.
-  // Each drain step may also stutter, so the simulator never deadlocks once everything is settled.
+  // failures (publish/clear failures, crashes) and outside changes (new tasks, legacy record adoption,
+  // requeue, pause, abort, delete, new deletion reservations) stop, and only actions that move a notice
+  // forward may run. A stutter step is only enabled while no progress action is enabled, so time does
+  // not pass while a notice could still be moved; a truly stuck drain keeps stepping (so the simulator
+  // does not stop before the bound) and the bound then exposes the stranded notice.
   // drainedDelivery then checks the effect of the actions, not their guards: if an action keeps its
   // guard but stops publishing or clearing, the notice is never delivered or settled.
   var drain: bool
@@ -808,33 +842,59 @@ module goalTaskCompletionPublication {
     }
   }
 
+  // True exactly when one of the drain's progress actions is enabled in the current state. The
+  // stutter step is gated on not(this) so a drain step that changes nothing never counts as time
+  // while a notice could still be published, cleared, consumed, deferred, or resumed.
+  val drainProgressPossible: bool = or {
+    writer.phase == WriterSaved and goal != Deleted and nextFileId <= MAX_FILES,
+    usesOutbox(DESIGN) and writer.phase == WriterPublished,
+    daemonRunning and daemon.phase == DaemonIdle and TASKS.exists(t => republisherAccepts(DESIGN, tasks.get(t))),
+    daemonRunning and usesRepublisher(DESIGN) and daemon.phase == DaemonRead and nextFileId <= MAX_FILES,
+    daemonRunning and usesRepublisher(DESIGN) and daemon.phase == DaemonPublished,
+    daemonRunning and daemon.phase == DaemonIdle and not(daemonHasWork(DESIGN, goal, tasks, inbox)),
+    daemonRunning and inbox.size() > 0,
+    daemonRunning and deferred.size() > 0,
+    TASKS.exists(t => tasks.get(t).deletion == DelAlive),
+    goal == Paused,
+  }
+
   action stepD: bool = any {
     all { not(drain), step, drain' = false, dsteps' = 0 },
     all { not(drain), unchangedModel, drain' = true, dsteps' = 0 },
     all { drain, progress, drain' = true, dsteps' = dsteps + 1 },
-    all { drain, unchangedModel, drain' = true, dsteps' = dsteps + 1 },
+    all { drain, unchangedModel, drain' = true, dsteps' = dsteps + 1, not(drainProgressPossible) },
   }
 
+  // Every delivery obligation a bounded drain can decide. It says nothing about a Paused goal: while
+  // the goal is Paused the manager is not woken (a notice is deferred instead) and pendingPub may
+  // legitimately stay in tasks.yaml, so neither a wake nor a cleared mark can be demanded.
   val drainSettled: bool = TASKS.forall(t => {
     val rec = tasks.get(t)
     and {
-      (goal == Active and rec.status == Failed and rec.hasCompletion) implies wakes.get((t, rec.attempt)) >= 1,
+      (goal == Active and rec.status == Failed and rec.hasCompletion) implies
+        (wakes.get((t, rec.attempt)) >= 1 and not(rec.pendingPub)),
       (goal == Aborted or goal == Deleted) implies not(rec.pendingPub),
     }
   })
 
   // 8. Drained delivery: DRAIN_STEPS drain steps after the drain began, every failed goal task with
-  //    completion under an Active goal has woken the manager, and no pendingPub mark remains under an
-  //    Aborted or Deleted goal. (A Paused goal is resumed by resumeGoal during the drain.)
-  val drainedDelivery: bool = (drain and dsteps >= DRAIN_STEPS) implies drainSettled
+  //    completion under an Active goal has woken the manager and no longer carries pendingPub, and no
+  //    pendingPub mark remains under an Aborted or Deleted goal. A goal that is still Paused at the
+  //    bound is not evidence of delivery: resumeGoal was selectable and may simply not have been
+  //    chosen, so the bound makes no claim about Paused (it neither requires a wake nor forbids a
+  //    pendingPub mark while Paused).
+  val drainedDelivery: bool =
+    (drain and dsteps >= DRAIN_STEPS and goal != Paused) implies drainSettled
 
   // Drain witnesses: the drain reached DRAIN_STEPS after a delivery, after a daemon-only delivery,
-  // and after an Aborted/Deleted settlement with the daemon idle-exited.
+  // after an Aborted/Deleted settlement with the daemon idle-exited, and after a Paused tail (which
+  // is observed but is not treated as delivery).
   val wDrainedWoke: bool = drain and dsteps >= DRAIN_STEPS and ATTEMPT_KEYS.exists(p => wakes.get(p) == 1)
   val wDrainedDaemonOnlyWoke: bool = drain and dsteps >= DRAIN_STEPS
     and ATTEMPT_KEYS.exists(p => wakes.get(p) == 1 and daemonRepublished.contains(p) and not(writerPublished.contains(p)))
   val wDrainedSettledExit: bool = drain and dsteps >= DRAIN_STEPS and not(daemonRunning)
     and (goal == Aborted or goal == Deleted) and failedAttempts != Set()
+  val wDrainedPausedUnresolved: bool = drain and dsteps >= DRAIN_STEPS and goal == Paused
 
   // ---------- properties ----------
 
@@ -937,7 +997,7 @@ module goalTaskCompletionPublication {
   val wReconcileFailWoke: bool = ATTEMPT_KEYS.exists(p => attemptKind.get(p) == "reconcile" and wakes.get(p) == 1)
   val wReconcileWithoutRunSlugWoke: bool = TASKS.exists(t =>
     tasks.get(t).status == Failed and not(tasks.get(t).hasRunSlug) and wakes.get((t, tasks.get(t).attempt)) == 1)
-  val wDaemonRepublished: bool = lastAction == "daemonClearOk" and ATTEMPT_KEYS.exists(p => wakes.get(p) == 1)
+  val wDaemonRepublished: bool = ATTEMPT_KEYS.exists(p => daemonRepublished.contains(p) and wakes.get(p) == 1)
   val wDaemonSoleRepublishWoke: bool =
     TASKS.exists(t => {
       val rec = tasks.get(t)

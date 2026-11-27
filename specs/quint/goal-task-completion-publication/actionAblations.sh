@@ -6,7 +6,8 @@
 # command must finish without an error; `[ok]`-only output or a failed command makes this script
 # exit non-zero.
 #
-#   P1  daemonReadPending never fires (adds `false` to its guard; republisherAccepts is unchanged)
+#   P1  daemonReadPending keeps its guard but never advances (daemon' = daemon): the daemon never
+#       reaches the publish step, so the mark is never republished
 #   P2  daemonPublishOk clears the mark without writing the inbox (always takes the Aborted branch)
 #   P3  daemonClearOk keeps the mark (tasks' = tasks)
 #
@@ -50,10 +51,7 @@ probe() { # label command...
   return 2
 }
 
-patch p1 '      republisherAccepts(DESIGN, rec),
-      daemon'"'"' = { phase: DaemonRead' '      republisherAccepts(DESIGN, rec),
-      false,
-      daemon'"'"' = { phase: DaemonRead'
+patch p1 '      daemon'"'"' = { phase: DaemonRead, task: t, attempt: rec.attempt, hasRunSlug: rec.hasRunSlug, hasExecId: rec.hasExecId },' '      daemon'"'"' = daemon,'
 patch p2 '    if (goal == Aborted or goal == Deleted) all {
       inbox'"'"' = inbox,' '    if (true) all {
       inbox'"'"' = inbox,'
