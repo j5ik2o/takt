@@ -326,6 +326,10 @@ it.skipIf(process.platform === 'win32')('does not report an unreaped zombie as a
     });
     holder.once('exit', () => reject(new Error(`perl exited before reporting the leader pid: ${output}`)));
   });
+  // perl を落としても、別グループの子（代役の Node）は残る。試験が途中で失敗しても
+  // 代役を残さないよう、PID が分かった直後に後片付けの対象へ入れ、holder より先に
+  // SIGKILL する（すでに終わっている対象は握りつぶす）。
+  descendantPids.push(leader);
   await vi.waitFor(() => expect(processField(leader, 'command')).toContain(entry));
 
   const leftovers = await terminateInScope(repository, { isolationRoot: root, settleMs: 200, terminationGraceMs: 200 });
