@@ -1739,16 +1739,33 @@ describe('callDevin', () => {
     }
   });
 
-  it('Given an abort and EPERM failures signalling the process group, When called, Then the abort result is preserved', async () => {
+  // The managed termination settles an EPERM differently per platform
+  // (docs/design/turn-process-exit-deadline.md:158-170, #177): darwin polls a
+  // group that answers EPERM (zombie-only group) until
+  // TERMINATION_SETTLE_TIMEOUT_MS (2s) and rethrows the EPERM that persisted,
+  // while other POSIX platforms rethrow it at once. The clock is moved instead
+  // of sleeping through the settle deadline.
+  it('Given an abort and EPERM failures signalling the process group on darwin, When called, Then no failure is logged before the settle deadline and the pid-bearing EPERM is logged after it', async () => {
     const abortController = new AbortController();
     let spawned: MockAcpChild | undefined;
     const realKill = process.kill.bind(process);
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'darwin' });
+    const realDateNow = Date.now.bind(Date);
+    // Freeze the clock so the settle deadline is decided by the clock moves
+    // below, not by how long the test happens to run on a loaded machine.
+    const frozenNow = realDateNow();
+    let fakeNow = frozenNow;
+    const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => fakeNow);
+    let leaderGroupProbes = 0;
     // Every process-group signal fails with EPERM (non-ESRCH): the descendant
     // sweep and managed termination must degrade to a logged failure instead
     // of masking the abort result or surfacing an unhandled rejection.
     const killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
       if (pid < 0) {
-        const denied = new Error(`kill ${String(signal ?? 0)} EPERM`) as NodeJS.ErrnoException;
+        if (spawned !== undefined && pid === -spawned.pid && (signal ?? 0) === 0) leaderGroupProbes += 1;
+        // The pid in the message ties a logged failure to this test's group.
+        const denied = new Error(`kill ${pid} ${String(signal ?? 0)} EPERM`) as NodeJS.ErrnoException;
         denied.code = 'EPERM';
         throw denied;
       }
@@ -1800,15 +1817,118 @@ describe('callDevin', () => {
         'Devin descendant process group signal failed',
         expect.objectContaining({ pgid: descendantPid, signal: 'SIGTERM' }),
       );
-      // managed.terminate() rejects on the same EPERM (SIGTERM grace is
-      // 250ms); the failure must land in the log, not an unhandled rejection.
-      await new Promise((resolve) => setTimeout(resolve, 600));
-      expect(debugSpy).toHaveBeenCalledWith(
-        'Devin process termination failed',
-        expect.objectContaining({ error: expect.stringContaining('EPERM') }),
-      );
+      // The group keeps answering EPERM, so the managed termination waits for
+      // the settle deadline: at 1.5s it has probed again and still not failed.
+      // Only this group's failure counts: other tests can leave async logs in
+      // the shared debug spy, and their pids differ from this test's.
+      const terminationLogs = (): unknown[][] =>
+        debugSpy.mock.calls
+          .filter(([message]) => message === 'Devin process termination failed')
+          .filter(([, context]) => String((context as { error?: unknown }).error ?? '').includes(`-${spawned!.pid} `));
+      await vi.waitFor(() => expect(leaderGroupProbes).toBeGreaterThan(0));
+      const probesBeforeSettle = leaderGroupProbes;
+      fakeNow = frozenNow + 1_500;
+      await vi.waitFor(() => expect(leaderGroupProbes).toBeGreaterThan(probesBeforeSettle));
+      expect(terminationLogs()).toHaveLength(0);
+      // Past the deadline the persisted EPERM, with the group's pid, is logged.
+      fakeNow = frozenNow + 2_001;
+      await vi.waitFor(() => expect(terminationLogs()).toHaveLength(1));
+      expect(terminationLogs()[0]?.[1]).toMatchObject({
+        error: expect.stringMatching(new RegExp(`^kill -${spawned!.pid} \\S+ EPERM$`)),
+      });
     } finally {
       killSpy.mockRestore();
+      dateNowSpy.mockRestore();
+      Object.defineProperty(process, 'platform', { configurable: true, value: originalPlatform });
+      mockExecFileSync.mockImplementation(() => '');
+    }
+  });
+
+  it('Given an abort and EPERM failures signalling the process group on linux, When called, Then the pid-bearing EPERM is logged at the first probe without entering the settle wait', async () => {
+    const abortController = new AbortController();
+    let spawned: MockAcpChild | undefined;
+    const realKill = process.kill.bind(process);
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' });
+    // Freeze the clock: the settle deadline is TERMINATION_SETTLE_TIMEOUT_MS
+    // (2s) after this instant, so a run whose clock never moves past it did
+    // not sit in the settle wait, however slowly the machine ran.
+    const frozenNow = Date.now();
+    const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => frozenNow);
+    let settleProbes = 0;
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: string | number) => {
+      if (pid < 0) {
+        // A settle probe is a reachability check on the leader's own group;
+        // linux must not poll it.
+        if (spawned !== undefined && pid === -spawned.pid && (signal ?? 0) === 0) settleProbes += 1;
+        const denied = new Error(`kill ${pid} ${String(signal ?? 0)} EPERM`) as NodeJS.ErrnoException;
+        denied.code = 'EPERM';
+        throw denied;
+      }
+      return realKill(pid, signal as NodeJS.Signals);
+    }) as typeof process.kill);
+    const descendantPid = nextFakePid + 500_000;
+    mockExecFileSync.mockImplementation((command: unknown, args?: unknown) => {
+      if (command === 'ps' && Array.isArray(args) && args.includes('pid=,ppid=,pgid=')) {
+        const leader = spawned!.pid;
+        return `${leader} 1 ${leader}\n${descendantPid} ${leader} ${descendantPid}\n`;
+      }
+      return '';
+    });
+    try {
+      mockSpawn.mockImplementation((...call: unknown[]) => {
+        recordConfigArg(call);
+        const child = createAcpChild();
+        spawned = child;
+        attachAcpServer(child, {
+          initialize: () => ({ protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: 'x', version: '0' } }),
+          'session/new': () => ({ sessionId: 'keen-otter', modes: DEFAULT_MODES, configOptions: [] }),
+          'session/prompt': (_params, _api, _id) => {
+            queueMicrotask(() => abortController.abort());
+            return undefined;
+          },
+        });
+        child.stdin.on('data', (chunk: Buffer) => {
+          if (chunk.toString('utf-8').includes('session/cancel')) {
+            queueMicrotask(() => {
+              child.emit('exit', null, 'SIGTERM');
+              child.emit('close', null, 'SIGTERM');
+            });
+          }
+        });
+        return child;
+      });
+
+      const result = await callDevin('coder', 'implement', {
+        cwd: '/repo',
+        abortSignal: abortController.signal,
+      });
+
+      expect(result.status).toBe('error');
+      expect(result.error).toBe('Devin execution aborted');
+      expect(debugSpy).toHaveBeenCalledWith(
+        'Devin descendant process group signal failed',
+        expect.objectContaining({ pgid: descendantPid, signal: 'SIGTERM' }),
+      );
+      // Only this group's failure counts: other tests can leave async logs in
+      // the shared debug spy, and their pids differ from this test's.
+      const terminationLogs = (): unknown[][] =>
+        debugSpy.mock.calls
+          .filter(([message]) => message === 'Devin process termination failed')
+          .filter(([, context]) => String((context as { error?: unknown }).error ?? '').includes(`-${spawned!.pid} `));
+      await vi.waitFor(() => expect(terminationLogs()).toHaveLength(1));
+      expect(terminationLogs()[0]?.[1]).toMatchObject({
+        error: expect.stringMatching(new RegExp(`^kill -${spawned!.pid} \\S+ EPERM$`)),
+      });
+      // Linux rethrows at the single reachability check that follows SIGKILL
+      // instead of polling the group. The clock is still frozen, so the 2s
+      // settle deadline was never reached.
+      expect(settleProbes).toBe(1);
+      expect(Date.now()).toBe(frozenNow);
+    } finally {
+      killSpy.mockRestore();
+      dateNowSpy.mockRestore();
+      Object.defineProperty(process, 'platform', { configurable: true, value: originalPlatform });
       mockExecFileSync.mockImplementation(() => '');
     }
   });

@@ -153,10 +153,20 @@ function isPosixProcessGroupRunning(pid: number): boolean {
   }
 }
 
+function isDarwinEperm(error: unknown): boolean {
+  return process.platform === 'darwin' && (error as NodeJS.ErrnoException).code === 'EPERM';
+}
+
 async function waitForPosixProcessGroupExit(pid: number): Promise<void> {
   const deadline = Date.now() + TERMINATION_SETTLE_TIMEOUT_MS;
-  while (isPosixProcessGroupRunning(pid)) {
+  while (true) {
+    let running: boolean;
+    let eperm: unknown;
+    try { running = isPosixProcessGroupRunning(pid); }
+    catch (error) { if (!isDarwinEperm(error)) throw error; running = true; eperm = error; }
+    if (!running) return;
     if (Date.now() >= deadline) {
+      if (eperm !== undefined) throw eperm;
       throw new Error(`Process group ${pid} did not terminate`);
     }
     await delay(TERMINATION_SETTLE_INTERVAL_MS);
@@ -169,13 +179,18 @@ export async function terminatePosixProcessTree(targetPid: number | undefined): 
   try {
     if (!signalPosixProcessGroup(pid, 'SIGTERM')) return false;
   } catch (error) {
+    if (isDarwinEperm(error)) { await waitForPosixProcessGroupExit(pid); return false; }
     terminationError = error;
   }
   await delay(TERMINATION_GRACE_MS);
   try {
     signalPosixProcessGroup(pid, 'SIGKILL');
   } catch (error) {
-    terminationError ??= error;
+    // A darwin EPERM from SIGKILL can mean the group became zombie-only after
+    // SIGTERM. Do not record it yet: waitForPosixProcessGroupExit below either
+    // confirms the group is gone (ESRCH, so the EPERM was transient) or throws
+    // the EPERM that persists to the settle deadline (a real permission error).
+    if (!(isDarwinEperm(error) && terminationError === undefined)) terminationError ??= error;
   }
   try {
     await waitForPosixProcessGroupExit(pid);

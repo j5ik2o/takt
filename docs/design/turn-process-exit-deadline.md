@@ -111,3 +111,196 @@
 - 再現の形: daemon が SIGKILL などで落ちる。ターン用プロセスは `disconnect` を受けて `exitAfter` に入る。実行中のターンが中断に応じず、プロバイダーが `spawnManagedProcess` を通らずに起こした子孫（SDK が直接 spawn したものなど）がターン用プロセスのグループ（`spawn.ts:215` の `detached: true`）にいる。または `business.close()` 自体が終わらない。5 秒後にターン用プロセスは `process.exit(1)` で終わるが、グループの子孫には何も送らない。親が生きていれば `managed.terminate()` がグループへ SIGTERM と SIGKILL を送るが、親がいないので誰も送らない。
 - 案: 期限切れのタイマーで `exit(1)` の前に、自分のグループへ SIGTERM を送る（`process.kill(-process.pid, 'SIGTERM')`）。自分にも届くが、SIGTERM ハンドラが `exitAfter` をもう一度呼ぶだけで、直後の `exit(1)` で終わる。POSIX のみ（Windows はグループの扱いが違う）。
 - 影響: 親が落ちた後に、プロバイダーや MCP の子孫が残り続ける。`scripts/leftover-turn-processes.mjs` はターン用プロセスしか見ないので、テストでも検出されない。
+
+---
+
+# 追記: ターン用プロセスのグループに残る子孫の掃除（#177）
+
+- Issue: [j5ik2o/takt#177](https://github.com/j5ik2o/takt/issues/177)（上の「別件の issue の中身（中1）」を切り出したもの）
+- Quint 仕様: 同じ `specs/quint/turn-process-exit-deadline/` を広げた（`GROUP_SIGNAL`・`SWEEP_ZOMBIE_EPERM` の軸、子孫・ゾンビ・親の終了後掃除の状態）
+- 上流（`nrslib/takt`）: `main` の `src/app/daemon-turn/index.ts` には `exitAfter` 自体がない（#141 の期限もフォークだけの変更）。開いている PR で `src/app/daemon-turn/index.ts`・`src/shared/utils/spawn.ts`・`scripts/leftover-turn-processes.mjs` に触れるものはない（2026-11-27 確認）。
+
+## 何が起きているか
+
+ターン用プロセスは `turnProcessHost.ts` の `spawnManagedProcess` で `detached: true` として起動されるので、自分の PID と同じ ID のプロセスグループを率いる。プロバイダーの SDK が `spawnManagedProcess` を通らずに起こした子（`detached` なし）は、このグループに入る。`spawnManagedProcess` で起こした子は、それぞれ自分のグループを持つ。
+
+グループを掃除するのは親だけである。親が生きていれば、ターン用プロセスが終わったあとに `managed.waitForExit()` に続く `managed.terminate()` がグループへ SIGTERM、250 ms 後に SIGKILL を送る（`turnProcessHost.ts:179-183`）。期限の前に親が SIGKILL するときも同じである。親が落ちていると誰も送らないので、ターン用プロセスが `exit` したあともグループの子孫は動き続ける。
+
+これは期限切れの `exit(1)` に限らない。親が落ちたあと、中断に応じたターンで後片付けが `shutdown_complete` の送信に失敗して `fatal` から `exit(1)` するとき（期限より前）や、親が `shutdown` を送った直後に正常終了し、親の掃除が走る前に親が落ちたときも、同じように残る。Quint の `timeoutOnlyGroupSignal`（issue の案どおり、期限切れのときだけ送る）は前者で反例を出す。
+
+さらに、ターン用プロセス自身が終了直前にグループへ `SIGTERM` を送るようにすると、親が生きている通常終了でも「子孫が `SIGTERM` で終了した直後に未回収ゾンビだけのグループになっている瞬間」へ親の `managed.terminate()` が重なる競合窓が広がる。macOS（XNU）では、グループ内の残存メンバーがすべて未回収ゾンビの状態で `kill(-pgid, sig)`（`sig=0` を含む）を呼ぶと `ESRCH` ではなく `EPERM` が返るため、現行の `src/shared/utils/spawn.ts` では `turnProcessHost.ts:183` の `input.onError(error)` へ無実の `EPERM` が報告される（Quint の `everyExitWithoutEpermFix` で反例が出る）。
+
+## 何をどう変えるか
+
+### 1. ターン用プロセス出口でのグループ SIGTERM（`src/app/daemon-turn/index.ts`）
+
+`src/app/daemon-turn/index.ts` の `exitAfter` で、`process.exit` を呼ぶ 2 か所の直前に、自分のグループへ SIGTERM を送る。
+
+```ts
+// 親が落ちているとグループを誰も掃除しないので、終わる前に自分のグループへ SIGTERM を送る。
+const signalOwnGroup = (): void => {
+  if (process.platform === 'win32') return;
+  // 自分自身にも届くため、SIGTERM リスナーが外れていてもシグナル終了にならないよう保険を置く。
+  if (process.listenerCount('SIGTERM') === 0) process.on('SIGTERM', () => {});
+  try { process.kill(-process.pid, 'SIGTERM'); } catch { /* ESRCH: グループを率いていない。どの失敗でも終了は続ける */ }
+};
+const exitAfter = (cleanup: Promise<void>): void => {
+  setTimeout(() => { process.stderr.write('Turn process cleanup timed out\n'); signalOwnGroup(); process.exit(1); }, TURN_SHUTDOWN_GRACE_MS);
+  void cleanup.catch(fatal).finally(() => { signalOwnGroup(); process.exit(); });
+};
+```
+
+- 期限切れだけでなく、後片付けが済んだときの終了でも送る（issue の案を広げる）。ターン用プロセスの終了は、実際にはすべて `exitAfter` を通る。`shutdown` メッセージの経路は `process.disconnect()` から `'disconnect'` に入り、`fatal` も `process.disconnect()` から同じ所に入る。だから 2 か所に置けば、「`exitAfter` から終わるときは、必ず先にグループへ SIGTERM を送っている」と言える。
+- SIGTERM は自分にも届く。`index.ts:33` は読み込みの時点で `process.on('SIGTERM', ...)` を登録しているが、将来のリファクタ（`process.once` 化）や SDK 等によるリスナー解除で既定動作（シグナル終了 `{ code: null, sig: 'SIGTERM' }`）へ壊れないよう、`signalOwnGroup()` 内で送信前に `process.listenerCount('SIGTERM') === 0` なら空リスナーを登録する。JS のハンドラはイベントループに積まれるだけで、直後の同期の `process.exit` が先に走るので動かない。終了コードは今と同じ（期限切れは 1、後片付けの結果どおり 0 か 1）。
+- 診断文の書き込みは SIGTERM より前に置く（今の順序を変えない）。
+- 親が生きている場合、親の掃除と重なって同じグループに SIGTERM が 2 回届くこと自体は害がない。ただし子孫が先に終了して未回収ゾンビだけになった瞬間に macOS が `EPERM` を返す競合窓が広がるため、下の 2 で `spawn.ts` をあわせて直す。
+
+### 2. macOS のゾンビ専用プロセスグループに対する `EPERM` の扱い（`src/shared/utils/spawn.ts`）
+
+macOS（XNU `bsd/kern/kern_sig.c` の `killpg1`）では、プロセスグループがまだカーネルに残っているがメンバーがすべて未回収ゾンビ（`SZOMB`）である状態（`nfound == 0`）に対し、`kill(-pgid, sig)`（`sig=0` を含む）が `ESRCH` ではなく **`EPERM`** を返し、`launchd`（PID 1）に回収されたあとに初めて `ESRCH` を返す。現行の `spawn.ts`（`signalPosixProcessGroup` / `isPosixProcessGroupRunning`）は `ESRCH` のみを無視して `EPERM` を再送出するため、`turnProcessHost.ts:182-183` の `managed.terminate()` から `input.onError(error)` へ無実の `EPERM` が漏れる（`managed-spawn.test.ts:69-72` がすでに `EPERM` を許容していたのと同じ現象）。
+
+`spawn.ts` の `process.platform === 'darwin'` 経路で、一過性のゾンビ由来 `EPERM` と本物の権限エラー（euid の異なる生存メンバー）を **`ESRCH` への遷移** で区別する。
+
+- `waitForPosixProcessGroupExit(pid)`: `darwin` で `process.kill(-pid, 0)` が `EPERM` を返したときは即座に例外を投げず、「グループがまだ残っている（未回収ゾンビまたは送信不能な生存メンバー）」として最後の `EPERM` を保持したまま `TERMINATION_SETTLE_INTERVAL_MS`（10 ms）間隔でポーリングを続ける。`TERMINATION_SETTLE_TIMEOUT_MS`（2 秒）以内に回収されて `ESRCH` が返れば正常終了し、期限まで `EPERM` が続けば本物の権限エラーとしてその `EPERM` を再送出する。Linux 等の他 POSIX では従来どおり即座に再送出する。
+- `terminatePosixProcessTree(pid)`:
+  - `SIGTERM` が `ESRCH` なら従来どおり `false` を返す。
+  - `SIGTERM` が `darwin` の `EPERM` を返したときは、直ちに `waitForPosixProcessGroupExit(pid)` で回収を待つ。期限内に `ESRCH` が確認できれば「生存メンバーへ送らず自然に消滅した」として `false` を返す（`waitCommandProcess.ts:34` の自然終了判定も維持される）。期限まで `EPERM` が続けば `EPERM` を投げる。
+  - `SIGTERM` が成功（`true`）したあとに `SIGKILL` が `darwin` の `EPERM` を返したときは、その `EPERM` を保留して `waitForPosixProcessGroupExit(pid)` を待ち、`ESRCH` でグループ消滅を確認できれば保留した `EPERM` を消して `true` を返す。期限まで `EPERM` が続けば `EPERM` を投げる。
+  - `EACCES` や非 `darwin` の `EPERM` は従来どおり即座に失敗させる。
+  - Linux 等の他 POSIX では、未回収ゾンビだけのグループへの `kill(-pgid, sig)` が回収前は成功する（`ESRCH` にならない）ため、SIGTERM/SIGKILL そのものは失敗しない。ただし常に `true` を返すわけではない。`waitForPosixProcessGroupExit(pid)` が `TERMINATION_SETTLE_TIMEOUT_MS`（2 秒）以内にグループの消滅（`ESRCH`）を確認できれば `true` を返し、期限まで残っていれば（回収されないゾンビや SIGKILL で消えない生存メンバー）`Process group <pid> did not terminate` を投げる。回収後は SIGTERM が `ESRCH` を返して `false` になる。
+- `turnProcessHost.ts:182-183` は変えない。`spawn.ts` が一過性のゾンビ由来 `EPERM` を吸収し、本物の権限エラーだけが `input.onError(error)` へ伝わる契約を保つ。
+
+### 3. 残存プロセス検査の拡張（`scripts/leftover-turn-processes.mjs`・`scripts/run-heavy-it-parallel.mjs`）
+
+詳細は下の「影響」の「守りの仕組み」にまとめる。実行単位の隔離ルート（`TEST_USER_ISOLATION_ROOT`）で検出範囲を絞り、`uid` / `stat` による絞り込み・一括 `lsof`・リーダーのグループ強制終了と再スキャンを入れる。
+
+### 採らなかった案
+
+- **期限切れのときだけ送る（issue の案のまま）**: 上で書いたとおり、期限より前の `exit(1)` と正常終了のあとに親が落ちる窓が残る。置く場所が 1 か所増えるだけなので、広げるほうを採る。
+- **SIGTERM のあと SIGKILL まで送る**: グループへの SIGKILL は自分も殺す。終了コード 1 の代わりにシグナル終了になり、期限も 250 ms 延びる。メンバーを列挙して自分以外に送るには `ps` を同期で呼ぶ必要があり、macOS と Linux で引数が違う。SIGTERM を無視する子孫は残る（範囲の外）として、こちらは採らない。
+- **`spawnManagedProcess` で起こした子のグループにも、期限切れで送る**: それらは `business.close()` の `terminateManagedProcesses()` が期限内に止める（ターンが止まっていても `close()` は並行に呼ばれる。`processRuntime.ts:74`）。残るのは `close()` 自体が止まったとき、`initialization`（`createBusiness`）が止まって `close()` が一度も走らないとき（`processRuntime.ts:73`）、または `close()` 完了後から期限切れまでの 5 秒間に中断無視ターンが新たに `spawnManagedProcess` を呼んだとき（`spawn.ts:17-21` は呼び出し時点の集合しか止めない）であり、それらはいずれも今回の範囲の外にする。
+- **`turnProcessHost.ts` 側で `EPERM` を無条件に握りつぶす**: 本物の権限エラー（euid の異なる生存メンバー）まで隠してしまい、`managed-spawn.test.ts` 等の他呼び出し元の競合も残る。`spawn.ts` 側で `ESRCH`（回収完了）を確認するほうを採る。
+
+### 範囲の外
+
+- SIGTERM を無視する子孫（親が落ちていると、誰も SIGKILL しない）。Quint では `wOrphanIgnoringDescendantLeft` として、残ることを明示している。
+- euid の違うメンバー（setuid された子孫など）自身への配送。なお macOS の `kill(2)` man ページは失敗時にシグナルは送られない旨を書くが、実際の XNU カーネル（`bsd/kern/kern_sig.c` の `killpg1` / `killpg1_callback`）は送信可能なメンバーへ順に配送して `nfound` を加算し、`nfound == 0` のときだけ `EPERM` を返す。`signalOwnGroup()` では自分自身が送信可能メンバーなので、実際には Linux と同様に権限のある子孫へは届き、届かないのは euid の違う子孫だけである。
+- 自分でグループを作り直した子孫（`setsid`・`detached: true`）。`spawnManagedProcess` の子、`clone-exec.ts:405`、deepseek-harness の supervisor、devin が追いかける子孫グループなどがこれに当たる。`-process.pid` では届かない。
+- `business.close()` が止まったとき、`initialization`（`createBusiness`）が止まったとき、または `close()` 完了後に中断無視ターンが新たに `spawnManagedProcess` を呼んだときに、その別グループの子が掃除されないまま期限が切れる場合。
+- `exitAfter` を通らない終わり方（捕まえていない例外での異常終了、外からの SIGKILL）。親が生きていれば親が掃除する。
+- Windows（グループの扱いが違う。今と同じく何もしない）。
+- `waitCommandProcess.ts:47` の `isProcessGroupRunning`（#177 で競合窓が広がる経路ではないため今回の範囲外）。
+- daemon 本体の終了処理（[j5ik2o/takt#142](https://github.com/j5ik2o/takt/issues/142)）。
+
+## 守る不変条件
+
+前半の 1〜7 はそのまま守る（グループへの送信は同期で、時刻も終了コードも変えない）。足すのは次の 4 つ。
+
+8. **親のいないグループの子孫には SIGTERM が届いている（`orphanedGroupSignalled`）**: ターン用プロセスが終わり、親も落ちていて（掃除する者がいない）、ターン用プロセスがグループを率いているなら、まだ動いているグループの子孫は SIGTERM を受け取り済みである。SIGTERM に応じる子孫はそのあと終わる（`descendantExitOnTerm`）。
+9. **自分の率いるグループにしか送らない（`signalsOnlyOwnGroup`）**: グループを率いていない（`detached` なしで起動された）とき、`-process.pid` はどのグループも指さず、ほかのグループの子孫には何も届かない。モデルでは構成上成り立つ健全性の確認で、実物では後述の OS の前提に依る。
+10. **親の終了後掃除がゾンビ由来の `EPERM` で誤報しない（`noSpuriousParentSweepError`）**: `signalOwnGroup()` で終了した子孫が未回収ゾンビだけになったグループへ親の `managed.terminate()` が重なっても、macOS の `EPERM` を `turnProcessHost` の `onError` に漏らさない。
+11. **親の終了後掃除はグループ消滅後だけ正常完了する（`parentSweepClearsGroup`）**: 親の掃除がエラーなしで完了した状態では、生存中の子孫も未回収ゾンビもグループに残っていない（`waitForPosixProcessGroupExit` が `ESRCH` を確認している。構成上の健全性確認）。
+
+設計を区別するのは 8（`noGroupSignal`・`timeoutOnlyGroupSignal` で反例、`fixed` で成り立つ）と 10（`everyExitWithoutEpermFix`・`timeoutOnlyGroupSignal` で反例、`fixed` で成り立つ）である。
+
+## PBT の性質と除外
+
+製品の変更は `exitAfter` の 2 か所と小さな関数 1 つ、および `spawn.ts` の macOS `EPERM` 待機処理であり、入力文字列やデータ構造の変換を持たない。そのため fast-check は使わず、状態遷移の性質を `quint run` の無作為シミュレーションで確かめる。初期構成（`initialized` × `hasTurn` × `stallAt` × `holdsHandle` × `closeFails` × 子孫の種類 3 通り × グループを率いるか）は `init` で全部を非決定に選び、除外する入力はない（`validConfig` が落とすのは実物で起こらない組み合わせだけ。子孫は初期化済みのときだけ置く）。
+
+確かめる性質は、不変条件 1〜11 と次の到達（witness）である。
+
+- 親が落ちたあとの期限切れで、SIGTERM に応じる子孫が終わる（`wOrphanDescendantGoneAfterTimeout`）
+- 親が落ちたあとの後片付けの失敗（期限より前の `exit(1)`）でも終わる（`wOrphanDescendantGoneAfterFailedCleanup`）
+- 正常終了のあと、親が掃除する前に落ちても、子孫は SIGTERM を受け取り済み（`wParentCrashAfterExitSignalled`）
+- 親が生きていれば、終了後の掃除が子孫を消す（`wParentSweepAfterExit`）
+- 親が生きていて子孫が未回収ゾンビだけになっていても、回収を待ってエラーなしで掃除を終える（`wParentSweepWaitsZombieReap`）
+- 親生存中の IPC 切断後に子が終了する前に親が落ちる経路も通る（`wParentCrashAfterDisconnect`）
+- SIGTERM を無視する子孫は残る（`wOrphanIgnoringDescendantLeft`。範囲の外を明示する）
+- グループを率いていなければ何も届かない（`wNonLeaderDescendantUntouched`）
+
+実プロセスでは、実装の段で次のテストを足す。
+
+- heavy IT（`src/__tests__/daemon-turn-process.integration.test.ts`）に 2 件: ターン用プロセスは `detached: true` で起動し（グループを率いる）、`cwd` と設定ディレクトリには隔離済み `tmpdir()` 配下の `takt-test-global-*` を使う（万一テスト自身が子孫を漏らしても `scripts/leftover-turn-processes.mjs` の守りに掛かるようにする）。フィクスチャのターンは `detached` なし・`stdio: 'ignore'`（`exitedWithStderr` が待つ `stderr` パイプを子へ継承させない）で子（`setInterval` だけの node）を起こし、その PID を `turn_progress` で知らせる。テストが `child.disconnect()` で親の消失を作り、ターン用プロセスの終了後、子の PID が期限内に消えることを確かめる。`finally` では報告された子 PID だけでなく `-child.pid`（グループ全体）にも `SIGKILL` を送る。
+  - 中断に応じないターン: 期限切れで終了コード 1 と診断文、その後に子が消える。修正前は子が残って失敗する。
+  - 中断に応じるが子を残すターン: 期限より前に終了コード 1（`shutdown_complete` を送れない）、その後に子が消える。期限切れのときだけ送る形では失敗する。
+  - 既存の 3 件は `spawn` を `detached` なしで呼んでいるので、グループを率いない場合（`ESRCH` を握って終了する）の確認を兼ねる。終了コードの検証（1 のまま）で、自分に届く SIGTERM が終了を変えないことも確かめる。
+- `src/__tests__/managed-spawn.test.ts` に macOS `EPERM` 待機（ゾンビ専用グループで `EPERM` のあと `ESRCH` に遷移したらエラーにせず完了すること、期限まで `EPERM` が続く本物の権限エラーは `EPERM` を再送出すること）の確認を足し、既存の 69–72 行目の `EPERM` 許容も不要になったことを確認する。
+
+足した回帰テスト（2026-11-27、実装の前に red を確かめた。TEST_TIME_FACTOR に従う）:
+
+- `daemon-turn-process.integration.test.ts`: `signals its own process group before exiting when the parent is gone and …（#177）` の 3 件。フィクスチャ `src/__tests__/fixtures/descendant-spawning-turn-business.ts` が子を起こして PID を `descendant:<pid>` の進捗で知らせる。中断に応じない（期限切れ）、中断に応じるが後片付けが失敗する（期限より前）、SIGTERM のリスナーを外した（低2 の保険。`{ code: 1, signal: null }` のまま）の 3 通り。ターン用プロセスは `detached: true`、`cwd` と設定ディレクトリは `tmpdir()` 配下の `takt-test-global-*`、tsx は絶対 URL で読み込む。
+- `managed-spawn.test.ts`:
+  - 実 OS（perl の親が回収しない子でゾンビだけのグループを作る）: ゾンビだけのグループでは、回収後に macOS は `false`（`EPERM`、SIGKILL を送らない）、Linux は `true`（送信が成功する。低5）。子が SIGTERM で終わって回収を待つ間に猶予後の SIGKILL が当たる場合は、両 OS で `true`（低7）。
+  - `process.platform` と `kill(-pgid)` の結果を差し替えた 4 件: macOS の SIGTERM の `EPERM` → `ESRCH` で `false`、SIGKILL の `EPERM` → `ESRCH` で `true`、`EPERM` が 2 秒続けば `EPERM` を投げる、Linux の `EPERM` は 2 秒待たずに投げる。
+  - 既存の `should terminate a process group after its leader exits normally` から `EPERM` の許容を外した。
+- `leftover-turn-processes.integration.test.ts`: 各テストは自分の `fixtureRoot()` を `isolationRoot` として渡す（低3）。主が抜けたグループの子孫、ゾンビの主のグループの子孫、`cwd` が `takt-test-global-*` でない子孫（低4。隔離ルートの配下だけで判定する）を報告して止める。別の隔離ルートの子孫は止めない。SIGTERM を無視する主を SIGKILL するとグループごと止まる。検出から送信までの間に範囲から外れたプロセスには送らない（低1。待ちの間に隔離ルートの外へ `chdir` させて表す）。報告の行は `kind`（`'turn'`・`'descendant'`）と `pgid` を持つ。加えて、1 回目の一覧が空でも 2 パス目で拾って止める（一覧だけを差し替え、1 回目は空を返す）ことと、SIGKILL したプロセスを親（perl）が回収せず未回収ゾンビとして残っても残存と誤らない（`ps` の `stat` が `Z` の行は候補外）ことを確かめる。
+- 低2（`run-heavy-it-parallel.mjs` が受け継いだ `TEST_USER_ISOLATION_ROOT` を消す）は、スクリプトがトップレベルで Vitest を起こすので、この段では試験にしていない。
+
+## 壊しうる入力・状況の一覧
+
+| 状況・入力 | 扱い | 確認手段 |
+|---|---|---|
+| 親が落ちたあとの期限切れ（ターンが中断に応じない、`close()` が止まる、初期化が止まる） | `exit(1)` の前にグループへ SIGTERM | Quint (`orphanTimeoutSignalsGroupTest`, `orphanCloseHangsSignalsGroupTest`)・IT |
+| 親が落ちたあと、期限より前の `exit(1)`（`shutdown_complete` を送れない） | `finally` でグループへ SIGTERM | Quint (`orphanFailedCleanupSignalsGroupTest`)・IT |
+| 正常終了の直後、親の掃除が走る前に親が落ちる | 終了前に送り済み | Quint (`parentCrashAfterCleanExitStillSignalledTest`) |
+| 並行：親生存中の IPC 切断後に、子が終了する前に親が落ちる | 切断時に `exitAfter` 済みのため、終了前にグループへ SIGTERM | Quint (`disconnectThenParentCrashSignalsGroupTest`, `wParentCrashAfterDisconnect`) |
+| 親が生きている（子孫がまだ生存中、または `signalOwnGroup()` 後に未回収ゾンビだけ） | 生存中の子孫は親の SIGTERM/SIGKILL で消える。macOS で未回収ゾンビだけのグループへ `managed.terminate()` が当たって `EPERM` が返った場合は、`spawn.ts` が `ESRCH`（回収完了）までポーリングして誤報を防ぐ | Quint (`parentSigkillEndsIgnoringDescendantTest`, `parentAliveSweepsWithoutGroupSignalTest`, `parentSweepWaitsForZombieReapTest`, `everyExitWithoutEpermFixTest`)・`managed-spawn.test.ts` |
+| SIGTERM を無視する子孫（親が落ちている） | 残る（範囲の外） | Quint (`orphanIgnoringDescendantStaysTest`) |
+| 自分にも SIGTERM が届く | `index.ts:33` の `process.on('SIGTERM')` に加え、`signalOwnGroup()` 内で `process.listenerCount('SIGTERM') === 0` のときに空リスナーを登録してから送るため、リスナーが外れていても死なない。ハンドラは同期の `process.exit` より後になるので動かない | IT（終了コード 1 の検証）・コード確認 |
+| グループを率いていない（`detached` なしで起動された。既存の IT など） | `kill(-pid)` は `ESRCH`。握って終了する。起動元のグループには何も届かない | Quint (`nonLeaderSignalsNothingTest`)・既存 IT |
+| 別のグループ（`setsid`・`detached: true` の子孫、`spawnManagedProcess` の子） | 届かない。`spawnManagedProcess` の子は `close()` が止める（`close()` や `initialization` が止まった場合、`close()` 後に新規起動された場合は範囲の外） | 範囲の外として明記 |
+| PID の再利用 | 送るのは自分が生きている間で、自分の PID はほかのプロセスに使われない。グループを率いていないのに同じ ID のグループが残っている状況は、そのグループの元の主が同じ PID を持っていて、それが再利用されたことを意味する。Linux と macOS は、グループ ID として使われている番号をプロセスに割り当てない（OS の前提） | 前提として明記 |
+| 権限（setuid された子孫など、送れないメンバーがいる） | Linux でも macOS（XNU `killpg1` は送信可能なメンバーへ順に配送して `nfound` を加算し、`nfound == 0` のときだけ `EPERM`）でも、`signalOwnGroup()` では自分自身が送信可能メンバーなので権限のある子孫へは届き、届かないのは euid の違う子孫だけ（範囲の外。macOS の `kill(2)` man ページの文言より実挙動が緩い）。親側の `spawn.ts` では送信不能な生存メンバーだけが残ると 2 秒間 `EPERM` が続くため、本物の `EPERM` として報告される | XNU 実挙動・`managed-spawn.test.ts`・前提として明記 |
+| macOS と Linux の違い | 違いは「残存メンバーが未回収ゾンビだけのグループへの `kill(-pgid, sig)`（`sig=0` 含む）の結果」だけ。macOS は回収まで `EPERM`、Linux は回収前は送信が成功し（`ESRCH` にならない）、回収後に `ESRCH` を返す。そのため `terminatePosixProcessTree` の結果も分かれる。Linux は SIGTERM/SIGKILL が失敗せず、`waitForPosixProcessGroupExit` が 2 秒以内にグループの消滅を確認できれば `true`、期限まで残れば `Process group <pid> did not terminate` を投げる（回収後は SIGTERM が `ESRCH` で `false`）。macOS は `darwin` 限定で `EPERM` を `ESRCH` までポーリングして吸収し、期限内に消えれば `true`（SIGTERM の `EPERM` から始まった場合は `false`）、期限まで `EPERM` が続けばその `EPERM` を投げる。`kill(-pgid)` のグループ配送・`ESRCH`・euid 違いに対する実挙動は共通 | Quint (`everyExitWithoutEpermFix`, `fixed`)・CI（Linux）・手元（macOS）で IT |
+| イベントループが同期処理で塞がる | 期限のタイマーと同じく、送信も遅れる（前提は前半と同じ） | 前提として明記 |
+| Windows | 何もしない | コード確認 |
+
+## 影響
+
+- **上流**: 該当なし（冒頭）。
+- **保存済みデータ・公開 API**: 変更なし。`src/app/daemon-turn/index.ts` と `src/shared/utils/spawn.ts` の内部処理を変えるだけで、メッセージ・設定・CLI に触れない。
+- **守りの仕組み（`scripts/leftover-turn-processes.mjs`・`scripts/run-heavy-it-parallel.mjs`）**: 今の検査はターン用プロセス（`dist/app/daemon-turn/index.js` か `src/app/daemon-turn/index.ts` を起動したもの）しか見ないので、グループに残った子孫は見つけない。レビューの中 1・中 2 の指摘を織り込み、実装の段で次を足す。
+  - **実行単位の分離（中 1）**:
+    - `scripts/run-heavy-it-parallel.mjs` は、`test:deepseek-harness:types` の直後・Vitest 起動前に `isolateUserDirectoriesForTestRun()`（`scripts/test-user-isolation.mjs`）を呼び、この実行に固有の隔離ルート `isolationRoot`（`<tmpdir>/tt-<random>`、`realpathSync.native` 済み）を確定する。Vitest は `TEST_USER_ISOLATION_ROOT` を引き継いで同じ隔離ルートを再利用するため、Vitest 終了時にルートが先に削除されず、`terminateLeftoverTurnProcesses` 完了後（`run-heavy-it-parallel.mjs` 終了時）に `rmSync(isolationRoot)` が走る。
+    - `findLeftoverTurnProcesses(repositoryRoot, { isolationRoot })` / `terminateLeftoverTurnProcesses(repositoryRoot, { isolationRoot, ... })` に `isolationRoot` を渡す。どちらも `cwd` が `isolationRoot` 配下（`realpathSync.native` で正規化した `isolationRoot + sep` の前方一致。Linux の ` (deleted)` 接尾辞にも一致する）であることを前提に、対象を 2 種類に分ける。ターン用プロセス（`dist/app/daemon-turn/index.js` か `src/app/daemon-turn/index.ts` を起動した `kind === 'turn'`）は `cwd` が `/takt-test-global-` を含むものに限り、孤立した子孫（`kind === 'descendant'`）は `isolationRoot` 配下であることだけで判定する（プロバイダーの子は作業ディレクトリをプロジェクト側にすることが多いため、印を重ねない）。これにより、別 worktree や並行実行中の `npm test` / `npm run test:it` / 別 Heavy IT のプロセスを拾わず・止めない。
+    - `isolationRoot` が省略された呼び出し（既存単体・結合呼び出し）では、後方互換のためターン用プロセス（コマンドラインに `repositoryRoot` を含む）のみ検査し、子孫の検出は無効にする。
+  - **ゾンビリーダー・全ユーザー `lsof`・リーダー `SIGKILL` 後の取り残しへの対処（中 2）**:
+    - 検出クエリを `ps -axww -o pid=,pgid=,uid=,stat=,command=` に広げる。`livePids` は全ユーザーの行から `!stat.startsWith('Z')` の PID で作る（他ユーザー所有のリーダーを持つプロセスを誤って「主不在」とみなさないため）。
+    - `cwd` を調べる候補は `uid === process.getuid()` かつ `!stat.startsWith('Z')` かつ `pid !== process.pid` に絞ったうえで、「ターン用プロセス（`entries` 一致）」または（`isolationRoot` 指定時のみ）「孤立子孫（`pid !== pgid && pgid > 1 && !livePids.has(pgid)`）」だけに限定する。ゾンビ自身は候補から外す。
+    - macOS では候補 PID が空なら `lsof` を呼ばず、1 件以上のときは `lsof -a -p <pid1,pid2,...> -d cwd -Fn` を 1 回にまとめて実行し `p<pid>` / `n<path>` を解析する（一部 PID が途中で終了して `lsof` が非 0 終了しても標準出力から取得済み分を読む）。Linux では候補 PID だけに `readlinkSync('/proc/<pid>/cwd')` を呼ぶ。
+    - 報告の行には種類（ターン用プロセスか子孫か）と `pgid` を出す。
+    - 終了手順では、ターン用プロセスがグループリーダー（`kind === 'turn' && pid === pgid`）のとき `SIGTERM`・`SIGKILL` をプロセスグループ（`-pid`）へ送る（非リーダーや孤立子孫は `+pid` へ送る）。グループ送信で macOS のゾンビ由来 `EPERM` が出た場合は `+pid` へのフォールバックと生存確認に委ね、`ESRCH` は終了済みとみなす。さらに、1 回目の強制終了後に同じ `isolationRoot` 範囲で子孫を再スキャン（最大 2 パス。1 パス目の一覧が空でも 2 パス目を取り直し、リーダーが一覧の直後に終わった子孫を取りこぼさない）し、`SIGKILL` 後に残った子孫も報告・終了する。最後に一覧を取り直して残存を判定する（`ps` の `stat` が `Z` の未回収ゾンビは候補外なので、回収待ちを残存と誤らない）。
+  - **危うさと検証**: 同一実行の隔離ルート内でも、ターンと関係のないテストが `/takt-test-global-` 配下にリーダー不在のプロセスを残していれば拾って heavy IT を落とす。実装の段で heavy IT を流し、拾ったものがあればその場で原因を確認する。
+  - **`src/__tests__/leftover-turn-processes.integration.test.ts` への追加**: (1) 主が抜けたグループ・ゾンビ化した主のグループに残る子孫を報告して止めるケース、(2) 別の隔離ルート（別 worktree / 並行テスト相当）の `takt-test-global-*` 配下で動く子孫を検出・終了しないケース、(3) `SIGTERM` を無視するリーダーを `SIGKILL` で落とした際にそのグループの子孫も残らず止めるケース。
+
+## 設計レビューの指摘への対応（#177）
+
+設計の独立レビュー（2026-11-27、高 0・中 3・低 5）への対応。
+
+| 指摘 | 対応 | 内容 |
+|---|---|---|
+| 中1 `scripts/leftover-turn-processes.mjs` の子孫検出にチェックアウト／実行単位の分離がなく、別 worktree や並行テストを誤検出・終了する | 直す | `run-heavy-it-parallel.mjs` が Vitest 起動前に `isolateUserDirectoriesForTestRun()` で隔離ルートを確定し、`isolationRoot` を渡して `cwd` を実行単位で絞る（省略時は子孫検出を無効にする）設計に直した |
+| 中2 `scripts/leftover-turn-processes.mjs` の子孫検出・強制終了手順の 3 つの穴（リーダー `SIGKILL` 後の取り残し・ゾンビリーダー・全ユーザーへの `lsof`） | 直す | `ps` に `uid=,stat=` を足して非ゾンビ集合と現在ユーザーに絞り、macOS は `lsof` を一括実行する。リーダー（`pid === pgid`）は `-pid` へグループ送信し、強制終了後に子孫を再スキャン（最大 2 パス）する設計に直した |
+| 中3 macOS のゾンビ専用プロセスグループに対する `EPERM` と親側 `turnProcessHost` / `spawn.ts` の競合 | 直す | `spawn.ts` の `darwin` 経路で `EPERM` を即失敗にせず `waitForPosixProcessGroupExit` が `ESRCH`（回収完了）までポーリングし、期限超過時のみ本物の `EPERM` を投げる方針を決めた。Quint に `descZombie`・`SWEEP_ZOMBIE_EPERM`・不変条件 10/11・反例モデル `everyExitWithoutEpermFix` を追加した |
+| 低1 「`spawnManagedProcess` の子が残るのは `close()` 自体が止まったときだけ」の 2 つの取りこぼし（`StallInit` 中の起動と `close()` 後の新規起動） | 直す | 採らなかった案・範囲の外・壊しうる入力の表および Quint `README.md` の記述を、3 つの条件すべてを挙げる形に直した |
+| 低2 自分自身への `SIGTERM` 配送が `process.on('SIGTERM')` の存続に暗黙依存している | 直す | `signalOwnGroup()` 内で `process.listenerCount('SIGTERM') === 0` のときに空リスナーを登録してから送る設計に直した |
+| 低3 macOS の `kill(2)` `EPERM` に関する man ページの読み取りと XNU 実挙動（`killpg1` の `nfound`）の差 | 直す | 範囲の外・壊しうる入力の表・Quint `README.md` に XNU 実挙動と man ページ表記の差を正確に書き直した（euid 違いの子孫自体は範囲外のまま） |
+| 低4 Quint モデルの未モデル化遷移（`ipcDisconnectWhileParentAlive` 後の親クラッシュ） | 直す | Quint モデルに `parentCrashAfterDisconnect`、witness `wParentCrashAfterDisconnect`、シナリオテスト `disconnectThenParentCrashSignalsGroupTest` を追加した |
+| 低5 実装段で追加する IT（`daemon-turn-process.integration.test.ts`）の `cwd` と `stdio` の注意点 | 直す | #177 用 IT の設計に、子の `stdio: 'ignore'` 指定、`cwd` への隔離済み `takt-test-global-*` の使用、`finally` での `-child.pid` への `SIGKILL` を明記した |
+
+## Quint の仕様と検査結果（#177）
+
+状態に、グループの子孫の種類 `desc`（`DescNone`・`DescHonorsTerm`・`DescIgnoresTerm`）、グループを率いるか `groupLeader`、`descAlive`・`descZombie`・`descTermed`・`groupSignalled`・親の終了後掃除の状態 `sweep`（`SweepIdle`・`SweepWaitingReap`・`SweepDone`）・`parentSweepError` を足した。操作は、親が終了後に掃除する `parentSweepAfterExit`、ゾンビ回収後に掃除を終える `parentSweepFinishAfterReap`、終了後に親が落ちる `parentCrashAfterExit`、IPC 切断後に子が稼働中のまま親が落ちる `parentCrashAfterDisconnect`、SIGTERM を受けた子孫が終了してゾンビになる `descendantExitOnTerm`、ゾンビが回収される `descendantReaped` を足した。`parentSigkill` はグループ全体を SIGKILL するので、SIGTERM を無視する子孫も消す。設計の軸は `GROUP_SIGNAL`（`None`・`TimeoutOnly`・`EveryExit`）と `SWEEP_ZOMBIE_EPERM`（`Throw`・`WaitReap`）の 2 つで、`fixed` を `EveryExit` × `WaitReap` にし、`noGroupSignal`・`timeoutOnlyGroupSignal`・`everyExitWithoutEpermFix`（レビュー前の `06c8b3f1f` の形）を並べて比較する。#141 の場面は `initWith`（子孫なし、グループを率いる）のまま動く。
+
+- `quint typecheck`: 本体・テストともに成功。
+- `quint test`: `beforeTest` 5、`unrefTimerTest` 1、`noGroupSignalTest` 4、`timeoutOnlyGroupSignalTest` 2、`everyExitWithoutEpermFixTest` 2、`fixedTest` 23（#177 の 9 件を含む）、`noAbortTest` 1 の計 38 件すべて通過。
+- `quint run`（`--max-samples 3000 --max-steps 15 --seed 0x2a`）:
+  - `orphanedGroupSignalled`:
+    - `noGroupSignal`（#141 のまま）: 反例。親生存中の IPC 切断 → SIGTERM → 親クラッシュ（`parentCrashAfterDisconnect`）→ 期限切れの `exit(1)`、子孫は SIGTERM を受け取らないまま動いている。
+    - `timeoutOnlyGroupSignal`（期限切れのみ送信）: 反例。親クラッシュ → `shutdown_complete` を送れず期限より前に `exit(1)`、子孫は SIGTERM を受け取らないまま残る。
+    - `before`・`unrefTimer` も反例（送らないので）。`everyExitWithoutEpermFix`・`fixed`・`noAbort` は違反なし。
+  - `noSpuriousParentSweepError`:
+    - `everyExitWithoutEpermFix`（レビュー前 `06c8b3f1f` の形、`EveryExit` × `Throw`）: 反例。SIGTERM・切断後に期限切れで `signalOwnGroup()` → 子孫が終了してゾンビ（`descendantExitOnTerm`）→ 親の `parentSweepAfterExit` がゾンビ専用グループへ当たり `parentSweepError = true`（macOS `EPERM` の誤報）。通常終了後でも同じ反例が出る（`everyExitWithoutEpermFixTest`）。
+    - `timeoutOnlyGroupSignal`（`TimeoutOnly` × `Throw`）: 同じ経路（期限切れで親生存）で反例。
+    - `fixed`（`EveryExit` × `WaitReap`）: 違反なし。
+- `quint run`（`fixed`, `--invariant safety`, 20 本の witness, `--max-samples 10000 --max-steps 15 --seed 0x2a`）: 違反 0 件、20 本の witness すべて到達（`wParentSweepWaitsZombieReap`・`wParentCrashAfterDisconnect` を含む）。seed `0x1`・`0x7`・`0xbeef`（2 万標本・20 手）でも違反 0 件。
