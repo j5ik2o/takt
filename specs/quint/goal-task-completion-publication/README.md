@@ -21,7 +21,7 @@ Design: `docs/design/goal-task-completion-publication.md`.
 - **Writers**:
   - `writeSetupFailure`: `Pending` -> `Failed` directly (only when `goal == Active`), sets `hasRunSlug = true`, `hasExecId = true`, and `pendingPub = usesOutbox(DESIGN)`.
   - `writeInterruptedFailure`: `Running` -> `Failed`, ensures `hasRunSlug = true`, sets `pendingPub = usesOutbox(DESIGN)`.
-  - `writeReconcileFailure`: `Running` -> `Failed`, preserves `hasRunSlug` (may be `false` if the worker died before `updateRunningTaskExecution`), and in `Fixed*` ensures `hasExecId = true` when `hasRunSlug == false` (`reconcileLostRun` issues an `execution_id` for exactly that record). Reaching that shape needs `adoptLegacyRunningTask`: a `tasks.yaml` record written before the attempt ids were recorded can still be `Running` with neither id, whereas `startTask` always sets `hasExecId`.
+  - `writeReconcileFailure`: `Running` -> `Failed`, preserves `hasRunSlug` (may be `false` when the worker died before `updateRunningTaskExecution` wrote `run_slug`), and in `Fixed*` ensures `hasExecId = true` when `hasRunSlug == false` (`reconcileLostRun` takes its `resolvedExecutionId` branch for a record whose `execution_id` and `run_slug` are both missing). Reaching a `Running` record with neither id needs `adoptLegacyRunningTask`: it moves a `Pending` task to `Running` with both ids absent, i.e. `startTask(t, false)` with `hasExecId = false`. It does **not** read or adopt an existing `Running` record, and it is enabled only while `goal == Active`. The model flips `hasExecId` to `true` in `writeReconcileFailure` but does not model the issued identifier or a resend that depends on it.
   - Post-write steps: `writerPublishOk` (writes inbox file unless `goal == Aborted`, fails on `Deleted`), `writerPublishFails` (ENOSPC / unreadable `goal.json`), `writerCrash` (process death before publish or before clear), `writerClearOk` (via `TaskStore.update`, which clears stale `DelDead` reservations before clearing `pendingPub`), `writerClearFails`.
 - **Daemon outbox republisher & idle lifecycle** (`FileDaemonWatchSource.hasWork` + `taskCompletions` + `publishPendingGoalTaskCompletions`):
   - `daemonRunning`: starts `true`; all daemon republish, inbox consumption, and deferred delivery actions require `daemonRunning == true`.
@@ -35,7 +35,7 @@ Design: `docs/design/goal-task-completion-publication.md`.
 - **Inbox consumer** (`receiveInboxChange` + `FileEventStore.accept` + `conversationService`):
   - `consumeInbox`: removes one inbox file, computes `eventKeyFor(DESIGN, f)`, inserts into durable `acceptedKeys`. On a new key: increments `wakes[(task, attempt)]` if `goal == Active`, inserts into `deferred` if `goal == Paused`, discards if `goal == Aborted | Deleted`. Duplicates are ignored.
   - `deliverDeferred`: delivers a deferred completion once `goal` resumes to `Active`.
-- **Concurrent lifecycle**: `startTask`, `adoptLegacyRunningTask` (adopts an older `tasks.yaml` record that is `Running` without `run_slug` or `execution_id`), `requeueTask`, `reserveDeletion` / `cancelDeletion` / `deletionOwnerCrash` / `finishDeletion`, `pauseGoal`, `resumeGoal`, `abortGoal` (clears `inbox` and `deferred`), `deleteGoal`.
+- **Concurrent lifecycle**: `startTask`, `adoptLegacyRunningTask` (creates a `Running` attempt with no `run_slug` or `execution_id` from a `Pending` task, `goal == Active` only; despite the name it does not read an existing `Running` record), `requeueTask`, `reserveDeletion` / `cancelDeletion` / `deletionOwnerCrash` / `finishDeletion`, `pauseGoal`, `resumeGoal`, `abortGoal` (clears `inbox` and `deferred`), `deleteGoal`.
 
 | `DESIGN` | Meaning |
 |---|---|
@@ -52,6 +52,7 @@ Design: `docs/design/goal-task-completion-publication.md`.
 - **Attempt-key uniqueness and writer/daemon key agreement**: `RunKey((task, attempt))` and `ExecKey((task, attempt))` key directly on `(task, attempt)`. The model therefore takes as a premise that (a) each attempt generates a unique `run_slug` / `execution_id` and (b) the writer and daemon derive the exact same `eventId` from the same `tasks.yaml` record. In the real implementation, these load-bearing premises are verified by PBT 1 (`eventId` determinism/injectivity) and the writer/daemon integration tests.
 - **Multiple concurrent writers or multiple daemon instances**: the model has one writer state and one daemon state; tasks are independent and `.takt/tasks.yaml.lock` serializes writes, so multi-writer interleavings on different tasks reduce to the modelled transitions.
 - **Goal `completed` status and direct goal deletion from `Active`**: the design settles a pending mark without writing the inbox when `isGoalFinished(goal)` is true (`executionStatus === 'aborted'` or `status === 'completed'`) or `goal.json` is missing. A `completed` goal therefore follows the same path as `Aborted`, and manual deletion directly from `Active` follows the same path as `Deleted` (skip inbox, clear `pendingPub`).
+- **`reconcileLostRun` of a legacy `Running` record under `Paused`/`Aborted`**: the real `reconcileLostRun` does not consult the goal status, but `adoptLegacyRunningTask` is enabled only while the goal is `Active`. The model can reconcile a `Running` attempt that already carries ids under any goal, but cannot create the no-id legacy shape under `Paused`/`Aborted`.
 - **Deletion owner liveness `unknown`**: `DeletionState` has only `DelNone | DelAlive | DelDead`. In the design, `observeProcess` may return `unknown` (no `owner_start_time` and the PID exists). The daemon then neither clears nor counts the mark in `hasWork`, and reports it once. The mark stays in `tasks.yaml` and is retried by the next daemon start. The model does not cover this path; its premise is that an `unknown` owner is not reported as `alive` forever.
 - **Invalid marks and unreadable `tasks.yaml`**: the model only has schema-valid marks (`pendingPubSchemaValid`). In the design, an invalid mark and a whole `tasks.yaml` that cannot be read are reported once (deduplicated until the content changes) and are not counted in `hasWork`.
 - **Simulation file bound (`MAX_FILES = 32`)**: inbox file IDs are bounded at 32; in 25-step traces at most 12 inbox files can be created, so the bound is not hit during checked runs, though unboundedly long traces would stop publishing past 32 files.
@@ -79,9 +80,9 @@ Design: `docs/design/goal-task-completion-publication.md`.
 
 | Name | Meaning |
 |---|---|
-| `drainedDelivery` | Runs with `--init initD --step stepD`. `stepD` runs `step` until it nondeterministically enters a drain phase. In the drain, failures and outside changes stop, and only forward progress actions run (`writerPublishOk`, `writerClearOk`, `daemonReadPending`, `daemonPublishOk`, `daemonClearOk`, `daemonIdleExit`, `consumeAnyInbox`, `deliverAnyDeferred`, `cancelDeletion`, `finishDeletion`, `deletionOwnerCrash`, `resumeGoal`). A stutter step is enabled only while no progress action is enabled (`drainProgressPossible`), so a step that changes nothing never counts as time while a notice could still move; a stuck drain keeps stepping and the bound then exposes it. After `DRAIN_STEPS = 40` drain steps, under an `Active` goal every `Failed` task with `completion` has `wakes >= 1` **and** no `pendingPub`; under `Aborted`/`Deleted` no `pendingPub` remains. A goal still `Paused` at the bound is not evidence of delivery (`resumeGoal` was selectable and may not have been chosen), so the bound makes no claim about `Paused`: it neither requires a wake nor forbids `pendingPub` while `Paused`. |
+| `drainedDelivery` | Runs with `--init initD --step stepD`. `stepD` runs `step` until it nondeterministically enters a drain phase. In the drain, failures and outside changes stop, and only forward progress actions run (`writerPublishOk`, `writerClearOk`, `daemonReadPending`, `daemonPublishOk`, `daemonClearOk`, `daemonIdleExit`, `consumeAnyInbox`, `deliverAnyDeferred`, `cancelDeletion`, `finishDeletion`, `deletionOwnerCrash`, `resumeGoal`). A stutter step is enabled only while no progress action is enabled (`drainProgressPossible`), so a step that changes nothing never counts as time while a notice could still move; a stuck drain keeps stepping and the bound then exposes it. `drainProgressPossible` mirrors each progress action's guard, including `deliverDeferred`'s `goal == Active`. After `DRAIN_STEPS = 40` drain steps, under an `Active` goal every `Failed` task with `completion` has `wakes >= 1` **and** no `pendingPub`; under `Aborted`/`Deleted` no `pendingPub` remains. There is no `goal != Paused` exclusion: while the goal is `Paused`, both implications in `drainSettled` are vacuous (their antecedents require `Active` or `Aborted`/`Deleted`), so the property neither requires a wake nor forbids `pendingPub`. The drain cannot be observed `Paused` at the bound: `drainProgressPossible` includes `goal == Paused` because `resumeGoal` is enabled, so no stutter is allowed and the drain must resume. |
 
-This is a bounded progress check under simulation, not a proof of liveness. Because a stutter does not advance the bound while a progress action is enabled, an unlucky schedule cannot launder a deliverable notice as "time passed"; the remaining risk is the opposite one: 40 steps may be too few for the work a trace still has, and a `Paused` tail at the bound is simply inconclusive. `fixed` showed no such case in the runs below.
+This is a bounded progress check under simulation, not a proof of liveness. Because a stutter does not advance the bound while a progress action is enabled, an unlucky schedule cannot launder a deliverable notice as "time passed"; the remaining risk is the opposite one: 40 steps may be too few for the work a trace still has. `fixed` showed no such case in the runs below.
 
 ## Record
 
@@ -105,13 +106,13 @@ quint run goalTaskCompletionPublication.qnt --main fixedUncheckedClear \
 
 | Invariant | `before` | `fixedNoRepublisher` | `fixedNoHasWork` | `fixedStaleDeletionBlocks` | `fixedNoDedup` | `fixedUncheckedClear` | `fixed` |
 |---|---|---|---|---|---|---|---|
-| `noDuplicateManagerWake` | ok | ok | ok | ok | **violation** (34ms) | ok | ok |
-| `noUnrecoverableLoss` | **violation** (35ms) | ok | ok | ok | ok | **violation** (708ms at 50k/25) | ok |
+| `noDuplicateManagerWake` | ok | ok | ok | ok | **violation** (33ms) | ok | ok |
+| `noUnrecoverableLoss` | **violation** (36ms) | ok | ok | ok | ok | **violation** (702ms at 50k/25) | ok |
 | `pendingPubSchemaValid` | ok | ok | ok | ok | ok | ok | ok |
 | `noPhantomWake` | ok | ok | ok | ok | ok | ok | ok |
 | `noDeferredWhenAbortedOrDeleted` | ok | ok | ok | ok | ok | ok | ok |
 | `noDaemonExitWithWork` | ok | ok | **violation** (35ms) | ok | ok | ok | ok |
-| `quiescentDelivery` | **violation** (32ms) | **violation** (34ms) | **violation** (35ms) | **violation** (31ms) | ok | **violation** (786ms at 50k/25) | ok |
+| `quiescentDelivery` | **violation** (35ms) | **violation** (35ms) | **violation** (34ms) | **violation** (34ms) | ok | **violation** (797ms at 50k/25) | ok |
 
 Note the `fixedNoRepublisher` column: `noUnrecoverableLoss` passes (checking only durable marks misses a missing republisher). `quiescentDelivery` fails, but only because the `usesRepublisher` flag also enters the guard expression that the property reads (see the limit above).
 
@@ -124,23 +125,23 @@ quint run goalTaskCompletionPublication.qnt --main <instance> --init initD --ste
 
 | `before` | `fixedNoRepublisher` | `fixedNoHasWork` | `fixedStaleDeletionBlocks` | `fixedNoDedup` | `fixedUncheckedClear` | `fixed` |
 |---|---|---|---|---|---|---|
-| **violation** (69ms) | **violation** (178ms) | **violation** (215ms) | **violation** (838ms) | ok | ok | ok |
+| **violation** (75ms) | **violation** (180ms) | **violation** (226ms) | **violation** (863ms) | ok | ok | ok |
 
-`fixedNoDedup` and `fixedUncheckedClear` are expected to pass here: duplicate wakes and stale clears are caught by `noDuplicateManagerWake` and `noUnrecoverableLoss`, not by a progress check. Those `ok` cells record what the command and seed above found: they are a sample of that seed, not a proof that no violation exists (another seed or a longer trace may find one). In particular, `fixedUncheckedClear` is still expected to violate `noUnrecoverableLoss`; only its `drainedDelivery` is outside the reach of a progress check.
+`fixedNoDedup` is expected to pass here: duplicate wakes are caught by `noDuplicateManagerWake`, not by a progress check. The `ok` cells record what the command and seed above found: they are a sample, not a proof that no violation exists (another seed or a longer trace may find one). `fixedUncheckedClear` is still expected to violate `noUnrecoverableLoss`, and its `drainedDelivery` is not out of reach: after the stale clear, attempt 2 is `Failed` with `completion` under `Active` with `wakes == 0` and `pendingPub == false`, so `drainSettled`'s `Active` clause is false; once the drain enters, the stutter bound can expose it. The `ok` for that instance at 5,000 samples / seed `0x2a` is only what this sample found.
 
 `fixed` with witnesses and three seeds (`--max-samples 10000 --max-steps 70`):
 
 ```sh
 quint run goalTaskCompletionPublication.qnt --main fixed --init initD --step stepD \
-  --invariant drainedDelivery --witnesses wDrainedWoke wDrainedDaemonOnlyWoke wDrainedSettledExit wDrainedPausedUnresolved \
+  --invariant drainedDelivery --witnesses wDrainedWoke wDrainedDaemonOnlyWoke wDrainedSettledExit \
   --max-samples 10000 --max-steps 70 --seed 0x2a
 ```
 
-- `--seed 0x2a`: `[ok] No violation found (24377ms)`. Witnesses: `wDrainedWoke` 1,202 (12.02%), `wDrainedDaemonOnlyWoke` 191 (1.91%), `wDrainedSettledExit` 15 (0.15%), `wDrainedPausedUnresolved` 0.
-- `--seed 0x1`: `[ok] No violation found (24174ms)`. Witnesses: `wDrainedWoke` 1,208 (12.08%), `wDrainedDaemonOnlyWoke` 189 (1.89%), `wDrainedSettledExit` 15 (0.15%), `wDrainedPausedUnresolved` 0.
-- `--seed 0xbeef`: `[ok] No violation found (23438ms)`. Witnesses: `wDrainedWoke` 1,203 (12.03%), `wDrainedDaemonOnlyWoke` 193 (1.93%), `wDrainedSettledExit` 15 (0.15%), `wDrainedPausedUnresolved` 0.
+- `--seed 0x2a`: `[ok] No violation found (23018ms)`. Witnesses: `wDrainedWoke` 1,202 (12.02%), `wDrainedDaemonOnlyWoke` 191 (1.91%), `wDrainedSettledExit` 15 (0.15%).
+- `--seed 0x1`: `[ok] No violation found (23062ms)`. Witnesses: `wDrainedWoke` 1,208 (12.08%), `wDrainedDaemonOnlyWoke` 189 (1.89%), `wDrainedSettledExit` 15 (0.15%).
+- `--seed 0xbeef`: `[ok] No violation found (23066ms)`. Witnesses: `wDrainedWoke` 1,203 (12.03%), `wDrainedDaemonOnlyWoke` 193 (1.93%), `wDrainedSettledExit` 15 (0.15%).
 
-`wDrainedPausedUnresolved` documents the `Paused` distinction: a goal still `Paused` after the bound is observed, not counted as delivery, and not a violation. It was not reached at this bound on these seeds, because once the other progress actions are exhausted `resumeGoal` is the only one left and the drain takes it.
+There is no Paused-tail witness. With the stutter gated on `drainProgressPossible`, `goal == Paused` is itself a progress condition (`resumeGoal` is enabled), so a Paused goal cannot remain until the bound; the drain must resume. `drainedDelivery` still makes no claim about `Paused`, but because `drainSettled` is vacuous there, not because of a `goal != Paused` exclusion.
 
 ### Action ablations (P1–P3)
 
@@ -148,9 +149,9 @@ These probes remove the work of one action and leave the `DESIGN` flags and guar
 
 | Probe | Edit | `safety` (10k/20) | `quiescentDelivery` (10k/20) | `drainedDelivery` (5k/70) |
 |---|---|---|---|---|
-| P1 | `daemonReadPending` keeps its guard but never advances (`daemon' = daemon`; `republisherAccepts` unchanged) | ok | ok | **violation** (193ms) |
-| P2 | `daemonPublishOk` always takes the skip-inbox branch, then the mark is cleared | **violation** (182ms) | **violation** (157ms) | **violation** (258ms) |
-| P3 | `daemonClearOk` keeps the mark (`tasks' = tasks`) | ok | ok | **violation** (212ms) |
+| P1 | `daemonReadPending` keeps its guard but never advances (`daemon' = daemon`; `republisherAccepts` unchanged) | ok | ok | **violation** (179ms) |
+| P2 | `daemonPublishOk` always takes the skip-inbox branch, then the mark is cleared | **violation** (182ms) | **violation** (143ms) | **violation** (247ms) |
+| P3 | `daemonClearOk` keeps the mark (`tasks' = tasks`) | ok | ok | **violation** (208ms) |
 
 ```sh
 sh actionAblations.sh [work-dir]
@@ -164,7 +165,7 @@ quint run goalTaskCompletionPublication.qnt --main fixed --invariant safety \
   --max-samples 10000 --max-steps 20 --seed 0x2a
 ```
 
-Result: `[ok] No violation found (6061ms at 1650 traces/second)`. All 13 witnesses reached:
+Result: `[ok] No violation found (6017ms at 1662 traces/second)`. All 13 witnesses reached:
 
 | Witness | Reached traces (out of 10,000) |
 |---|---|
@@ -182,13 +183,13 @@ Result: `[ok] No violation found (6061ms at 1650 traces/second)`. All 13 witness
 | `wStaleDeletionRecovered` | 346 (3.46%) |
 | `wDaemonIdleExitedAfterSettle` | 627 (6.27%) |
 
-`wDaemonRepublished` requires both `daemonRepublished.contains(p)` and `wakes.get(p) == 1` for the same attempt `p`; being the last action (`daemonClearOk`) or waking a different attempt is not enough. `wReconcileWithoutRunSlugWoke` also covers the adoption path (`adoptLegacyRunningTask` then `writeReconcileFailure`), where the issued `execution_id` is what makes the resend possible.
+`wDaemonRepublished` requires both `daemonRepublished.contains(p)` and `wakes.get(p) == 1` for the same attempt `p`; being the last action (`daemonClearOk`) or waking a different attempt is not enough, and that part is intentional. The 138 traces do not show that the daemon's republication caused the wake: a same-attempt wake can also come from consuming the writer's inbox file, or from deferred delivery after a resume. `wDaemonSoleRepublishWoke` is the causal witness: it excludes a writer publish for that attempt (`not(writerPublished.contains(p))`) while requiring `daemonRepublished.contains(p)` and `wakes.get(p) == 1`; its 14 traces are the coverage for that claim. `wReconcileWithoutRunSlugWoke` only requires a `Failed` record with no `run_slug` whose attempt woke once; it can be reached with `startTask(t, false)` and does not require `adoptLegacyRunningTask` (the scenario tests do not use adopt), nor does it show that the issued `execution_id` enabled a resend.
 
 Multi-seed stress test on `fixed` (`--invariant safety --max-samples 20000 --max-steps 25`):
 
-- `--seed 0x2a`: `[ok] No violation found (11110ms)`
-- `--seed 0x1`: `[ok] No violation found (10944ms)`
-- `--seed 0xbeef`: `[ok] No violation found (11076ms)`
+- `--seed 0x2a`: `[ok] No violation found (11200ms)`
+- `--seed 0x1`: `[ok] No violation found (11183ms)`
+- `--seed 0xbeef`: `[ok] No violation found (10936ms)`
 
 ### Scenario tests
 

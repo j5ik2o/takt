@@ -260,10 +260,14 @@ module goalTaskCompletionPublication {
     }
   }
 
-  // A tasks.yaml record written by an older version can still be Running with neither run_slug nor
-  // execution_id: the process died before updateRunningTaskExecution recorded the attempt identifiers
-  // (or the record predates them). Adopting it as a Running attempt makes the execution_id issuance in
-  // writeReconcileFailure reachable; without it every Running would carry an id from startTask.
+  // A synthetic Running attempt with neither run_slug nor execution_id: this is how the model reaches
+  // the shape of a tasks.yaml record whose process died before updateRunningTaskExecution wrote
+  // run_slug (claim already writes execution_id, and updateRunningTaskExecution only writes run_slug).
+  // It moves a Pending task to Running, exactly like startTask(t, false) except hasExecId stays false;
+  // it does not read or adopt an existing Running record, and it is enabled only while goal == Active,
+  // so it cannot represent reconcileLostRun of such a legacy record under Paused/Aborted. With this
+  // shape, writeReconcileFailure flips hasExecId to true (the resolvedExecutionId branch), but the
+  // model does not model the identifier value or a resend effect beyond that flag.
   action adoptLegacyRunningTask(t: TaskId): bool = {
     val rec = tasks.get(t)
     val nextAttempt = rec.attempt + 1
@@ -844,7 +848,9 @@ module goalTaskCompletionPublication {
 
   // True exactly when one of the drain's progress actions is enabled in the current state. The
   // stutter step is gated on not(this) so a drain step that changes nothing never counts as time
-  // while a notice could still be published, cleared, consumed, deferred, or resumed.
+  // while a notice could still be published, cleared, consumed, deferred, or resumed. The deferred
+  // clause carries deliverDeferred's goal == Active guard as well as daemonRunning and non-empty
+  // deferred.
   val drainProgressPossible: bool = or {
     writer.phase == WriterSaved and goal != Deleted and nextFileId <= MAX_FILES,
     usesOutbox(DESIGN) and writer.phase == WriterPublished,
@@ -853,7 +859,7 @@ module goalTaskCompletionPublication {
     daemonRunning and usesRepublisher(DESIGN) and daemon.phase == DaemonPublished,
     daemonRunning and daemon.phase == DaemonIdle and not(daemonHasWork(DESIGN, goal, tasks, inbox)),
     daemonRunning and inbox.size() > 0,
-    daemonRunning and deferred.size() > 0,
+    daemonRunning and goal == Active and deferred.size() > 0,
     TASKS.exists(t => tasks.get(t).deletion == DelAlive),
     goal == Paused,
   }
@@ -879,22 +885,24 @@ module goalTaskCompletionPublication {
 
   // 8. Drained delivery: DRAIN_STEPS drain steps after the drain began, every failed goal task with
   //    completion under an Active goal has woken the manager and no longer carries pendingPub, and no
-  //    pendingPub mark remains under an Aborted or Deleted goal. A goal that is still Paused at the
-  //    bound is not evidence of delivery: resumeGoal was selectable and may simply not have been
-  //    chosen, so the bound makes no claim about Paused (it neither requires a wake nor forbids a
-  //    pendingPub mark while Paused).
+  //    pendingPub mark remains under an Aborted or Deleted goal. There is no explicit Paused
+  //    exclusion: both implications in drainSettled are vacuous while the goal is Paused (their
+  //    antecedents require Active or Aborted/Deleted), so the bound neither requires a wake nor
+  //    forbids a pendingPub mark there. The drain itself cannot be observed at the bound with the goal
+  //    Paused: drainProgressPossible counts goal == Paused (resumeGoal is enabled), so no stutter is
+  //    allowed and the drain must take resumeGoal before the bound.
   val drainedDelivery: bool =
-    (drain and dsteps >= DRAIN_STEPS and goal != Paused) implies drainSettled
+    (drain and dsteps >= DRAIN_STEPS) implies drainSettled
 
   // Drain witnesses: the drain reached DRAIN_STEPS after a delivery, after a daemon-only delivery,
-  // after an Aborted/Deleted settlement with the daemon idle-exited, and after a Paused tail (which
-  // is observed but is not treated as delivery).
+  // and after an Aborted/Deleted settlement with the daemon idle-exited. There is no Paused-tail
+  // witness: with stutter gated on drainProgressPossible, goal == Paused is itself a progress
+  // condition (resumeGoal), so a Paused goal cannot remain at the bound.
   val wDrainedWoke: bool = drain and dsteps >= DRAIN_STEPS and ATTEMPT_KEYS.exists(p => wakes.get(p) == 1)
   val wDrainedDaemonOnlyWoke: bool = drain and dsteps >= DRAIN_STEPS
     and ATTEMPT_KEYS.exists(p => wakes.get(p) == 1 and daemonRepublished.contains(p) and not(writerPublished.contains(p)))
   val wDrainedSettledExit: bool = drain and dsteps >= DRAIN_STEPS and not(daemonRunning)
     and (goal == Aborted or goal == Deleted) and failedAttempts != Set()
-  val wDrainedPausedUnresolved: bool = drain and dsteps >= DRAIN_STEPS and goal == Paused
 
   // ---------- properties ----------
 
@@ -995,8 +1003,14 @@ module goalTaskCompletionPublication {
   val wSetupFailWoke: bool = ATTEMPT_KEYS.exists(p => attemptKind.get(p) == "setup" and wakes.get(p) == 1)
   val wInterruptedFailWoke: bool = ATTEMPT_KEYS.exists(p => attemptKind.get(p) == "interrupted" and wakes.get(p) == 1)
   val wReconcileFailWoke: bool = ATTEMPT_KEYS.exists(p => attemptKind.get(p) == "reconcile" and wakes.get(p) == 1)
+  // Reached by any Failed record with no run_slug that woke its attempt, e.g. startTask(t, false) then
+  // writeReconcileFailure. It does not require adoptLegacyRunningTask (the scenario tests do not use
+  // adopt) and says nothing about the execution_id issuance or about a resend using it.
   val wReconcileWithoutRunSlugWoke: bool = TASKS.exists(t =>
     tasks.get(t).status == Failed and not(tasks.get(t).hasRunSlug) and wakes.get((t, tasks.get(t).attempt)) == 1)
+  // Coexistence, not causation: some attempt was republished by the daemon and woke once, but the
+  // same-attempt wake may come from consuming the writer's inbox file or from deferred delivery.
+  // wDaemonSoleRepublishWoke is the causal witness (it excludes a writer publish for that attempt).
   val wDaemonRepublished: bool = ATTEMPT_KEYS.exists(p => daemonRepublished.contains(p) and wakes.get(p) == 1)
   val wDaemonSoleRepublishWoke: bool =
     TASKS.exists(t => {

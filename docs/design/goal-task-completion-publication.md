@@ -146,7 +146,7 @@ daemon 本体（`src/features/daemon/`・`src/infra/daemon/`）は `daemon-reach
 
 | 指摘 | 重要度 | 扱い | 反映内容（節・ファイル） |
 |---|---|---|---|
-| `quiescentDelivery` が出し直しの動作そのものを見ていない。`taskRecoveryEnabled` が動作の条件の式を書き写しており、`daemonReadPending` の条件に `false` を足す（P1）、`daemonClearOk` が印を外さない（P3）のどちらも `safety` を通る | 中 1 | **直す** | Quint に出し切りの段（`drain`・`dsteps`・`initD`・`stepD`・`progress`）と不変条件 `drainedDelivery`、witness 3 本を足した。P1・P2・P3 を、旗でなく動作を外す負対照として `actionAblations.sh` と README に載せ、`safety` は P1・P3 を通すが `drainedDelivery` は 3 つとも反例を出すことを確かめた。`quiescentDelivery` が「届かないことを捕まえる」とした言い過ぎを、本設計「守る不変条件」「Quint の仕様と検査結果」、README、`.qnt` の注釈で直した。 |
+| `quiescentDelivery` が出し直しの動作そのものを見ていない。`taskRecoveryEnabled` が動作の条件の式を書き写しており、`daemonReadPending` が guard を残したまま進まない（P1）、`daemonClearOk` が印を外さない（P3）のどちらも `safety` を通る | 中 1 | **直す** | Quint に出し切りの段（`drain`・`dsteps`・`initD`・`stepD`・`progress`）と不変条件 `drainedDelivery`、witness 3 本（`wDrainedWoke`・`wDrainedDaemonOnlyWoke`・`wDrainedSettledExit`）を足した。P1・P2・P3 を、旗でなく動作を外す負対照として `actionAblations.sh` と README に載せ、`safety` は P1・P3 を通すが `drainedDelivery` は 3 つとも反例を出すことを確かめた。`quiescentDelivery` が「届かないことを捕まえる」とした言い過ぎを、本設計「守る不変条件」「Quint の仕様と検査結果」、README、`.qnt` の注釈で直した。 |
 | 回帰テスト 5 と PBT 2 の「未知の列つき `completion` でも `TaskRecordSchema` が全体を読み込める」は、`GoalTaskResultSchema` が `.strict()` なので今のコードでは成り立たない | 低 1 | **直す** | `GoalTaskResultSchema` は緩めない。1 節と 4 節に「未知の列つき `completion` の印は報告されるだけで届かずに残る。`TaskStore` は従来どおりファイル全体を拒む」と書き、PBT 2 と回帰テスト 5 の対象を `readWatchTasks` と `readPendingGoalTaskCompletions` に絞った。 |
 | ゴールが `completed` のときの扱いが README（受信箱を飛ばす）と設計（受信箱へ書く）で食い違う | 低 2 | **直す** | `isGoalFinished(goal)` が真（`aborted` または `completed`）か `ENOENT` なら、受信箱へ書かずに印だけ外すと決めた（4 節）。README の `Not modelled` と `daemonPublishOk` の説明もこれに揃えた。回帰テスト 6 に `completed` を足した。 |
 | `idle()` は `taskCompletions` の途中かを見ず、`hasWork` が「ゴール → 受信箱 → タスク」の順だと、印の確認を後ろに足したとき受信箱にファイルを残したまま終わり得る | 低 3 | **直す** | `hasWork` の読む順を「ゴール → 印 → 受信箱 → タスク」と決め、再送が「受信箱へ書く → 印を外す」の順であることと合わせて、モデルの `daemonIdleExit` の guard との対応を 4 節と README に書いた。`idle()` に条件を足す案は採らない。 |
@@ -169,7 +169,7 @@ Quint 仕様（`specs/quint/goal-task-completion-publication/goalTaskCompletionP
 
 `safety` とは別の入口（`--init initD --step stepD`）で、次も確かめる。
 
-8. **`drainedDelivery`**（限られた手数での到達）: 通常の `step` の途中で出し切りの段に入ると、失敗の動作（送信・印の解除の失敗、クラッシュ）と外からの変化（新しいタスク、再キュー、一時停止、中止、削除、新しい削除予約）が止まり、前に進む動作（書き手の送信と解除、daemon の読み取り・送信・解除・アイドル終了、受信箱の受け付け、`deferred` の配信、削除予約の取消・完了・持ち主の死亡、ゴールの再開）だけが動く（各手で足踏みもあり得る）。出し切りの段に入って 40 手の後に、`Active` のゴールの `Failed`・`completion` ありのタスクは必ず `wakes >= 1`、`Aborted` / `Deleted` のゴールには `pendingPub` が残っていない。動作の条件ではなく動作の結果を見るので、P1・P3 のように条件を残して動作だけ止めた形でも反例が出る。シミュレーションでの有限の検査であり、活性の証明ではない。
+8. **`drainedDelivery`**（限られた手数での到達）: 通常の `step` の途中で出し切りの段に入ると、失敗の動作（送信・印の解除の失敗、クラッシュ）と外からの変化（新しいタスク、旧 `Running` の生成、再キュー、一時停止、中止、削除、新しい削除予約）が止まり、前に進む動作（書き手の送信と解除、daemon の読み取り・送信・解除・アイドル終了、受信箱の受け付け、`deferred` の配信、削除予約の取消・完了・持ち主の死亡、ゴールの再開）だけが動く。足踏みは、前に進む動作が 1 つも有効でないときだけ許す（`drainProgressPossible`）。`drainProgressPossible` は各動作の条件を写し、`deliverAnyDeferred` については `daemonRunning`・`goal == Active`・`deferred` 非空を写す。出し切りの段に入って 40 手の後に、`Active` のゴールの `Failed`・`completion` ありのタスクは必ず `wakes >= 1` かつ `pendingPub` が残っておらず、`Aborted` / `Deleted` のゴールには `pendingPub` が残っていない。`Paused` では `drainSettled` の 2 つの含意の前件が偽で空虚に真になるので、この性質は `Paused` について何も要求しない。`goal != Paused` の除外は置かない。`drainProgressPossible` が `goal == Paused` を数える（`resumeGoal` が有効）ため、出し切りの段が 40 手に達したときに `Paused` のまま残ることはなく、`resumeGoal` が選ばれる。動作の条件ではなく動作の結果を見るので、P1・P3 のように条件を残して動作だけ止めた形でも反例が出る。シミュレーションでの有限の検査であり、活性の証明ではない。
 
 実装側ではさらに次を守る。
 
@@ -212,12 +212,12 @@ Quint 仕様（`specs/quint/goal-task-completion-publication/goalTaskCompletionP
 - `fixedNoHasWork`: `hasWork` から `pendingPub` だけ外した版（ゴール終了後に未処理の印を残したままアイドル終了し、`noDaemonExitWithWork` と `quiescentDelivery` で違反）。
 - `fixedStaleDeletionBlocks`: 死んだ持ち主の `deletion` 予約を回収せず一律スキップする版（低 5。`quiescentDelivery` で違反）。
 - `fixedNoDedup`: `inbox.ts` の決定的な重複排除だけ省いた版（`noDuplicateManagerWake` で違反）。
-- `fixedUncheckedClear`: 印解除の試行識別子照合だけ省いた版（`noUnrecoverableLoss` と `quiescentDelivery` で違反）。
+- `fixedUncheckedClear`: 印解除の試行識別子照合だけ省いた版（`noUnrecoverableLoss` と `quiescentDelivery` で違反。`drainedDelivery` はサンプルでは `ok` だが、stale clear の後の状態は `drainSettled` の `Active` 節を偽にするので違反し得る）。
 - `fixed`: 本設計の全体。
 
 これとは別に、旗でなく動作を外す負対照 P1〜P3 を `actionAblations.sh` で作る（モデルの写しの 1 行を書き換え、`fixed` で流す）。
 
-- P1: `daemonReadPending` の条件に `false` を足す（`republisherAccepts` はそのまま）。
+- P1: `daemonReadPending` の guard を残したまま `daemon' = daemon` にして進めない（`republisherAccepts` はそのまま）。
 - P2: `daemonPublishOk` が受信箱へ書かずに常に飛ばす枝を通り、その後に印が外れる。
 - P3: `daemonClearOk` が印を外さない（`tasks' = tasks`）。
 
@@ -225,15 +225,21 @@ Quint 仕様（`specs/quint/goal-task-completion-publication/goalTaskCompletionP
 |---|---|
 | `quint typecheck`（本体・テスト） | どちらも成功 |
 | `quint test`（7 モジュール計 22 件） | `beforeTest` 4 件、`fixedNoRepublisherTest` 2 件、`fixedNoHasWorkTest` 1 件、`fixedStaleDeletionBlocksTest` 1 件、`fixedNoDedupTest` 1 件、`fixedUncheckedClearTest` 1 件、`fixedTest` 12 件、すべて通過 |
-| `quint run`（7 不変条件 × 7 版、3,000 標本・16 ステップ、seed `0x2a`） | `before` は `noUnrecoverableLoss`（33 ms）・`quiescentDelivery`（32 ms）で違反。`fixedNoRepublisher` は `noUnrecoverableLoss` を通過しつつ `quiescentDelivery`（34 ms）で違反（旗が `republisherAccepts` に入っているため）。`fixedNoHasWork` は `noDaemonExitWithWork`（38 ms）・`quiescentDelivery`（39 ms）で違反。`fixedStaleDeletionBlocks` は `quiescentDelivery`（36 ms）で違反。`fixedNoDedup` は `noDuplicateManagerWake`（93 ms）で違反。`fixed` は 7 本すべて違反なし |
-| `quint run`（`fixedUncheckedClear`, 50,000 標本・25 ステップ、seed `0x2a`） | `noUnrecoverableLoss`（4,192 ms）・`quiescentDelivery`（4,634 ms）の両方で違反を検出 |
-| `quint run --main fixed --invariant safety`（10,000 標本・20 ステップ、seed `0x2a`、witness 13 本） | 違反 0 件（5,793 ms）。全 13 本の witness が到達（`wDaemonSoleRepublishWoke` 13 本、`wSecondAttemptWoke` 25 本、`wReconcileWithoutRunSlugWoke` 29 本、`wDeferredDelivered` 45 本、`wDaemonRepublished` 84 本、`wStaleDeletionRecovered` 307 本、`wDaemonIdleExitedAfterSettle` 437 本など） |
-| `quint run --main fixed --invariant safety`（20,000 標本・25 ステップ × 3 seed: `0x2a`・`0x1`・`0xbeef`） | 計 60,000 標本すべて違反 0 件（10,500 ms・11,210 ms・10,532 ms） |
-| `quint run --init initD --step stepD --invariant drainedDelivery`（7 版、5,000 標本・70 ステップ、seed `0x2a`） | `before`（69 ms）・`fixedNoRepublisher`（96 ms）・`fixedNoHasWork`（1,343 ms）・`fixedStaleDeletionBlocks`（254 ms）で違反。`fixedNoDedup`・`fixedUncheckedClear`・`fixed` は違反なし（重複起動と古い解除は進み方の性質ではなく 1・2 番で捕まえる） |
-| `quint run --main fixed --init initD --step stepD --invariant drainedDelivery`（10,000 標本・70 ステップ × 3 seed、witness 3 本） | 計 30,000 標本すべて違反 0 件（19,661 ms・18,618 ms・18,759 ms）。seed `0x2a` で `wDrainedWoke` 1,353 本、`wDrainedDaemonOnlyWoke` 190 本、`wDrainedSettledExit` 10 本が到達 |
-| `actionAblations.sh`（P1〜P3 を `fixed` で、`safety`・`quiescentDelivery` は 10,000 標本・20 ステップ、`drainedDelivery` は 5,000 標本・70 ステップ） | P1・P3 は `safety` と `quiescentDelivery` を通り、`drainedDelivery` で違反（95 ms・244 ms）。P2 は 3 つすべてで違反（132 ms・121 ms・55 ms） |
+| `quint run`（7 不変条件 × 7 版、3,000 標本・16 ステップ、seed `0x2a`） | `before` は `noUnrecoverableLoss`・`quiescentDelivery` で違反。`fixedNoRepublisher` は `noUnrecoverableLoss` を通過しつつ `quiescentDelivery` で違反（旗が `republisherAccepts` に入っているため）。`fixedNoHasWork` は `noDaemonExitWithWork`・`quiescentDelivery` で違反。`fixedStaleDeletionBlocks` は `quiescentDelivery` で違反。`fixedNoDedup` は `noDuplicateManagerWake` で違反。`fixedUncheckedClear` はこの標本では 7 本すべて通過。`fixed` は 7 本すべて違反なし |
+| `quint run`（`fixedUncheckedClear`, 50,000 標本・25 ステップ、seed `0x2a`） | `noUnrecoverableLoss`・`quiescentDelivery` の両方で違反を検出 |
+| `quint run --main fixed --invariant safety`（10,000 標本・20 ステップ、seed `0x2a`、witness 13 本） | 違反 0 件。全 13 本の witness が到達（`wDaemonSoleRepublishWoke` 14 本、`wSecondAttemptWoke` 20 本、`wReconcileWithoutRunSlugWoke` 76 本、`wDeferredDelivered` 59 本、`wDaemonRepublished` 138 本、`wStaleDeletionRecovered` 346 本、`wDaemonIdleExitedAfterSettle` 627 本など） |
+| `quint run --main fixed --invariant safety`（20,000 標本・25 ステップ × 3 seed: `0x2a`・`0x1`・`0xbeef`） | 計 60,000 標本すべて違反 0 件 |
+| `quint run --init initD --step stepD --invariant drainedDelivery`（7 版、5,000 標本・70 ステップ、seed `0x2a`） | `before`・`fixedNoRepublisher`・`fixedNoHasWork`・`fixedStaleDeletionBlocks` で違反。`fixedNoDedup`・`fixedUncheckedClear`・`fixed` はこの標本では違反なし。`fixedUncheckedClear` の `ok` はサンプルであって到達不能の証明ではない（下記） |
+| `quint run --main fixed --init initD --step stepD --invariant drainedDelivery`（10,000 標本・70 ステップ × 3 seed、witness 3 本） | 計 30,000 標本すべて違反 0 件。seed `0x2a` で `wDrainedWoke` 1,202 本、`wDrainedDaemonOnlyWoke` 191 本、`wDrainedSettledExit` 15 本が到達 |
+| `actionAblations.sh`（P1〜P3 を `fixed` で、`safety`・`quiescentDelivery` は 10,000 標本・20 ステップ、`drainedDelivery` は 5,000 標本・70 ステップ） | P1・P3 は `safety` と `quiescentDelivery` を通り、`drainedDelivery` で違反。P2 は 3 つすべてで違反 |
 
-なお、モデルの前提とモデル外とした要素（`RunKey`/`ExecKey` が試行番号をそのまま鍵にしているため実物の一意性・書き手と daemon の一致は PBT 1 で担保すること、単一書き手・単一 daemon、ゴールの `completed`（`Aborted` と同じ枝）、`Active` から直接の削除、`deletion` の生死 `unknown`、不正な印とファイル全体の読み取り失敗、`MAX_FILES = 32` 上限など）は `specs/quint/goal-task-completion-publication/README.md` の `Not modelled` に明記している。
+`fixedUncheckedClear` の `drainedDelivery` が 5,000 標本・seed `0x2a` で `ok` なのは、そのサンプルが stale clear の後に 40 手の排出へ至らなかったという意味にすぎない。stale clear の後、試行 2 は `Active` の下で `Failed`・`completion` あり・`wakes == 0`・`pendingPub == false` になり、`drainSettled` の `Active` 節が偽になる。排出に入れば足踏みの上限で違反し得る。この版の `noUnrecoverableLoss` の違反期待は変えない。
+
+`wDaemonRepublished` は同じ試行 `p` で `daemonRepublished.contains(p)` と `wakes.get(p) == 1` を要求する。別の試行の wake では満たせない点は意図どおりである。ただし同じ試行でも、書き手の受信箱ファイルの消費や `deferred` の配信で wake し得るので、138 本は daemon の再送が wake の原因だったことを示さない。原因を示すのは、その試行で書き手が送信していないことを条件に加えた `wDaemonSoleRepublishWoke`（14 本）である。`wReconcileWithoutRunSlugWoke` は `Failed`・`run_slug` なし・`wakes == 1` だけを要求し、`startTask(t, false)` で満たせる。`adoptLegacyRunningTask` を要求せず、シナリオテストも adopt を使っていないので、発行された `execution_id` が再送を可能にしたことは示さない。
+
+`adoptLegacyRunningTask` は `Pending` から `Running` を作るだけで、既存の `Running` を読まない。`startTask(t, false)` とほぼ同じで、違うのは `hasExecId = false` だけである。`goal == Active` 限定なので、ゴールを見ない `reconcileLostRun` の `Paused` 側の旧 `Running` は表せない。モデルが観測するのは `writeReconcileFailure` で `hasExecId` が真になる形までで、発行された識別子の値やそれによる再送の効果はモデルに無い。
+
+なお、モデルの前提とモデル外とした要素（`RunKey`/`ExecKey` が試行番号をそのまま鍵にしているため実物の一意性・書き手と daemon の一致は PBT 1 で担保すること、単一書き手・単一 daemon、ゴールの `completed`（`Aborted` と同じ枝）、`Active` から直接の削除、`deletion` の生死 `unknown`、不正な印とファイル全体の読み取り失敗、`Paused`/`Aborted` の下での旧 `Running` の `reconcileLostRun`、`MAX_FILES = 32` 上限など）は `specs/quint/goal-task-completion-publication/README.md` の `Not modelled` に明記している。
 
 ## 壊しうる入力・状況の一覧
 
