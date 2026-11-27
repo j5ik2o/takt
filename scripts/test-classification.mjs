@@ -367,6 +367,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/statusLine.test.ts',
   'src/__tests__/system-pr-status.test.ts',
   'src/__tests__/task-delete-task.test.ts',
+  'src/__tests__/task-finish-hook-notice.test.ts',
   'src/__tests__/taskResultHandler.test.ts',
   'src/__tests__/taskSpecContext.test.ts',
   'src/__tests__/team-leader-schema-loader.test.ts',

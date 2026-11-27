@@ -810,6 +810,8 @@
     "src/__tests__/takt-branch-name.test.ts",
     "src/__tests__/takt-runner-async.test.ts",
     "src/__tests__/task-directory-reference.test.ts",
+    "src/__tests__/task-finish-hook-notice.pbt.test.ts",
+    "src/__tests__/task-finish-hook-notice.test.ts",
     "src/__tests__/task-owner-process-identity.test.ts",
     "src/__tests__/task-pr-execution-context.test.ts",
     "src/__tests__/task-prefix-writer.test.ts",
