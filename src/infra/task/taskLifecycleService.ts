@@ -473,6 +473,7 @@ export class TaskLifecycleService {
       status: 'failed', completed_at: nowIso(), owner_pid: null,
       failure: { error: reason },
       run_slug: `setup-${randomUUID()}`,
+      completion_publication_pending: true,
       completion: {
         success: false, interrupted: false, workflowResult: 'error',
         branch: task.branch, failureReason: reason,
@@ -557,6 +558,7 @@ export class TaskLifecycleService {
           },
           ...(task.goal_id === undefined ? {} : {
             run_slug: task.run_slug ?? `setup-${randomUUID()}`,
+            completion_publication_pending: true as const,
             completion: {
               success: false, interrupted: true, workflowResult: 'error',
               branch: task.branch, failureReason: reason,
@@ -573,8 +575,46 @@ export class TaskLifecycleService {
       if (!written) throw error;
       this.warnLockReleaseAfterWrite(error);
     }
-    for (const task of recovered) onRecovered?.(toTaskState(this.tasksFile, task));
+    for (const task of recovered) {
+      try {
+        onRecovered?.(toTaskState(this.tasksFile, task));
+      } catch (error) {
+        this.onWarning?.(sanitizeSensitiveText(`Recovered task ${task.name} was saved as failed, but reporting it failed: ${getErrorMessage(error)}`));
+      }
+    }
     return recovered.length;
+  }
+
+  /**
+   * Clears the completion publication mark of exactly one attempt (#170). The record is only
+   * rewritten when every identity field still matches, so a late clear never removes the mark
+   * of a requeued attempt. Returns the updated record, or undefined when nothing matched.
+   */
+  clearCompletionPublicationPending(
+    taskName: string,
+    identity: { goalId?: string; status: TaskRecord['status']; runSlug?: string; executionId?: string },
+  ): TaskRecord | undefined {
+    let cleared: TaskRecord | undefined;
+    this.store.update((current) => {
+      let changed = false;
+      const tasks = current.tasks.map((task) => {
+        if (task.name === taskName
+          && task.goal_id === identity.goalId
+          && task.status === identity.status
+          && task.run_slug === identity.runSlug
+          && task.execution_id === identity.executionId
+          && task.completion_publication_pending === true
+          && task.deletion === undefined) {
+          changed = true;
+          const clearedRecord: TaskRecord = { ...task, completion_publication_pending: undefined };
+          cleared = clearedRecord;
+          return clearedRecord;
+        }
+        return task;
+      });
+      return changed ? { tasks } : undefined;
+    });
+    return cleared;
   }
 
   private readTerminalRetryMetadata(task: TaskRecord): ResolvedTaskRetryMetadata {

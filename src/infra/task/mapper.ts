@@ -211,6 +211,7 @@ export function toTaskState(tasksFile: string, task: TaskRecord): TaskState {
     ...(task.goal_purpose === undefined ? {} : { goalPurpose: task.goal_purpose }),
     ...(task.goal_work_key === undefined ? {} : { goalWorkKey: task.goal_work_key }),
     ...(task.completion === undefined ? {} : { completion: task.completion }),
+    ...(task.completion_publication_pending === undefined ? {} : { completionPublicationPending: task.completion_publication_pending }),
     kind: task.status,
     status: task.status,
     name: task.name,
