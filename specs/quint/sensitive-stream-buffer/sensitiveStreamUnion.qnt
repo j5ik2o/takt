@@ -23,7 +23,7 @@
 //      previous range path hid in the same unit. No reading hides it on its own.
 // A key opens a value; a newline before the first value character does not close it, one after does.
 //
-// `mutation` selects a deliberately broken outer stream (design 7.2, seven mutations); "none" is the
+// `mutation` selects a deliberately broken outer stream (design 7.2, eight mutations); "none" is the
 // design. The simulator writes 1–3 random symbols, or one of `CHUNKS` (the cuts that matter).
 module sensitiveStreamUnion {
   type Sym = P | KB | KL | KN | V | N | G | C
@@ -31,6 +31,7 @@ module sensitiveStreamUnion {
   const CAP: int          // MAX_PENDING_SENSITIVE_LINE_LENGTH, scaled down
   const mutation: str     // "none" | "cutAtWriteEnd" | "rereadJoined" | "noNewGuard" | "newGuardOnly"
                           // | "dropHeldHidden" | "dropDisplayTrace" | "dropEarlierExtra"
+                          // | "capCutAtHeldEnd"
   val ALPHABET = Set(P, KB, KL, KN, V, N, G, C)
   /// Writes the simulator prefers: the pieces of the shapes in design 7.2 and 8 (a key cut from its
   /// value, a line only the new reading keeps open, a G before a later unit's KL, a C after a value).

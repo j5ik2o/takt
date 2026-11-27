@@ -1,5 +1,5 @@
 // -*- mode: Bluespec; -*-
-// Instances of the second PR's stream model (design 7.2): the design (`unionStream`), and the seven
+// Instances of the second PR's stream model (design 7.2): the design (`unionStream`), and the eight
 // deliberately broken streams. Each broken stream has a witness test that ends in a state breaking
 // the invariant it must break; `quint run --invariant <name>` finds the same by simulation.
 module unionStream {
