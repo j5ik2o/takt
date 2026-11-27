@@ -33,6 +33,8 @@ export interface StreamObservation {
    * line cap and prefix alignment are not redaction (design 3, 12th edition).
    */
   readonly streamed?: readonly string[];
+  /** `views[t]`: what that stream had committed by time `t` and its preview at `t` (design 3, time-wise sums). */
+  readonly views?: readonly string[];
 }
 
 /**
@@ -42,29 +44,45 @@ export interface StreamObservation {
  * time `t`. The display stops writing to its stream once its line cap is reached, so what the display
  * itself took from the stream is not the reference.
  */
-function streamedForDisplay(run: ToolRun, create: SensitiveTextStreamRedactorFactory, flushAtEnd: boolean): string[] {
+export function streamedForDisplay(
+  run: ToolRun,
+  create: SensitiveTextStreamRedactorFactory,
+  mode: 'compact' | 'expanded',
+): { streamed: string[]; views: string[] } {
   const redactor = create();
   const source = toolResultSensitiveValues(run.input);
   const outputs: string[] = [];
   const streamed: string[] = [];
+  const views: string[] = [];
+  let committed = '';
   let output = '';
   let consumed = 0;
   run.chunks.forEach((chunk, index) => {
     output += chunk;
     const result = classifyToolResult(output);
+    let preview = '';
     if (result.kind === 'text') {
       const text = normalizeToolResultText(result.text);
-      outputs.push(redactor.write(text.slice(consumed), source));
+      const written = redactor.write(text.slice(consumed), source);
+      outputs.push(written);
+      committed += written;
       consumed = text.length;
-      if (run.previews[index] === true) outputs.push(redactor.preview(source));
+      if (run.previews[index] === true) {
+        preview = redactor.preview(source);
+        outputs.push(preview);
+      }
     }
     streamed.push(outputs.join('\n'));
+    views.push(committed + preview);
   });
-  if (flushAtEnd) {
-    outputs.push(redactor.flush(source));
+  if (mode === 'compact') {
+    const flushed = redactor.flush(source);
+    outputs.push(flushed);
+    committed += flushed;
     streamed.push(outputs.join('\n'));
+    views.push(committed);
   }
-  return streamed;
+  return { streamed, views };
 }
 
 const TURN = { conversationId: 'conversation', operationId: 'operation', generation: 1 };
@@ -104,7 +122,7 @@ export function driveToolActivityDisplay(
     : new ToolActivityDisplay(mode, false, writeLine, false, false, createRedactor);
   const shown = (): string => printed.filter((line) => line.startsWith('  │ ')).map((line) => line.slice(4)).join('\n');
   const moments: string[] = [];
-  const streamed = createRedactor === undefined ? undefined : streamedForDisplay(run, createRedactor, mode === 'compact');
+  const reference = createRedactor === undefined ? undefined : streamedForDisplay(run, createRedactor, mode);
   display.handle({ type: 'tool_use', data: { id: 'tool', tool: 'Bash', input: run.input } });
   run.chunks.forEach((chunk, index) => {
     display.handle({ type: 'tool_output', data: { id: 'tool', tool: 'Bash', output: chunk } });
@@ -113,10 +131,10 @@ export function driveToolActivityDisplay(
   });
   // In expanded mode the stream shows only the running output; the completed result is printed
   // from the result view (sanitizeToolResultText), which is not a stream path.
-  if (mode === 'expanded') return { committed: moments.at(-1) ?? '', moments, ...(streamed === undefined ? {} : { streamed }) };
+  if (mode === 'expanded') return { committed: moments.at(-1) ?? '', moments, ...(reference ?? {}) };
   display.handle({ type: 'tool_result', data: { id: 'tool', content: '', isError: false } });
   moments.push(shown());
-  return { committed: shown(), moments, ...(streamed === undefined ? {} : { streamed }) };
+  return { committed: shown(), moments, ...(reference ?? {}) };
 }
 
 function runningEntry(input: Record<string, unknown>, output: string): ToolActivityEntry {

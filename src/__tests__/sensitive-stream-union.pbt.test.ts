@@ -5,13 +5,14 @@ import {
   createLegacySensitiveTextStreamBuffer, createLegacySensitiveTextStreamRedactor, createSensitiveTextStreamRedactor,
   SensitiveTextStreamBuffer, type SensitiveTextCommit, type SensitiveTextStreamBufferLike, type SensitiveTextStreamRedactor,
 } from '../shared/utils/sensitive-stream.js';
+import { classifyToolResult } from '../shared/tool-activity/result.js';
 import { maskSensitiveRanges, REDACTED_VALUE, type SensitiveRange } from '../shared/utils/sensitive-text.js';
 import { createBoundedSensitiveValues, type BoundedSensitiveValues } from '../shared/utils/sensitive-value.js';
 import * as legacyStream from './helpers/legacy-sensitive-stream.js';
 import * as legacyValue from './helpers/legacy-sensitive-value.js';
 import { leakText, markersIn } from './helpers/sensitive-text-arbitraries.js';
 import {
-  driveRunningResult, driveToolActivityDisplay, laterOutputs, unseenMarkers, legacyUnitBoundaries, moreMarkers, NEW_ONLY_OPEN_LINES, streamCuts, TOOL_PATHS, type ToolRun,
+  driveRunningResult, driveToolActivityDisplay, laterOutputs, streamedForDisplay, unseenMarkers, legacyUnitBoundaries, moreMarkers, NEW_ONLY_OPEN_LINES, streamCuts, TOOL_PATHS, type ToolRun,
 } from './helpers/sensitive-stream-drivers.js';
 
 // #151 2a (design 3 "stream paths, second PR", 7.1, 8): the new stream hides at least what the
@@ -331,19 +332,6 @@ function expectNoMoreMarkers(name: string, run: ToolRun, drive: (run: ToolRun, c
   if (next.sensitiveValues !== undefined && inner.sensitiveValues !== undefined) expectSameLegacyBound(next.sensitiveValues, inner.sensitiveValues);
 }
 
-// ToolActivityDisplay (design 3, 12th edition; the marshal's decision, 2026-11-27). At each time t:
-//
-//   markers(what the new display printed up to t) ⊆ markers(what the inner-only stream returned up to t
-//                                                            for what the tool printed up to t)
-//
-// where `markers` is the set of marker kinds (cores, not counts) and the inner-only stream gets the
-// tool's output normalized as the display normalizes it, a preview where the display reads one, and
-// a flush at the end, with no display in between. Narrowed, by name: (a) a marker the previous
-// display did not print only because its line or byte cap stopped it is not counted as hidden, and
-// (b) printing an occurrence again (the prefix alignment `unprinted` parting midway) is not counted.
-// The cap and the alignment are not redaction and are not monotone in what the stream hides. A new
-// display that shows a marker the previous stream hid still fails: a stream that applies only the
-// last held unit's ranges, or a preview that leaves the held part unhidden, fails all four tests.
 // R12-4 (design 13th edition): runs on which a stream whose preview does not apply the inner tail's
 // previous ranges (`legacyMerged` and its trace) shows a marker the previous stream hid. Found by the
 // mutant in `sensitive-stream-union.mutants.mjs`; every display test runs them first, so the display
@@ -355,12 +343,67 @@ const DISPLAY_EXAMPLES: ToolRun[] = [
   {"input": {}, "chunks": ["https", "://set-cookie", ":", "a@h Set-Cookie: s=Zq26Zq'http:", "//u", ":Zq44Zqa;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;Zq144Zq@host@TOKEN=token :&password=", "\" \"]01n6d🔑éZq52Zq<249rqt0nb495;[sk-Zq423Zqabcdefgh@'https://set-cookie:a@host,Cookie: 5'\\`q3edZq671Zq", "'", "\n", "echoed https://set-cookie:a@h Set-Cookie: s=Zq26Zq"], "previews": [false, false, false, false, false, false, true, false, false, false]},
 ];
 
+// ToolActivityDisplay (design 3, 13th edition; the marshal's decision, 2026-11-27, strengthened after
+// design review 12, R12-3). The display prints its stream's output with a line and byte cap and aligns
+// a printed preview with the later commit by their common prefix (`unprinted`). Neither is redaction,
+// and neither is monotone in what the stream hides, so the display is not compared with the previous
+// display after the cap. Instead, at each time t:
+//
+//   (i)   count_m(newStream.views[t]) ≤ count_m(innerStream.views[t]) for every marker m, where
+//         views[t] is what the stream committed by t plus its preview at t, the stream getting the
+//         tool's output the way the display feeds it (normalized, a preview where the display reads
+//         one, a flush at the end), with no display in between;
+//   (ii)  markers(what the new display printed up to t) ⊆ markers(innerStream outputs up to t);
+//   (iii) every row the new display printed at t is a substring of newStream.views[t'] for some
+//         t' ≤ t: the display prints only what its own stream returned.
+//
+// Narrowed, by name: (a) a marker the previous display did not print only because its cap stopped
+// it is not counted as hidden, and (b) printing an occurrence again is not counted. Not allowed (the
+// review's (c)): showing, at another place, an occurrence the previous stream hid because the
+// previous stream showed the same marker somewhere else. (iii) fails then, since the row is not what
+// the stream returned; (i) fails when the stream itself shows it.
+function rowsOf(shown: string): string[] {
+  return shown === '' ? [] : shown.split('\n');
+}
+
+/** Rows printed by each time that are not a substring of what the stream returned by then (iii). */
+function rowsNotFromTheStream(moments: readonly string[], views: readonly string[]): string[] {
+  const unexplained: string[] = [];
+  let printed = 0;
+  moments.forEach((shown, at) => {
+    const rows = rowsOf(shown);
+    for (const row of rows.slice(printed)) {
+      if (!views.slice(0, at + 1).some((view) => view.includes(row))) unexplained.push(row);
+    }
+    printed = rows.length;
+  });
+  return unexplained;
+}
+
 function expectDisplayShowsOnlyWhatTheInnerStreamShowed(name: string, run: ToolRun, mode: 'compact' | 'expanded'): void {
   const next = driveToolActivityDisplay(run, mode);
   const inner = driveToolActivityDisplay(run, mode, createLegacySensitiveTextStreamRedactor);
+  const nextStream = streamedForDisplay(run, createSensitiveTextStreamRedactor, mode);
   expect(next.moments.length, name).toBe(inner.moments.length);
-  next.moments.forEach((shown, at) => expect(unseenMarkers(shown, inner.streamed![at]!), `${name} at ${at}`).toEqual([]));
+  nextStream.views.forEach((view, at) => expect(moreMarkers(view, inner.views![at]!), `${name} (i) at ${at}`).toEqual([]));
+  next.moments.forEach((shown, at) => expect(unseenMarkers(shown, inner.streamed![at]!), `${name} (ii) at ${at}`).toEqual([]));
+  // A structured (JSON) result is printed from its projection, not from the stream (`[structured
+  // output omitted]` and the projected text); (iii) is about the rows the stream feeds.
+  if (classifyToolResult(run.chunks.join('')).kind === 'text') {
+    expect(rowsNotFromTheStream(next.moments, nextStream.views), `${name} (iii)`).toEqual([]);
+  }
 }
+
+// The review's (c): a display that prints the second row unhidden passes (ii), since the previous
+// stream shows `Zq7Zq` on the first row, and fails (iii).
+it('(iii) catches a display that prints a row its stream hid (R12-3)', () => {
+  const run: ToolRun = { input: {}, chunks: ['echo Zq7Zq\n', 'token=Zq7Zqsecretpart\n'], previews: [false, false] };
+  const stream = streamedForDisplay(run, createLegacySensitiveTextStreamRedactor, 'compact');
+  expect(stream.views.at(-1)).toBe('echo Zq7Zq\ntoken=[REDACTED]\n');
+  const regressed = ['echo Zq7Zq', 'echo Zq7Zq\ntoken=Zq7Zqsecretpart', 'echo Zq7Zq\ntoken=Zq7Zqsecretpart'];
+  expect(unseenMarkers(regressed.at(-1)!, stream.streamed.at(-1)!)).toEqual([]);
+  expect(rowsNotFromTheStream(regressed, stream.views)).toEqual(['token=Zq7Zqsecretpart']);
+});
 
 describe('#151 2a: the tool paths show no marker more than the inner-only stream (D2-stream, D3-stream, D4)', () => {
   for (const mode of ['compact', 'expanded'] as const) {
