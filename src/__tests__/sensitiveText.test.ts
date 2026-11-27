@@ -74,6 +74,33 @@ describe('sensitiveText', () => {
     });
   });
 
+  describe('T7', () => {
+    const text = 'curl https://u:p@host;TOKEN=left@RIGHT_SECRET';
+    const expected = 'curl https://[REDACTED]@host;TOKEN=[REDACTED]';
+
+    it('matches the recorded output in the displayed text', () => {
+      expect(sanitizeSensitiveText(text)).toBe(expected);
+    });
+
+    it('matches the recorded output in the streamed text', () => {
+      const redactor = createSensitiveTextStreamRedactor();
+      expect(redactor.write(text, {}) + redactor.flush({})).toBe(expected);
+    });
+  });
+
+  describe('W5', () => {
+    const text = 'https://u:Zq12Zq@host;TOKEN=left@Zq13Zq;https://u:Zq14Zq@host;TOKEN=left@Zq15Zq';
+
+    it.each(['Zq12Zq', 'Zq13Zq', 'Zq14Zq', 'Zq15Zq'])('keeps %s out of the displayed text', (marker) => {
+      expect(sanitizeSensitiveText(text)).not.toContain(marker);
+    });
+
+    it.each(['Zq12Zq', 'Zq13Zq', 'Zq14Zq', 'Zq15Zq'])('keeps %s out of the streamed text', (marker) => {
+      const redactor = createSensitiveTextStreamRedactor();
+      expect(redactor.write(text, {}) + redactor.flush({})).not.toContain(marker);
+    });
+  });
+
   it.each(['known', 'substring'] as const)('masks the union of overlapping %s matches without hiding surrounding text', (matching) => {
     for (const [value, text] of [['abcab', 'before abcabcab after'], ['aaaa', 'before aaaaaa after']] as const) {
       const masked = matching === 'known'
