@@ -366,10 +366,16 @@ it('cleans up managed providers while leaving independently spawned runs alive',
 // #177: macOS（XNU）では、残るメンバーがすべて未回収ゾンビのグループへの kill(-pgid, sig)（sig=0 を含む）が ESRCH ではなく EPERM を返す。
 // Linux では同じ状況で送信が成功する。どちらも回収されたあとは ESRCH になる。
 describe('terminatePosixProcessTree on a group whose members are unreaped zombies (#177)', () => {
-  const holders: ChildProcess[] = [];
+  const holders: { holder: ChildProcess; pgid?: number }[] = [];
   afterEach(() => {
-    // 親（perl）が落ちれば、残ったゾンビは init / launchd が回収する。
-    for (const holder of holders.splice(0)) holder.kill('SIGKILL');
+    // 子は別のグループにいる（setpgrp）。準備の途中で失敗しても子が残らないよう、
+    // グループごと終わらせてから親（perl）を落とす。
+    for (const { holder, pgid } of holders.splice(0)) {
+      if (pgid !== undefined) {
+        try { process.kill(-pgid, 'SIGKILL'); } catch { /* already gone */ }
+      }
+      holder.kill('SIGKILL');
+    }
   });
 
   function processState(pid: number): { pgid: number; stat: string } | undefined {
@@ -398,7 +404,8 @@ describe('terminatePosixProcessTree on a group whose members are unreaped zombie
       'sleep 1 while 1;',
     ].join('\n');
     const holder = spawn('perl', ['-e', script, behavior], { stdio: ['ignore', 'pipe', 'inherit'] });
-    holders.push(holder);
+    const entry: { holder: ChildProcess; pgid?: number } = { holder };
+    holders.push(entry);
     let output = '';
     const reaped = new Promise<void>((resolve) => {
       holder.stdout!.on('data', (chunk: Buffer) => {
@@ -408,6 +415,7 @@ describe('terminatePosixProcessTree on a group whose members are unreaped zombie
     });
     await vi.waitFor(() => expect(output).toMatch(/^\d+\n/));
     const pgid = Number(output.split('\n')[0]);
+    entry.pgid = pgid;
     await vi.waitFor(() => {
       const state = processState(pgid);
       expect(state?.pgid).toBe(pgid);
