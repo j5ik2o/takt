@@ -128,16 +128,23 @@ unreadable `config.yaml` used to leave only `log.error`, which is written only w
   was configured.
 - `Read = ReadOk | ReadNotTerminal | ReadTimeout | ReadBroken`. Only `ReadTimeout` is retried.
   `ReadNotTerminal` is a task another process moved on (retry/requeue); this model calls it not a
-  loss for this invocation.
+  loss for this invocation. `sawNotTerminal` records that the transition happened, so the
+  `wReadNotTerminalNoNotice` witness is not also satisfied by `ConfigMissing`.
 - `NOTICE = Silent | Fixed`. `Silent` is the old `log.error` only; `Fixed` is one `warn()` with the
   task names. `RETRY = None | Bounded | Unbounded`. `Bounded` is `MAX_READ_ATTEMPTS = 2` and
   `MAX_RETRIES = 1` (one wait); `Unbounded` is the rejected alternative.
 
 `safety` is the conjunction of `noUnnoticedLoss`, `noFalseNotice`, `noticeAtMostOnce`,
-`retryBounded`, `retriesTimeouts`, `noHookOnLoss`, and `atMostOnceHook`. The model does not include
-the hook command outcome (#148's `HookOutcome` does), the `terminalStamp` pre/post read of
-`withTaskFinishHook`, multiple task names in one warning, the exact lock wait, or concurrent
-processes. Those are covered by the code tests and PBT in the design document.
+`retryBounded`, `retriesTimeouts`, `noHookOnLoss`, and `atMostOnceHook`. `retriesTimeouts` is
+about the post-save read modeled here (`runTaskFinishHooks`, `NamedHook`); the design applies the
+same retry to `runHook`'s post-execution read, which is not modelled. The pre-execution stamp read
+of `withTaskFinishHook` is outside the model and is not retried. `noHookOnLoss` is the modeled part of the design's
+`noSilentLossOrUnconfirmedRun`; the at-least-once warning when the pre-read was unreadable is
+outside the model. The model does not include the hook command outcome (#148's
+`HookOutcome` does), the `terminalStamp` pre/post read, `callHook` rejection, the warning when the
+pre-read was unreadable, multiple task names in one warning, the exact lock wait, or concurrent
+processes. Those are covered by the code tests and PBT in the design document; they are not
+modelled by #148 either.
 
 ### Notice model: records and counterexamples
 
@@ -169,11 +176,15 @@ quint run taskFinishHookNotice.qnt --main noticeFixed --invariant safety \
   --max-samples 20000 --max-steps 8 --seed 0x2a
 ```
 
-Result: 20,000 samples, max-steps 8, seed `0x2a`, `[ok]` (no violation, 1,358 ms). Witnesses:
+Result: 20,000 samples, max-steps 8, seed `0x2a`, `[ok]` (no violation, about 1.4 s). Witnesses
+(traces out of 20,000; these are reachability counts, not coverage):
 `wRetriedThenCalled` 197, `wExhaustedWarned` 452, `wBrokenWarned` 843,
-`wReadNotTerminalNoNotice` 7,718, `wConfigMissingNoNotice` 6,693,
-`wStatesConfigErrorWarned` 3,344. A further 50,000 samples at max-steps 10 with seeds `0x1` and
-`0x2a` also found no violation (3,194 ms / 3,156 ms). This is simulation, not a proof.
+`wReadNotTerminalNoNotice` 1,025, `wConfigMissingNoNotice` 6,693,
+`wStatesConfigErrorWarned` 3,344. `wReadNotTerminalNoNotice` now requires `sawNotTerminal`, so the
+number is the count of traces that actually passed through `ReadNotTerminal`, not the count that
+also happens to satisfy the weaker old condition. A further 50,000 samples at max-steps 10 with
+seeds `0x1` and `0x2a` also found no violation (about 3.3 s / 3.3 s). This is simulation, not a
+proof.
 
 The #148 model is unchanged and its recorded results still hold: `entryPoints` 10,000 samples at
 max-steps 12 with seed `0x2a` has no violation, while `normalEndOnly` (`noMissedExit`) and

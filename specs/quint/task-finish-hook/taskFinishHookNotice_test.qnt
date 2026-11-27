@@ -34,12 +34,12 @@ module noticeFixedTest {
   run readNotTerminalDoesNotWarnTest =
     initWith(NamedHook, ConfigOk).then(resolveConfig)
       .then(readStateAs(ReadNotTerminal))
-      .expect(phase == Done and not(loss) and notices == 0 and hookRuns == 0)
+      .expect(phase == Done and sawNotTerminal and not(loss) and notices == 0 and hookRuns == 0)
 
-  // No configured hook: nothing is lost.
+  // No configured hook: nothing is lost. This must not be counted as a ReadNotTerminal trace.
   run configMissingDoesNotWarnTest =
     initWith(NamedHook, ConfigMissing).then(resolveConfig)
-      .expect(phase == Done and not(loss) and notices == 0 and hookRuns == 0)
+      .expect(phase == Done and not(sawNotTerminal) and not(loss) and notices == 0 and hookRuns == 0)
 
   // The configuration cannot be read: no hook can be known, so one warning.
   run configUnreadableWarnsTest =

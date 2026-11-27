@@ -10,8 +10,11 @@
 // Sources modelled:
 //   src/features/tasks/execute/taskFinishHook.ts
 //     runTaskFinishHooks        named path; reads tasks.yaml after the caller saved a terminal state
+//                               (Path = NamedHook)
 //     runTaskFinishHooksForStates  states path; the caller hands the saved states over
-//     runHook                   the wrapper around one execution; reads tasks.yaml again
+//                               (Path = StatesHook)
+//   runHook (the wrapper around one execution) is not modelled. The design applies the same bounded
+//   retry to its post-execution read; that path is covered by the code tests.
 //
 // NOTICE (a string) is the loss notice:
 //   Silent   only log.error, which is written only when logging.debug is enabled (the old code)
@@ -45,6 +48,7 @@ module taskFinishHookNotice {
   var notices: int              // warn() calls for a lost hook, one per invocation at most
   var loss: bool                // the hook was not run although a terminal state may have been saved
   var timedOut: bool            // at least one read ended in ReadTimeout
+  var sawNotTerminal: bool      // at least one read returned ReadNotTerminal
 
   // A timed-out read may be tried again only while the bound allows it.
   pure def canRetry(r: Read, attempts: int): bool =
@@ -54,7 +58,7 @@ module taskFinishHookNotice {
   action initWith(p: Path, c: Config): bool = all {
     path' = p, config' = c, phase' = Configuring,
     readAttempts' = 0, retries' = 0, hookRuns' = 0, notices' = 0,
-    loss' = false, timedOut' = false,
+    loss' = false, timedOut' = false, sawNotTerminal' = false,
   }
 
   action init = {
@@ -73,7 +77,7 @@ module taskFinishHookNotice {
     loss' = config == ConfigUnreadable,
     notices' = if (config == ConfigUnreadable and NOTICE == "Fixed") 1 else 0,
     path' = path, config' = config, readAttempts' = readAttempts, retries' = retries,
-    hookRuns' = hookRuns, timedOut' = timedOut,
+    hookRuns' = hookRuns, timedOut' = timedOut, sawNotTerminal' = sawNotTerminal,
   }
 
   // One read of tasks.yaml. ReadNotTerminal is a state another process already moved on (retry or
@@ -82,6 +86,7 @@ module taskFinishHookNotice {
     phase == Reading,
     readAttempts' = readAttempts + 1,
     timedOut' = (timedOut or r == ReadTimeout),
+    sawNotTerminal' = (sawNotTerminal or r == ReadNotTerminal),
     retries' = if (canRetry(r, readAttempts)) retries + 1 else retries,
     phase' = if (r == ReadOk) Calling
       else if (canRetry(r, readAttempts)) Waiting
@@ -106,6 +111,7 @@ module taskFinishHookNotice {
     phase' = Reading,
     path' = path, config' = config, readAttempts' = readAttempts, retries' = retries,
     hookRuns' = hookRuns, notices' = notices, loss' = loss, timedOut' = timedOut,
+    sawNotTerminal' = sawNotTerminal,
   }
 
   // The saved terminal state exists and the hook command is invoked once.
@@ -114,14 +120,14 @@ module taskFinishHookNotice {
     phase' = Done, hookRuns' = hookRuns + 1,
     loss' = false, notices' = notices,
     path' = path, config' = config, readAttempts' = readAttempts, retries' = retries,
-    timedOut' = timedOut,
+    timedOut' = timedOut, sawNotTerminal' = sawNotTerminal,
   }
 
   action stutter = all {
     phase == Done,
     path' = path, config' = config, phase' = phase, readAttempts' = readAttempts,
     retries' = retries, hookRuns' = hookRuns, notices' = notices, loss' = loss,
-    timedOut' = timedOut,
+    timedOut' = timedOut, sawNotTerminal' = sawNotTerminal,
   }
 
   action step = any { resolveConfig, readState, waitThenRead, callHook, stutter }
@@ -133,6 +139,9 @@ module taskFinishHookNotice {
   val noticeAtMostOnce = notices <= 1
   // Retrying stops at the bound; an unbounded retry fails this.
   val retryBounded = readAttempts <= MAX_READ_ATTEMPTS and retries <= MAX_RETRIES
+  // The read modeled here is the post-save read of runTaskFinishHooks (NamedHook). The pre-execution
+  // stamp read and runHook's post-execution read are not modeled; this invariant does not speak
+  // about them. The code applies the same retry to runHook's post-execution read.
   // A timeout is always retried to the bound before the hook is given up (except ReadBroken, which
   // makes the next attempt pointless).
   val retriesTimeouts = (phase == Done and loss and timedOut) implies readAttempts == MAX_READ_ATTEMPTS
@@ -149,7 +158,8 @@ module taskFinishHookNotice {
   val wRetriedThenCalled = phase == Done and hookRuns == 1 and notices == 0 and readAttempts == 2
   val wExhaustedWarned = phase == Done and loss and notices == 1 and hookRuns == 0 and readAttempts == 2
   val wBrokenWarned = phase == Done and loss and notices == 1 and readAttempts == 1
-  val wReadNotTerminalNoNotice = phase == Done and not(loss) and notices == 0 and hookRuns == 0
+  val wReadNotTerminalNoNotice =
+    phase == Done and sawNotTerminal and not(loss) and notices == 0 and hookRuns == 0
   val wConfigMissingNoNotice = phase == Done and config == ConfigMissing and notices == 0 and hookRuns == 0
   val wStatesConfigErrorWarned =
     phase == Done and path == StatesHook and config == ConfigUnreadable and notices == 1 and hookRuns == 0
