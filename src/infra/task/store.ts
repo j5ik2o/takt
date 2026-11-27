@@ -125,7 +125,7 @@ export class TaskStore {
     this.locked = true;
     try {
       this.ensureDirs();
-      return withFileLock(this.lockFile, fn, { onAcquisitionError: onAcquisitionError ?? this.onAcquisitionError });
+      return withFileLock(this.lockFile, fn, { onAcquisitionError: onAcquisitionError ?? this.onAcquisitionError, directCreate: true });
     } finally {
       this.locked = false;
     }

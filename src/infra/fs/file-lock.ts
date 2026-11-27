@@ -176,9 +176,35 @@ function recoverStaleLock(lockPath: string): boolean {
   return false;
 }
 
-function acquireLock(lockPath: string, content: string, timeoutMs: number): LockSnapshot {
+function acquireLock(lockPath: string, content: string, timeoutMs: number, directCreate = false): LockSnapshot {
   const deadline = Date.now() + timeoutMs;
   while (true) {
+    if (directCreate) {
+      let descriptor: number;
+      try {
+        descriptor = openSync(lockPath, 'wx', 0o600);
+      } catch (error) {
+        if (!hasCode(error, 'EEXIST')) throw error;
+        if (recoverStaleLock(lockPath)) continue;
+        if (Date.now() >= deadline) {
+          throw new Error(`${LOCK_TIMEOUT_MESSAGE_PREFIX}: ${lockPath}`);
+        }
+        Atomics.wait(waitBuffer, 0, 0, Math.min(RETRY_MS, deadline - Date.now()));
+        continue;
+      }
+      let snapshot: LockSnapshot;
+      try {
+        writeFileSync(descriptor, content, 'utf8');
+        snapshot = { stat: fstatSync(descriptor), content };
+      } catch (error) {
+        try { closeSync(descriptor); } catch { /* the write error is the one to report */ }
+        try { unlinkSync(lockPath); } catch { /* the write error is the one to report */ }
+        throw error;
+      }
+      closeSync(descriptor);
+      orphanedLocks.delete(resolve(lockPath));
+      return snapshot;
+    }
     const temporaryPath = `${lockPath}.${process.pid}.${randomUUID()}.tmp`;
     let descriptor: number;
     try {
@@ -216,7 +242,7 @@ export function isRecordedProcessAlive(pid: number, processIdentity: ProcessIden
 
 export function withFileLock<T>(
   lockPath: string, action: () => T,
-  options?: { timeoutMs?: number; onAcquisitionError?: FileLockAcquisitionErrorHandler },
+  options?: { timeoutMs?: number; onAcquisitionError?: FileLockAcquisitionErrorHandler; directCreate?: boolean },
 ): T {
   const resolvedPath = resolve(lockPath);
   if (heldLocks.has(resolvedPath)) throw new Error(`File lock: reentrant lock detected: ${lockPath}`);
@@ -225,7 +251,7 @@ export function withFileLock<T>(
     const content = JSON.stringify({ pid: process.pid, processIdentity: getSelfProcessIdentity() });
     let acquired: LockSnapshot;
     try {
-      acquired = acquireLock(resolvedPath, content, options?.timeoutMs ?? TIMEOUT_MS);
+      acquired = acquireLock(resolvedPath, content, options?.timeoutMs ?? TIMEOUT_MS, options?.directCreate ?? false);
     } catch (error) {
       if (options?.onAcquisitionError) options.onAcquisitionError(error);
       throw error;
