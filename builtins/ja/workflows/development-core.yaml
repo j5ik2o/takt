@@ -206,8 +206,9 @@ loop_monitors:
         - condition: 要件を満たす実現可能な打開手段がない
           next: ABORT
   # replan → implement → peer-review → replan の往復は implement を挟むので、ignore_steps で外して数える。
-  # 最初の peer-review は plan からの流れなので [replan, peer-review] は 0 周。
-  # 2 回目の peer-review が再び再計画を求めた時点で 1 周（threshold: 1）になり、
+  # min_trigger_visits: 2 により、開始・再開位置や implement → replan 経由に関わらず、
+  # この実行で peer-review が 2 回完了するまでは judge を呼ばない。
+  # 2 回目以降の peer-review が再び再計画を求めた時点で 1 周（threshold: 1）になり、
   # judge が直近 2 回のレビュー結果を比べて、同じ指摘が新しい差分なしに繰り返されていれば止める。
   - cycle:
       - replan
@@ -215,6 +216,7 @@ loop_monitors:
     ignore_steps:
       - implement
     threshold: 1
+    min_trigger_visits: 2
     judge:
       input_reports:
         - from_step: replan

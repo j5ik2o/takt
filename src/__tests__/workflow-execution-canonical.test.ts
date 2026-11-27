@@ -12,6 +12,7 @@ const mockObservabilityShutdown = vi.fn().mockResolvedValue(undefined);
 const mockWorkflowLoggerError = vi.fn();
 const mockReportWarning = vi.fn();
 const mockProjectTerminal = vi.fn();
+const mockRunMetaManagerConstructor = vi.fn();
 const mockWorkflowEngine = vi.fn().mockImplementation(function MockWorkflowEngine() {
   return {
     on: vi.fn(),
@@ -266,6 +267,9 @@ vi.mock('../features/tasks/execute/outputFns.js', () => ({
 
 vi.mock('../features/tasks/execute/runMeta.js', () => ({
   RunMetaManager: class {
+    constructor(...args: unknown[]) {
+      mockRunMetaManagerConstructor(...args);
+    }
     updateStep() {}
     finalize() {}
     projectTerminal = mockProjectTerminal;
@@ -753,5 +757,118 @@ describe('workflow execution canonical entrypoints', () => {
       expect.stringMatching(/loop analysis/i),
       expect.objectContaining({ error: 'scheduler failed' }),
     );
+  });
+
+  it('begins the run before preparing the execution bundle and terminalizes unresolved workflow_call failures', async () => {
+    const order: string[] = [];
+    const lifecycleModule = await import('../features/tasks/execute/workflowRunLifecycle.js');
+    const createLifecycle = lifecycleModule.createWorkflowRunLifecycle;
+    vi.spyOn(lifecycleModule, 'createWorkflowRunLifecycle').mockImplementationOnce((input) => {
+      const composition = createLifecycle(input);
+      return {
+        ...composition,
+        lifecycle: {
+          beginRun: async (runInput) => {
+            order.push('beginRun');
+            return composition.lifecycle.beginRun(runInput);
+          },
+        },
+      };
+    });
+
+    const executionBundle = await import('../features/tasks/execute/workflowExecutionBundle.js');
+    const unresolvedError = new Error(
+      'Workflow bundle could not resolve call "builtin-caller/develop" (call: development-core; cwd: /tmp/project; project: /tmp/project; searched: /tmp/project/.takt/workflows/development-core.yaml; excluded: builtin "development-core" (excluded because enable_builtin_workflows is false))',
+    );
+    vi.mocked(executionBundle.prepareWorkflowExecutionBundle).mockImplementationOnce(() => {
+      order.push('prepareWorkflowExecutionBundle');
+      throw unresolvedError;
+    });
+
+    const fsModule = await import('../infra/fs/index.js');
+    const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+
+    await expect(executeWorkflow({
+      name: 'builtin-caller',
+      initialStep: 'develop',
+      maxSteps: 1,
+      steps: [{ name: 'develop', personaDisplayName: 'coder', instruction: 'work' }],
+    }, 'task', '/tmp/project', {
+      projectCwd: '/tmp/project',
+      provider: 'mock',
+    })).rejects.toBe(unresolvedError);
+
+    expect(order).toEqual(['beginRun', 'prepareWorkflowExecutionBundle']);
+    expect(mockWorkflowEngine).not.toHaveBeenCalled();
+    expect(fsModule.initNdjsonLog).toHaveBeenCalledExactlyOnceWith(
+      'session-id',
+      'task',
+      'builtin-caller',
+      expect.objectContaining({ logsDir: '/tmp/logs' }),
+    );
+    expect(mockProjectTerminal).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      status: 'failed',
+      iterations: 0,
+      reason: unresolvedError.message,
+    }));
+  });
+
+  it('preserves resume source and operation lineage in RunMetaManager when bundle preparation fails on resume', async () => {
+    const resumeSource = {
+      sourceRunSlug: 'source-run-slug',
+      resumeMode: 'retry' as const,
+    };
+    const bootstrapModule = await import('../features/tasks/execute/workflowExecutionBootstrap.js');
+    const lineageSpy = vi.spyOn(bootstrapModule, 'resolveWorkflowExecutionResumeSourceLineage')
+      .mockReturnValueOnce({
+        sourceRunSlug: resumeSource.sourceRunSlug,
+        artifactResumeSource: resumeSource,
+        publishedResumeSource: resumeSource,
+        operationJournalRunSlug: 'journal-root-slug',
+        operationClaimToken: 'claim-token-123',
+        sourceOperationClaimTokens: new Set(['source-claim-token']),
+      });
+
+    const executionBundle = await import('../features/tasks/execute/workflowExecutionBundle.js');
+    const unresolvedError = new Error(
+      'Workflow bundle could not resolve call "builtin-caller/develop" (call: development-core; excluded because enable_builtin_workflows is false)',
+    );
+    vi.mocked(executionBundle.prepareWorkflowExecutionBundle).mockImplementationOnce(() => {
+      throw unresolvedError;
+    });
+
+    const { executeWorkflow } = await import('../features/tasks/execute/workflowExecution.js');
+
+    try {
+      await expect(executeWorkflow({
+        name: 'builtin-caller',
+        initialStep: 'develop',
+        maxSteps: 1,
+        steps: [{ name: 'develop', personaDisplayName: 'coder', instruction: 'work' }],
+      }, 'task', '/tmp/project', {
+        projectCwd: '/tmp/project',
+        provider: 'mock',
+        resumeSource,
+      })).rejects.toBe(unresolvedError);
+
+      expect(lineageSpy).toHaveBeenCalledExactlyOnceWith('/tmp/project', resumeSource, undefined);
+      expect(mockRunMetaManagerConstructor).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ slug: 'test-report-dir' }),
+        'task',
+        'builtin-caller',
+        resumeSource,
+        expect.objectContaining({
+          operationJournalRunSlug: 'journal-root-slug',
+          operationClaimToken: 'claim-token-123',
+        }),
+      );
+      expect(mockProjectTerminal).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        status: 'failed',
+        iterations: 0,
+        reason: unresolvedError.message,
+      }));
+    } finally {
+      lineageSpy.mockRestore();
+    }
   });
 });

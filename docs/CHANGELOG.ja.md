@@ -8,6 +8,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- 進まない往復を止める step 単位の `max_visits` と `stop_on_repeated_verdict` を追加しました (#164)。組み込みの開発 workflow は `replan`・`fix-replan`・`verification-replan` に `max_visits: 4` を設定しています。
+- `loop_monitors[].min_trigger_visits` を追加し、その実行で `cycle` 末尾の step が指定回数完了するまで monitor の発動を遅らせるようにしました。`development-core` の `[replan, peer-review]` monitor に `2` を設定し、初回の独立レビューで judge が誤発火しないようにしました。
+
+### Changed
+
+- 遷移先の step がすでに `max_visits` に達しているときは、loop monitor より上限を優先し、別の step へ逃がす judge rule があっても judge を呼ばずに `Visit limit reached` で中断するようにしました。
+
+### Fixed
+
+- `system` step の `wait.on_timeout` が同じ判定のあいだに挟まったとき、`stop_on_repeated_verdict` が誤って停止しないようにしました。
+
 ## [0.77.0] - 2026-11-24
 
 ### Added

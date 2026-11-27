@@ -1,5 +1,5 @@
 // -*- mode: Bluespec; -*-
-// Scenario tests for the step loop guard (#164).
+// Scenario tests for the step loop guard (#164 and follow-up).
 module fixedCodeTest {
   import stepLoopGuard(CODE = "fixed", MAX_VISITS = 2, STOP_ON_REPEATED_VERDICT = true).* from "./stepLoopGuard"
 
@@ -9,7 +9,7 @@ module fixedCodeTest {
       .then(enter(false)).then(complete(0))
       .then(enter(false)).then(complete(1))
       .then(enter(false))
-      .expect(status == StoppedAtLimit and reasons.length() == 1 and startedVisits == 2 and safety)
+      .expect(status == StoppedAtLimit and reasons.length() == 1 and startedVisits == 2 and completedVisits == 2 and safety)
 
   // Retries of one visit (blocked → user input, quality gate, rate-limit fallback) do not use the limit.
   run retriesAreFreeTest =
@@ -31,6 +31,28 @@ module fixedCodeTest {
       .then(enter(false)).then(complete(0))
       .then(enter(false)).then(finish)
       .expect(status == Finished and reasons.length() == 0 and safety)
+
+  // Two rule-less completions (wait.on_timeout) in a row never stop on repetition, and still count toward max_visits.
+  run consecutiveWithoutRuleDoesNotRepeatTest =
+    init
+      .then(enter(false)).then(completeWithoutRule)
+      .then(enter(false)).then(completeWithoutRule)
+      .expect(status == Running and completedVisits == 2 and safety)
+}
+
+module withoutRuleStreakBreakTest {
+  import stepLoopGuard(CODE = "fixed", MAX_VISITS = 5, STOP_ON_REPEATED_VERDICT = true).* from "./stepLoopGuard"
+
+  // rule 0 -> wait.on_timeout (no rule) -> rule 0 is not consecutive, so it keeps running;
+  // a second rule 0 immediately afterward stops on repetition.
+  run timeoutBreaksVerdictStreakTest =
+    init
+      .then(enter(false)).then(complete(0))
+      .then(enter(false)).then(completeWithoutRule)
+      .then(enter(false)).then(complete(0))
+      .expect(status == Running and completedVisits == 3 and safety)
+      .then(enter(false)).then(complete(0))
+      .expect(status == StoppedOnRepeat and reasons.length() == 1 and safety)
 }
 
 module alternatingTest {
@@ -46,6 +68,18 @@ module alternatingTest {
       .then(enter(false)).then(complete(0))
       .then(enter(false))
       .expect(status == StoppedAtLimit and completedVisits == 5 and safety)
+}
+
+module pr164VersionTest {
+  import stepLoopGuard(CODE = "pr164", MAX_VISITS = 5, STOP_ON_REPEATED_VERDICT = true).* from "./stepLoopGuard"
+
+  // Merged #164 left lastVerdict stale across wait.on_timeout, causing a false stop on rule 0 -> timeout -> rule 0.
+  run timeoutLeftStaleVerdictTest =
+    init
+      .then(enter(false)).then(complete(0))
+      .then(enter(false)).then(completeWithoutRule)
+      .then(enter(false)).then(complete(0))
+      .expect(status == StoppedOnRepeat and not(stopOnRepeatNeedsRepeat))
 }
 
 module firstVersionTest {
