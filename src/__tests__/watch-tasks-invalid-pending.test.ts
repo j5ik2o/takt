@@ -3,8 +3,9 @@
  * one invalid record in `.takt/tasks.yaml` does not stop the whole read.
  *
  * - `readWatchTasks` returns every task however the single mark or completion is malformed.
- * - `readPendingGoalTaskCompletions` reports only the invalid pending completion and skips it, and
- *   still returns every other valid pending completion in the same file.
+ * - `readPendingGoalTaskCompletions` skips a record whose mark is not `true` without reporting it,
+ *   reports a `true` mark whose content is invalid and skips it, and still returns every other
+ *   valid pending completion in the same file.
  * - Reading the same content again reports the same record once.
  */
 
@@ -122,7 +123,7 @@ describe('one invalid pending completion does not stop readWatchTasks or the run
     }
   });
 
-  it('reports a mark-only invalidity to readPendingGoalTaskCompletions but not to readWatchTasks', async () => {
+  it('skips a mark written as a string without reporting it or returning it', async () => {
     const invalidMark = pendingMarked({ name: 'goal-task-string', completion_publication_pending: 'true' });
     writeTasks([invalidMark, valid]);
     const recorded = reports();
@@ -130,7 +131,7 @@ describe('one invalid pending completion does not stop readWatchTasks or the run
     const completions = await readPendingGoalTaskCompletions(project, recorded);
 
     expect(completions.map((value: { name: string }) => value.name)).toEqual(['goal-task-valid']);
-    expect(recorded.invalids.map(({ key }) => key)).toEqual([expect.stringContaining('goal-task-string')]);
+    expect(recorded.invalids).toEqual([]);
   });
 });
 
@@ -188,6 +189,27 @@ describe('the two readers separate a bad record from the rest for every shape', 
 
         await readPendingGoalTaskCompletions(project, recorded);
         expect(recorded.invalids).toHaveLength(valid ? 0 : 1);
+      }), { numRuns: 40 });
+  });
+
+  it('never reports or returns a mark that is not true, whatever its content holds', async () => {
+    const nonTrueMark = fc.constantFrom(false, 'true', 1, null, undefined);
+
+    await fc.assert(fc.asyncProperty(terminal, fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(), nonTrueMark,
+      async (value, hasGoal, hasCompletion, hasRunSlug, hasExecutionId, unknownColumn, pending) => {
+        // A mark that is not `true` is skipped before its completion is parsed, so even an unknown
+        // column, a missing goal or a missing attempt identifier is not a reportable record.
+        const subject = generated('goal-task-subject', { status: value, hasGoal, hasCompletion, hasRunSlug, hasExecutionId, unknownColumn, mark: pending });
+        writeTasks([subject, pendingMarked({ name: 'goal-task-valid' })]);
+        const recorded = reports();
+
+        const completions = await readPendingGoalTaskCompletions(project, recorded);
+
+        expect(completions.map((task: { name: string }) => task.name)).toEqual(['goal-task-valid']);
+        expect(recorded.invalids).toEqual([]);
+
+        await readPendingGoalTaskCompletions(project, recorded);
+        expect(recorded.invalids).toEqual([]);
       }), { numRuns: 40 });
   });
 });
