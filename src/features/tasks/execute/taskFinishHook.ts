@@ -16,7 +16,6 @@ import { buildCommandEnv, runBoundedCommand } from '../../../shared/utils/bounde
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitive-text.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
-import { warn } from '../../../shared/ui/index.js';
 
 const log = createLogger('task-finish-hook');
 
@@ -51,10 +50,14 @@ function formatTaskNames(taskNames: readonly string[]): string {
   return shown.join(', ') + suffix;
 }
 
+function writeNoticeToStderr(message: string): void {
+  const sanitized = sanitizeTerminalText(sanitizeSensitiveText(message));
+  process.stderr.write(`${sanitized}\n`);
+}
+
 function emitNotice(message: string, taskNames: readonly string[], reason: unknown): void {
-  const sanitized = sanitizeSensitiveText(message);
   try {
-    warn(sanitized);
+    writeNoticeToStderr(message);
   } catch (warnError) {
     try {
       log.error('Task finish hook notice could not be shown', {
@@ -179,7 +182,11 @@ async function callHook(
     taskName, status: state.status, reason, stderr: result.stderr,
   });
   if (options?.emitStatusLog !== false) {
-    warn(`Task finish hook for "${sanitizeTerminalText(taskName)}" ${sanitizeTerminalText(reason)}; the task state is unchanged`);
+    try {
+      writeNoticeToStderr(`Task finish hook for "${taskName}" ${reason}; the task state is unchanged`);
+    } catch {
+      // A failed notice must never reach the caller.
+    }
   }
 }
 
@@ -196,6 +203,12 @@ async function runHook(
   try {
     items = await readTaskStateItemsWithRetry(taskRunner);
   } catch (error) {
+    try {
+      const existingHook = loadProjectConfig(projectCwd).taskFinishHook;
+      if (existingHook === undefined) return;
+    } catch {
+      // Hook presence is unknown, so the lost hook is reported below.
+    }
     reportLostHook([taskName], error, 'execution-read');
     return;
   }
