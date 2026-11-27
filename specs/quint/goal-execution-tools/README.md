@@ -25,7 +25,8 @@ connection can drive the same goal (issue
 - `Current`: no interlock. `begin` never takes anything, so `M` and `X` can both be between
   `begin` and `commit` for the same goal. The saved goal write is still atomic (the goal-execution
   lock), so the defect is not a torn write; it is two controllers deciding on the same goal from
-  the same old state.
+  the same old state. Current は、manager と外の両方に 4 つの道具があり lease が無い状態である。
+  今のバイナリで外に道具が無いことそのものは表していない。
 - `Fixed`: both drivers take a per-goal driver lease for the whole operation. A call that finds a
   live lease held by the other driver is refused (`refuse`) and names the holder. A lease left by
   a dead holder is reclaimed by the next `begin` (`beginAfterStaleLease`). `commit`, `abandon` and

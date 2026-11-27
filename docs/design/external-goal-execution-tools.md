@@ -232,4 +232,4 @@ Goal <goalId> has an unreadable driver lease (.takt/goals/<goalId>/driver.json).
 - PID と開始時刻は呼び出しを実行したホストで見る。複数ホストで同じ `.takt/` を共有する構成は、
   既存のロックと同じく対象外。
 
-範囲の外に出ない（#179 の 3 点、つまり `all` への登録・二重起動の拒否・権限を増やさない、に収めた。範囲の外に出る点は無い）。
+採否（2026-11-27）: 「実行中」は 4 つの道具の処理中に限る。タスク実行中の外からの pause と abort は成功する。lease（driver.json、相手が持っている間は manager 側の同じ 4 つも external 同士も失敗する、死んだ PID の回収は 3-2）は認め、壊れた lease は消さない。新しい権限は足さない。
