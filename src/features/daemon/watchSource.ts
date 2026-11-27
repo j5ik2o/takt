@@ -17,7 +17,9 @@ import { readWatchGoal, readWatchGoals, readWatchInquiries, readWatchTasks, type
 import { DaemonConversations } from './conversationState.js';
 import { projectKey, routeAssignment } from './routing.js';
 import { globalDaemonConfiguration, readDaemonConfiguration } from './configuration.js';
-import { DaemonPersistedFiles, type DaemonInquiryOwner } from '../../infra/daemon/persistedFiles.js';
+import { DaemonPersistedFiles, inspectDeletionOwner, type DaemonInquiryOwner } from '../../infra/daemon/persistedFiles.js';
+import { readPendingGoalTaskCompletions, type PendingGoalTaskCompletion } from '../../infra/task/taskStateReader.js';
+import { publishPendingGoalTaskCompletions } from './pendingGoalTaskCompletions.js';
 import type { ManagerPatrolTarget } from './patrols.js';
 import { WatchGoalReader } from './watchers/goalReader.js';
 import type { GoalQuestion } from '../../infra/goals/schema.js';
@@ -26,6 +28,35 @@ import { isGoalFinished, isGoalPatrolCandidate } from '../../infra/goals/activit
 
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
+const MAX_PENDING_COMPLETION_REPORTS = 256;
+
+/**
+ * The report record shared by `hasWork` and the completion resend (#170): the same unchanged
+ * record is reported once, however often the watch reads it. `valid` clears one record's
+ * reports (keys below a `##` namespace belong to other checks and are kept).
+ */
+class PendingCompletionReports {
+  private readonly reported = new Set<string>();
+  constructor(private readonly onError: (error: unknown) => void) {}
+
+  async invalid(key: string, error: unknown): Promise<void> {
+    if (this.reported.has(key)) return;
+    if (this.reported.size >= MAX_PENDING_COMPLETION_REPORTS) this.reported.delete(this.reported.keys().next().value!);
+    this.reported.add(key);
+    this.onError(error);
+  }
+
+  valid(scope: string): void {
+    for (const key of [...this.reported]) {
+      if (key === scope || (key.startsWith(`${scope}#`) && !key.startsWith(`${scope}##`))) this.reported.delete(key);
+    }
+  }
+}
+
+function unknownDeletionKey(repositoryDirectory: string, taskName: string): string {
+  return `${join(repositoryDirectory, '.takt', 'tasks.yaml')}##unknown-deletion##${taskName}`;
+}
+
 /** 保存ファイルから観測対象を組み立てる。 */
 export class FileDaemonWatchSource implements DaemonWatchSource {
   async close(): Promise<void> { await this.goalReader.close(); }
@@ -33,6 +64,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
   private readonly epicFiles: DaemonEpicFiles;
   // 監視と公開待ちの走査は同じファイルを読むため、知らせた記録を共有する。
   private readonly invalidInquiries: InvalidInquiryFileReports;
+  private readonly pendingCompletionReports: PendingCompletionReports;
   private inquiriesInitialized = false;
   constructor(private readonly conversations: DaemonConversations,
     private readonly publish: (notice: InquiryNotice) => Promise<void>, private readonly onError: (error: unknown) => void,
@@ -41,6 +73,7 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
     private readonly goalReader: WatchGoalReader = new WatchGoalReader()) {
     this.epicFiles = new DaemonEpicFiles(conversations.routing.directory);
     this.invalidInquiries = new InvalidInquiryFileReports(onError);
+    this.pendingCompletionReports = new PendingCompletionReports(onError);
   }
 
   private async *projects() {
@@ -62,10 +95,15 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
       }
       // 読取失敗ではゴールの終了を確認できないため、daemon を維持する。
       if (goalReadFailed) return true;
+      // The pending mark is read before the inbox (#170): a resend writes the inbox first and
+      // clears the mark after, so a mark that is already gone has its inbox record behind it.
+      if (await this.hasPendingCompletionWork(project.repositoryDirectory)) return true;
       if ((await listWatchEntries(await files.inboxDirectory(project.repositoryDirectory))).some((entry) => entry.isFile() && entry.name.endsWith('.json'))) return true;
       try {
         if ((await readWatchTasks(project.repositoryDirectory)).some((task) => task.status === 'pending' || task.status === 'running')) return true;
-      } catch (error) { this.onError(error); }
+      } catch (error) {
+        await this.pendingCompletionReports.invalid(`${join(project.repositoryDirectory, '.takt', 'tasks.yaml')}##file`, error);
+      }
     }
     for (const assignment of await this.conversations.routing.assignments()) {
       if (assignment.kind === 'daemon') continue;
@@ -80,6 +118,66 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
       if ((await files.listPendingInquiryAnswerPublications(owner, this.invalidInquiries)).length > 0) return true;
     }
     return false;
+  }
+
+  /** Whether one pending completion in this project counts as daemon work (#170). */
+  private async hasPendingCompletionWork(repositoryDirectory: string): Promise<boolean> {
+    const completions = await readPendingGoalTaskCompletions(repositoryDirectory, this.pendingCompletionReports);
+    for (const completion of completions) {
+      if (await this.countsAsWork(repositoryDirectory, completion)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * A pending completion counts as work unless its deletion reservation has an unknown owner:
+   * that reservation can never be resolved by waiting, so it is reported once and left for
+   * the next daemon start instead of keeping this daemon alive forever (#170).
+   */
+  private async countsAsWork(repositoryDirectory: string, completion: PendingGoalTaskCompletion): Promise<boolean> {
+    if (completion.deletion === undefined) return true;
+    let owner: Awaited<ReturnType<typeof inspectDeletionOwner>>;
+    try {
+      owner = await inspectDeletionOwner(completion.deletion);
+    } catch (error) {
+      await this.pendingCompletionReports.invalid(unknownDeletionKey(repositoryDirectory, completion.name), error);
+      return false;
+    }
+    if (owner === 'unknown') {
+      await this.pendingCompletionReports.invalid(unknownDeletionKey(repositoryDirectory, completion.name),
+        new Error(`Pending goal task completion for task ${completion.name} in ${join(repositoryDirectory, '.takt', 'tasks.yaml')} is guarded by a deletion whose owner cannot be checked; leaving it for the next daemon start.`));
+      return false;
+    }
+    return true;
+  }
+
+  /** The daemon's resend pass for pending goal task completions (#170), run on the files interval. */
+  async taskCompletions(): Promise<void> {
+    for await (const project of this.projects()) {
+      const completions = await readPendingGoalTaskCompletions(project.repositoryDirectory, this.pendingCompletionReports);
+      const publishable: PendingGoalTaskCompletion[] = [];
+      for (const completion of completions) {
+        if (completion.deletion !== undefined) {
+          let owner: Awaited<ReturnType<typeof inspectDeletionOwner>>;
+          try {
+            owner = await inspectDeletionOwner(completion.deletion);
+          } catch (error) {
+            await this.pendingCompletionReports.invalid(unknownDeletionKey(project.repositoryDirectory, completion.name), error);
+            continue;
+          }
+          if (owner === 'unknown') {
+            await this.pendingCompletionReports.invalid(unknownDeletionKey(project.repositoryDirectory, completion.name),
+              new Error(`Pending goal task completion for task ${completion.name} in ${join(project.repositoryDirectory, '.takt', 'tasks.yaml')} is guarded by a deletion whose owner cannot be checked; leaving it for the next daemon start.`));
+            continue;
+          }
+        }
+        publishable.push(completion);
+      }
+      await publishPendingGoalTaskCompletions(this.conversations.routing.directory,
+        publishable.map((completion) => ({ ...completion, repositoryDirectory: project.repositoryDirectory })),
+        (repositoryDirectory, goalId) => this.goalReader.read(repositoryDirectory, goalId),
+        this.onError);
+    }
   }
 
   async runs(): Promise<readonly RunWatchTarget[]> {

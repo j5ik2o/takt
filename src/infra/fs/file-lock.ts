@@ -53,8 +53,15 @@ function parseOwner(content: string | undefined): LockOwner | undefined {
   const raw = value as Record<string, unknown>;
   if (!Number.isSafeInteger(raw.pid) || (raw.pid as number) <= 0) return undefined;
   const identity = raw.processIdentity;
-  // An unavailable OS inspector leaves identity unknown, just as for execution locks.
-  if (identity === undefined) return { pid: raw.pid as number, processIdentity: undefined };
+  if (identity === undefined) {
+    // FileAsyncLock records the same start time at the top level ({ pid, startTime, token });
+    // it proves PID reuse exactly as the nested form does.
+    if (typeof raw.startTime === 'string' && raw.startTime.trim().length > 0) {
+      return { pid: raw.pid as number, processIdentity: { startTime: raw.startTime } };
+    }
+    // An unavailable OS inspector leaves identity unknown, just as for execution locks.
+    return { pid: raw.pid as number, processIdentity: undefined };
+  }
   if (identity === null || typeof identity !== 'object' || Array.isArray(identity)
     || !('startTime' in identity) || typeof identity.startTime !== 'string'
     || identity.startTime.trim().length === 0) return undefined;

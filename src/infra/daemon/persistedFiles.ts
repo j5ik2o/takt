@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, readdir, realpath } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
-import { parse as parseYaml } from 'yaml';
+import { parse as parseYaml, parseDocument } from 'yaml';
 import { z } from 'zod/v4';
 import { GoalAnswerSchema, GoalExecutionOriginSchema, GoalIdSchema, GoalQuestionSchema, GoalSchema, GoalTaskResultSchema, type Goal, type GoalQuestion } from '../goals/schema.js';
 import { projectIdForCanonicalDirectory } from '../config/global/projectRegistry.js';
@@ -11,16 +11,17 @@ import type { Language } from '../../core/models/types.js';
 import { managerTurnFailureNotification } from '../goals/notifications.js';
 import { FileAsyncLock } from './lock.js';
 import { readDisplayFile } from './displayFiles.js';
-import { hasCode, readPrivateFile, writePrivateFile } from './privateFile.js';
+import { hasCode, readEntirePrivateFile, readPrivateFile, writePrivateFile } from './privateFile.js';
 import { readInboxJson } from './inboxFiles.js';
 import { parseInquiryFile, type InvalidInquiryFileReports } from '../goals/inquiry-files.js';
+import { observeProcess } from './process.js';
 
 const MAX_PROJECTION_BYTES = 256 * 1024;
 // 業務 schema の値 import は run の同期読取まで到達するため、ここでは保存形式だけを検証する。
 const tasksFile = z.object({ tasks: z.array(z.record(z.string(), z.unknown())) }).strict();
 const common = { goalId: GoalIdSchema, createdAt: z.iso.datetime() };
 const inboxEvent = z.discriminatedUnion('kind', [
-  z.object({ ...common, kind: z.literal('completion'), taskName: z.string().min(1), runSlug: z.string().min(1).optional(), result: GoalTaskResultSchema }).strict(),
+  z.object({ ...common, kind: z.literal('completion'), taskName: z.string().min(1), runSlug: z.string().min(1).optional(), executionId: z.string().min(1).optional(), result: GoalTaskResultSchema }).strict(),
   z.object({ ...common, kind: z.literal('pr_failed'), expectedSha: z.string(), reason: z.string() }).strict(),
   z.object({ ...common, kind: z.literal('answer'), goalId: GoalIdSchema.nullable(), questionId: z.uuid(),
     questionBody: z.string().optional(), answer: GoalAnswerSchema }).strict(),
@@ -31,6 +32,75 @@ const inquiryId = z.uuid();
 const workspaceRepositories = z.object({ id: z.uuid(), repositoryDirectories: z.array(z.string().refine(isAbsolute)) });
 
 export type DaemonInquiryOwner = Extract<ConversationAssignment, { kind: 'workspace' | 'repository' }>;
+
+/** The identity a pending completion mark is cleared for: every field must still match (#170). */
+export interface GoalTaskCompletionIdentity {
+  goalId: string;
+  taskName: string;
+  status: string;
+  runSlug?: string;
+  executionId?: string;
+}
+
+/**
+ * Classifies the owner of a `deletion` reservation by whether its process is still there.
+ * A live PID without a recorded start time stays `unknown`: PID reuse can never be ruled
+ * out for it, so the daemon must neither rewrite the record nor wait for it forever.
+ */
+export async function inspectDeletionOwner(deletion: { owner_pid: number; owner_start_time?: string }): Promise<'alive' | 'dead' | 'unknown'> {
+  const observed = await observeProcess(
+    { pid: deletion.owner_pid, startTime: deletion.owner_start_time ?? null },
+    { signal: new AbortController().signal, timeoutMs: 5000 },
+  );
+  return observed.kind;
+}
+
+/** The end offset of a node's own content, recursing into a collection's last item. */
+function nodeContentEnd(node: unknown): number | undefined {
+  if (node === null || typeof node !== 'object') return undefined;
+  const candidate = node as { range?: [number, number, number]; items?: unknown[]; value?: unknown };
+  if (Array.isArray(candidate.items) && candidate.items.length > 0) {
+    // A collection's own range can run past its last item (a block mapping's range reaches
+    // into the next record); its content ends where its last item ends.
+    return nodeContentEnd(candidate.items[candidate.items.length - 1]) ?? candidate.range?.[1];
+  }
+  if ('key' in candidate && 'value' in candidate) return nodeContentEnd(candidate.value);
+  return candidate.range?.[1];
+}
+
+/**
+ * Removes the lines of the given keys from one task record in tasks.yaml text, using the
+ * parsed document's node ranges to find them. Returns undefined when the record's shape
+ * is not the plain block style this surgery understands.
+ */
+function removeTaskRecordLines(text: string, document: ReturnType<typeof parseDocument>, index: number, keys: readonly string[]): string | undefined {
+  const sequence = document.getIn(['tasks'], true) as { items?: unknown[] } | undefined;
+  const item = sequence?.items?.[index] as { items?: Array<{ key?: { range?: [number, number, number] }; value?: unknown }> } | undefined;
+  if (item === undefined || !Array.isArray(item.items)) return undefined;
+  const spans: Array<[number, number]> = [];
+  for (const key of keys) {
+    const pair = item.items.find((candidate) => {
+      const node = candidate.key as { value?: unknown } | undefined;
+      return node?.value === key;
+    });
+    if (pair?.key?.range === undefined) return undefined;
+    const lineStart = text.lastIndexOf('\n', pair.key.range[0] - 1) + 1;
+    // The key must open its own line. A flow-style record shares its line with the rest of
+    // the record, and cutting that line would take the neighbouring tasks with it.
+    if (!/^\s*$/.test(text.slice(lineStart, pair.key.range[0]))) return undefined;
+    const valueEnd = nodeContentEnd(pair.value);
+    if (valueEnd === undefined) return undefined;
+    const newline = text.indexOf('\n', valueEnd);
+    const lineEnd = newline === -1 ? text.length : newline;
+    // Only trailing spaces or a comment may follow the value on its last line.
+    if (!/^\s*(#.*)?$/.test(text.slice(valueEnd, lineEnd))) return undefined;
+    spans.push([lineStart, newline === -1 ? text.length : newline + 1]);
+  }
+  spans.sort((left, right) => right[0] - left[0]);
+  let result = text;
+  for (const [start, end] of spans) result = result.slice(0, start) + result.slice(end);
+  return result;
+}
 
 /** 既存形式を小さい読取に限定。大きい goals/tasks の全件解析には使わない。 */
 export class DaemonPersistedFiles {
@@ -154,9 +224,78 @@ export class DaemonPersistedFiles {
 
   // 受信箱のファイル名と置き場所は saveManagerEvent と同じ形式にそろえる。
   private async saveAnswerEvent(repositoryDirectory: string, input: Omit<Extract<z.input<typeof inboxEvent>, { kind: 'answer' }>, 'createdAt'>): Promise<void> {
+    await this.saveInboxEvent(repositoryDirectory, input);
+  }
+
+  private async saveInboxEvent(repositoryDirectory: string, input: Omit<z.input<typeof inboxEvent>, 'createdAt'>): Promise<void> {
     const event = inboxEvent.parse({ ...input, createdAt: new Date().toISOString() });
     const name = `${event.createdAt.replaceAll(':', '-')}-${process.hrtime.bigint().toString().padStart(20, '0')}-${randomUUID()}.json`;
     await writePrivateFile(join(await this.inboxDirectory(repositoryDirectory), name), JSON.stringify(event));
+  }
+
+  /** Writes one pending goal task completion to the manager inbox, in the saveManagerEvent format (#170). */
+  async saveGoalTaskCompletion(repositoryDirectory: string, input: {
+    goalId: string; taskName: string; runSlug?: string; executionId?: string;
+    result: z.infer<typeof GoalTaskResultSchema>;
+  }): Promise<void> {
+    await this.saveInboxEvent(repositoryDirectory, { kind: 'completion', ...input });
+  }
+
+  /**
+   * Clears one pending completion mark from tasks.yaml with a minimal YAML rewrite (#170):
+   * only the mark (and a dead owner's `deletion` reservation) is removed, every other record,
+   * column, comment and formatting stays as it was. Returns false without rewriting when no
+   * record matches all identity conditions, or when a live or unknown deletion owner guards it.
+   */
+  async markGoalTaskCompletionPublished(repositoryDirectory: string, identity: GoalTaskCompletionIdentity): Promise<boolean> {
+    const path = join(repositoryDirectory, '.takt', 'tasks.yaml');
+    const lock = new FileAsyncLock();
+    return lock.exclusive(`${path}.lock`, async () => {
+      const content = await readEntirePrivateFile(path);
+      if (content === undefined) return false;
+      const document = parseDocument(content.toString('utf8'));
+      if (document.errors.length > 0) return false;
+      const value = document.toJS({ maxAliasCount: 0 }) as { tasks?: unknown } | null;
+      if (value === null || typeof value !== 'object' || !Array.isArray(value.tasks)) return false;
+      const index = value.tasks.findIndex((entry) => {
+        if (typeof entry !== 'object' || entry === null) return false;
+        const record = entry as Record<string, unknown>;
+        return record.name === identity.taskName
+          && record.goal_id === identity.goalId
+          && record.status === identity.status
+          && record.run_slug === identity.runSlug
+          && record.execution_id === identity.executionId
+          && record.completion_publication_pending === true;
+      });
+      if (index === -1) return false;
+      const record = value.tasks[index] as Record<string, unknown>;
+      let removeDeletion = false;
+      if (record.deletion !== undefined) {
+        const deletion = record.deletion as Record<string, unknown> | null;
+        if (deletion === null || typeof deletion !== 'object'
+          || typeof deletion.owner_pid !== 'number' || !Number.isInteger(deletion.owner_pid) || deletion.owner_pid <= 0
+          || (deletion.owner_start_time !== undefined && typeof deletion.owner_start_time !== 'string')) return false;
+        const owner = await inspectDeletionOwner({
+          owner_pid: deletion.owner_pid,
+          ...(typeof deletion.owner_start_time === 'string' ? { owner_start_time: deletion.owner_start_time } : {}),
+        });
+        if (owner !== 'dead') return false;
+        removeDeletion = true;
+      }
+      // Remove only the mark's own lines from the original text, so every other record,
+      // column, comment and spacing stays byte-for-byte as it was.
+      const text = content.toString('utf8');
+      const rewritten = removeTaskRecordLines(text, document, index, removeDeletion
+        ? ['completion_publication_pending', 'deletion'] : ['completion_publication_pending']);
+      if (rewritten === undefined) {
+        document.deleteIn(['tasks', index, 'completion_publication_pending']);
+        if (removeDeletion) document.deleteIn(['tasks', index, 'deletion']);
+        await writePrivateFile(path, document.toString());
+        return true;
+      }
+      await writePrivateFile(path, rewritten);
+      return true;
+    }, { signal: new AbortController().signal, timeoutMs: 5000 });
   }
 
   async readInboxEvent(repositoryDirectory: string, name: string) {
