@@ -14,10 +14,15 @@ afterEach(() => {
 });
 
 // 実物の入口と同じ相対パスに、SIGTERM を無視して動き続ける代役を置く。
-async function startTurnProcess(repository: string, cwd: string): Promise<ChildProcess> {
+function writeTermIgnoringTurnEntry(repository: string): string {
   const entry = join(repository, 'dist/app/daemon-turn/index.js');
   mkdirSync(join(repository, 'dist/app/daemon-turn'), { recursive: true });
   writeFileSync(entry, "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready');");
+  return entry;
+}
+
+async function startTurnProcess(repository: string, cwd: string): Promise<ChildProcess> {
+  const entry = writeTermIgnoringTurnEntry(repository);
   mkdirSync(cwd, { recursive: true });
   const child = spawn(process.execPath, [entry], { cwd, detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
   started.push(child);
@@ -66,7 +71,13 @@ it.skipIf(process.platform === 'win32')('does not report a turn process that fin
 
 // #177: ターン用プロセスのグループに残った子孫も、実行単位の隔離ルート（isolationRoot）の範囲で見つけて止める。
 // 各テストは自分の fixtureRoot() を isolationRoot として渡す。実行全体のルートを渡すと、同時に動く別のテストのプロセスまで止めてしまう。
-interface LeftoverScope { isolationRoot?: string; settleMs?: number; terminationGraceMs?: number }
+interface LeftoverScope {
+  isolationRoot?: string;
+  settleMs?: number;
+  terminationGraceMs?: number;
+  // 試験専用の差し替え口。1 回目だけ空の一覧を返して 2 パス目の取り直しを確かめる。
+  findLeftovers?: () => LeftoverProcess[];
+}
 interface LeftoverProcess { pid: number; cwd: string; kind?: string; pgid?: number }
 const findInScope = findLeftoverTurnProcesses as (repositoryRoot: string, scope?: LeftoverScope) => LeftoverProcess[];
 const terminateInScope = terminateLeftoverTurnProcesses as (repositoryRoot: string, scope?: LeftoverScope) => Promise<LeftoverProcess[]>;
@@ -255,4 +266,71 @@ it.skipIf(process.platform === 'win32')('does not signal a process that no longe
   expect(await pending).toEqual([]);
   expect(child.exitCode).toBeNull();
   expect(child.signalCode).toBeNull();
+});
+
+function processField(pid: number, field: 'stat' | 'command'): string {
+  return execFileSync('ps', ['-ww', '-o', `${field}=`, '-p', String(pid)], { encoding: 'utf8' }).trim();
+}
+
+it.skipIf(process.platform === 'win32')('takes a second listing when the first one comes back empty, so a leftover is still terminated (#177)', async () => {
+  // 一覧を取った時点でリーダーが生きていると、その子孫は「主がいる」として候補外になり、
+  // 一覧は空になる。その直後にリーダーが終わると、取り直さない限り子孫を取りこぼす。
+  const root = fixtureRoot();
+  const repository = join(root, 'repository');
+  const cwd = join(root, 'takt-test-global-efg123', '.takt');
+  const { descendant } = await startTurnGroup(repository, cwd, 'exit', { cwd, ignoresTerm: false });
+
+  let calls = 0;
+  const findOnceEmpty = (): LeftoverProcess[] => {
+    calls += 1;
+    return calls === 1 ? [] : findInScope(repository, { isolationRoot: root });
+  };
+
+  const leftovers = await terminateInScope(repository, {
+    isolationRoot: root,
+    settleMs: 200,
+    terminationGraceMs: 200,
+    findLeftovers: findOnceEmpty,
+  });
+
+  expect(calls).toBeGreaterThanOrEqual(2);
+  expect(leftovers).toEqual([expect.objectContaining({ pid: descendant, kind: 'descendant' })]);
+  await vi.waitFor(() => expect(isRunning(descendant)).toBe(false));
+  expect(findInScope(repository, { isolationRoot: root })).toEqual([]);
+});
+
+it.skipIf(process.platform === 'win32')('does not report an unreaped zombie as a survivor after the kill (#177)', async () => {
+  // 親（perl）が回収しないので、SIGKILL したターン用プロセスは未回収ゾンビとして残る。
+  // ps の stat が Z の行は残存の候補から外れるので、回収待ちを「終わらない」と誤らない。
+  const root = fixtureRoot();
+  const repository = join(root, 'repository');
+  const cwd = join(root, 'takt-test-global-hij456', '.takt');
+  const entry = writeTermIgnoringTurnEntry(repository);
+  mkdirSync(cwd, { recursive: true });
+  const script = [
+    'my $pid = fork();',
+    'die "fork failed" unless defined $pid;',
+    'if ($pid == 0) { setpgrp(0, 0); chdir($ARGV[0]) or die; exec($ARGV[1], $ARGV[2]); }',
+    "print \"$pid\\n\";",
+    '$| = 1;',
+    'sleep 1 while 1;',
+  ].join('\n');
+  const holder = spawn('perl', ['-e', script, cwd, process.execPath, entry], { stdio: ['ignore', 'pipe', 'ignore'] });
+  holders.push(holder);
+  const leader = await new Promise<number>((resolve, reject) => {
+    let output = '';
+    holder.stdout!.on('data', (chunk: Buffer) => {
+      output += String(chunk);
+      const line = output.split('\n').find((candidate) => /^\d+$/.test(candidate));
+      if (line !== undefined) resolve(Number(line));
+    });
+    holder.once('exit', () => reject(new Error(`perl exited before reporting the leader pid: ${output}`)));
+  });
+  await vi.waitFor(() => expect(processField(leader, 'command')).toContain(entry));
+
+  const leftovers = await terminateInScope(repository, { isolationRoot: root, settleMs: 200, terminationGraceMs: 200 });
+
+  expect(leftovers).toEqual([expect.objectContaining({ pid: leader, kind: 'turn' })]);
+  expect(processField(leader, 'stat')).toMatch(/^Z/);
+  expect(findInScope(repository, { isolationRoot: root })).toEqual([]);
 });

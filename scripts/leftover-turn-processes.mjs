@@ -80,19 +80,30 @@ function stillMatches(repositoryRoot, options, found) {
 }
 
 export async function terminateLeftoverTurnProcesses(repositoryRoot, options = {}) {
+  // 試験が「1 回目だけ空の一覧」を作るための差し替え口。既定は実物の一覧。
+  const find = options.findLeftovers ?? (() => findLeftoverTurnProcesses(repositoryRoot, options));
   const all = [];
   for (let pass = 0; pass < 2; pass += 1) {
-    const found = findLeftoverTurnProcesses(repositoryRoot, options);
-    if (found.length === 0) break;
+    const found = find();
+    // 1 回目の一覧と作業ディレクトリの取得の間にリーダーが終了すると、子孫は
+    // 「リーダーが生きている」と見た一覧のせいで候補から外れる。空でも次の
+    // パスで取り直す（最大 2 パス）。
+    if (found.length === 0) continue;
     const stuck = new Set(await waitUntilGone(found.map(({ pid }) => pid), pass === 0 ? options.settleMs ?? 5_000 : 0));
     const leftovers = stillMatches(repositoryRoot, options, found.filter(({ pid }) => stuck.has(pid)));
     const target = (f) => (f.kind === 'turn' && f.pid === f.pgid ? -f.pid : f.pid);
     for (const f of leftovers) signal(target(f), 'SIGTERM');
     const remaining = await waitUntilGone(leftovers.map((f) => f.pid), options.terminationGraceMs ?? 2_000);
     for (const f of stillMatches(repositoryRoot, options, leftovers.filter((f) => remaining.includes(f.pid)))) signal(target(f), 'SIGKILL');
-    const survivors = await waitUntilGone(leftovers.map((f) => f.pid), 2_000);
-    if (survivors.length > 0) throw new Error(`Turn processes did not terminate: ${survivors.join(', ')}`);
+    await waitUntilGone(leftovers.map((f) => f.pid), 2_000);
     all.push(...leftovers);
+  }
+  // 終了を待つ間に新しい子孫が生まれることがある。ゾンビ（ps の stat が Z）は
+  // findLeftoverTurnProcesses が候補にしないので、ここで取り直せば
+  // 「回収待ちなだけ」を残存と誤らない。
+  const survivors = find();
+  if (survivors.length > 0) {
+    throw new Error(`Turn processes did not terminate: ${survivors.map(({ pid }) => pid).join(', ')}`);
   }
   return all;
 }
