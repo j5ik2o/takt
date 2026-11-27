@@ -11,10 +11,11 @@ import { join } from 'node:path';
 import type { TaskRunner, TaskState } from '../../../infra/task/index.js';
 import type { TaskFinishHookConfig } from '../../../core/models/task-finish-hook.js';
 import { loadProjectConfig } from '../../../infra/config/project/projectConfig.js';
+import { isFileLockTimeoutError } from '../../../infra/fs/file-lock.js';
 import { buildCommandEnv, runBoundedCommand } from '../../../shared/utils/bounded-command-runner.js';
 import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
+import { sanitizeSensitiveText } from '../../../shared/utils/sensitive-text.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
-import { warn } from '../../../shared/ui/index.js';
 
 const log = createLogger('task-finish-hook');
 
@@ -24,9 +25,15 @@ type TerminalStatus = (typeof TERMINAL_STATUSES)[number];
 /** Keeps one oversized failure message from making the child's environment unspawnable. */
 const MAX_FAILURE_REASON_CHARS = 4096;
 
+const TASK_FINISH_HOOK_READ_MAX_ATTEMPTS = 2;
+const TASK_FINISH_HOOK_READ_RETRY_INTERVAL_MS = 250;
+const MAX_NOTICE_TASK_NAMES = 10;
+
 export interface TaskFinishHookOptions {
   emitStatusLog?: boolean;
 }
+
+type LostHookPhase = 'config-read' | 'named-read' | 'execution-read' | 'hook-call';
 
 function isTerminal(state: TaskState | undefined): state is TaskState & { status: TerminalStatus } {
   return state !== undefined && (TERMINAL_STATUSES as readonly string[]).includes(state.status);
@@ -34,6 +41,81 @@ function isTerminal(state: TaskState | undefined): state is TaskState & { status
 
 function readTaskState(taskRunner: TaskRunner, taskName: string): TaskState | undefined {
   return taskRunner.listTaskStateItems().find((item) => item.name === taskName);
+}
+
+function formatTaskNames(taskNames: readonly string[]): string {
+  const unique = [...new Set(taskNames.map((name) => sanitizeTerminalText(name)))];
+  const shown = unique.slice(0, MAX_NOTICE_TASK_NAMES).map((name) => `"${name}"`);
+  const suffix = unique.length > MAX_NOTICE_TASK_NAMES ? ` and ${unique.length - MAX_NOTICE_TASK_NAMES} more` : '';
+  return shown.join(', ') + suffix;
+}
+
+function writeNoticeToStderr(message: string): void {
+  const sanitized = sanitizeTerminalText(sanitizeSensitiveText(message));
+  process.stderr.write(`${sanitized}\n`);
+}
+
+function emitNotice(message: string, taskNames: readonly string[], reason: unknown): void {
+  try {
+    writeNoticeToStderr(message);
+  } catch (warnError) {
+    try {
+      log.error('Task finish hook notice could not be shown', {
+        taskNames, error: getErrorMessage(reason), warnError: getErrorMessage(warnError),
+      });
+    } catch {
+      // A failed notice must never reach the caller.
+    }
+    return;
+  }
+  log.error('Task finish hook could not run', { taskNames, error: getErrorMessage(reason) });
+}
+
+function reportLostHook(
+  taskNames: readonly string[],
+  reason: unknown,
+  phase: LostHookPhase,
+): void {
+  const names = formatTaskNames(taskNames);
+  const reasonText = sanitizeSensitiveText(getErrorMessage(reason));
+  let detail: string;
+  if (phase === 'config-read') {
+    detail = `reading .takt/config.yaml failed: ${reasonText}`;
+  } else if (phase === 'named-read' || phase === 'execution-read') {
+    detail = isFileLockTimeoutError(reason)
+      ? `reading .takt/tasks.yaml timed out after ${TASK_FINISH_HOOK_READ_MAX_ATTEMPTS} attempts: ${reasonText}`
+      : `reading .takt/tasks.yaml failed: ${reasonText}`;
+  } else {
+    detail = `the hook command could not be started: ${reasonText}`;
+  }
+  const message = `Task finish hook was not run for ${names}: ${detail}. The saved task state is unchanged; the hook is not retried later.`;
+  emitNotice(message, taskNames, reason);
+}
+
+function reportUnconfirmedPreRead(taskName: string, reason: unknown): void {
+  const names = formatTaskNames([taskName]);
+  const reasonText = sanitizeSensitiveText(getErrorMessage(reason));
+  const message = `Task finish hook for ${names} ran without a confirmed previous state: the state before execution could not be read (${reasonText}), so the hook may run for a state that this execution did not save.`;
+  emitNotice(message, [taskName], reason);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function readTaskStateItemsWithRetry(taskRunner: TaskRunner): Promise<TaskState[]> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return taskRunner.listTaskStateItems();
+    } catch (error) {
+      if (!isFileLockTimeoutError(error) || attempt >= TASK_FINISH_HOOK_READ_MAX_ATTEMPTS) {
+        throw error;
+      }
+      await delay(TASK_FINISH_HOOK_READ_RETRY_INTERVAL_MS);
+    }
+  }
 }
 
 /** Identifies one saved terminal state, so a state that was already saved before is not reported again. */
@@ -100,7 +182,11 @@ async function callHook(
     taskName, status: state.status, reason, stderr: result.stderr,
   });
   if (options?.emitStatusLog !== false) {
-    warn(`Task finish hook for "${sanitizeTerminalText(taskName)}" ${sanitizeTerminalText(reason)}; the task state is unchanged`);
+    try {
+      writeNoticeToStderr(`Task finish hook for "${taskName}" ${reason}; the task state is unchanged`);
+    } catch {
+      // A failed notice must never reach the caller.
+    }
   }
 }
 
@@ -110,12 +196,41 @@ async function runHook(
   taskName: string,
   stampBefore: string | undefined,
   options: TaskFinishHookOptions | undefined,
+  beforeReadFailed = false,
+  beforeReadError?: unknown,
 ): Promise<void> {
-  const state = readTaskState(taskRunner, taskName);
+  let items: TaskState[];
+  try {
+    items = await readTaskStateItemsWithRetry(taskRunner);
+  } catch (error) {
+    try {
+      const existingHook = loadProjectConfig(projectCwd).taskFinishHook;
+      if (existingHook === undefined) return;
+    } catch {
+      // Hook presence is unknown, so the lost hook is reported below.
+    }
+    reportLostHook([taskName], error, 'execution-read');
+    return;
+  }
+  const state = items.find((item) => item.name === taskName);
   if (!isTerminal(state) || terminalStamp(state) === stampBefore) return;
-  const hook = loadProjectConfig(projectCwd).taskFinishHook;
+  let hook: TaskFinishHookConfig | undefined;
+  try {
+    hook = loadProjectConfig(projectCwd).taskFinishHook;
+  } catch (error) {
+    reportLostHook([taskName], error, 'config-read');
+    return;
+  }
   if (hook === undefined) return;
-  await callHook(projectCwd, hook, state, options);
+  try {
+    await callHook(projectCwd, hook, state, options);
+  } catch (error) {
+    reportLostHook([taskName], error, 'hook-call');
+    return;
+  }
+  if (beforeReadFailed) {
+    reportUnconfirmedPreRead(taskName, beforeReadError);
+  }
 }
 
 /**
@@ -130,15 +245,35 @@ export async function runTaskFinishHooks(
   options?: TaskFinishHookOptions,
 ): Promise<void> {
   if (taskNames.length === 0) return;
+  let hook: TaskFinishHookConfig | undefined;
   try {
-    const hook = loadProjectConfig(projectCwd).taskFinishHook;
-    if (hook === undefined) return;
-    const names = new Set(taskNames);
-    const states = taskRunner.listTaskStateItems().filter((item) => names.has(item.name)).filter(isTerminal);
-    // Side by side: aborting a goal with many pending tasks waits for one timeout, not one per task.
-    await Promise.all(states.map((state) => callHook(projectCwd, hook, state, options)));
+    hook = loadProjectConfig(projectCwd).taskFinishHook;
   } catch (error) {
-    log.error('Task finish hook could not run', { taskNames, error: getErrorMessage(error) });
+    reportLostHook(taskNames, error, 'config-read');
+    return;
+  }
+  if (hook === undefined) return;
+  let states: (TaskState & { status: TerminalStatus })[];
+  try {
+    const items = await readTaskStateItemsWithRetry(taskRunner);
+    const names = new Set(taskNames);
+    states = items.filter((item) => names.has(item.name)).filter(isTerminal);
+  } catch (error) {
+    reportLostHook(taskNames, error, 'named-read');
+    return;
+  }
+  // Side by side: aborting a goal with many pending tasks waits for one timeout, not one per task.
+  const results = await Promise.allSettled(states.map((state) => callHook(projectCwd, hook, state, options)));
+  const rejectedNames: string[] = [];
+  let firstReason: unknown;
+  results.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      rejectedNames.push(states[index]!.name);
+      if (firstReason === undefined) firstReason = result.reason;
+    }
+  });
+  if (rejectedNames.length > 0) {
+    reportLostHook(rejectedNames, firstReason, 'hook-call');
   }
 }
 
@@ -149,13 +284,27 @@ export async function runTaskFinishHooksForStates(
   options?: TaskFinishHookOptions,
 ): Promise<void> {
   if (states.length === 0) return;
+  const terminal = states.filter(isTerminal);
+  if (terminal.length === 0) return;
+  let hook: TaskFinishHookConfig | undefined;
   try {
-    const hook = loadProjectConfig(projectCwd).taskFinishHook;
-    if (hook === undefined) return;
-    const terminal = states.filter(isTerminal);
-    await Promise.all(terminal.map((state) => callHook(projectCwd, hook, state, options)));
+    hook = loadProjectConfig(projectCwd).taskFinishHook;
   } catch (error) {
-    log.error('Task finish hook could not run', { taskNames: states.map((state) => state.name), error: getErrorMessage(error) });
+    reportLostHook(terminal.map((state) => state.name), error, 'config-read');
+    return;
+  }
+  if (hook === undefined) return;
+  const results = await Promise.allSettled(terminal.map((state) => callHook(projectCwd, hook, state, options)));
+  const rejectedNames: string[] = [];
+  let firstReason: unknown;
+  results.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      rejectedNames.push(terminal[index]!.name);
+      if (firstReason === undefined) firstReason = result.reason;
+    }
+  });
+  if (rejectedNames.length > 0) {
+    reportLostHook(rejectedNames, firstReason, 'hook-call');
   }
 }
 
@@ -188,19 +337,23 @@ export async function withTaskFinishHook<T>(
   options?: TaskFinishHookOptions,
 ): Promise<T> {
   let stampBefore: string | undefined;
+  let beforeReadFailed = false;
+  let beforeReadError: unknown;
   try {
     stampBefore = terminalStamp(readTaskState(taskRunner, taskName));
   } catch (error) {
     // An execution starts from a running task, so an unreadable state is taken as "nothing saved yet".
+    beforeReadFailed = true;
+    beforeReadError = error;
     log.error('Task state was unreadable before execution', { taskName, error: getErrorMessage(error) });
   }
   try {
     return await execute();
   } finally {
     try {
-      await runHook(projectCwd, taskRunner, taskName, stampBefore, options);
+      await runHook(projectCwd, taskRunner, taskName, stampBefore, options, beforeReadFailed, beforeReadError);
     } catch (error) {
-      log.error('Task finish hook could not run', { taskName, error: getErrorMessage(error) });
+      reportLostHook([taskName], error, 'hook-call');
     }
   }
 }
