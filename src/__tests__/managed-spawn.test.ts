@@ -10,9 +10,10 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { spawnManagedProcess, terminateManagedProcesses } from '../shared/utils/spawn.js';
+import { spawnManagedProcess, terminateManagedProcesses, terminatePosixProcessTree } from '../shared/utils/spawn.js';
+import { scaledMs } from '../../scripts/test-time-factor.mjs';
 
 const temporaryDirectories: string[] = [];
 
@@ -66,10 +67,8 @@ describe('spawnManagedProcess', () => {
         expect(isProcessRunning(pids.leader)).toBe(false);
         expect(isProcessRunning(pids.grandchild)).toBe(true);
 
-        const [termination] = await Promise.allSettled([managed.terminate()]);
-        if (termination.status === 'rejected') {
-          expect(termination.reason).toMatchObject({ code: 'EPERM' });
-        }
+        // #177: macOS で孫が SIGKILL のあと未回収ゾンビだけになったグループに当たっても、EPERM を漏らさない。
+        await expect(managed.terminate()).resolves.toBeUndefined();
 
         await vi.waitFor(() => expect(isProcessRunning(pids.grandchild)).toBe(false));
       } finally {
@@ -362,4 +361,197 @@ it('cleans up managed providers while leaving independently spawned runs alive',
     expect(isProcessRunning(provider.child.pid!)).toBe(false);
     expect(isProcessRunning(run.pid!)).toBe(true);
   } finally { run.kill('SIGKILL'); await once(run, 'exit'); await provider.terminate(); }
+});
+
+// #177: macOS（XNU）では、残るメンバーがすべて未回収ゾンビのグループへの kill(-pgid, sig)（sig=0 を含む）が ESRCH ではなく EPERM を返す。
+// Linux では同じ状況で送信が成功する。どちらも回収されたあとは ESRCH になる。
+describe('terminatePosixProcessTree on a group whose members are unreaped zombies (#177)', () => {
+  const holders: { holder: ChildProcess; pgid?: number }[] = [];
+  afterEach(() => {
+    // 子は別のグループにいる（setpgrp）。準備の途中で失敗しても子が残らないよう、
+    // グループごと終わらせてから親（perl）を落とす。
+    for (const { holder, pgid } of holders.splice(0)) {
+      if (pgid !== undefined) {
+        try { process.kill(-pgid, 'SIGKILL'); } catch { /* already gone */ }
+      }
+      holder.kill('SIGKILL');
+    }
+  });
+
+  function processState(pid: number): { pgid: number; stat: string } | undefined {
+    try {
+      const [pgid, stat] = execFileSync('ps', ['-o', 'pgid=,stat=', '-p', String(pid)], { encoding: 'utf8' }).trim().split(/\s+/);
+      return { pgid: Number(pgid), stat: stat ?? '' };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * perl の親は子を回収しない（SIGCHLD の既定の動作）。子は自分のグループを作って率いる。
+   * `exit`: 子はすぐ終わり、グループには未回収ゾンビだけが残る。
+   * `wait-for-term`: 子は SIGTERM の既定の動作で終わるまで待ち、終わると未回収ゾンビになる。
+   * 親は SIGUSR1 を受けると子を回収して `reaped` を出す。
+   */
+  async function startUnreapedGroupLeader(behavior: 'exit' | 'wait-for-term'): Promise<{ pgid: number; requestReap(): void; reaped: Promise<void> }> {
+    const script = [
+      '$| = 1;',
+      'my $pid = fork();',
+      'die "fork failed" unless defined $pid;',
+      'if ($pid == 0) { setpgrp(0, 0); exit 0 if $ARGV[0] eq "exit"; sleep 1 while 1; }',
+      '$SIG{USR1} = sub { waitpid($pid, 0); print "reaped\\n"; };',
+      'print "$pid\\n";',
+      'sleep 1 while 1;',
+    ].join('\n');
+    const holder = spawn('perl', ['-e', script, behavior], { stdio: ['ignore', 'pipe', 'inherit'] });
+    const entry: { holder: ChildProcess; pgid?: number } = { holder };
+    holders.push(entry);
+    let output = '';
+    const reaped = new Promise<void>((resolve) => {
+      holder.stdout!.on('data', (chunk: Buffer) => {
+        output += chunk.toString();
+        if (output.includes('reaped\n')) resolve();
+      });
+    });
+    await vi.waitFor(() => expect(output).toMatch(/^\d+\n/));
+    const pgid = Number(output.split('\n')[0]);
+    entry.pgid = pgid;
+    await vi.waitFor(() => {
+      const state = processState(pgid);
+      expect(state?.pgid).toBe(pgid);
+      if (behavior === 'exit') expect(state?.stat).toMatch(/^Z/);
+    });
+    return { pgid, requestReap: () => { holder.kill('SIGUSR1'); }, reaped };
+  }
+
+  it.runIf(process.platform === 'darwin' || process.platform === 'linux')(
+    'settles once the zombies are reaped, returning false on macOS (EPERM, nothing sent) and true on Linux (the send succeeds)',
+    async () => {
+      const group = await startUnreapedGroupLeader('exit');
+      const originalKill = process.kill.bind(process);
+      let reapScheduled = false;
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation((target, signal) => {
+        try {
+          return originalKill(target, signal);
+        } finally {
+          if (target === -group.pgid && signal === 'SIGTERM' && !reapScheduled) {
+            reapScheduled = true;
+            setTimeout(group.requestReap, 50);
+          }
+        }
+      });
+      try {
+        await expect(terminatePosixProcessTree(group.pgid)).resolves.toBe(process.platform === 'linux');
+        await group.reaped;
+        if (process.platform === 'darwin') expect(killSpy).not.toHaveBeenCalledWith(-group.pgid, 'SIGKILL');
+      } finally {
+        killSpy.mockRestore();
+      }
+    },
+    scaledMs(10_000),
+  );
+
+  it.runIf(process.platform === 'darwin' || process.platform === 'linux')(
+    'returns true when the SIGKILL after the grace hits a group whose last member exited on SIGTERM and awaits reaping (parent deadline race)',
+    async () => {
+      const group = await startUnreapedGroupLeader('wait-for-term');
+      const originalKill = process.kill.bind(process);
+      let reapScheduled = false;
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation((target, signal) => {
+        try {
+          return originalKill(target, signal);
+        } finally {
+          if (target === -group.pgid && signal === 'SIGKILL' && !reapScheduled) {
+            reapScheduled = true;
+            setTimeout(group.requestReap, 50);
+          }
+        }
+      });
+      try {
+        await expect(terminatePosixProcessTree(group.pgid)).resolves.toBe(true);
+        expect(killSpy).toHaveBeenCalledWith(-group.pgid, 'SIGKILL');
+        await group.reaped;
+      } finally {
+        killSpy.mockRestore();
+      }
+    },
+    scaledMs(10_000),
+  );
+});
+
+// #177: kill(-pgid, ...) の結果を差し替えて、OS ごとの EPERM の扱いを確かめる。差し替えた番号には本物のシグナルを送らない。
+describe('terminatePosixProcessTree EPERM handling by platform (#177)', () => {
+  const fakeGroup = 4_193_987;
+  const originalPlatform = process.platform;
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { configurable: true, value: originalPlatform });
+    vi.restoreAllMocks();
+  });
+
+  function errno(code: string): NodeJS.ErrnoException {
+    const error = new Error(`kill ${code}`) as NodeJS.ErrnoException;
+    error.code = code;
+    return error;
+  }
+
+  function simulateGroup(platform: NodeJS.Platform, answer: (signal: string | number | undefined) => 'ok' | 'EPERM' | 'ESRCH') {
+    Object.defineProperty(process, 'platform', { configurable: true, value: platform });
+    const originalKill = process.kill.bind(process);
+    const calls: (string | number | undefined)[] = [];
+    vi.spyOn(process, 'kill').mockImplementation((target, signal) => {
+      if (Math.abs(target) !== fakeGroup) return originalKill(target, signal);
+      if (target > 0) throw errno('ESRCH');
+      calls.push(signal);
+      const result = answer(signal);
+      if (result !== 'ok') throw errno(result);
+      return true;
+    });
+    return calls;
+  }
+
+  it.runIf(process.platform !== 'win32')('on macOS, waits through EPERM on SIGTERM until ESRCH and returns false without sending SIGKILL', async () => {
+    let probes = 0;
+    const calls = simulateGroup('darwin', (signal) => {
+      if (signal === 'SIGTERM') return 'EPERM';
+      if (signal === 0) return ++probes <= 3 ? 'EPERM' : 'ESRCH';
+      return 'ok';
+    });
+
+    await expect(terminatePosixProcessTree(fakeGroup)).resolves.toBe(false);
+    expect(calls).not.toContain('SIGKILL');
+    expect(probes).toBe(4);
+  });
+
+  it.runIf(process.platform !== 'win32')('on macOS, drops an EPERM from the SIGKILL after the grace once the group reaches ESRCH and returns true', async () => {
+    let probes = 0;
+    const calls = simulateGroup('darwin', (signal) => {
+      if (signal === 'SIGTERM') return 'ok';
+      if (signal === 'SIGKILL') return 'EPERM';
+      return ++probes <= 3 ? 'EPERM' : 'ESRCH';
+    });
+
+    await expect(terminatePosixProcessTree(fakeGroup)).resolves.toBe(true);
+    expect(calls.slice(0, 2)).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(probes).toBe(4);
+  });
+
+  it.runIf(process.platform !== 'win32')('on macOS, rethrows EPERM only after it persists for the settle timeout (a real permission error)', async () => {
+    const calls = simulateGroup('darwin', () => 'EPERM');
+    const startedAt = Date.now();
+
+    await expect(terminatePosixProcessTree(fakeGroup)).rejects.toMatchObject({ code: 'EPERM' });
+
+    // TERMINATION_SETTLE_TIMEOUT_MS（2 秒）まで ESRCH への遷移を待つ。
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1_900);
+    expect(calls.filter((signal) => signal === 0).length).toBeGreaterThan(1);
+  }, scaledMs(10_000));
+
+  it.runIf(process.platform !== 'win32')('on Linux, rethrows EPERM without waiting for the settle timeout', async () => {
+    simulateGroup('linux', () => 'EPERM');
+    const startedAt = Date.now();
+
+    await expect(terminatePosixProcessTree(fakeGroup)).rejects.toMatchObject({ code: 'EPERM' });
+
+    expect(Date.now() - startedAt).toBeLessThan(1_500);
+  }, scaledMs(10_000));
 });
