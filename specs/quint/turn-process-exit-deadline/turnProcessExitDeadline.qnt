@@ -23,7 +23,10 @@
 // the parent's post-exit managed.terminate() sweep (#177 review M3):
 //   "Throw"    - current spawn.ts: only ignores ESRCH and rethrows EPERM to turnProcessHost's onError.
 //   "WaitReap" - fixed spawn.ts: on darwin, polls kill(-pid, 0) through EPERM until launchd reaps
-//                the zombie and ESRCH confirms the group is gone.
+//                the zombie and ESRCH confirms the group is gone. The model covers only that
+//                ESRCH-within-the-settle-deadline transition; rethrowing the EPERM that persists
+//                for TERMINATION_SETTLE_TIMEOUT_MS (2s) is outside it (managed-spawn.test.ts and
+//                devin-client.test.ts check that branch).
 module turnProcessExitDeadline {
   const DESIGN: str
   const GROUP_SIGNAL: str

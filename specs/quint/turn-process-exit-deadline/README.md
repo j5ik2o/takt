@@ -94,6 +94,7 @@ After `s.status != Running` only the post-exit group actions (`parentSweepAfterE
 - The parent's `managed.terminate()` sends `SIGTERM` to the group, waits `TERMINATION_GRACE_MS` (250 ms), then sends `SIGKILL`. The real bound with a live parent is therefore about `GRACE` + 250 ms. `parentSigkill` absorbs the 250 ms into the same tick.
 - The clean exit on the `shutdown` message path: the real child calls `process.disconnect()`, so `'disconnect'` enters `exitAfter` and then `exit()`. The model goes to `ExitedZero` without `exitAfter`, so `wCleanExitAfterShutdownMsg` uses `not(inExitAfter)`. The exit code is the same.
 - Daemon main-process shutdown ([j5ik2o/takt#142](https://github.com/j5ik2o/takt/issues/142)).
+- The deadline-expiry branch of the `WaitReap` sweep. The model represents only the case where the group reaches `ESRCH` within the parent's `TERMINATION_SETTLE_TIMEOUT_MS` (2 s) settlement deadline (`parentSweepFinishAfterReap`, witnessed by `wParentSweepWaitsZombieReap`). Rethrowing the `EPERM` that persists for the whole deadline is outside the model: `src/__tests__/managed-spawn.test.ts` covers it (an `EPERM` that lasts 2 s is rethrown) and `src/__tests__/devin-client.test.ts` covers the logged pid-bearing `EPERM` once the deadline passes on darwin. The design decision is unchanged.
 
 ## Record
 
