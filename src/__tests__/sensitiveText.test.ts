@@ -56,6 +56,24 @@ describe('sensitiveText', () => {
     expect(sanitizeSensitiveText(text)).toBe(text);
   });
 
+  describe.each([
+    ['T1', 'curl https://u:@pa55@host', 'pa55'],
+    ['T2', 'curl https://u:@pa55@host;TOKEN=left@RIGHT_SECRET', 'pa55'],
+    ['T3', 'curl "https://u:@pa55@host;TOKEN=left@RIGHT_SECRET"', 'pa55'],
+    ['T4', 'curl https://u:@pa55@host,TOKEN=left@RIGHT_SECRET', 'pa55'],
+    ['T5', 'https://alice:@LEFT;token=RIGHT@host', 'LEFT'],
+  ])('%s keeps the sensitive part out of the output', (_id, text, fragment) => {
+    it('in the displayed text', () => {
+      expect(sanitizeSensitiveText(text)).not.toContain(fragment);
+    });
+
+    it('in the streamed text', () => {
+      const redactor = createSensitiveTextStreamRedactor();
+      const output = redactor.write(text, {}) + redactor.flush({});
+      expect(output).not.toContain(fragment);
+    });
+  });
+
   it.each(['known', 'substring'] as const)('masks the union of overlapping %s matches without hiding surrounding text', (matching) => {
     for (const [value, text] of [['abcab', 'before abcabcab after'], ['aaaa', 'before aaaaaa after']] as const) {
       const masked = matching === 'known'
