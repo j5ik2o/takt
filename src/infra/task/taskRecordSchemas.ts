@@ -311,6 +311,7 @@ export type TaskRecord = Omit<z.infer<typeof TaskRecordObjectSchema>, 'completio
 export const TaskRecordSchema = TaskRecordObjectSchema.transform((value): TaskRecord => {
   const mark = value.completion_publication_pending;
   const { completion_publication_pending: _dropped, ...rest } = value;
+  void _dropped;
   if (mark === true && isValidCompletionPublicationPending(value)) {
     return { ...rest, completion_publication_pending: true };
   }
