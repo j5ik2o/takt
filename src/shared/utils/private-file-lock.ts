@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { unlinkSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import {
   ensurePrivateDirectory,
   PrivateArtifactContentWriteFailedError,
@@ -14,6 +14,7 @@ const LOCK_MODE = 0o600;
 const LOCK_RETRY_DELAY_MS = 10;
 const LOCK_TIMEOUT_MS = 10_000;
 const lockWaitBuffer = new Int32Array(new SharedArrayBuffer(4));
+const orphanedLocks = new Map<string, AcquiredPrivateFileLock>();
 
 export class PrivateFileLockAcquisitionError extends Error {
   constructor(message: string, readonly code: string, readonly errno: number | undefined, options: ErrorOptions) {
@@ -97,23 +98,43 @@ function removeLockIfUnchanged(
   }
 }
 
-function recoverUnchangedDeadHolder(lockPath: string): void {
+function recoverUnchangedDeadHolder(lockPath: string): boolean {
+  const key = resolve(lockPath);
+  const record = orphanedLocks.get(key);
   const current = readPrivateFileState(lockPath);
   if (!current.state.exists) {
-    return;
+    if (record !== undefined) orphanedLocks.delete(key);
+    return false;
   }
   if (!('content' in current)) {
     throw new Error(`Private file lock content is missing: ${lockPath}`);
   }
   const content = current.content.toString('utf-8');
+  if (record !== undefined) {
+    if (sameState(record.state, current.state) && content === record.content) {
+      if (removeLockIfUnchanged(lockPath, record)) {
+        orphanedLocks.delete(key);
+        return true;
+      }
+      orphanedLocks.delete(key);
+      return false;
+    }
+    orphanedLocks.delete(key);
+  }
   const holder = parseLockHolder(content);
   if (holder === undefined || isProcessAlive(holder.pid)) {
-    return;
+    return false;
   }
   removeLockIfUnchanged(lockPath, { state: current.state, content });
+  return false;
 }
 
-function tryAcquirePrivateFileLock(lockPath: string): AcquiredPrivateFileLock | undefined {
+interface TryAcquireResult {
+  acquired?: AcquiredPrivateFileLock;
+  removedOwn?: boolean;
+}
+
+function tryAcquirePrivateFileLock(lockPath: string): TryAcquireResult {
   const holder: LockHolder = { pid: process.pid, token: randomUUID() };
   const content = JSON.stringify(holder);
   try {
@@ -133,19 +154,21 @@ function tryAcquirePrivateFileLock(lockPath: string): AcquiredPrivateFileLock | 
       || acquired.content.toString('utf-8') !== content) {
       throw new Error(`Private file lock identity changed after acquisition: ${lockPath}`);
     }
-    return { state: acquired.state, content };
+    orphanedLocks.delete(resolve(lockPath));
+    return { acquired: { state: acquired.state, content } };
   } catch (error) {
     if (!(error instanceof PrivateArtifactPublicationConflictError)
       && !String(error).includes('already exists')) {
       throw error;
     }
   }
-  try { recoverUnchangedDeadHolder(lockPath); } catch (error) {
+  let removedOwn = false;
+  try { removedOwn = recoverUnchangedDeadHolder(lockPath); } catch (error) {
     // A holder can release the lock between the recovery snapshot's stat and open.
     if (!(error instanceof PrivateArtifactPublicationConflictError)
       && (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
-  return undefined;
+  return { removedOwn };
 }
 
 /** The lock was not acquired before its deadline; nothing ran under it. */
@@ -165,8 +188,9 @@ function acquirePrivateFileLock(lockPath: string): AcquiredPrivateFileLock {
   ensurePrivateDirectory(dirname(lockPath));
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   while (true) {
-    const acquired = tryAcquirePrivateFileLock(lockPath);
-    if (acquired !== undefined) return acquired;
+    const result = tryAcquirePrivateFileLock(lockPath);
+    if (result.acquired !== undefined) return result.acquired;
+    if (result.removedOwn) continue;
     assertLockDeadline(lockPath, deadline);
     waitForLock();
   }
@@ -181,11 +205,12 @@ export async function runPrivateFileExclusiveAsync<Result>(
   ensurePrivateDirectory(dirname(lockPath));
   const deadline = Date.now() + (options.timeoutMs ?? LOCK_TIMEOUT_MS);
   while (true) {
-    const acquired = tryAcquirePrivateFileLock(lockPath);
-    if (acquired !== undefined) return runWithAcquiredLockAsync(lockPath, acquired, action);
+    const result = tryAcquirePrivateFileLock(lockPath);
+    if (result.acquired !== undefined) return runWithAcquiredLockAsync(lockPath, result.acquired, action);
+    if (result.removedOwn) continue;
     assertLockDeadline(lockPath, deadline);
     options.onWait?.();
-    await new Promise<void>((resolve) => setTimeout(resolve, LOCK_RETRY_DELAY_MS));
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, LOCK_RETRY_DELAY_MS));
   }
 }
 
@@ -201,14 +226,19 @@ function releasePrivateFileLock(
   lockPath: string,
   acquired: AcquiredPrivateFileLock,
 ): unknown {
+  let removed: boolean;
   try {
-    if (!removeLockIfUnchanged(lockPath, acquired)) {
-      throw new Error(`Private file lock ownership changed before release: ${lockPath}`);
-    }
-    return undefined;
+    removed = removeLockIfUnchanged(lockPath, acquired);
   } catch (error) {
+    if (!(error instanceof PrivateArtifactPublicationConflictError)) {
+      orphanedLocks.set(resolve(lockPath), acquired);
+    }
     return error;
   }
+  if (!removed) {
+    return new Error(`Private file lock ownership changed before release: ${lockPath}`);
+  }
+  return undefined;
 }
 
 function combineLockActionErrors(

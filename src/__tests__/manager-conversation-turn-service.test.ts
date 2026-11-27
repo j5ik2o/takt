@@ -513,8 +513,9 @@ it.each([
   expect(doubles.setStatus).toHaveBeenCalledExactlyOnceWith('/repository', goalId, status, f.io.signal, 'human');
   expect(doubles.invalidate).toHaveBeenCalledTimes(status === 'aborted' ? 1 : 0);
   if (status === 'aborted') {
-    // 待機中のタスクを先に読む。読んだタスクのうち failed になったものに終了フックを呼ぶためである。
-    expect(doubles.list.mock.invocationCallOrder[0]).toBeLessThan(doubles.invalidate.mock.invocationCallOrder[0]!);
+    // #169 (設計レビュー 中-3): 待機中のタスクを先に読まず、中止が保存した状態を第2引数の関数で受け取って終了フックに渡す。
+    expect(doubles.invalidate).toHaveBeenCalledExactlyOnceWith(goalId, expect.any(Function));
+    expect(doubles.list).not.toHaveBeenCalled();
   }
   expect(f.execute).not.toHaveBeenCalled();
 });

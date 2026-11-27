@@ -24,7 +24,7 @@ import { ShutdownManager } from './shutdownManager.js';
 import { forceExitAfterOpenCodeCleanup } from './forceShutdown.js';
 import { isInputWaiting } from './inputWait.js';
 import type { TaskExecutionOptions } from './types.js';
-import { runTaskFinishHooks } from './taskFinishHook.js';
+import { runTaskFinishHooksForStates } from './taskFinishHook.js';
 import { claimTasksWithGoalCompletions, isClaimLockTimeoutFailure, TaskClaimLockUnavailableError } from './claimTasks.js';
 import { checkQueuedTaskProviders, checkPendingTaskProviders } from './providerPreflight.js';
 
@@ -161,12 +161,12 @@ export async function runWithWorkerPool(
     if (schedulingSignal.aborted || preparationFailure !== undefined
       || (claimRetryAt !== undefined && Date.now() < claimRetryAt)) return;
     try {
-      const { attempted, setupFailedTaskNames } = await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal,
+      const { attempted, setupFailedTasks } = await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal,
         cwd, taskExecutionOptions, goalTasksOnly);
       if (mode === 'run') {
-        for (const taskName of setupFailedTaskNames) {
+        for (const task of setupFailedTasks) {
           failCount++;
-          executedTaskNames.push(taskName);
+          executedTaskNames.push(task.name);
         }
       }
       if (claimRetryAt !== undefined) {
@@ -339,16 +339,16 @@ async function claimAvailableTasks(
   cwd: string,
   overrides: TaskExecutionOptions | undefined,
   goalTasksOnly: boolean,
-): Promise<{ attempted: boolean; setupFailedTaskNames: string[] }> {
-  if (signal.aborted || isInputWaiting()) return { attempted: false, setupFailedTaskNames: [] };
+): Promise<{ attempted: boolean; setupFailedTasks: import('../../../infra/task/index.js').TaskState[] }> {
+  if (signal.aborted || isInputWaiting()) return { attempted: false, setupFailedTasks: [] };
   const freeSlots = concurrency - activeCount - queue.length;
-  if (freeSlots <= 0) return { attempted: false, setupFailedTaskNames: [] };
+  if (freeSlots <= 0) return { attempted: false, setupFailedTasks: [] };
   await checkPendingTaskProviders(taskRunner, cwd, overrides ?? {}, undefined, [], signal, goalTasksOnly);
-  if (signal.aborted || isInputWaiting()) return { attempted: false, setupFailedTaskNames: [] };
-  const { tasks: newTasks, setupFailedTaskNames } = claimTasksWithGoalCompletions(
+  if (signal.aborted || isInputWaiting()) return { attempted: false, setupFailedTasks: [] };
+  const { tasks: newTasks, setupFailedTasks } = claimTasksWithGoalCompletions(
     taskRunner, freeSlots, cwd, signal, goalTasksOnly,
   );
-  await runTaskFinishHooks(cwd, taskRunner, setupFailedTaskNames);
+  await runTaskFinishHooksForStates(cwd, setupFailedTasks);
   log.trace('poll_tick', { active: activeCount, queued: queue.length, freeSlots });
   if (newTasks.length > 0) {
     log.debug('poll_new_tasks', { count: newTasks.length });
@@ -356,7 +356,7 @@ async function claimAvailableTasks(
   } else {
     log.trace('no_new_tasks');
   }
-  return { attempted: true, setupFailedTaskNames };
+  return { attempted: true, setupFailedTasks };
 }
 
 export function requeueExistingFailedTasks(
