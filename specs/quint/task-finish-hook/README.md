@@ -7,6 +7,8 @@ the hook command may and may not change.
 |---|---|
 | `taskFinishHook.qnt` | The model. `entryPoints` is the implementation; `normalEndOnly` and `everySave` are two placements that were rejected. |
 | `taskFinishHook_test.qnt` | Scenario tests for each exit and for the two rejected placements. |
+| `taskFinishHookNotice.qnt` | #171: the configuration/read prelude of `runTaskFinishHooks` and `runTaskFinishHooksForStates`, the bounded read retry, and the loss notice. |
+| `taskFinishHookNotice_test.qnt` | Scenario tests for the notice model: retry success, exhausted retry, broken read, missing configuration, handed-over states, and the rejected silent/unbounded forms. |
 
 ## What is modelled
 
@@ -108,3 +110,71 @@ quint test taskFinishHook_test.qnt --main entryPointsTest     # 9 passing
 quint test taskFinishHook_test.qnt --main normalEndOnlyTest   # 1 passing
 quint test taskFinishHook_test.qnt --main everySaveTest       # 1 passing
 ```
+
+## Notice loss (#171)
+
+Design: `docs/design/task-finish-hook-notice-loss.md`.
+
+`taskFinishHook.qnt` above answers where the hook is attached and whether it may change the saved
+state. It leaves out the read of `tasks.yaml` and of the project configuration. #171 is about that
+prelude: `runTaskFinishHooks` reads `tasks.yaml` itself, and a lock timeout, a broken file, or an
+unreadable `config.yaml` used to leave only `log.error`, which is written only when
+`logging.debug` is enabled. `taskFinishHookNotice.qnt` models one invocation and one task:
+
+- `Path = NamedHook | StatesHook`. `NamedHook` is `runTaskFinishHooks` (it reads `tasks.yaml` after
+  the caller saved a terminal state). `StatesHook` is `runTaskFinishHooksForStates` (#169; the
+  caller hands the states over, so only the configuration is read).
+- `Config = ConfigOk | ConfigMissing | ConfigUnreadable`. `ConfigMissing` is not a loss: no hook
+  was configured.
+- `Read = ReadOk | ReadNotTerminal | ReadTimeout | ReadBroken`. Only `ReadTimeout` is retried.
+  `ReadNotTerminal` is a task another process moved on (retry/requeue); this model calls it not a
+  loss for this invocation.
+- `NOTICE = Silent | Fixed`. `Silent` is the old `log.error` only; `Fixed` is one `warn()` with the
+  task names. `RETRY = None | Bounded | Unbounded`. `Bounded` is `MAX_READ_ATTEMPTS = 2` and
+  `MAX_RETRIES = 1` (one wait); `Unbounded` is the rejected alternative.
+
+`safety` is the conjunction of `noUnnoticedLoss`, `noFalseNotice`, `noticeAtMostOnce`,
+`retryBounded`, `retriesTimeouts`, `noHookOnLoss`, and `atMostOnceHook`. The model does not include
+the hook command outcome (#148's `HookOutcome` does), the `terminalStamp` pre/post read of
+`withTaskFinishHook`, multiple task names in one warning, the exact lock wait, or concurrent
+processes. Those are covered by the code tests and PBT in the design document.
+
+### Notice model: records and counterexamples
+
+Quint 0.32.0. Commands run from this directory.
+
+```sh
+quint typecheck taskFinishHookNotice.qnt
+quint typecheck taskFinishHookNotice_test.qnt
+quint test taskFinishHookNotice_test.qnt --main noticeFixedTest     # 9 passing
+quint test taskFinishHookNotice_test.qnt --main noticeBeforeTest    # 2 passing
+quint test taskFinishHookNotice_test.qnt --main noticeNoRetryTest   # 1 passing
+quint test taskFinishHookNotice_test.qnt --main noticeUnboundedTest # 1 passing
+```
+
+Rejected forms (1,000 samples, max-steps 8, seed `0x2a`):
+
+| Main | Violated invariant | Counterexample |
+|---|---|---|
+| `noticeBefore` (`Silent` + `None`) | `noUnnoticedLoss` | `ConfigUnreadable` reaches `Done` with `loss = true`, `notices = 0`. `retriesTimeouts` is also violated because a timeout is not retried. |
+| `noticeNoRetry` (`Fixed` + `None`) | `retriesTimeouts` | `ReadTimeout` reaches `Done` with `readAttempts = 1`, `loss = true`, `notices = 1`. The warning exists, but the retry bound is not used. |
+| `noticeUnbounded` (`Fixed` + `Unbounded`) | `retryBounded` | `readAttempts = 3`, `retries = 3`; the model keeps waiting. `retriesTimeouts` is also violated. |
+
+The fixed form:
+
+```sh
+quint run taskFinishHookNotice.qnt --main noticeFixed --invariant safety \
+  --witnesses wRetriedThenCalled wExhaustedWarned wBrokenWarned \
+    wReadNotTerminalNoNotice wConfigMissingNoNotice wStatesConfigErrorWarned \
+  --max-samples 20000 --max-steps 8 --seed 0x2a
+```
+
+Result: 20,000 samples, max-steps 8, seed `0x2a`, `[ok]` (no violation, 1,358 ms). Witnesses:
+`wRetriedThenCalled` 197, `wExhaustedWarned` 452, `wBrokenWarned` 843,
+`wReadNotTerminalNoNotice` 7,718, `wConfigMissingNoNotice` 6,693,
+`wStatesConfigErrorWarned` 3,344. A further 50,000 samples at max-steps 10 with seeds `0x1` and
+`0x2a` also found no violation (3,194 ms / 3,156 ms). This is simulation, not a proof.
+
+The #148 model is unchanged and its recorded results still hold: `entryPoints` 10,000 samples at
+max-steps 12 with seed `0x2a` has no violation, while `normalEndOnly` (`noMissedExit`) and
+`everySave` (`atMostOnce`) still produce the counterexamples recorded above.
