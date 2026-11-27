@@ -31,7 +31,7 @@ describe('inspectDeletionOwner does not trust a reused PID', () => {
       owner_start_time: differentStartTime(self!.startTime),
     });
 
-    expect(owner).not.toBe('alive');
+    expect(owner).toBe('dead');
   });
 
   it('keeps a live PID without a recorded start time unknown', async () => {
