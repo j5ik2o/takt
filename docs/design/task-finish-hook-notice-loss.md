@@ -19,7 +19,7 @@
 
 `runTaskFinishHooks` と `runTaskFinishHooksForStates` は、設定 `loadProjectConfig(projectCwd).taskFinishHook` を読む。設定が無ければ何もしない（これは取りこぼしではない）。設定が読めない、または `listTaskStateItems()` が失敗すると、`catch` が `log.error` を 1 行残して戻る（`taskFinishHook.ts:140-142`、`157-159`）。`runHook` の失敗も `withTaskFinishHook` の `finally` の `catch` が `log.error` だけを残す（`taskFinishHook.ts:200-204`）。`callHook` の中で `runBoundedCommand` が予期せず投げた場合も、`Promise.all` が拒否されて同じ `catch` に落ちる（`taskFinishHook.ts:139`、`156`）。
 
-`log.*` は `DebugLogger.writeLog` に渡り、既定では `DebugLogger` が無効なのでファイルにも console にも残らない（`src/shared/utils/debug.ts:166-174`）。ただし `--verbose` のときは `initDebugLogger` が有効になり、`setVerboseConsole(true)` で `writeLog` が stderr にも書く（`src/app/cli/initialization.ts:52-60`、`src/shared/utils/debug.ts:167-170`）。したがって正確には「既定では見えない（`--verbose` では stderr に出る）」である。`warn()` は `LogManager` の既定レベル `info` で表示される（`src/shared/ui/LogManager.ts:69-72`、`103-105`）。つまり、既定では次の経路でフックが呼ばれないことが利用者にもログにも残らない。
+`log.*` は `DebugLogger.writeLog` に渡り、既定では `DebugLogger` が無効なのでファイルにも console にも残らない（`src/shared/utils/debug.ts:166-174`）。ただし `--verbose` のときは `initDebugLogger` が有効になり、`setVerboseConsole(true)` で `writeLog` が stderr にも書く（`src/app/cli/initialization.ts:52-60`、`src/shared/utils/debug.ts:167-170`）。したがって正確には「既定では見えない（`--verbose` では stderr に出る）」である。`warn()` は `LogManager` の既定レベル `info` で表示される（`src/shared/ui/LogManager.ts:69-72`、`103-105`）。ただし `warn()` の出力先は stdout であり、この設計の取りこぼしの警告は §1 のとおり **stderr** に出す（MCP の stdio トランスポートは stdout を JSON-RPC 専用に使う）。つまり、既定では次の経路でフックが呼ばれないことが利用者にもログにも残らない。
 
 1. `runTaskFinishHooks`（`pr_failed` の公開後）で、`tasks.yaml` の読みがロックの時間切れになる。`file-lock.ts` は `TIMEOUT_MS = 5_000` のあいだ `RETRY_MS = 25` ms ごとに取り直し、`acquireLock` の待ちループの各回で `recoverStaleLock` も呼ぶ（`file-lock.ts:179-204`）。時間切れになるのは、他のプロセスが 5 秒以上保持したか、取得が 5 秒間進まなかったときだけである。短い書き込みは待つだけで成功する。
 2. 同じ経路で `tasks.yaml` が壊れている（`Invalid tasks.yaml`）、読めない（EACCES / EIO など）、または `config.yaml` が壊れている／読めない。
@@ -42,13 +42,13 @@
 #170 と #171 は、同じ保存（たとえば claim の setup 失敗）に対して、別の種類の「失われた」通知を出しうる。
 
 - #170 の `publishSetupFailure` は、manager への完了通知 `saveManagerEvent` が失敗したときに `warn()` を出す。
-- #171 の `runTaskFinishHooksForStates` は、同じ保存の後に、`config.yaml` が読めない、またはフックの起動が例外で落ちたときに `warn()` を出す。
+- #171 の `runTaskFinishHooksForStates` は、同じ保存の後に、`config.yaml` が読めない、またはフックの起動が例外で落ちたときに stderr へ 1 行の警告を出す。
 
 したがって、1 回の保存で 2 つの警告が並ぶことがある。それぞれの「1 回」は自分の範囲内の 1 回であり、互いに重複排除しない。利用者には「manager に通知できなかった」と「終了フックを実行できなかった」が別々に見えるので、原因を取り違えない。この重なりは [j5ik2o/takt#188](https://github.com/j5ik2o/takt/issues/188)「同じ保存で、manager 通知の失敗とタスク終了フックの失敗の警告が 2 種類並ぶ」として起票されている（解決の案は 1 本にまとめる／文面で互いを参照／そのまま。決めるのは #170・#171 の着地後）。今回の範囲では 2 つを統合しない（#188 の範囲）。#170 の `completion_publication_pending` の印は #171 では使わず、#171 は再送もしない。両方が成功したときは、どちらの警告も出ない。
 
 ## 何をどう変えるか
 
-### 1. 取りこぼしを、タスク名つきの `warn()` で 1 回だけ出す
+### 1. 取りこぼしを、タスク名つきの 1 行の警告で 1 回だけ stderr に出す
 
 `taskFinishHook.ts` に、フックを呼べなかったことを知らせる小さな関数を 1 つ置く（仮に `reportLostHook`）。
 
@@ -58,19 +58,20 @@ function reportLostHook(
   reason: unknown,
   phase: 'config-read' | 'named-read' | 'execution-read' | 'hook-call',
 ): void {
-  // 実装の形は設計。名前は sanitizeTerminalText、理由は sanitizeSensitiveText を通す。
+  // 実装の形は設計。名前は sanitizeTerminalText、理由は sanitizeSensitiveText、
+  // 完成文は sanitizeSensitiveText の後に sanitizeTerminalText を通し、stderr へ 1 行書く。
 }
 ```
 
-- **1 回の呼び出しにつき 1 回だけ** `warn()` を呼ぶ。`runTaskFinishHooks` が 3 つのタスク名を受け取って読みに失敗したら、1 つの警告に 3 つの名前を入れる。`withTaskFinishHook` の 1 タスクなら 1 つの名前を入れる。
+- **1 回の呼び出しにつき 1 回だけ**警告を書く。`runTaskFinishHooks` が 3 つのタスク名を受け取って読みに失敗したら、1 つの警告に 3 つの名前を入れる。`withTaskFinishHook` の 1 タスクなら 1 つの名前を入れる。
 - **「1 回」の単位は 1 回の呼び出し**（`runTaskFinishHooks` の 1 回、`runTaskFinishHooksForStates` の 1 回、`withTaskFinishHook` の 1 回）。時間をおいた別の実行、同じタスクの再実行、同じ失敗の再発をまたいだ「1 回」は保証しない。`runTaskFinishHooks` は印を持たないので、呼び出し元が同じタスクで何度も呼べば、そのたびに警告する。
+- **出力先は stderr。stdout には書かない。** `warn()` は `console.log` で stdout に書くため、この警告には使わない（既存の `warn()` の出力先は変えない）。stdio の MCP サーバーは stdout を JSON-RPC のフレームだけに使う（`src/app/mcp/index.ts:85-93`）。stdout に警告行を混ぜるとクライアントの JSON 解析が壊れる。実装では `process.stderr.write`（またはそれと同じ宛先の小さなヘルパー）で 1 行書く。`--quiet` でも `--pipeline` でも出す（`isQuietMode()`（`src/shared/context.ts`）も `minimalOutput` も見ない）。失われた通知を隠さないことを優先する。stderr は MCP の JSON-RPC を運ばないので、`--pipeline` の stdout を機械が読む用途も壊さない。
 - タスク名は `sanitizeTerminalText`（`src/shared/utils/text.ts:45`）を通し、重複を除く。`tasks.yaml` のタスク名は制御文字や ANSI を含みうるので、端末にそのまま出さない。
-- 理由（例外の文面）は `sanitizeSensitiveText`（`src/shared/utils/sensitive-text.ts:544`）を通し、組み立てた文面も `sanitizeSensitiveText` に通す。秘密の伏せ方そのものは変えない。`src/shared/utils/sensitiveText.ts` は再エクスポートなので、参照先は実体のファイルにする。
+- **組み立ての順序は「名前 → `sanitizeTerminalText`」「理由 → `sanitizeSensitiveText`」「完成文 → `sanitizeSensitiveText` → `sanitizeTerminalText`」。** 例外の文面はロックのパスなどから作られ、ANSI（`\x1b[2J` など）・改行・制御文字を含みうる。`sanitizeSensitiveText` は秘密だけを伏せ、端末向けの文字は残す。そのため完成文にも `sanitizeTerminalText` を当て、生の制御文字を stderr に書かない。`src/shared/utils/sensitiveText.ts` は再エクスポートなので、参照先は実体のファイルにする。
 - 名前が大量にあるとき（ゴールの中止で何百もの pending タスクを failed にした場合など）は、先頭 10 件と「and N more」に丸める。1 回の警告を巨大にしないため。丸めた件数は警告に残す。
-- `log.error` はデバッグ用に残す。`warn()` は既定で見えるが、`log.error` は既定では見えず、`--verbose` のときは stderr にも出る（`logging.debug` が有効ならファイルにも残る）。
+- `log.error` はデバッグ用に残す。警告は既定で stderr に見えるが、`log.error` は既定では見えず、`--verbose` のときは stderr にも出る（`logging.debug` が有効ならファイルにも残る）。
 - **新しい警告は `emitStatusLog` では抑えない。** `emitStatusLog` はフックの通常の失敗表示（非 0 終了・時間切れ・起動失敗）を静かにするためのもので、フックが呼ばれなかったことは通常の状態表示ではない。`parallelOptions.outputMode === 'silent'` の実行でも、取りこぼしは 1 回出す。
-- **`--quiet` でも `--pipeline` でも出す。** `warn()` は `LogManager.warn` が `console.log` で stdout に書く（`src/shared/ui/LogManager.ts:68-72`、`103-105`）。`isQuietMode()`（`src/shared/context.ts`）も `minimalOutput` も見ない。失われた通知を隠さないことを優先する。`--pipeline` の stdout を機械が読む用途では警告が混ざるが、これは「影響」に書き、必要なら将来の別件にする（この設計では統合しない）。
-- `warn()` が同期で投げた場合（閉じた stdout への書き込みなど）は握りつぶし、`log.error` を試みて、呼び出し元へは投げない。console のストリームエラーが非同期になる場合の扱いは `console.log` に任せ、この設計の対象外とする。
+- stderr への書き込みが同期で投げた場合（閉じた stderr など）は握りつぶし、`log.error` を試みて、呼び出し元へは投げない。ストリームエラーが非同期になる場合の扱いは `process.stderr` に任せ、この設計の対象外とする。
 - 文面の例（英語。既存の `callHook` の警告に合わせる）:
 
 ```text
@@ -90,7 +91,8 @@ Task finish hook was not run for "task-a", "task-b": reading .takt/tasks.yaml ti
 - **#169 との関係**: #169 の外し損ねロックは、同じ `acquireLock` の 5 秒の待ちループの中で 25 ms ごとに `recoverStaleLock` が呼ばれて外れる（`file-lock.ts:199`）。2 回目の取得が助けるのは、1 回目の待ちの間に読めなかった記録が後で読める場合など、狭い範囲だけである。これを主な根拠にしない。
 - **実行前の読みは再試行しない**: `withTaskFinishHook` の実行前の `readTaskState`（`taskFinishHook.ts:190-196`）は、フックの取りこぼしではなく、実行を遅らせないことを優先する。保存後（`runTaskFinishHooks`）と実行後（`runHook`）の読みだけを再試行する。Quint も実行前の読みはモデルに含めない（「モデルが表していないこと」）。
 - **実行前の読みが失敗したときは at-least-once にする**: 実行前の `readTaskState` が失敗したことを `beforeReadFailed = true` で覚える（`stampBefore` が `undefined` なだけでは、非終端だった場合と区別できない）。`beforeReadFailed` で、実行後の読みが終端を見つけたら、フックを 1 回呼ぶ。同時に、`reportUnconfirmedPreRead(taskName, reason)`（`reportLostHook` と同じ整形・サニタイズを使う別の関数）で「実行前の状態を読めなかったので、この実行が保存した状態でないのにフックが走ることがある」と 1 回警告する。フックを呼ばない（実行後が非終端、設定なし、設定読み失敗、実行後の読み失敗）ときは、この警告は出さない。二重実行を防ぐより、取りこぼさないことを優先するという判断である。
-- **設定の読みは再試行しない**: `loadProjectConfig` は `config.yaml` を読む。壊れた YAML やスキーマ違反は決定的で、待っても直らない。ロック待ちも無い。失敗したら `reportLostHook` を 1 回だけ呼ぶ（phase は `'config-read'`。`runTaskFinishHooks` は受け取った名前、`runHook` はそのタスク名、`ForStates` は濾した後の終端状態の名前）。設定が無い場合は警告しない。
+- **設定の読みは再試行しない**: `loadProjectConfig` は `config.yaml` を読む。壊れた YAML やスキーマ違反は決定的で、待っても直らない。ロック待ちも無い。失敗したら `reportLostHook` を 1 回だけ呼ぶ（phase は `'config-read'`。`runTaskFinishHooks` は受け取った名前、`runHook` はそのタスク名、`ForStates` は濾した後の終端状態の名前）。**設定が無い場合は警告しない**（フックが無いので取りこぼしではない）。
+- **設定が無いと確定しているときは、実行後の読みの失敗でも警告しない**: 名前指定の経路（`runTaskFinishHooks` / `runTaskFinishHooksForStates`）は設定を先に読み、無ければそのまま return するので `tasks.yaml` を読まない。一方、キュー実行と `takt merge` の `withTaskFinishHook` は実行前の印を取るために設定より先に状態を読み、`runHook` の実行後の読みも設定より先に走る。そのため `runHook` の実行後の読みが失敗したときは、`loadProjectConfig` を試して次のように分ける。(a) 設定が無いと確定できたら、警告せずに戻る（実行すべきフックが無い）。(b) 設定がある、または `config.yaml` が読めない（フックの有無を確定できない）なら、`'execution-read'` の `reportLostHook` を 1 回だけ出す。読めない設定を `'config-read'` として別にもう 1 回出さない（1 回の呼び出しにつき 1 回の警告）。実行前の読みの失敗だけでは警告しない（実行後が終端でフックを呼ぶときの at-least-once 警告だけ）。
 - **`runTaskFinishHooksForStates` は読み直さない**: 状態は呼び出し元が渡す（#169）。設定だけを読み、失敗したら `'config-read'` で警告する。
 
 ### 3. `callHook` の予期しない例外も、1 回の警告にまとめる（3 つの呼び出し経路すべて）
@@ -99,7 +101,7 @@ Task finish hook was not run for "task-a", "task-b": reading .takt/tasks.yaml ti
 
 - **`runTaskFinishHooks` と `runTaskFinishHooksForStates`**: `Promise.all`（`taskFinishHook.ts:139`、`156`）を `Promise.allSettled` に変え、どのタスクの `callHook` が拒否されたかを集める。全件が終わってから、落ちたタスク名をまとめて 1 回 `reportLostHook(..., 'hook-call')` で警告する。成功したフックはそのまま実行される。非 0 終了・時間切れ・起動失敗は今までどおり `callHook` がタスクごとに警告する（`emitStatusLog !== false` のとき）。
 - **`withTaskFinishHook` / `runHook`**: `runHook` の中で、実行後の読み（再試行後）の失敗を `reportLostHook([taskName], reason, 'execution-read')`、設定の読みの失敗を `reportLostHook([taskName], reason, 'config-read')`、`callHook` の例外を `reportLostHook([taskName], reason, 'hook-call')` として、それぞれ 1 回呼んで、投げ直さない。`withTaskFinishHook` の `finally` の `catch`（`taskFinishHook.ts:199-204`）は、`runHook` から漏れた予期しない例外だけを拾い、`reportLostHook([taskName], reason, 'hook-call')` を 1 回呼ぶ。`runHook` が報告済みの例外を投げ直さないので、ここで二重に警告しない。この形で、キュー実行（`taskExecution.ts:126`）と `takt merge` の直接実行（`merge/index.ts:98`）の両方で、フックの例外が既定で見える。
-- **二重警告を避ける**: 各関数で「報告する場所」を 1 つに決める。`runTaskFinishHooks` / `ForStates` は `allSettled` の結果をまとめる 1 か所、`runHook` は `callHook` の catch 1 か所、`withTaskFinishHook` は `runHook` の外の catch 1 か所だけが `warn()` を呼ぶ。`reportLostHook` は呼び出し側で「報告済み」を持たない。`runHook` が報告したら投げない規約で重複を防ぐ。
+- **二重警告を避ける**: 各関数で「報告する場所」を 1 つに決める。`runTaskFinishHooks` / `ForStates` は `allSettled` の結果をまとめる 1 か所、`runHook` は `callHook` の catch 1 か所、`withTaskFinishHook` は `runHook` の外の catch 1 か所だけが stderr へ警告を書く。`reportLostHook` は呼び出し側で「報告済み」を持たない。`runHook` が報告したら投げない規約で重複を防ぐ。
 - この変更は、例外で落ちたフックが `log.error` だけになる経路を塞ぐためのものである。保存済みの状態と実行の戻り値は変えない。
 
 ### 3-1. `runTaskFinishHooksForStates` の契約: 渡すのは終端状態だけ
@@ -136,10 +138,10 @@ Quint の `safety` は次の 7 つの連言で、`noticeFixed` で違反が無�
 
 実装の側では、さらに次を守る。
 
-- 警告のタスク名は `sanitizeTerminalText`、理由と文面は `sanitizeSensitiveText` を通す。秘密とタスク名の生の値を漏らさない。
+- 警告のタスク名は `sanitizeTerminalText`、理由は `sanitizeSensitiveText`、完成文は `sanitizeSensitiveText` の後に `sanitizeTerminalText` を通す。秘密とタスク名の生の値、および ANSI・改行・制御文字を漏らさない。
 - `runTaskFinishHooks`・`runTaskFinishHooksForStates`・`withTaskFinishHook` のフック経路は投げない。実行の結果・保存済みの状態・再開点を変えない（#148 の `savedStateUntouched` は状態の不変条件として保つ）。
-- 8. `hookExceptionVisible`: キュー実行（`taskExecution.ts:126`）と `takt merge` の直接実行（`merge/index.ts:98`）の両方で、`callHook` の例外は 1 回の `warn()` に出る（`log.error` だけにしない）。
-- 9. `noticeNotSuppressed`: 取りこぼしの警告は `emitStatusLog`・`outputMode: 'silent'`・`--quiet`・`--pipeline` で抑えない。通常のフック失敗の表示だけを `emitStatusLog` に従わせる。
+- 8. `hookExceptionVisible`: キュー実行（`taskExecution.ts:126`）と `takt merge` の直接実行（`merge/index.ts:98`）の両方で、`callHook` の例外は 1 回の警告として stderr に出る（`log.error` だけにしない）。
+- 9. `noticeNotSuppressed`: 取りこぼしの警告は `emitStatusLog`・`outputMode: 'silent'`・`--quiet`・`--pipeline` で抑えない。通常のフック失敗の表示だけを `emitStatusLog` に従わせる。警告は stderr にだけ出し、stdout には出さない。
 - 10. `forStatesTerminalOnly`: `runTaskFinishHooksForStates` は `isTerminal` で濾した後の状態だけをフックにも警告の名前にも使う（§3-1）。
 - 再試行するのは `isFileLockTimeoutError` の**実行後の読み**だけ。設定、フックの起動、`runTaskFinishHooksForStates` の状態、実行前の読みは再試行しない。
 - 読みの再試行は、フックの呼び出しより前に行う。フックを呼んだ後に読みをやり直さない。
@@ -154,7 +156,7 @@ Quint の `safety` は次の 7 つの連言で、`noticeFixed` で違反が無�
 | `taskFinishHook.qnt` / `taskFinishHook_test.qnt` | #148 のモデル。終了フックを付ける位置（`AtEntryPoints` / `AtNormalEnd` / `AtEverySave`）と、フックが保存済みの状態を変えないこと。**変更していない。** |
 | `taskFinishHookNotice.qnt` / `taskFinishHookNotice_test.qnt` | #171 で足したモデル。`runTaskFinishHooks` / `runTaskFinishHooksForStates` の設定と読みの前置き、上限つき再試行、警告の回数。 |
 
-`taskFinishHookNotice.qnt` は 1 回の呼び出しと 1 つのタスクを表す。`NOTICE` は `Silent`（旧: `log.error` だけ）と `Fixed`（1 回の `warn()`）、`RETRY` は `None`（再試行なし）、`Bounded`（2 回まで、待ち 1 回）、`Unbounded`（待ち続ける）を切り替える。`Read` は `ReadOk`、`ReadNotTerminal`、`ReadTimeout`、`ReadBroken`。`ReadTimeout` だけが再試行の対象である。`sawNotTerminal` は `ReadNotTerminal` を通ったことを記録し、`wReadNotTerminalNoNotice` が `ConfigMissing` でも成り立つという過大な見せ方を避ける。
+`taskFinishHookNotice.qnt` は 1 回の呼び出しと 1 つのタスクを表す。`NOTICE` は `Silent`（旧: `log.error` だけ）と `Fixed`（1 回の stderr 警告）、`RETRY` は `None`（再試行なし）、`Bounded`（2 回まで、待ち 1 回）、`Unbounded`（待ち続ける）を切り替える。`Read` は `ReadOk`、`ReadNotTerminal`、`ReadTimeout`、`ReadBroken`。`ReadTimeout` だけが再試行の対象である。`sawNotTerminal` は `ReadNotTerminal` を通ったことを記録し、`wReadNotTerminalNoNotice` が `ConfigMissing` でも成り立つという過大な見せ方を避ける。`lastReadTimedOut` は**最後の**読みが `ReadTimeout` だったことを記録する。初回タイムアウト→再試行で壊れた YAML、を「時間切れを使い切った」と数えないため、`wExhaustedWarned` は `lastReadTimedOut` を要求し、その跡は `wTimeoutThenBrokenWarned` として別に数える。
 
 ### 実行したコマンドと結果
 
@@ -172,7 +174,7 @@ quint test taskFinishHookNotice_test.qnt --main noticeUnboundedTest
 | 検査 | 結果 |
 |---|---|
 | `quint typecheck`（本体・テスト） | どちらも成功 |
-| `quint test noticeFixedTest` | 9 件すべて通る（`timeoutThenSuccessTest`、`exhaustedWarnsOnceTest`、`brokenWarnsOnceTest`、`readNotTerminalDoesNotWarnTest`、`configMissingDoesNotWarnTest`、`configUnreadableWarnsTest`、`statesPathSkipsReadTest`、`statesConfigErrorWarnsTest`、`noSecondCallTest`） |
+| `quint test noticeFixedTest` | 10 件すべて通る（`timeoutThenSuccessTest`、`exhaustedWarnsOnceTest`、`timeoutThenBrokenWarnsOnceTest`、`brokenWarnsOnceTest`、`readNotTerminalDoesNotWarnTest`、`configMissingDoesNotWarnTest`、`configUnreadableWarnsTest`、`statesPathSkipsReadTest`、`statesConfigErrorWarnsTest`、`noSecondCallTest`） |
 | `quint test noticeBeforeTest` | 2 件通る（`silentTimeoutTest`、`silentConfigErrorTest`） |
 | `quint test noticeNoRetryTest` | 1 件通る（`timeoutNotRetriedTest`） |
 | `quint test noticeUnboundedTest` | 1 件通る（`retryExceedsBoundTest`） |
@@ -195,23 +197,26 @@ quint test taskFinishHookNotice_test.qnt --main noticeUnboundedTest
 
 ```sh
 quint run taskFinishHookNotice.qnt --main noticeFixed --invariant safety \
-  --witnesses wRetriedThenCalled wExhaustedWarned wBrokenWarned \
+  --witnesses wRetriedThenCalled wExhaustedWarned wTimeoutThenBrokenWarned wBrokenWarned \
     wReadNotTerminalNoNotice wConfigMissingNoNotice wStatesConfigErrorWarned \
   --max-samples 20000 --max-steps 8 --seed 0x2a
 ```
 
-結果: 20,000 標本、max-steps 8、seed `0x2a`、`[ok]`（違反なし、約1.4秒）。witness はすべて到達した。以下は到達した跡の本数で、網羅率ではない。
+結果: 20,000 標本、max-steps 8、seed `0x2a`、`[ok]`（違反なし、約1.6秒）。witness はすべて到達した。以下は到達した跡の本数で、網羅率ではない。
 
 | witness | 本数 / 20,000 |
 |---|---|
 | `wRetriedThenCalled` | 197 |
-| `wExhaustedWarned` | 452 |
+| `wExhaustedWarned` | 241 |
+| `wTimeoutThenBrokenWarned` | 211 |
 | `wBrokenWarned` | 843 |
 | `wReadNotTerminalNoNotice` | 1,025 |
 | `wConfigMissingNoNotice` | 6,693 |
 | `wStatesConfigErrorWarned` | 3,344 |
 
-追加で `--max-samples 50000 --max-steps 10` を seed `0x1` と `0x2a` で流し、どちらも `[ok]`（約3.3秒 / 約3.3秒）。シミュレーションであり、証明ではない。`wReadNotTerminalNoNotice` は `sawNotTerminal` を要求するので、1,025 本は `ReadNotTerminal` を通った跡だけを数えている。`wConfigMissingNoNotice` の 6,693 本とは別の跡である。
+`wExhaustedWarned` は「最後の読みが `ReadTimeout`」だけを数えるので 452 から 241 に減り、残りの 211 本は「初回タイムアウト→再試行で壊れた YAML」として `wTimeoutThenBrokenWarned` に分かれた。両者の合計 452 は直す前の `wExhaustedWarned` と一致する。
+
+追加で `--max-samples 50000 --max-steps 10` を seed `0x1` と `0x2a` で流し、どちらも `[ok]`（約3.4秒 / 約3.5秒）。シミュレーションであり、証明ではない。`wReadNotTerminalNoNotice` は `sawNotTerminal` を要求するので、1,025 本は `ReadNotTerminal` を通った跡だけを数えている。`wConfigMissingNoNotice` の 6,693 本とは別の跡である。
 
 #148 のモデルが壊れていないことも、同じ版で確かめた。
 
@@ -245,24 +250,25 @@ quint test taskFinishHook_test.qnt --main everySaveTest
 
 ### 先に red を置く回帰テスト
 
-新しいユニットテスト `src/__tests__/task-finish-hook-notice.test.ts` を置く。`TaskRunner` は `listTaskStateItems` の結果と失敗を差し替えた偽物、`warn` は `vi.mock('../shared/ui/index.js')` で spy する。フックの起動は `runBoundedCommand` を spy するか、`callHook` の代わりに偽の `TaskRunner` と設定で観測する。
+新しいユニットテスト `src/__tests__/task-finish-hook-notice.test.ts` を置く。`TaskRunner` は `listTaskStateItems` の結果と失敗を差し替えた偽物、警告は `process.stderr.write` を spy して観測する（`console.log` を spy し、警告が stdout に出ないことも確かめる）。フックの起動は `runBoundedCommand` を spy するか、`callHook` の代わりに偽の `TaskRunner` と設定で観測する。
 
-1. `runTaskFinishHooks` が `listTaskStateItems` のロック時間切れを 2 回受け取ると、`warn` が 1 回、タスク名 2 つを含み、フックは 0 回。直す前は `warn` 0 回（`log.error` だけ）。
+1. `runTaskFinishHooks` が `listTaskStateItems` のロック時間切れを 2 回受け取ると、stderr の警告が 1 回、タスク名 2 つを含み、フックは 0 回。直す前は警告 0 回（`log.error` だけ）。
 2. `runTaskFinishHooks` が 1 回目にロック時間切れ、2 回目に成功すると、フックがちょうど 1 回。直す前は 0 回（再試行が無い）。
-3. `runTaskFinishHooks` が `Invalid tasks.yaml` を受けると、再試行せず（読みは 1 回）、`warn` 1 回、フック 0 回。
-4. `runTaskFinishHooks` が `loadProjectConfig` の例外を受けると、`warn` 1 回、`listTaskStateItems` は呼ばない、フック 0 回。文面が `config.yaml` を指し、phase が `'config-read'` であること（`tasks.yaml` の読み失敗と取り違えない）。
-5. `runTaskFinishHooksForStates` が `loadProjectConfig` の例外を受けると、`warn` 1 回に終端タスクの名前、フック 0 回。文面が `config.yaml` を指し、phase が `'config-read'` であること。直す前は `warn` 0 回。
-6. `runTaskFinishHooksForStates` に終端 1 件と非終端 1 件を渡し、設定読みが例外になると、`warn` の名前は終端の 1 件だけで、非終端の名前を含まない（§3-1 の契約）。
-7. `runTaskFinishHooksForStates` で 1 件の `callHook` が投げ、別の 1 件が成功すると、成功したフックは 1 回、`warn` は投げたタスク名を含めて 1 回。直す前は `warn` 0 回で `Promise.all` が拒否される。
-8. `withTaskFinishHook` の実行後の読みがロック時間切れを 2 回受けると、`warn` 1 回、実行の戻り値は変わらない。直す前は `warn` 0 回。
+3. `runTaskFinishHooks` が `Invalid tasks.yaml` を受けると、再試行せず（読みは 1 回）、警告 1 回、フック 0 回。
+4. `runTaskFinishHooks` が `loadProjectConfig` の例外を受けると、警告 1 回、`listTaskStateItems` は呼ばない、フック 0 回。文面が `config.yaml` を指し、phase が `'config-read'` であること（`tasks.yaml` の読み失敗と取り違えない）。
+5. `runTaskFinishHooksForStates` が `loadProjectConfig` の例外を受けると、警告 1 回に終端タスクの名前、フック 0 回。文面が `config.yaml` を指し、phase が `'config-read'` であること。直す前は警告 0 回。
+6. `runTaskFinishHooksForStates` に終端 1 件と非終端 1 件を渡し、設定読みが例外になると、警告の名前は終端の 1 件だけで、非終端の名前を含まない（§3-1 の契約）。
+7. `runTaskFinishHooksForStates` で 1 件の `callHook` が投げ、別の 1 件が成功すると、成功したフックは 1 回、警告は投げたタスク名を含めて 1 回。直す前は警告 0 回で `Promise.all` が拒否される。
+8. `withTaskFinishHook` の実行後の読みがロック時間切れを 2 回受けると、設定があるので警告 1 回、実行の戻り値は変わらない。直す前は警告 0 回。
 9. `withTaskFinishHook` の実行後の読みが 1 回目に時間切れ、2 回目に成功すると、フックが 1 回。直す前は 0 回。
-10. **実行前の読みが失敗**し（`beforeReadFailed = true`）、実行後が終端になる。フックは 1 回呼ばれ、`warn` は「前の状態を読めなかったので、この実行が保存した状態でないのにフックが走ることがある」を 1 回出す。実行前の読みが成功して印が変わらない場合（非終端だった場合を含む）は、フック 0 回・`warn` 0 回（既存の `terminalStamp` の回帰）。
-11. 設定が無いプロジェクトでは、`listTaskStateItems` を呼ばず、`warn` 0 回、フック 0 回（設定なしは取りこぼしではない）。設定はあるが `tasks.yaml` の読みが時間切れの場合は、別の試験で `warn` 1 回・フック 0 回を確かめる。
-12. `withTaskFinishHook` の `callHook` が拒否するとき、キュー実行（`taskExecution.ts:126`）と `takt merge` の直接実行（`merge/index.ts:98`）の両方で `warn` 1 回。直す前は `log.error` だけで `warn` 0 回。
-13. `setQuietMode(true)` と `--pipeline` の両方で、取りこぼしの `warn` が 1 回出る（stdout に混ざることを含めて確かめる）。
-14. 警告のタスク名に改行・ANSI・引用符・Unicode を入れ、理由に既知の秘密（`sk-...`、URL の userinfo、`Bearer ...`）を入れる。`warn` の文面に生の制御文字と秘密が無く、`sanitizeTerminalText` / `sanitizeSensitiveText` を通した値だけがある。
-15. 1,000 個のタスク名で読みが失敗すると、`warn` は 1 回で、先頭 10 件と「and 990 more」を含む。1,000 行の警告にしない。
-16. 既存の `src/__tests__/it-task-finish-hook.test.ts` の「calls the command once after a completed task is saved」「runs again when a pr_failed task is saved as completed」「runs for each pending task that an aborted goal saves as failed」が、直した後も同じ回数・同じ環境変数で通る（回帰）。
+10. **実行前の読みが失敗**し（`beforeReadFailed = true`）、実行後が終端になる。フックは 1 回呼ばれ、警告は「前の状態を読めなかったので、この実行が保存した状態でないのにフックが走ることがある」を 1 回出す。実行前の読みが成功して印が変わらない場合（非終端だった場合を含む）は、フック 0 回・警告 0 回（既存の `terminalStamp` の回帰）。
+11. 設定が無いプロジェクトでは、`listTaskStateItems` を呼ばず、警告 0 回、フック 0 回（設定なしは取りこぼしではない）。設定はあるが `tasks.yaml` の読みが時間切れの場合は、別の試験で警告 1 回・フック 0 回を確かめる。
+12. `withTaskFinishHook` の `callHook` が拒否するとき、キュー実行（`taskExecution.ts:126`）と `takt merge` の直接実行（`merge/index.ts:98`）の両方で警告 1 回が stderr に出る。直す前は `log.error` だけで警告 0 回。`takt merge` の試験は Git を起動する 1 か所（`cloneAndIsolateAbortable`）をテストダブルにし、実 Git を起動しない。
+13. `setQuietMode(true)` と `--pipeline` の両方で、取りこぼしの警告が stderr に 1 回出て、stdout には出ない（`console.log` が警告を受け取らない）。
+14. 警告のタスク名に改行・ANSI・引用符・Unicode を入れ、理由に既知の秘密（`sk-...`、URL の userinfo、`Bearer ...`）を入れる。警告の文面に生の制御文字と秘密が無く、`sanitizeTerminalText` / `sanitizeSensitiveText` を通した値だけがある。
+15. 理由に ANSI（`\x1b[2J`）・改行・制御文字を入れても、警告の完成文に生の制御文字が無い（理由 → `sanitizeSensitiveText` → 完成文 → `sanitizeTerminalText` の順）。
+16. 1,000 個のタスク名で読みが失敗すると、警告は 1 回で、先頭 10 件と「and 990 more」を含む。1,000 行の警告にしない。
+17. 既存の `src/__tests__/it-task-finish-hook.test.ts` の「calls the command once after a completed task is saved」「runs again when a pr_failed task is saved as completed」「runs for each pending task that an aborted goal saves as failed」が、直した後も同じ回数・同じ環境変数で通る（回帰）。
 
 旧 test 9（設定なしで読み失敗を作る）は空振りだったので、設定なしを確かめる test 11 と、設定あり＋読み時間切れを確かめる test 1 に分けた。設定なしでは `listTaskStateItems` を呼ばないこと自体を test 11 で確かめる。
 
@@ -275,11 +281,11 @@ quint test taskFinishHook_test.qnt --main everySaveTest
 `package.json` に `fast-check`（`^4.11.0`）がある。除外する入力集合は設けない。
 
 1. **実行後の読みの結果の列**: `ReadTimeout` / `ReadBroken` / `ReadOk` / `ReadNotTerminal` の任意の列（長さ 1〜4）と、`Config` の任意の値、`Path` の任意の値から、呼び出しの結果を計算する。性質: (a) `ReadTimeout` は 2 回までしか試さず、3 回目を読まない。(b) フックは 0 回か 1 回。(c) `loss` のときはフック 0 回、`notices` 1 回。(d) `loss` でないときは `notices` 0 回。(e) `ReadBroken` の後は再試行しない。(f) `ConfigMissing` は `loss` でない。(g) `ReadNotTerminal` は `loss` でない。実行前の読みはこの性質の対象外（モデル外）。
-2. **警告の回数と内容**: 任意のタスク名の配列（空、重複、制御文字、ANSI、引用符、Unicode、長い名前）と任意のエラー文面から、**1 回の呼び出しで** `reportLostHook` の警告を 1 回だけ出し、タスク名は `sanitizeTerminalText`、理由は `sanitizeSensitiveText` を通したものだけを含む。先頭 10 件と残り件数の丸めが正しい。既知の秘密（`sanitizeSensitiveText` の既存の PBT が使う既知の漏れ）が生で出ない。呼び出しをまたぐ重複排除は対象外。
+2. **警告の回数と内容**: 任意のタスク名の配列（空、重複、制御文字、ANSI、引用符、Unicode、長い名前）と任意のエラー文面から、**1 回の呼び出しで** `reportLostHook` の警告を stderr に 1 回だけ出し、タスク名は `sanitizeTerminalText`、理由は `sanitizeSensitiveText`、完成文は `sanitizeSensitiveText` → `sanitizeTerminalText` を通したものだけを含む。先頭 10 件と残り件数の丸めが正しい。既知の秘密（`sanitizeSensitiveText` の既存の PBT が使う既知の漏れ）が生で出ない。呼び出しをまたぐ重複排除は対象外。
 3. **状態を変えない**: 任意の `TaskState` の配列と読みの失敗の入れ方で、`runTaskFinishHooks` / `runTaskFinishHooksForStates` の前後で `tasks.yaml` の内容と `TaskState` のオブジェクトが変わらない。フックの起動回数は、1 回の呼び出しでタスクごとに 0 か 1。
 4. **再試行の待ちの上限**: 偽のタイマーで、`runTaskFinishHooks` と `runHook` の実行後の読みについて、時間切れが続くときに `setTimeout` が 1 回だけ 250 ms で呼ばれ、2 回目の失敗で終わる。設定の失敗と実行前の読みでは `setTimeout` を呼ばない。Quint は前者（`NamedHook`）だけを表す。
-5. **実行前の読みの失敗（at-least-once）**: 実行前の `readTaskState` が失敗するか成功するか、実行後の状態が終端か非終端か、印が同じかを任意に作る。実行前が失敗して実行後が終端なら、フックは 1 回、`warn` は「前の状態を読めなかった」を 1 回。実行前が成功して印が同じなら、フック 0 回・`warn` 0 回。実行後が非終端なら、フック 0 回・`warn` 0 回。`warn` の回数は 1 回を超えない。
-6. **出力モード**: `quietMode` と `pipelineMode` の任意の組み合わせで、`reportLostHook` の `warn` 呼び出し回数は 1 回のまま（0 回に落ちない）。
+5. **実行前の読みの失敗（at-least-once）**: 実行前の `readTaskState` が失敗するか成功するか、実行後の状態が終端か非終端か、印が同じかを任意に作る。実行前が失敗して実行後が終端なら、フックは 1 回、警告は「前の状態を読めなかった」を 1 回。実行前が成功して印が同じなら、フック 0 回・警告 0 回。実行後が非終端なら、フック 0 回・警告 0 回。**実行後の読みが失敗したときは、設定が無いと確定できるなら警告 0 回、設定がある／設定を読めないなら警告 1 回。** 警告の回数は 1 回を超えない。
+6. **出力モード**: `quietMode` と `pipelineMode` の任意の組み合わせで、`reportLostHook` の警告は stderr に 1 回のまま（0 回に落ちない）。stdout には出ない。
 
 除外: 無し。実時間の 5 秒待ちは偽の `TaskRunner` と偽のタイマーで作る（heavy IT にしない）。
 
@@ -292,20 +298,23 @@ quint test taskFinishHook_test.qnt --main everySaveTest
 | 破損 | `tasks.yaml` が壊れた YAML・スキーマ違反 | 再試行しない（`Invalid tasks.yaml` は決定的）。1 回警告。ファイルは触らない。 |
 | 破損 | `config.yaml` が壊れた YAML・スキーマ違反 | 再試行しない。1 回警告。設定なしとは区別する。 |
 | 権限・IO | `tasks.yaml` / `config.yaml` の EACCES・EIO・ENOSPC | 再試行しない。1 回警告。 |
-| 設定なし | `task_finish_hook` が無い | 何もしない。警告も出さない（取りこぼしではない）。 |
+| 設定なし | `task_finish_hook` が無い | 何もしない。警告も出さない（取りこぼしではない）。名前指定の経路は設定を読んでから状態を読む。キュー実行と `takt merge` は状態を先に読むが、実行後の読みが失敗したときは設定を確かめ、無いと確定できたら警告しない。 |
+| 設定が読めない | `config.yaml` が壊れている・読めない | フックの有無を確定できないので警告する（名前指定は `'config-read'`、実行後の読みが先に失敗した `runHook` は `'execution-read'` の 1 回）。 |
 | 同時実行 | 2 つのプロセスが同じ `tasks.yaml` を読み書きする | 読みはロックの下で行う。時間切れだけ再試行する。書き込みはしない。 |
 | 再開・retry | 読みの間にタスクが再キューされ、非終端になる | フックは呼ばない。警告も出さない（範囲の外。別の試行の状態を古いフックで走らせない）。 |
 | 再開・retry | 同じ終端状態で `runTaskFinishHooks` が 2 回呼ばれる | 1 回の呼び出しの中では 1 回。呼び出しをまたぐと 2 回警告しうる。既存の呼び出し元の責任。この設計は再送を追加しない。`withTaskFinishHook` は `terminalStamp` で同じ状態を弾く。 |
 | 実行前の読み | 実行前の `readTaskState` が時間切れ・破損で失敗する | 再試行しない。実行後の読みが終端ならフックを 1 回呼び、at-least-once の警告を 1 回出す（二重に走る可能性を隠さない）。 |
 | フック自体の失敗 | 非 0 終了・時間切れ・起動失敗 | 既存の `callHook` の警告（`emitStatusLog !== false`）。保存済みの状態は変えない。この設計では変えない。 |
-| フック自体の失敗 | `callHook` が予期せず投げる | `runTaskFinishHooks` / `ForStates` は `Promise.allSettled` で集め、`withTaskFinishHook` は `runHook` の catch で 1 回報告し、外側の catch は漏れた例外だけを報告する。キュー実行と `takt merge` の両方で `warn` に出る。 |
+| フック自体の失敗 | `callHook` が予期せず投げる | `runTaskFinishHooks` / `ForStates` は `Promise.allSettled` で集め、`withTaskFinishHook` は `runHook` の catch で 1 回報告し、外側の catch は漏れた例外だけを報告する。キュー実行と `takt merge` の両方で stderr の警告に出る。 |
 | 大量のタスク | ゴールの中止で数百の pending を failed にし、設定が読めない | 警告は 1 回。先頭 10 件と「and N more」。フックは 0 回。 |
 | 大量のタスク | 1,000 個のタスク名で読みが失敗 | 同上。名前の整形でメモリを食い尽くさない。 |
 | 端末 | タスク名に制御文字・ANSI・改行・引用符 | `sanitizeTerminalText` を通す。 |
+| 端末 | 例外文面に ANSI・改行・制御文字 | 理由を `sanitizeSensitiveText` に通し、完成文を `sanitizeTerminalText` に通す。生の制御文字を stderr に書かない。 |
 | 端末 | 例外文面に秘密（API キー、URL の userinfo、トークン） | `sanitizeSensitiveText` を通す。既存の伏せ方を変えない。 |
-| 端末 | `warn()` が同期で投げる（閉じた stdout など） | 握りつぶし、`log.error` を試み、呼び出し元へは投げない。非同期のストリームエラーは対象外。 |
+| 端末 | stderr への書き込みが同期で投げる（閉じた stderr など） | 握りつぶし、`log.error` を試み、呼び出し元へは投げない。非同期のストリームエラーは対象外。 |
 | 出力モード | `outputMode: 'silent'` / `emitStatusLog: false` | 通常のフック失敗の表示は今までどおり抑える。取りこぼしの警告は抑えない。 |
-| 出力モード | `--quiet` / `minimalOutput` / `--pipeline` | `warn()` は `console.log` で stdout に出て quiet を見ないので、取りこぼしの警告は出す。`--pipeline` の stdout に混ざることは「影響」に書く。 |
+| 出力モード | `--quiet` / `minimalOutput` / `--pipeline` | 警告は stderr に書くので quiet でも pipeline でも出る。stdout には出さない。 |
+| MCP | stdio トランスポートが stdout を JSON-RPC に使う | 警告は stderr にだけ書く。stdout の JSON-RPC フレームを壊さない。 |
 | #170 との重なり | claim の setup 失敗で、manager 通知（#170）とフック設定（#171）が両方失敗する | 2 種類の警告が並ぶ。それぞれの「1 回」は自分の範囲内で、統合は別件。 |
 | 並行 | `runTaskFinishHooks` が同じタスク名で同時に 2 回呼ばれる | 1 回の呼び出しごとに 1 回警告するので、2 回の呼び出しで 2 回出る。既存の呼び出し元の責任。この設計は追加の重複排除をしない（フックの二重実行を避けるため、再送はしない）。 |
 | 時刻 | 再試行の 250 ms 待ちの間にプロセスが終わる | 待ちは上限つき。終了すれば警告は出ないが、プロセスの終了なので許容する。 |
@@ -313,11 +322,11 @@ quint test taskFinishHook_test.qnt --main everySaveTest
 ## 影響
 
 - **上流（`nrslib/takt`）**: 何も流さない。上流の `main` には `task_finish_hook` と `runTaskFinishHooks` が無い（`bba6f2315` で確認）。次の取り込みで `taskFinishHook.ts` が競合する可能性は低いが、フォーク側の機能なので、競合したらこの設計と Quint を見て解く。
-- **保存されるデータ**: `tasks.yaml` のスキーマ、`config.yaml` のキー、`manager-inbox` の形式を変えない。フックの経路は `tasks.yaml` を読むだけで、書き込まない。再送の印も付けない。警告は端末（stdout）に出て、`--verbose` のときはデバッグログ（stderr）にも残る。
+- **保存されるデータ**: `tasks.yaml` のスキーマ、`config.yaml` のキー、`manager-inbox` の形式を変えない。フックの経路は `tasks.yaml` を読むだけで、書き込まない。再送の印も付けない。警告は端末の stderr に出て、`--verbose` のときはデバッグログ（同じ stderr）にも残る。
 - **公開 API**: `runTaskFinishHooks` / `runTaskFinishHooksForStates` / `withTaskFinishHook` の引数と戻り値、`TaskFinishHookOptions`、`TaskRunner` の形を変えない。MCP の道具、`takt` のコマンド、環境変数を変えない。追加するのは `taskFinishHook.ts` の中の非公開のヘルパーと定数だけ。
-- **守りの仕組み**: 秘密の伏せ方（`sensitive*.ts`）は変えず、新しい警告を `sanitizeSensitiveText` に通すだけ。タスク名は `sanitizeTerminalText`。ロックの順序（`epics.lock` → `goal.json.lock` → `goal-execution.lock` → `tasks.yaml.lock`）と排他は変えない。読みの再試行は新しい取得を 1 回増やすだけで、待ち続けない。
-- **利用者に見えるもの**: フックが呼ばれなかったときに、既定で 1 回の警告が stdout に出る。`--quiet` でも `--pipeline` でも出る（`warn()` は `console.log` で、quiet を見ない）。manager の自動 run では、その stdout/stderr が `.takt/manager-logs/run-<uuid>.log` に向くため、そのファイルに残る（#168 の設計と同じ限界）。`--verbose` のときは `log.error` も stderr に出る。
-- **`--pipeline` の stdout**: 取りこぼしの警告が、パイプラインの stdout を機械が読む出力に混ざりうる。失われた通知を隠さないことを優先して受け入れる。出力を分ける必要が出たら、将来の別件で stderr へ逃がすことを検討する（この設計では変えない）。
+- **守りの仕組み**: 秘密の伏せ方（`sensitive*.ts`）は変えず、新しい警告を `sanitizeSensitiveText` と `sanitizeTerminalText` に通すだけ。タスク名は `sanitizeTerminalText`。ロックの順序（`epics.lock` → `goal.json.lock` → `goal-execution.lock` → `tasks.yaml.lock`）と排他は変えない。読みの再試行は新しい取得を 1 回増やすだけで、待ち続けない。
+- **利用者に見えるもの**: フックが呼ばれなかったときに、既定で 1 回の警告が stderr に出る。`--quiet` でも `--pipeline` でも出る（`isQuietMode()` も `minimalOutput` も見ない）。manager の自動 run では、その stdout/stderr が `.takt/manager-logs/run-<uuid>.log` に向くため、そのファイルに残る（#168 の設計と同じ限界）。`--verbose` のときは `log.error` も stderr に出る。**stdout には出さない**ので、stdio の MCP サーバー（stdout が JSON-RPC）でも応答の解析を壊さない。
+- **`--pipeline` の stdout**: 取りこぼしの警告は stderr に出るので、パイプラインの stdout を機械が読む用途に混ざらない。stdout と stderr を別々に読む呼び出し元は、警告を stderr 側で受け取る。
 - **遅延**: ロック時間切れのときだけ、最悪で約 10.25 秒（5 秒 + 250 ms + 5 秒）を余分に待つ。フックの最大 60 秒に比べれば小さく、上限がある。
 
 ## 相対見積もり
@@ -325,7 +334,7 @@ quint test taskFinishHook_test.qnt --main everySaveTest
 | 範囲 | 大きさ | 基準と根拠 |
 |---|---|---|
 | 設計と Quint（本作業） | 2 | #170 の設計 + Quint を 3（daemon・スキーマ・複数経路）とした。本件は設計書 1 つと Quint のモデル 1 つ（約 180 行）で、保存するデータと公開 API を変えない。 |
-| 実装と試験（設計レビュー後） | 3 | 変えるのは `taskFinishHook.ts` の 1 ファイルと新しいユニットテスト 1 ファイルだが、3 つの呼び出し経路、実行前の読みの at-least-once、`--quiet`/`--pipeline`、試験 16 件を含む。既存の `it-task-finish-hook.test.ts` は回帰としてそのまま使う。 |
+| 実装と試験（設計レビュー後） | 3 | 変えるのは `taskFinishHook.ts` の 1 ファイルと新しいユニットテスト 1 ファイルだが、3 つの呼び出し経路、実行前の読みの at-least-once、stderr への出力、`--quiet`/`--pipeline`、試験 24 件を含む。既存の `it-task-finish-hook.test.ts` は回帰としてそのまま使う。 |
 | 全体（設計レビュー・CI を含む） | 3 | #169 の 8、#170 の設計 3 + 実装 5 より小さい。複数の呼び出し経路と警告の秘密の扱いがあるので 1 ではない。 |
 
 ## 決めずに残したこと
@@ -334,6 +343,6 @@ quint test taskFinishHook_test.qnt --main everySaveTest
 - 再試行の回数と間隔（2 回・250 ms）は初期値。設計レビューで変えるなら、Quint の `MAX_READ_ATTEMPTS` / `MAX_RETRIES` と一緒に変える。
 - 読みに成功した後の「非終端・見つからない」を警告するか。この設計では範囲の外にした（別の試行の状態を古いフックで走らせないため）。警告だけなら害は少ないが、自動再キューのたびに警告が出る可能性がある。
 - フックの副作用を後から出し直す仕組み（印・daemon）を足すか。#170 の `completion_publication_pending` とは別の印が必要になり、二重実行の危険があるので、この設計では足さない。
-- `--pipeline` の stdout に混ざる警告を stderr へ逃がすか。この設計では `warn()` の既存の出力先（stdout）を変えず、将来の別件にする。
+- `--pipeline` の警告を stderr に出すことを既定にした。MCP のログ通知としても出すかは、この設計では扱わない（stderr だけで JSON-RPC を壊さない）。
 - 同じタスク名で `runTaskFinishHooks` が時間をおいて何度も呼ばれたときに、警告をまとめるか。この設計ではまとめない（呼び出しごとに 1 回。印を持たないので、呼び出し元の責任）。
 - 実時間のロック時間切れを使う heavy IT を足すか。ユニットテストで足りるなら足さない。

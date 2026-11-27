@@ -3,12 +3,14 @@
  * implementation. Each test states the behaviour the design asks for; the current code fails the
  * ones that still only write `log.error`.
  *
- * `warn` and `runBoundedCommand` are spies. A fake `TaskRunner` (only `listTaskStateItems`) covers
- * the read failures and the retry; a real `TaskRunner` in a temporary project covers the two
- * execution entry points and the existing hook contracts (test 16).
+ * `process.stderr.write` and `runBoundedCommand` are spies: the notice must reach stderr only.
+ * A fake `TaskRunner` (only `listTaskStateItems`) covers the read failures and the retry; a real
+ * `TaskRunner` in a temporary project covers the two execution entry points and the existing hook
+ * contracts (test 16). The `takt merge` test doubles the single clone entry point, so no Git
+ * process starts.
  */
 
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Command } from 'commander';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -16,16 +18,18 @@ import * as path from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 import type { TaskInfo, TaskState } from '../infra/task/index.js';
 
-const ui = vi.hoisted(() => ({ warn: vi.fn() }));
-vi.mock('../shared/ui/index.js', async (original) => ({
-  ...(await original<typeof import('../shared/ui/index.js')>()),
-  warn: ui.warn,
-}));
-
 const bounded = vi.hoisted(() => ({ run: vi.fn() }));
 vi.mock('../shared/utils/bounded-command-runner.js', async (original) => ({
   ...(await original<typeof import('../shared/utils/bounded-command-runner.js')>()),
   runBoundedCommand: bounded.run,
+}));
+
+// The `takt merge` path reaches Git through this one function. A rejection here keeps the merge
+// test on the hook contract without starting a real `git clone`.
+const cloneExec = vi.hoisted(() => ({ cloneAndIsolateAbortable: vi.fn() }));
+vi.mock('../infra/task/clone-exec.js', async (original) => ({
+  ...(await original<typeof import('../infra/task/clone-exec.js')>()),
+  cloneAndIsolateAbortable: cloneExec.cloneAndIsolateAbortable,
 }));
 
 const doubles = vi.hoisted(() => ({
@@ -49,7 +53,7 @@ import { initializeCliExecutionContext, getCliExecutionContext } from '../app/cl
 import { invalidateAllResolvedConfigCache } from '../infra/config/index.js';
 import { TaskRunner } from '../infra/task/runner.js';
 import { setQuietMode } from '../shared/context.js';
-import { setLogLevel, warn as realWarn } from '../shared/ui/LogManager.js';
+import { setLogLevel } from '../shared/ui/LogManager.js';
 import { sanitizeTerminalText } from '../shared/utils/text.js';
 import { executePrWorkflow, resolveMergeSettings } from '../features/merge/index.js';
 import {
@@ -73,8 +77,8 @@ const okCommandResult = {
 };
 
 const tempDirs = new Set<string>();
-let previousConfigDir: string | undefined;
-let tempHome: string | undefined;
+let stderrChunks: string[] = [];
+let stdoutChunks: string[] = [];
 
 function makeTempDir(prefix: string): string {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
@@ -139,13 +143,24 @@ async function runWithFakeTimers<T>(start: () => Promise<T>): Promise<T> {
   return promise;
 }
 
+/** The task-finish-hook notices that reached stderr. Other stderr writes are ignored. */
 function warnMessages(): string[] {
-  return ui.warn.mock.calls.map((call) => String(call[0]));
+  return stderrChunks.join('').split('\n').filter((line) => line.includes('Task finish hook'));
 }
 
 function onlyWarnMessage(): string {
-  expect(ui.warn).toHaveBeenCalledTimes(1);
-  return warnMessages()[0]!;
+  const messages = warnMessages();
+  expect(messages).toHaveLength(1);
+  return messages[0]!;
+}
+
+function expectNoNotice(): void {
+  expect(warnMessages()).toHaveLength(0);
+  expect(stdoutText()).not.toContain('Task finish hook');
+}
+
+function stdoutText(): string {
+  return stdoutChunks.join('');
 }
 
 function hookEnvOfCall(index = 0): NodeJS.ProcessEnv {
@@ -174,22 +189,24 @@ function stubResolution(project: string, overrides: Record<string, unknown> = {}
   });
 }
 
-beforeAll(() => {
-  // Never read or write the real ~/.takt while these tests run.
-  previousConfigDir = process.env.TAKT_CONFIG_DIR;
-  tempHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'takt-171-home-')));
-  process.env.TAKT_CONFIG_DIR = path.join(tempHome, '.takt');
-});
-
-afterAll(() => {
-  if (previousConfigDir === undefined) delete process.env.TAKT_CONFIG_DIR;
-  else process.env.TAKT_CONFIG_DIR = previousConfigDir;
-  if (tempHome !== undefined) fs.rmSync(tempHome, { recursive: true, force: true });
-});
-
 beforeEach(() => {
   vi.resetAllMocks();
+  // An isolated TAKT_CONFIG_DIR is set per test by src/__tests__/test-setup.ts.
+  stderrChunks = [];
+  stdoutChunks = [];
+  vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
+    stderrChunks.push(String(chunk));
+    return true;
+  });
+  vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+    stdoutChunks.push(String(chunk));
+    return true;
+  });
+  vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+    stdoutChunks.push(args.map((arg) => String(arg)).join(' '));
+  });
   bounded.run.mockResolvedValue(okCommandResult);
+  cloneExec.cloneAndIsolateAbortable.mockRejectedValue(new Error('merge clone is a test double; no git is started'));
   setQuietMode(false);
   setLogLevel('info');
   invalidateAllResolvedConfigCache();
@@ -230,7 +247,7 @@ describe('task finish hook notices (#171)', () => {
     expect(reads).toHaveBeenCalledTimes(2);
     expect(bounded.run).toHaveBeenCalledTimes(1);
     expect(hookEnvOfCall().TAKT_FINISH_TASK_NAME).toBe('task-a');
-    expect(ui.warn).not.toHaveBeenCalled();
+    expectNoNotice();
   });
 
   it('does not retry an invalid tasks.yaml, and warns once with no hook (3)', async () => {
@@ -328,7 +345,7 @@ describe('task finish hook notices (#171)', () => {
 
     expect(reads).toHaveBeenCalledTimes(3);
     expect(bounded.run).toHaveBeenCalledTimes(1);
-    expect(ui.warn).not.toHaveBeenCalled();
+    expectNoNotice();
   });
 
   it('at-least-once: when the pre-read fails and the post-read is terminal, calls the hook once and warns once (10)', async () => {
@@ -354,7 +371,7 @@ describe('task finish hook notices (#171)', () => {
 
     expect(reads).toHaveBeenCalledTimes(2);
     expect(bounded.run).not.toHaveBeenCalled();
-    expect(ui.warn).not.toHaveBeenCalled();
+    expectNoNotice();
   });
 
   it('does nothing when the project has no task_finish_hook: no read, no warning, no hook (11)', async () => {
@@ -365,7 +382,20 @@ describe('task finish hook notices (#171)', () => {
 
     expect(reads).not.toHaveBeenCalled();
     expect(bounded.run).not.toHaveBeenCalled();
-    expect(ui.warn).not.toHaveBeenCalled();
+    expectNoNotice();
+  });
+
+  it('does not warn when the post-execution read fails and the project has no hook (11)', async () => {
+    const project = makeProject('none');
+    const { runner, reads } = fakeRunner([[state('task-a', 'running')], lockTimeout()]);
+
+    vi.useFakeTimers();
+    await runWithFakeTimers(() =>
+      withTaskFinishHook(project, runner, 'task-a', async () => undefined));
+
+    expect(reads).toHaveBeenCalledTimes(3);
+    expect(bounded.run).not.toHaveBeenCalled();
+    expectNoNotice();
   });
 
   it('warns once for a rejected hook in the queued execution path (12)', async () => {
@@ -409,8 +439,8 @@ describe('task finish hook notices (#171)', () => {
       return okCommandResult;
     });
 
-    // The temporary project is not a Git repository, so the merge workflow fails and saves a
-    // failed task; the hook still runs and its rejection must be visible.
+    // The clone double rejects before any Git process starts, so the merge workflow fails and saves
+    // a failed task; the hook still runs and its rejection must be visible.
     await executePrWorkflow({
       projectCwd: project,
       prNumber: 7,
@@ -422,24 +452,22 @@ describe('task finish hook notices (#171)', () => {
     expect(bounded.run.mock.calls.some(
       (call) => (call[0] as { command: string }).command === REJECTING_HOOK_COMMAND,
     )).toBe(true);
-    expect(ui.warn).toHaveBeenCalledTimes(1);
-    expect(warnMessages()[0]).toContain('Task');
+    expect(cloneExec.cloneAndIsolateAbortable).toHaveBeenCalledTimes(1);
+    expect(onlyWarnMessage()).toContain('Task');
   });
 
-  it('still warns in quiet mode, on stdout, once (13)', async () => {
+  it('still warns in quiet mode, on stderr, once (13)', async () => {
     const project = makeProject();
     const { runner } = fakeRunner([invalidTasksFile()]);
     setQuietMode(true);
-    ui.warn.mockImplementation((message: string) => realWarn(message));
-    const stdout = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
     await runTaskFinishHooks(project, runner, ['task-a']);
 
-    expect(ui.warn).toHaveBeenCalledTimes(1);
-    expect(stdout.mock.calls.flat().join('\n')).toContain('task-a');
+    expect(onlyWarnMessage()).toContain('task-a');
+    expect(stdoutText()).not.toContain('Task finish hook');
   });
 
-  it('still warns in pipeline mode, on stdout, once (13)', async () => {
+  it('still warns in pipeline mode, on stderr, once (13)', async () => {
     const project = makeProject();
     const { runner } = fakeRunner([invalidTasksFile()]);
     vi.spyOn(process, 'cwd').mockReturnValue(project);
@@ -448,13 +476,22 @@ describe('task finish hook notices (#171)', () => {
     await initializeCliExecutionContext(program, '171-test');
 
     expect(getCliExecutionContext().pipelineMode).toBe(true);
-    ui.warn.mockImplementation((message: string) => realWarn(message));
-    const stdout = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
     await runTaskFinishHooks(project, runner, ['task-a']);
 
-    expect(ui.warn).toHaveBeenCalledTimes(1);
-    expect(stdout.mock.calls.flat().join('\n')).toContain('task-a');
+    expect(onlyWarnMessage()).toContain('task-a');
+    expect(stdoutText()).not.toContain('Task finish hook');
+  });
+
+  it('writes the notice to stderr once and never to stdout (13)', async () => {
+    const project = makeProject();
+    const { runner } = fakeRunner([invalidTasksFile()]);
+
+    await runTaskFinishHooks(project, runner, ['task-a']);
+
+    expect(stderrChunks.join('')).toContain('task-a');
+    expect(onlyWarnMessage()).toContain('task-a');
+    expect(stdoutText()).not.toContain('Task finish hook');
   });
 
   it('sanitises task names and the reason; no raw control characters or secrets reach the warning (14)', async () => {
@@ -479,6 +516,20 @@ describe('task finish hook notices (#171)', () => {
     }
     // The reason is carried, masked by sanitizeSensitiveText.
     expect(message).toContain('[REDACTED]');
+  });
+
+  it('sanitises terminal controls in the reason before the warning is written (14)', async () => {
+    const project = makeProject();
+    const reason = new Error('Invalid tasks.yaml: \u001b[2J\nbroken\r\u0000\u001b[31m');
+    const { runner } = fakeRunner([reason]);
+
+    await runTaskFinishHooks(project, runner, ['task-a']);
+
+    const message = onlyWarnMessage();
+    expect(message).toContain('Invalid tasks.yaml');
+    expect(message).not.toContain('\u001b');
+    expect(message).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/u);
+    expect(message).toContain('\\n');
   });
 
   it('collapses 1,000 task names to the first 10 and "and 990 more" in one warning (15)', async () => {

@@ -22,7 +22,17 @@ module noticeFixedTest {
     initWith(NamedHook, ConfigOk).then(resolveConfig)
       .then(readStateAs(ReadTimeout)).then(waitThenRead)
       .then(readStateAs(ReadTimeout))
-      .expect(phase == Done and loss and notices == 1 and hookRuns == 0 and readAttempts == 2 and retryBounded)
+      .expect(phase == Done and loss and notices == 1 and hookRuns == 0 and readAttempts == 2
+        and retryBounded and lastReadTimedOut and wExhaustedWarned)
+
+  // A timeout then a broken read also ends after two attempts, but the last read is not a timeout:
+  // it belongs to wTimeoutThenBrokenWarned, not to wExhaustedWarned.
+  run timeoutThenBrokenWarnsOnceTest =
+    initWith(NamedHook, ConfigOk).then(resolveConfig)
+      .then(readStateAs(ReadTimeout)).then(waitThenRead)
+      .then(readStateAs(ReadBroken))
+      .expect(phase == Done and loss and notices == 1 and hookRuns == 0 and readAttempts == 2
+        and not(lastReadTimedOut) and wTimeoutThenBrokenWarned and not(wExhaustedWarned))
 
   // A broken tasks.yaml is not retried; the hook is lost and reported once.
   run brokenWarnsOnceTest =

@@ -4,13 +4,16 @@
  * non-terminal states, config failures, control characters and known secret shapes.
  *
  * The reads are a fake `TaskRunner`, the config and the CLI context are module doubles, and the
- * 250 ms retry wait runs on fake timers.
+ * 250 ms retry wait runs on fake timers. The notice is observed on stderr; stdout must stay empty
+ * of it (the stdio MCP transport owns stdout for JSON-RPC).
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Command } from 'commander';
 import fc from 'fast-check';
 import type { TaskRunner, TaskState } from '../infra/task/index.js';
+
+import { scaledMs } from '../../scripts/test-time-factor.mjs';
 
 const configState = vi.hoisted(() => ({ mode: 'ok' as 'ok' | 'missing' | 'unreadable' }));
 
@@ -26,12 +29,6 @@ vi.mock('../infra/config/project/projectConfig.js', async (original) => ({
         : { command: ['hook-command'], timeoutMs: 100 },
     };
   },
-}));
-
-const ui = vi.hoisted(() => ({ warn: vi.fn() }));
-vi.mock('../shared/ui/index.js', async (original) => ({
-  ...(await original<typeof import('../shared/ui/index.js')>()),
-  warn: ui.warn,
 }));
 
 const bounded = vi.hoisted(() => ({ run: vi.fn() }));
@@ -96,7 +93,7 @@ const NUM_RUNS = (() => {
 })();
 const SEED = Number.parseInt(process.env.TAKT_PBT_SEED ?? '', 10);
 const runs = { numRuns: NUM_RUNS, ...(Number.isInteger(SEED) ? { seed: SEED } : {}) };
-const TIMEOUT = 60_000;
+const TIMEOUT = scaledMs(60_000);
 
 const okCommandResult = {
   exitCode: 0,
@@ -145,8 +142,12 @@ function fakeRunner(outcomes: readonly ReadOutcome[]): { runner: TaskRunner; rea
   return { runner: { listTaskStateItems: reads } as unknown as TaskRunner, reads };
 }
 
+let stderrChunks: string[] = [];
+let stdoutChunks: string[] = [];
+
 function resetMocks(): void {
-  ui.warn.mockReset();
+  stderrChunks = [];
+  stdoutChunks = [];
   bounded.run.mockReset();
   bounded.run.mockResolvedValue(okCommandResult);
 }
@@ -157,8 +158,13 @@ async function runWithFakeTimers<T>(start: () => Promise<T>): Promise<T> {
   return promise;
 }
 
+/** The task-finish-hook notices that reached stderr. Other stderr writes are ignored. */
 function warnMessages(): string[] {
-  return ui.warn.mock.calls.map((call) => String(call[0]));
+  return stderrChunks.join('').split('\n').filter((line) => line.includes('Task finish hook'));
+}
+
+function expectNoStdoutNotice(): void {
+  expect(stdoutChunks.join('')).not.toContain('Task finish hook');
 }
 
 function hookNames(): string[] {
@@ -199,6 +205,17 @@ function expectedNamedRead(outcomes: readonly ReadOutcome[], config: ConfigMode)
 }
 
 beforeEach(() => {
+  vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
+    stderrChunks.push(String(chunk));
+    return true;
+  });
+  vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+    stdoutChunks.push(String(chunk));
+    return true;
+  });
+  vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => {
+    stdoutChunks.push(args.map((arg) => String(arg)).join(' '));
+  });
   resetMocks();
   configState.mode = 'ok';
   setQuietMode(false);
@@ -248,13 +265,14 @@ describe('task finish hook notice properties (#171)', () => {
           expect(reads.mock.calls.length).toBeLessThanOrEqual(2);
           expect(bounded.run.mock.calls.length).toBe(expected.hook);
           expect(bounded.run.mock.calls.length).toBeLessThanOrEqual(1);
-          expect(ui.warn.mock.calls.length).toBe(expected.notices);
-          expect(ui.warn.mock.calls.length).toBeLessThanOrEqual(1);
+          expect(warnMessages()).toHaveLength(expected.notices);
+          expect(warnMessages().length).toBeLessThanOrEqual(1);
           if (expected.loss) {
             expect(bounded.run).not.toHaveBeenCalled();
-            expect(ui.warn).toHaveBeenCalledTimes(1);
+            expect(warnMessages()).toHaveLength(1);
           } else {
-            expect(ui.warn).not.toHaveBeenCalled();
+            expect(warnMessages()).toHaveLength(0);
+            expectNoStdoutNotice();
           }
 
           if (path === 'named' && outcomes[0] === 'broken' && config === 'ok') {
@@ -263,7 +281,7 @@ describe('task finish hook notice properties (#171)', () => {
           if (config === 'missing') expect(reads).not.toHaveBeenCalled();
           if (path === 'named' && config === 'ok' && outcomes[0] === 'notTerminal') {
             expect(bounded.run).not.toHaveBeenCalled();
-            expect(ui.warn).not.toHaveBeenCalled();
+            expect(warnMessages()).toHaveLength(0);
           }
         },
       ), runs);
@@ -301,9 +319,12 @@ describe('task finish hook notice properties (#171)', () => {
       // secret is shown masked; that masking is allowed and expected.
       const shownNames = uniqueNames.map((name) => sanitizeSensitiveText(name));
       const expectedNotices = names.length === 0 ? 0 : 1;
-      expect(ui.warn.mock.calls.length, JSON.stringify(names)).toBe(expectedNotices);
+      expect(warnMessages().length, JSON.stringify(names)).toBe(expectedNotices);
       expect(bounded.run).not.toHaveBeenCalled();
-      if (expectedNotices === 0) return;
+      if (expectedNotices === 0) {
+        expectNoStdoutNotice();
+        return;
+      }
 
       const message = warnMessages()[0]!;
       if (uniqueNames.length <= 10) {
@@ -390,7 +411,7 @@ describe('task finish hook notice properties (#171)', () => {
             await runWithFakeTimers(() => runTaskFinishHooks('/project', runner, ['task-0']));
             expect(reads).toHaveBeenCalledTimes(2);
             expect(bounded.run).not.toHaveBeenCalled();
-            expect(ui.warn).toHaveBeenCalledTimes(1);
+            expect(warnMessages()).toHaveLength(1);
             break;
           }
           case 'execution-timeout': {
@@ -398,7 +419,7 @@ describe('task finish hook notice properties (#171)', () => {
             await runWithFakeTimers(() => withTaskFinishHook('/project', runner, 'task-0', async () => undefined));
             expect(reads).toHaveBeenCalledTimes(3);
             expect(bounded.run).not.toHaveBeenCalled();
-            expect(ui.warn).toHaveBeenCalledTimes(1);
+            expect(warnMessages()).toHaveLength(1);
             break;
           }
           case 'config-unreadable': {
@@ -406,7 +427,7 @@ describe('task finish hook notice properties (#171)', () => {
             const { runner, reads } = fakeRunner(['ok']);
             await runTaskFinishHooks('/project', runner, ['task-0']);
             expect(reads).not.toHaveBeenCalled();
-            expect(ui.warn).toHaveBeenCalledTimes(1);
+            expect(warnMessages()).toHaveLength(1);
             break;
           }
           case 'pre-read': {
@@ -414,13 +435,14 @@ describe('task finish hook notice properties (#171)', () => {
             await withTaskFinishHook('/project', runner, 'task-0', async () => undefined);
             expect(reads).toHaveBeenCalledTimes(2);
             expect(bounded.run).not.toHaveBeenCalled();
-            expect(ui.warn).not.toHaveBeenCalled();
+            expect(warnMessages()).toHaveLength(0);
+            expectNoStdoutNotice();
             break;
           }
           case 'for-states': {
             configState.mode = 'unreadable';
             await runTaskFinishHooksForStates('/project', [terminalState()]);
-            expect(ui.warn).toHaveBeenCalledTimes(1);
+            expect(warnMessages()).toHaveLength(1);
             break;
           }
         }
@@ -435,7 +457,7 @@ describe('task finish hook notice properties (#171)', () => {
     }
   }, TIMEOUT);
 
-  it('5. at-least-once only when the pre-read failed and the post-read is terminal; otherwise no hook and no notice', async () => {
+  it('5. at-least-once only when the pre-read failed and the post-read is terminal; a failed post-read warns unless no hook is configured', async () => {
     const preArb = fc.constantFrom<'ok' | 'fail'>('ok', 'fail');
     const postArb = fc.constantFrom<'terminal' | 'nonTerminal' | 'fail'>('terminal', 'nonTerminal', 'fail');
     const sameStampArb = fc.boolean();
@@ -477,13 +499,17 @@ describe('task finish hook notice properties (#171)', () => {
         const reachedConfig = post === 'terminal' && (pre === 'fail' || !sameStamp);
         const hookExpected = reachedConfig && config === 'ok' ? 1 : 0;
         let noticeExpected = 0;
-        if (post === 'fail') noticeExpected = 1;
+        // A failed post-read is reported only when a hook may exist. A missing configuration is a
+        // known "no hook", so there is nothing to lose; unreadable configuration is unknown, so it
+        // is reported.
+        if (post === 'fail') noticeExpected = config === 'missing' ? 0 : 1;
         else if (reachedConfig && config === 'unreadable') noticeExpected = 1;
         else if (reachedConfig && config === 'ok' && pre === 'fail') noticeExpected = 1;
 
         expect(bounded.run.mock.calls.length, `${pre} ${post} ${String(sameStamp)} ${config}`).toBe(hookExpected);
-        expect(ui.warn.mock.calls.length).toBe(noticeExpected);
-        expect(ui.warn.mock.calls.length).toBeLessThanOrEqual(1);
+        expect(warnMessages().length).toBe(noticeExpected);
+        expect(warnMessages().length).toBeLessThanOrEqual(1);
+        if (noticeExpected === 0) expectNoStdoutNotice();
         expect(bounded.run.mock.calls.length).toBeLessThanOrEqual(1);
       }), runs);
     } finally {
@@ -505,7 +531,8 @@ describe('task finish hook notice properties (#171)', () => {
 
       await runTaskFinishHooks('/project', runner, ['task-0']);
 
-      expect(ui.warn.mock.calls.length, `quiet=${String(quiet)} pipeline=${String(pipeline)}`).toBe(1);
+      expect(warnMessages().length, `quiet=${String(quiet)} pipeline=${String(pipeline)}`).toBe(1);
+      expectNoStdoutNotice();
       expect(bounded.run).not.toHaveBeenCalled();
     }), runs);
   }, TIMEOUT);

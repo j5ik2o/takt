@@ -130,8 +130,11 @@ unreadable `config.yaml` used to leave only `log.error`, which is written only w
   `ReadNotTerminal` is a task another process moved on (retry/requeue); this model calls it not a
   loss for this invocation. `sawNotTerminal` records that the transition happened, so the
   `wReadNotTerminalNoNotice` witness is not also satisfied by `ConfigMissing`.
-- `NOTICE = Silent | Fixed`. `Silent` is the old `log.error` only; `Fixed` is one `warn()` with the
-  task names. `RETRY = None | Bounded | Unbounded`. `Bounded` is `MAX_READ_ATTEMPTS = 2` and
+  `lastReadTimedOut` records whether the **last** read was `ReadTimeout`. The
+  `wExhaustedWarned` witness requires it, so "first read timed out, retry read a broken YAML" is
+  counted as `wTimeoutThenBrokenWarned`, not as an exhausted timeout.
+- `NOTICE = Silent | Fixed`. `Silent` is the old `log.error` only; `Fixed` is one warning on
+  stderr. `RETRY = None | Bounded | Unbounded`. `Bounded` is `MAX_READ_ATTEMPTS = 2` and
   `MAX_RETRIES = 1` (one wait); `Unbounded` is the rejected alternative.
 
 `safety` is the conjunction of `noUnnoticedLoss`, `noFalseNotice`, `noticeAtMostOnce`,
@@ -154,7 +157,7 @@ Quint 0.32.0. Commands run from this directory.
 ```sh
 quint typecheck taskFinishHookNotice.qnt
 quint typecheck taskFinishHookNotice_test.qnt
-quint test taskFinishHookNotice_test.qnt --main noticeFixedTest     # 9 passing
+quint test taskFinishHookNotice_test.qnt --main noticeFixedTest     # 10 passing
 quint test taskFinishHookNotice_test.qnt --main noticeBeforeTest    # 2 passing
 quint test taskFinishHookNotice_test.qnt --main noticeNoRetryTest   # 1 passing
 quint test taskFinishHookNotice_test.qnt --main noticeUnboundedTest # 1 passing
@@ -176,20 +179,22 @@ The fixed form:
 
 ```sh
 quint run taskFinishHookNotice.qnt --main noticeFixed --invariant safety \
-  --witnesses wRetriedThenCalled wExhaustedWarned wBrokenWarned \
+  --witnesses wRetriedThenCalled wExhaustedWarned wTimeoutThenBrokenWarned wBrokenWarned \
     wReadNotTerminalNoNotice wConfigMissingNoNotice wStatesConfigErrorWarned \
   --max-samples 20000 --max-steps 8 --seed 0x2a
 ```
 
-Result: 20,000 samples, max-steps 8, seed `0x2a`, `[ok]` (no violation, about 1.4 s). Witnesses
+Result: 20,000 samples, max-steps 8, seed `0x2a`, `[ok]` (no violation, about 1.6 s). Witnesses
 (traces out of 20,000; these are reachability counts, not coverage):
-`wRetriedThenCalled` 197, `wExhaustedWarned` 452, `wBrokenWarned` 843,
-`wReadNotTerminalNoNotice` 1,025, `wConfigMissingNoNotice` 6,693,
-`wStatesConfigErrorWarned` 3,344. `wReadNotTerminalNoNotice` now requires `sawNotTerminal`, so the
-number is the count of traces that actually passed through `ReadNotTerminal`, not the count that
-also happens to satisfy the weaker old condition. A further 50,000 samples at max-steps 10 with
-seeds `0x1` and `0x2a` also found no violation (about 3.3 s / 3.3 s). This is simulation, not a
-proof.
+`wRetriedThenCalled` 197, `wExhaustedWarned` 241, `wTimeoutThenBrokenWarned` 211,
+`wBrokenWarned` 843, `wReadNotTerminalNoNotice` 1,025, `wConfigMissingNoNotice` 6,693,
+`wStatesConfigErrorWarned` 3,344. `wExhaustedWarned` requires `lastReadTimedOut`, so it counts
+only the traces whose retry also timed out; the 211 timeout-then-broken traces are reported
+separately, and 241 + 211 equals the 452 that the previous, undifferentiated witness counted.
+`wReadNotTerminalNoNotice` now requires `sawNotTerminal`, so the number is the count of traces
+that actually passed through `ReadNotTerminal`, not the count that also happens to satisfy the
+weaker old condition. A further 50,000 samples at max-steps 10 with seeds `0x1` and `0x2a` also
+found no violation (about 3.4 s / 3.5 s). This is simulation, not a proof.
 
 The #148 model is unchanged and its recorded results still hold: `entryPoints` 10,000 samples at
 max-steps 12 with seed `0x2a` has no violation, while `normalEndOnly` (`noMissedExit`) and
