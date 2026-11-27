@@ -195,6 +195,22 @@ describe('withFileLock', () => {
     expect(vi.mocked(fs.unlinkSync).mock.calls.filter(([path]) => path === lockPath)).toHaveLength(2);
   });
 
+  it('recovers a live same-PID lock whose recorded top-level start time differs', () => {
+    // FileAsyncLock writes { pid, startTime, token } at the top level, while this synchronous
+    // lock reads processIdentity.startTime. The recorded start time proves the PID was reused.
+    content = JSON.stringify({ pid: 4101, startTime: 'darwin-start-v2:1', token: 'token-1' });
+    stat = { ...stat, mtimeMs: 0 } as fs.Stats;
+    vi.mocked(isProcessAlive).mockReturnValue(true);
+    vi.mocked(getProcessIdentity).mockReturnValue(identity);
+    const action = vi.fn(() => content);
+
+    expect(withFileLock(lockPath, action)).toBe(selfContent);
+
+    expect(action).toHaveBeenCalledOnce();
+    expect(content).toBe(selfContent);
+    expect(fs.unlinkSync).toHaveBeenCalledWith(lockPath);
+  });
+
   it('times out after five seconds without deleting even an old live owner', () => {
     content = otherContent;
     stat = { ...stat, mtimeMs: 0 } as fs.Stats;

@@ -506,3 +506,51 @@ describe('the rewrite changes nothing but the mark', () => {
     expect(withoutMark(updated.tasks[1]!)).toEqual(withoutMark(before.tasks[1]!));
   });
 });
+
+describe('the minimal rewrite does not delete a neighbouring task', () => {
+  it('keeps the next task when a block deletion reservation ends the record', async () => {
+    const h = await open();
+    const source = [
+      'tasks:',
+      '  - name: marked-task',
+      '    status: failed',
+      `    goal_id: ${defaultGoalId}`,
+      '    run_slug: run-marked',
+      '    completion_publication_pending: true',
+      '    deletion:',
+      '      id: 5a0e8400-e29b-41d4-a716-446655440000',
+      '      owner_pid: 999999',
+      '  - name: next-task',
+      '    status: pending',
+      '',
+    ].join('\n');
+    writeFileSync(tasksPath(h.project), source, 'utf8');
+
+    const published = await h.files.markGoalTaskCompletionPublished(h.project, {
+      goalId: defaultGoalId, taskName: 'marked-task', status: 'failed', runSlug: 'run-marked',
+    });
+
+    expect(published).toBe(true);
+    const tasks = readTasks(h.project);
+    expect(tasks.map((task) => task.name)).toEqual(['marked-task', 'next-task']);
+    expect(tasks[0]!.completion_publication_pending).toBeUndefined();
+    expect(tasks[0]!.deletion).toBeUndefined();
+    expect(tasks[1]!.status).toBe('pending');
+  });
+
+  it('keeps a flow-style record when the mark and the task share one line', async () => {
+    const h = await open();
+    const source = `tasks: [{name: marked-task, status: failed, goal_id: ${defaultGoalId}, run_slug: run-marked, completion_publication_pending: true, deletion: {id: 5a0e8400-e29b-41d4-a716-446655440000, owner_pid: 999999}}, {name: next-task, status: pending}]\n`;
+    writeFileSync(tasksPath(h.project), source, 'utf8');
+
+    const published = await h.files.markGoalTaskCompletionPublished(h.project, {
+      goalId: defaultGoalId, taskName: 'marked-task', status: 'failed', runSlug: 'run-marked',
+    });
+
+    expect(published).toBe(true);
+    const tasks = readTasks(h.project);
+    expect(tasks.map((task) => task.name)).toEqual(['marked-task', 'next-task']);
+    expect(tasks[0]!.completion_publication_pending).toBeUndefined();
+    expect(tasks[0]!.deletion).toBeUndefined();
+  });
+});
