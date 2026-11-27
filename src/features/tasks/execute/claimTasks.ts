@@ -15,6 +15,8 @@ import { createRuntimeAssignmentSetupGuard } from './runtimeAssignmentGuard.js';
 
 const log = createLogger('claim-tasks');
 
+export const CLAIM_RETRY_INTERVAL_MS = 5_000;
+
 export class TaskClaimLockUnavailableError extends Error {
   readonly lock: TaskClaimLock;
 

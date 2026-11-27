@@ -1,3 +1,4 @@
+import { redactExecutionSecrets, getExecutionSecrets } from './execution-secrets.js';
 import * as legacy from './sensitive-text-legacy.js';
 import { legacySequentialRanges, legacyStageSteps, type LegacyStage } from './sensitive-text-legacy-trace.js';
 
@@ -541,9 +542,10 @@ export function previousDisplayRanges(text: string, masked: readonly SensitiveRa
   return legacySequentialRanges(text, masked).ranges;
 }
 
-export function sanitizeSensitiveText(text: string): string {
+export function sanitizeSensitiveText(text: string, executionSecrets: readonly string[] = getExecutionSecrets()): string {
   if (!text) return text;
-  return maskSensitiveRanges(text, displayRanges(text, legacySequentialRanges(text, []).ranges));
+  const masked = maskSensitiveRanges(text, displayRanges(text, legacySequentialRanges(text, []).ranges));
+  return redactExecutionSecrets(masked, executionSecrets);
 }
 
 export function isSensitiveKeyName(key: string): boolean {
@@ -569,6 +571,7 @@ function patternRanges(matches: SensitiveMatches): SensitiveRange[] {
 
 /** Values hidden from later output: the previous collection and the new one (`all`). */
 export function collectEmbeddedSensitiveValues(text: string, values: Set<string>): void {
+  for (const value of getExecutionSecrets()) values.add(value);
   legacy.collectEmbeddedSensitiveValues(text, values);
   collectNewEmbeddedValues(text, values);
 }

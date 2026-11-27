@@ -130,6 +130,7 @@ vi.mock('../shared/utils/index.js', () => ({
 vi.mock('../core/logging/providerEventLogger.js', () => ({
   createProviderEventLogger: vi.fn(() => ({
     logEvent: vi.fn(),
+    flush: vi.fn(),
   })),
   isProviderEventsEnabled: vi.fn(() => false),
 }));

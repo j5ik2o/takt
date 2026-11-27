@@ -2,11 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { StreamEvent } from '../../shared/types/provider.js';
+import { normalizeProviderEventData } from '../logging/providerEvent.js';
+import { getExecutionSecrets } from '../../shared/utils/execution-secrets.js';
 import { normalizeProviderEventValue } from '../../shared/utils/logMetadata.js';
 import {
   collectTrackedEmbeddedSensitiveValues,
-  previousDisplayRanges,
-  previousSensitiveTextRanges,
   REDACTED_VALUE,
   sensitiveTextRanges,
   substringSensitiveRanges,
@@ -43,16 +43,11 @@ function maskTextFragments(chunks: readonly string[]): string[] {
   const fullText = chunks.join('');
   const tracked = { legacy: new Set<string>(), all: new Set<string>() };
   collectTrackedEmbeddedSensitiveValues(fullText, tracked);
-  const masked = maskedCharacters(fullText, sensitiveTextRanges(fullText, new Set()), tracked.all);
-  const previous = maskedCharacters(fullText, previousSensitiveTextRanges(fullText), tracked.legacy);
-  if (masked === undefined && previous === undefined) return [...chunks];
-  const hidden = masked ?? new Uint8Array(fullText.length);
+  const masked = maskedCharacters(fullText, sensitiveTextRanges(fullText, new Set(getExecutionSecrets())), tracked.all);
+  if (masked === undefined) return [...chunks];
+  const hidden = masked;
   let offset = 0;
   return chunks.map((chunk) => {
-    const previousSpans = previous === undefined ? [] : maskedSpans(previous, offset, chunk.length);
-    if (previousSpans.length > 0) {
-      for (const range of previousDisplayRanges(chunk, previousSpans)) hidden.fill(1, offset + range.start, offset + range.end);
-    }
     let output = '';
     let inMaskedSpan = false;
     for (let index = 0; index < chunk.length; index++) {
@@ -69,21 +64,6 @@ function maskTextFragments(chunks: readonly string[]): string[] {
   });
 }
 
-/** The masked runs of `masked` within [offset, offset + length), as ranges on that fragment. */
-function maskedSpans(masked: Uint8Array, offset: number, length: number): SensitiveRange[] {
-  const spans: SensitiveRange[] = [];
-  for (let index = 0; index < length;) {
-    if (masked[offset + index] !== 1) {
-      index++;
-      continue;
-    }
-    const start = index;
-    while (index < length && masked[offset + index] === 1) index++;
-    spans.push({ start, end: index });
-  }
-  return spans;
-}
-
 /** Characters of `fullText` covered by a pattern range or by an occurrence of a value, or undefined if none. */
 function maskedCharacters(fullText: string, patternRanges: readonly SensitiveRange[], sensitiveValues: ReadonlySet<string>): Uint8Array | undefined {
   if (patternRanges.length === 0 && sensitiveValues.size === 0) return undefined;
@@ -94,6 +74,7 @@ function maskedCharacters(fullText: string, patternRanges: readonly SensitiveRan
     maskChanges[end] = maskChanges[end]! - 1;
   };
   for (const range of patternRanges) markMask(range.start, range.end);
+  const executionSecrets = new Set(getExecutionSecrets());
   const nodes: SensitiveMatchNode[] = [{ next: new Map(), failure: 0, longest: 0, shortLengths: 0 }];
   const longValues: string[] = [];
   for (const value of sensitiveValues) {
@@ -112,7 +93,7 @@ function maskedCharacters(fullText: string, patternRanges: readonly SensitiveRan
       }
       state = next;
     }
-    if (value.length >= 4) nodes[state]!.longest = Math.max(nodes[state]!.longest, value.length);
+    if (value.length >= 4 || executionSecrets.has(value)) nodes[state]!.longest = Math.max(nodes[state]!.longest, value.length);
     else nodes[state]!.shortLengths |= 1 << value.length;
   }
   for (const range of substringSensitiveRanges(fullText, longValues)) markMask(range.start, range.end);
@@ -312,7 +293,9 @@ export class Phase1ExecutionLog {
     return serializePhase1ExecutionLog(this.entries.flatMap((entry, index) => {
       if (omitted.has(index) || (entry.kind === 'instruction' && !entry.dispatched)) return [];
       const retained = replacements.get(index) ?? entry;
-      return [retained.kind === 'provider_event' ? this.sanitize(retained) : retained];
+      return [retained.kind === 'provider_event'
+        ? { ...retained, event: { ...retained.event, data: normalizeProviderEventData(retained.event) } }
+        : retained];
     }));
   }
 

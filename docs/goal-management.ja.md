@@ -136,6 +136,8 @@ mcp:
 
 担当から外してもリポジトリやゴールは削除されません。未完成のゴールがある場合は外せないため、先に完成または中止してください。リポジトリの外で起動すると workspace を選べます。
 
+OpenCode を使う manager は workspace に登録したすべてのリポジトリを直接読み書きできます。未登録の外部ディレクトリは拒否されます。追加の設定は不要です。会話中に追加・削除したリポジトリの権限は次のターンから反映します。追加したターンの返答には、次のターンから使えることを表示します。存在しない登録先はそのターンの許可対象から除外して理由を表示し、登録を残して次のターンに再確認します。`/verify` も登録先を参照できますが、読み取り専用で動きます。
+
 ## Epic で複数ゴールの結合確認を管理する
 
 Epic は、同じ workspace manager が担当する複数のゴールと、その成果を組み合わせて確認した証拠をまとめて保存するレコードです。各メンバーゴールは引き続き1つのリポジトリ・1つの PR で進めます。Epic 自身のブランチ、PR、専用のタスク実行系は作りません。別の manager のゴールや、director が依存関係に基づいて自動で実行順序を決める機能は対象外です。
@@ -259,6 +261,8 @@ manager:
 `takt_merge_goal_pr` は必須の `cwd`、`goalId`、`prNumber`、`until` を受け、`merge_task: true` と `goal_id` を持つタスクを `tasks.yaml` に pending で積み、すぐにタスク名を返します。`prepare` は `merge.prepare_workflow`（未設定なら `merge-prepare`）、`merge` は `merge.workflow`（未設定なら `merge-review-fix-simple`）を使います。同じ対象の pending / running タスクは二重に積めません。
 
 daemon は通常のゴールタスクと同じように、選択された workflow を実行します。既定の `merge-prepare` / `merge-review-fix-simple` では、取り込み先の変更を取り込み、push、Caccia、CI 待ちへ進みます。AIで競合を解消した場合は、初回・再同期ともpush前にレビューと修正を行います。カスタム workflow では、これらの処理を行うかどうかも含め、各自に定義された step に従います。PR が競合しても普通の修正タスクは作りません。マージ用タスクは PR のブランチへ直接 push するため、成果を `takt_merge_goal_task` で取り込みません。`takt_list_tasks` は `mergeTask` と完了結果を表示します。完了イベントには `mergeOutcome`（`prepared`・`merged`・`unresolved`）と `branchSynchronization` が入り、マージ済みなら manager が `takt_check_goal_completion` で完成にします。
+
+`merge-prepare` と `merge-review-fix-simple` の同期後レビューはPRの累積差分全体とベースブランチの追加変更を確認します。修正するのは衝突解消の誤りと、両側の変更の組み合わせで生じた不具合だけです。非競合ファイルの不具合も対象に含みます。同期と無関係な既存問題は理由を記録して持ち越し、修正計画・修正・最終確認での差し戻しにはつなげません。競合のない同期でのレビュー省略と通常開発のレビュー・裁定基準は維持します。
 
 push 後は、元リポジトリのゴールブランチが origin の祖先なら fast-forward します。分岐していれば両方の履歴を保持して失敗結果とイベントで知らせます。チェックアウト中の作業コピーは書き換えず、追従を止めて知らせます。タスクの取り込み前と再申請の push 前にも同じ確認を行います。追従で先端が変わった場合は、その新しい SHA の受け入れ条件を確認し直して申請します。
 

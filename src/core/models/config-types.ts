@@ -461,6 +461,9 @@ export interface ProjectConfig {
  */
 export interface GlobalConfig extends Omit<ProjectConfig, 'submodules' | 'withSubmodules' | 'assistant' | 'manager' | 'taskFinishHook'> {
   /** @globalOnly */
+  daemon?: { builtinWorker?: { concurrency?: number }; remoteWorker?: { host: string; port: number;
+    credentials?: import('./daemon-config-schema.js').RemoteCredentialsConfig } };
+  /** @globalOnly */
   director?: { slack?: { channelId: string; allowedUserIds: string[] } };
   manager?: { permission?: ManagerPermission; providerPermissions?: Record<string, ManagerPermission>; patrolInterval?: number; refreshIntervalMs?: number; autoRun?: boolean; preserveGoalWorktree?: boolean; verifyOnRegister?: boolean; workflows?: ManagerWorkflowsConfig; runtimeAssignments?: ManagerRuntimeAssignmentsConfig; notifications?: ManagerNotifications };
   /** Global default for assistant task-instruction formatting. */
