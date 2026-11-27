@@ -1829,7 +1829,6 @@ describe('callDevin', () => {
       const probesBeforeSettle = leaderGroupProbes;
       fakeNow = frozenNow + 1_500;
       await vi.waitFor(() => expect(leaderGroupProbes).toBeGreaterThan(probesBeforeSettle));
-      console.log('TERMLOG', JSON.stringify(terminationLogs(), (_k, v) => (v instanceof Error ? { msg: v.message, code: (v as NodeJS.ErrnoException).code } : v)));
       expect(terminationLogs()).toHaveLength(0);
       // Past the deadline the persisted EPERM, with the group's pid, is logged.
       fakeNow = frozenNow + 2_001;
