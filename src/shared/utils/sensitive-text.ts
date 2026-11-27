@@ -581,6 +581,12 @@ export function collectEmbeddedSensitiveValues(text: string, values: Set<string>
  * found (the start of the previous composition, see sanitizeTextWithValues), `all` gets both.
  */
 export function collectTrackedEmbeddedSensitiveValues(text: string, into: { legacy: Set<string>; all: Set<string> }): void {
+  // Execution secrets are known values of the current implementation, as in
+  // collectEmbeddedSensitiveValues: they go to `all`, not to `legacy` (the previous
+  // collection did not know them, and the previous composition must start from
+  // `legacy` only). Without them, a short secret split across fragments is never
+  // tracked, so the fragment masking in the phase 1 log cannot hide it at all.
+  for (const value of getExecutionSecrets()) into.all.add(value);
   const found = new Set<string>();
   legacy.collectEmbeddedSensitiveValues(text, found);
   for (const value of found) {
