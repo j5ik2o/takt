@@ -79,7 +79,10 @@ const PendingGoalTaskCompletionSchema = z.object({
 });
 
 function recordName(record: unknown, index: number): string {
-  if (typeof record === 'object' && record !== null && 'name' in record) return String((record as { name: unknown }).name);
+  if (typeof record === 'object' && record !== null && 'name' in record) {
+    const name = (record as { name: unknown }).name;
+    if (typeof name === 'string') return name;
+  }
   return `index-${index}`;
 }
 
