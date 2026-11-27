@@ -310,10 +310,19 @@ function stripMatchingQuotes(value: string): string {
 function* bareAssignments(text: string): Generator<RegExpExecArray> {
   const quotedAssignments = text.matchAll(SENSITIVE_ASSIGNMENT_QUOTED_VALUE_REGEX);
   let quotedAssignment = quotedAssignments.next().value;
+  // Assignments inside URL userinfo are already consumed by the userinfo match,
+  // as in display redaction, which replaces userinfo first. A bare match there
+  // would extend past the terminating '@' (its value can contain '@') and
+  // mask the host that follows.
+  const userinfoRanges = [...text.matchAll(URL_USERINFO_CREDENTIALS_REGEX)].map((match) => ({
+    start: match.index + match[1]!.length,
+    end: match.index + match[0].length - 1,
+  }));
   for (const match of text.matchAll(SENSITIVE_ASSIGNMENT_BARE_VALUE_REGEX)) {
     while (quotedAssignment !== undefined && quotedAssignment.index + quotedAssignment[0].length <= match.index) {
       quotedAssignment = quotedAssignments.next().value;
     }
+    if (userinfoRanges.some((range) => match.index >= range.start && match.index < range.end)) continue;
     if (quotedAssignment === undefined || quotedAssignment.index > match.index) yield match;
   }
 }
