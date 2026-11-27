@@ -270,6 +270,52 @@ describe('readPendingGoalTaskCompletions reports the invalid record and returns 
     expect(recorded.invalids).toEqual([]);
   });
 
+  it('does not stop at a record whose name cannot be converted to a string', async () => {
+    // A YAML mapping for `name` becomes an object with an own `toString: null`, so `String(name)`
+    // throws a TypeError before validation. The valid record behind it must still be returned.
+    writeFileSync(join(project, '.takt', 'tasks.yaml'), [
+      'tasks:',
+      '  - name:',
+      '      toString: null',
+      '    status: failed',
+      '    content: bad work',
+      `    goal_id: ${GOAL_ID}`,
+      `    created_at: ${created}`,
+      `    started_at: ${created}`,
+      `    completed_at: ${created}`,
+      '    failure:',
+      '      error: boom',
+      '    run_slug: run-bad',
+      '    completion:',
+      '      success: false',
+      '      interrupted: true',
+      '      workflowResult: error',
+      '      failureReason: boom',
+      '    completion_publication_pending: true',
+      '  - name: goal-task-valid',
+      '    status: failed',
+      '    content: do the work',
+      `    goal_id: ${GOAL_ID}`,
+      `    created_at: ${created}`,
+      `    started_at: ${created}`,
+      `    completed_at: ${created}`,
+      '    failure:',
+      '      error: boom',
+      '    run_slug: run-valid',
+      '    completion:',
+      '      success: false',
+      '      interrupted: true',
+      '      workflowResult: error',
+      '      failureReason: boom',
+      '    completion_publication_pending: true',
+      '',
+    ].join('\n'), 'utf8');
+
+    const completions = await readPendingGoalTaskCompletions(project, reports());
+
+    expect(completions.map((value: { name: string }) => value.name)).toEqual(['goal-task-valid']);
+  });
+
   it('leaves tasks.yaml unchanged after reporting', async () => {
     writeTasks([pendingMarked({ name: 'goal-task-unknown', completion: { ...completion(), unknownColumn: 1 } })]);
     const before = readFileSync(join(project, '.takt', 'tasks.yaml'), 'utf8');
