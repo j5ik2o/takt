@@ -25,7 +25,7 @@ module noticeFixedTest {
       .expect(phase == Done and loss and notices == 1 and hookRuns == 0 and readAttempts == 2
         and retryBounded and lastReadTimedOut and wExhaustedWarned)
 
-  // A timeout then a broken read also ends after two attempts, but the last read is not a timeout:
+  // A timeout then a broken read also ends after two attempts, but only the first read was a timeout:
   // it belongs to wTimeoutThenBrokenWarned, not to wExhaustedWarned.
   run timeoutThenBrokenWarnsOnceTest =
     initWith(NamedHook, ConfigOk).then(resolveConfig)

@@ -367,7 +367,6 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/statusLine.test.ts',
   'src/__tests__/system-pr-status.test.ts',
   'src/__tests__/task-delete-task.test.ts',
-  'src/__tests__/task-finish-hook-notice.test.ts',
   'src/__tests__/taskResultHandler.test.ts',
   'src/__tests__/taskSpecContext.test.ts',
   'src/__tests__/team-leader-schema-loader.test.ts',
@@ -511,6 +510,10 @@ export const heavyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-lock-release-finish-hook.test.ts',
   // Runs `takt run` in a real child process with a preload that fails one lock release (#169).
   'src/__tests__/it-claim-lock-release-run.test.ts',
+  // Runs the real `takt merge` path, which starts Git (clone, fetch, remote) before the finish hook (#171).
+  'src/__tests__/task-finish-hook-notice.test.ts',
+  // Starts a real MCP stdio server process and speaks JSON-RPC to it (#171).
+  'src/__tests__/it-finish-hook-notice-mcp-stdio.test.ts',
   ...legacyParallelIntegrationTestFiles,
   ...auditedIntegrationBoundaryTestFiles,
   // Compares every #176 iteration-entry tuple against the model oracle in both run loops (~280k cases).

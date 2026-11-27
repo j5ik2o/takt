@@ -6,8 +6,9 @@
  * `process.stderr.write` and `runBoundedCommand` are spies: the notice must reach stderr only.
  * A fake `TaskRunner` (only `listTaskStateItems`) covers the read failures and the retry; a real
  * `TaskRunner` in a temporary project covers the two execution entry points and the existing hook
- * contracts (test 16). The `takt merge` test doubles the single clone entry point, so no Git
- * process starts.
+ * contracts (test 16). The `takt merge` tests reach the Git boundary before any real command could
+ * start (a failing `runGitCommandAbortable`, or a project directory that cannot be resolved as a
+ * repository), so no Git process starts. The file is in the heavy IT slice for that reason.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -24,18 +25,23 @@ vi.mock('../shared/utils/bounded-command-runner.js', async (original) => ({
   runBoundedCommand: bounded.run,
 }));
 
-// The `takt merge` path reaches Git through this one function. A rejection here keeps the merge
-// test on the hook contract without starting a real `git clone`.
-const cloneExec = vi.hoisted(() => ({ cloneAndIsolateAbortable: vi.fn() }));
+// The `takt merge` paths reach Git through these functions. Each double fails before any Git
+// process would start, so the merge tests stay on the hook contract.
+const gitBoundary = vi.hoisted(() => ({
+  runGitCommandAbortable: vi.fn(),
+  cloneAndIsolateAbortable: vi.fn(),
+}));
 vi.mock('../infra/task/clone-exec.js', async (original) => ({
   ...(await original<typeof import('../infra/task/clone-exec.js')>()),
-  cloneAndIsolateAbortable: cloneExec.cloneAndIsolateAbortable,
+  runGitCommandAbortable: gitBoundary.runGitCommandAbortable,
+  cloneAndIsolateAbortable: gitBoundary.cloneAndIsolateAbortable,
 }));
 
 const doubles = vi.hoisted(() => ({
   resolveTaskExecution: vi.fn(),
   postExecutionFlow: vi.fn(),
   gitProvider: vi.fn(),
+  pushWorktreeToOrigin: vi.fn(),
 }));
 vi.mock('../features/tasks/execute/resolveTask.js', () => ({
   resolveTaskExecution: doubles.resolveTaskExecution,
@@ -47,6 +53,11 @@ vi.mock('../features/tasks/execute/postExecution.js', () => ({
 vi.mock('../infra/git/index.js', async (original) => ({
   ...(await original<Record<string, unknown>>()),
   getGitProvider: doubles.gitProvider,
+}));
+// The `pr_failed` publication path pushes through this one function; the double fails before Git.
+vi.mock('../features/tasks/list/taskActionTarget.js', async (original) => ({
+  ...(await original<typeof import('../features/tasks/list/taskActionTarget.js')>()),
+  pushWorktreeToOrigin: doubles.pushWorktreeToOrigin,
 }));
 
 import { initializeCliExecutionContext, getCliExecutionContext } from '../app/cli/initialization.js';
@@ -191,7 +202,7 @@ function stubResolution(project: string, overrides: Record<string, unknown> = {}
 
 beforeEach(() => {
   vi.resetAllMocks();
-  // An isolated TAKT_CONFIG_DIR is set per test by src/__tests__/test-setup.ts.
+  // TAKT_CONFIG_DIR and the other per-test environment are owned by src/__tests__/test-setup.ts.
   stderrChunks = [];
   stdoutChunks = [];
   vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => {
@@ -206,7 +217,11 @@ beforeEach(() => {
     stdoutChunks.push(args.map((arg) => String(arg)).join(' '));
   });
   bounded.run.mockResolvedValue(okCommandResult);
-  cloneExec.cloneAndIsolateAbortable.mockRejectedValue(new Error('merge clone is a test double; no git is started'));
+  gitBoundary.runGitCommandAbortable.mockRejectedValue(new Error('git is a test double; no process starts'));
+  gitBoundary.cloneAndIsolateAbortable.mockRejectedValue(new Error('merge clone is a test double; no git is started'));
+  doubles.pushWorktreeToOrigin.mockImplementation(() => {
+    throw new Error('branch publication is a test double; no git is started');
+  });
   setQuietMode(false);
   setLogLevel('info');
   invalidateAllResolvedConfigCache();
@@ -385,17 +400,17 @@ describe('task finish hook notices (#171)', () => {
     expectNoNotice();
   });
 
-  it('does not warn when the post-execution read fails and the project has no hook (11)', async () => {
-    const project = makeProject('none');
-    const { runner, reads } = fakeRunner([[state('task-a', 'running')], lockTimeout()]);
+  it('names config.yaml when the project config cannot be read, and does not read tasks.yaml (4)', async () => {
+    const project = makeProject('invalid-yaml');
+    const { runner, reads } = fakeRunner([[state('task-a', 'completed')]]);
 
-    vi.useFakeTimers();
-    await runWithFakeTimers(() =>
-      withTaskFinishHook(project, runner, 'task-a', async () => undefined));
+    await runTaskFinishHooks(project, runner, ['task-a']);
 
-    expect(reads).toHaveBeenCalledTimes(3);
+    expect(reads).not.toHaveBeenCalled();
+    const message = onlyWarnMessage();
+    expect(message).toContain('config.yaml');
+    expect(message).not.toContain('tasks.yaml');
     expect(bounded.run).not.toHaveBeenCalled();
-    expectNoNotice();
   });
 
   it('warns once for a rejected hook in the queued execution path (12)', async () => {
@@ -452,7 +467,7 @@ describe('task finish hook notices (#171)', () => {
     expect(bounded.run.mock.calls.some(
       (call) => (call[0] as { command: string }).command === REJECTING_HOOK_COMMAND,
     )).toBe(true);
-    expect(cloneExec.cloneAndIsolateAbortable).toHaveBeenCalledTimes(1);
+    expect(gitBoundary.cloneAndIsolateAbortable).toHaveBeenCalledTimes(1);
     expect(onlyWarnMessage()).toContain('Task');
   });
 
@@ -516,6 +531,43 @@ describe('task finish hook notices (#171)', () => {
     }
     // The reason is carried, masked by sanitizeSensitiveText.
     expect(message).toContain('[REDACTED]');
+  });
+
+  it('sanitises terminal controls in a hook exception reason before the warning is written (7)', async () => {
+    const project = makeProject();
+    // The spawn failure carries the whole error including the lock path, so a lock path with
+    // terminal controls and a newline reaches `warn()` through reportLostHook('hook-call').
+    const control = '\u001b[2J\nbroken\r\u0000\u001b[31m';
+    const execError = Object.assign(new Error(`spawn ENOENT: /project/.takt/tasks.yaml.lock ${control}`), {
+      code: 'ENOENT',
+      path: `/project/.takt/tasks.yaml.lock ${control}`,
+      syscall: `spawn ${control}`,
+    });
+    const { runner } = fakeRunner([[state('task-a', 'completed')]]);
+    bounded.run.mockRejectedValue(execError);
+
+    await runTaskFinishHooks(project, runner, ['task-a']);
+
+    const message = onlyWarnMessage();
+    expect(message).toContain('could not be started');
+    expect(message).not.toContain('\u001b');
+    expect(message).not.toMatch(/[\u0000-\u001f\u007f-\u009f]/u);
+    expect(message).toContain('\\n');
+  });
+
+  it('does not warn when the post-execution read fails and the project has no hook (8)', async () => {
+    // The pre-read fails too, so the execution reaches the post-read without a stamp. The project
+    // has no task_finish_hook: no hook can have been lost, so the failed post-read stays silent.
+    const project = makeProject('none');
+    const { runner, reads } = fakeRunner([lockTimeout()]);
+
+    vi.useFakeTimers();
+    await runWithFakeTimers(() =>
+      withTaskFinishHook(project, runner, 'task-a', async () => undefined));
+
+    expect(reads).toHaveBeenCalledTimes(3);
+    expect(bounded.run).not.toHaveBeenCalled();
+    expectNoNotice();
   });
 
   it('sanitises terminal controls in the reason before the warning is written (14)', async () => {
