@@ -24,6 +24,7 @@ export function reconcileLostRun(observation: Extract<WatchObservation, { kind: 
     shaUnavailableReason: failureReason };
   let recovered = false;
   let written = false;
+  let releaseError: unknown;
   let resolvedExecutionId: string | undefined;
   try {
     withGoalExecutionLock(reference.repositoryDirectory, () => {
@@ -49,21 +50,28 @@ export function reconcileLostRun(observation: Extract<WatchObservation, { kind: 
   } catch (error) {
     if (!written) throw error;
     // The reconciliation is saved in tasks.yaml; a lock release failure after the write must
-    // not lose it (#169). The pending mark lets the daemon finish the publication.
-    log.error('Lost-run reconciliation was saved, but releasing a lock afterwards failed', {
-      taskName: reference.taskName, goalId: reference.goalId, error: getErrorMessage(error),
-    });
+    // not lose it (#169). The event is still saved below, and the release failure is thrown
+    // only afterwards, so the caller sees the failure without losing the recovery.
+    releaseError = error;
   }
   if (!recovered) return false;
+  let saveError: unknown;
   try {
     saveManagerEvent(reference.repositoryDirectory, { kind: 'completion', goalId: reference.goalId,
       taskName: reference.taskName, runSlug: reference.runSlug,
       ...(reference.runSlug === undefined && resolvedExecutionId !== undefined
         ? { executionId: resolvedExecutionId } : {}), result });
   } catch (error) {
+    saveError = error;
+  }
+  if (saveError !== undefined) {
+    if (releaseError !== undefined) {
+      throw new AggregateError([saveError, releaseError],
+        'Lost-run completion notification and lock release both failed');
+    }
     // The mark stays in tasks.yaml and the daemon resends the notice (#170).
     log.error('Lost-run completion notification failed; the daemon will resend it', {
-      taskName: reference.taskName, goalId: reference.goalId, error: getErrorMessage(error),
+      taskName: reference.taskName, goalId: reference.goalId, error: getErrorMessage(saveError),
     });
     return true;
   }
@@ -86,5 +94,6 @@ export function reconcileLostRun(observation: Extract<WatchObservation, { kind: 
       taskName: reference.taskName, goalId: reference.goalId, error: getErrorMessage(error),
     });
   }
+  if (releaseError !== undefined) throw releaseError;
   return true;
 }

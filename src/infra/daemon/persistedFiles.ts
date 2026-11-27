@@ -14,6 +14,7 @@ import { readDisplayFile } from './displayFiles.js';
 import { hasCode, readEntirePrivateFile, readPrivateFile, writePrivateFile } from './privateFile.js';
 import { readInboxJson } from './inboxFiles.js';
 import { parseInquiryFile, type InvalidInquiryFileReports } from '../goals/inquiry-files.js';
+import { getProcessIdentity, hasProcessIdentityMismatch, isProcessAlive } from '../task/process.js';
 
 const MAX_PROJECTION_BYTES = 256 * 1024;
 // 業務 schema の値 import は run の同期読取まで到達するため、ここでは保存形式だけを検証する。
@@ -47,11 +48,25 @@ export interface GoalTaskCompletionIdentity {
  * out for it, so the daemon must neither rewrite the record nor wait for it forever.
  */
 export function inspectDeletionOwner(deletion: { owner_pid: number; owner_start_time?: string }): 'alive' | 'dead' | 'unknown' {
-  let missing = false;
-  try { process.kill(deletion.owner_pid, 0); }
-  catch (error) { if (hasCode(error, 'ESRCH')) missing = true; }
-  if (missing) return 'dead';
-  return deletion.owner_start_time === undefined ? 'unknown' : 'alive';
+  if (!isProcessAlive(deletion.owner_pid)) return 'dead';
+  if (deletion.owner_start_time === undefined) return 'unknown';
+  const current = getProcessIdentity(deletion.owner_pid);
+  if (current === undefined) return 'unknown';
+  // A live PID whose start time differs is a reused PID: the recorded owner is gone.
+  return hasProcessIdentityMismatch({ startTime: deletion.owner_start_time }, current) ? 'dead' : 'alive';
+}
+
+/** The end offset of a node's own content, recursing into a collection's last item. */
+function nodeContentEnd(node: unknown): number | undefined {
+  if (node === null || typeof node !== 'object') return undefined;
+  const candidate = node as { range?: [number, number, number]; items?: unknown[]; value?: unknown };
+  if (Array.isArray(candidate.items) && candidate.items.length > 0) {
+    // A collection's own range can run past its last item (a block mapping's range reaches
+    // into the next record); its content ends where its last item ends.
+    return nodeContentEnd(candidate.items[candidate.items.length - 1]) ?? candidate.range?.[1];
+  }
+  if ('key' in candidate && 'value' in candidate) return nodeContentEnd(candidate.value);
+  return candidate.range?.[1];
 }
 
 /**
@@ -61,7 +76,7 @@ export function inspectDeletionOwner(deletion: { owner_pid: number; owner_start_
  */
 function removeTaskRecordLines(text: string, document: ReturnType<typeof parseDocument>, index: number, keys: readonly string[]): string | undefined {
   const sequence = document.getIn(['tasks'], true) as { items?: unknown[] } | undefined;
-  const item = sequence?.items?.[index] as { items?: Array<{ key?: { range?: [number, number, number] }; value?: { range?: [number, number, number] } }> } | undefined;
+  const item = sequence?.items?.[index] as { items?: Array<{ key?: { range?: [number, number, number] }; value?: unknown }> } | undefined;
   if (item === undefined || !Array.isArray(item.items)) return undefined;
   const spans: Array<[number, number]> = [];
   for (const key of keys) {
@@ -69,11 +84,18 @@ function removeTaskRecordLines(text: string, document: ReturnType<typeof parseDo
       const node = candidate.key as { value?: unknown } | undefined;
       return node?.value === key;
     });
-    if (pair?.key?.range === undefined || pair?.value?.range === undefined) return undefined;
-    const start = text.lastIndexOf('\n', pair.key.range[0] - 1) + 1;
-    const endOfValue = pair.value.range[1];
-    const newline = text.indexOf('\n', endOfValue);
-    spans.push([start, newline === -1 ? text.length : newline + 1]);
+    if (pair?.key?.range === undefined) return undefined;
+    const lineStart = text.lastIndexOf('\n', pair.key.range[0] - 1) + 1;
+    // The key must open its own line. A flow-style record shares its line with the rest of
+    // the record, and cutting that line would take the neighbouring tasks with it.
+    if (!/^\s*$/.test(text.slice(lineStart, pair.key.range[0]))) return undefined;
+    const valueEnd = nodeContentEnd(pair.value);
+    if (valueEnd === undefined) return undefined;
+    const newline = text.indexOf('\n', valueEnd);
+    const lineEnd = newline === -1 ? text.length : newline;
+    // Only trailing spaces or a comment may follow the value on its last line.
+    if (!/^\s*(#.*)?$/.test(text.slice(valueEnd, lineEnd))) return undefined;
+    spans.push([lineStart, newline === -1 ? text.length : newline + 1]);
   }
   spans.sort((left, right) => right[0] - left[0]);
   let result = text;

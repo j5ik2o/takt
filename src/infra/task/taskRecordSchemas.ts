@@ -71,7 +71,7 @@ const TaskRecordObjectSchema = buildTaskSchema(
     completion: GoalTaskResultSchema.optional(),
     completion_publication_pending: z.unknown().optional(),
     auto_requeue_count: z.number().int().min(0).optional(),
-  }).strip(),
+  }),
 ).superRefine((value, ctx) => {
   const sourceFields = [value.content, value.content_file, value.task_dir].filter((field) => field !== undefined);
   if (sourceFields.length === 0) {
