@@ -872,6 +872,8 @@ max_steps: infinite
 
 根 workflow 拥有预算，可调用的子 workflow 不能声明自己的 `max_steps`。
 
+- 当当前 step 已达到其 `max_visits` 时，会在 `max_steps` 触发 `exceeded` 保存或迭代上限延长之前，以 `Visit limit reached` 中止 run。
+
 ### `schemas`
 
 `structured_output.schema_ref` 映射到 schema 名称。文件按项目 `.takt/schemas/` → `~/.takt/schemas/` → bundled `schemas/` 查找：
@@ -961,6 +963,7 @@ steps:
 ```
 
 - `max_visits` 为正整数（拒绝 `0`、负数和小数）。在一个 workflow engine 的运行中，统计以迁移结束的 visit 次数。同一 visit 的重试（`blocked` 后的用户输入、quality gate 失败、rate-limit fallback）不计数。每次子工作流调用单独计数，恢复（resume）的 run 从 0 开始计数。达到上限后再开始 visit 时，以 `Visit limit reached: step "replan" already completed 4 times (max_visits: 4); ...` 为理由中止 run。
+- 每次迭代开头，中断（`SIGINT` / `AbortSignal`）的优先级最高，其次是 `max_visits`，然后是 `max_steps`、`requires_user_input` 和 `loop_detection`。当当前 step 同时达到 `max_visits` 和 `max_steps` 时，run 以 `Visit limit reached`（`loop_detected`）中止，而不是 `Max steps reached`（`iteration_limit`），并保存为 `failed` 而不是 `exceeded`。
 - `stop_on_repeated_verdict` 只比较匹配了哪条 rule，不比较输出中的理由。当 step 与上一次 visit 匹配同一条 rule 且该 rule 不是终止（包括回到同一 step 的迁移）时中止 run。终止结果（`COMPLETE`、`ABORT`、`return`）不参与比较。需要按理由判断时，请使用 `loop_monitors` 的 judge。
 - 中止理由以一行记录在 run 的中止原因中（`meta.json` 的 `reason` 与 `workflow_abort` 日志）。
 - 无需修改 workflow 即可更改 `max_visits`：`.takt/config.yaml`（项目）或 `~/.takt/config.yaml`（全局）中的 `workflow_overrides.steps.<step>.max_visits` 会替换 YAML 中的值，项目优先于全局。无法通过覆盖取消上限，请改为指定更大的数值。parallel 的 sub-step 不接受 `max_visits`。

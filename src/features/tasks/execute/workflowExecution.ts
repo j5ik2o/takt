@@ -645,6 +645,10 @@ async function executeWorkflowInternal(
       liveInterventionTerminalizationOwned = true;
       const finalState = await engine.run();
       await eventBridge.flushEventSink();
+      const isIterationLimitExceeded =
+        finalState.status === 'aborted'
+        && eventBridge.state.abortKind === 'iteration_limit'
+        && eventBridge.state.exceededInfo != null;
       executionResult = {
         interrupted: eventBridge.getStagedAbort()?.status === 'aborted',
         success: finalState.status === 'completed',
@@ -658,8 +662,8 @@ async function executeWorkflowInternal(
         runDirectory: bootstrap.runPaths.runRootAbs,
         reportDirectory: bootstrap.runPaths.reportsAbs,
         ndjsonLogPath: bootstrap.ndjsonLogPath,
-        exceeded: eventBridge.state.exceededInfo != null,
-        ...(eventBridge.state.exceededInfo ? { exceededInfo: eventBridge.state.exceededInfo } : {}),
+        exceeded: isIterationLimitExceeded,
+        ...(isIterationLimitExceeded ? { exceededInfo: eventBridge.state.exceededInfo } : {}),
       };
       if (finalState.status === 'aborted') {
         const stagedAbort = eventBridge.getStagedAbort();

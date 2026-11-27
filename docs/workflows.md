@@ -1023,6 +1023,8 @@ The iteration budget for the run: a positive integer, or `infinite` for workflow
 max_steps: infinite
 ```
 
+- If the current step has already reached its `max_visits`, the run aborts with `Visit limit reached` before `max_steps` triggers `exceeded` persistence or iteration-limit extension.
+
 ### `schemas`
 
 A map from `structured_output.schema_ref` keys to structured-output schema names. Each name resolves to `<name>.json` in project `.takt/schemas/`, then `~/.takt/schemas/`, then the bundled `schemas/` directory. A `schema_ref` that is not in the map is used directly as the schema name.
@@ -1135,6 +1137,7 @@ steps:
 ```
 
 - `max_visits` is a positive integer (`0`, negatives, and fractions are rejected). It counts visits of the step that ended in a transition, within one workflow engine run. Retrying the same visit (user input after `blocked`, a failed quality gate, a rate-limit fallback) does not count. Each subworkflow call has its own count, and a resumed run counts from zero. Starting a visit after the limit aborts the run with `Visit limit reached: step "replan" already completed 4 times (max_visits: 4); ...`.
+- At the start of each iteration, interrupts (`SIGINT` / `AbortSignal`) take highest priority, followed by `max_visits`, then `max_steps`, `requires_user_input`, and `loop_detection`. When the current step has already reached its `max_visits` at the same time `max_steps` is reached, the run aborts with `Visit limit reached` (`loop_detected`) instead of `Max steps reached` (`iteration_limit`) and is saved as `failed` rather than `exceeded`.
 - `stop_on_repeated_verdict` compares only which rule matched, not the reason in the output. It aborts when the step matches the same rule as on its previous visit and that rule is not terminal (a transition back to the same step counts too). Terminal results (`COMPLETE`, `ABORT`, `return`) are never compared. When the reason matters, use a `loop_monitors` judge instead.
 - The stop reason is a single line in the run's abort reason (`meta.json` `reason` and the `workflow_abort` log entry).
 - `max_visits` can be changed without editing the workflow: `workflow_overrides.steps.<step>.max_visits` in `.takt/config.yaml` (project) or `~/.takt/config.yaml` (global) replaces the YAML value; project wins over global. An override cannot remove the limit; set a larger number instead. Parallel sub-steps do not take `max_visits`.

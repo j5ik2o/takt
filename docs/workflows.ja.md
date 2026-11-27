@@ -1029,6 +1029,8 @@ run 全体で実行できる回数を制限します。正の整数か、無限�
 max_steps: infinite
 ```
 
+- 現在の step がすでに `max_visits` に達しているときは、`max_steps` による `exceeded` 保存や反復上限の延長より先に、`Visit limit reached` で中断します。
+
 ### `schemas`
 
 `structured_output.schema_ref` のキーを structured output スキーマ名に対応づけるマップです。各名前は project `.takt/schemas/`、`~/.takt/schemas/`、同梱の `schemas/` ディレクトリの順で `<name>.json` に解決されます。マップにない `schema_ref` はそのままスキーマ名として使われます。
@@ -1131,6 +1133,7 @@ steps:
 ```
 
 - `max_visits` は正の整数です（`0`・負の数・小数は拒否します）。1 つの workflow engine の実行の中で、遷移まで終わった visit を数えます。同じ visit のやり直し（`blocked` のあとのユーザー入力、quality gate の失敗、rate-limit の fallback）は数えません。サブワークフローは呼び出しごとに、再開した run は 0 から数え直します。上限に達したあとで visit を始めようとすると、`Visit limit reached: step "replan" already completed 4 times (max_visits: 4); ...` を理由に run を止めます。
+- 各反復の先頭では、割り込み（`SIGINT` / `AbortSignal`）を最優先で調べ、次に `max_visits`、その後に `max_steps`・`requires_user_input`・`loop_detection` の順で調べます。現在の step が `max_visits` と `max_steps` に同時に達したときは、`Max steps reached`（`iteration_limit`）ではなく `Visit limit reached`（`loop_detected`）で中断し、`exceeded` ではなく `failed` として保存します。
 - `stop_on_repeated_verdict` が比べるのは、どの rule に一致したかだけで、出力に書かれた理由は比べません。その step が前回と同じ rule に一致し、その rule が終端でない場合（同じ step へ戻る遷移も含む）に run を止めます。終端（`COMPLETE`・`ABORT`・`return`）は比べません。理由の中身で判断したいときは `loop_monitors` の judge を使ってください。
 - 止めた理由は 1 行で run の中断理由（`meta.json` の `reason` と `workflow_abort` ログ）に残ります。
 - `max_visits` は workflow を書き換えずに変えられます。`.takt/config.yaml`（プロジェクト）または `~/.takt/config.yaml`（グローバル）の `workflow_overrides.steps.<step>.max_visits` が YAML の値を置き換えます。プロジェクトがグローバルより優先です。上限を外すことはできないので、大きな数を指定してください。parallel の sub-step には `max_visits` を付けられません。
