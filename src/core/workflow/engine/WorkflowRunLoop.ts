@@ -859,6 +859,11 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
     }
 
     const step = deps.getStep(deps.state.currentStep);
+    const visitLimitReason = deps.stepVisitCheckEntry(step);
+    if (visitLimitReason !== undefined) {
+      abort = abortWorkflow(deps, 'loop_detected', visitLimitReason);
+      break;
+    }
     const consumesIterationBudget = getWorkflowStepKind(step) !== 'workflow_call';
     const maxSteps = deps.getMaxSteps();
     if (
@@ -908,11 +913,6 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
     }
     if (loopCheck.shouldAbort) {
       abort = abortWorkflow(deps, 'loop_detected', ERROR_MESSAGES.LOOP_DETECTED(step.name, loopCheck.count));
-      break;
-    }
-    const visitLimitReason = deps.stepVisitCheckEntry(step);
-    if (visitLimitReason !== undefined) {
-      abort = abortWorkflow(deps, 'loop_detected', visitLimitReason);
       break;
     }
 
@@ -1211,7 +1211,10 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
         break;
       }
 
-      if (deps.stepVisitCheckEntry(deps.getStep(nextStep)) === undefined) {
+      if (
+        deps.stepVisitCheckEntry(deps.getStep(nextStep)) === undefined
+        && deps.stepVisitCheckEntry(step) === undefined
+      ) {
         const cycleCheck = deps.cycleDetectorRecordAndCheck(step.name, nextStep);
         if (cycleCheck.triggered && cycleCheck.monitor) {
           log.info('Loop monitor cycle threshold reached', {
@@ -1296,6 +1299,22 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
   if (workflowInterruptRequested(deps)) {
     return buildInterruptedIterationResult(deps, step);
   }
+  const visitLimitReason = deps.stepVisitCheckEntry(step);
+  if (visitLimitReason !== undefined) {
+    const abort = abortWorkflow(deps, 'loop_detected', visitLimitReason);
+    return {
+      response: {
+        persona: step.persona ?? step.name,
+        status: 'blocked',
+        content: abort.reason,
+        timestamp: new Date(),
+      },
+      nextStep: ABORT_STEP,
+      isComplete: true,
+      loopDetected: true,
+      abort,
+    };
+  }
   const userInputRuntimeAbort = validateUserInputRuntime(deps, step);
   if (userInputRuntimeAbort) {
     return {
@@ -1322,12 +1341,11 @@ async function runSingleWorkflowIterationCore(deps: WorkflowRunLoopDeps): Promis
     });
   }
 
-  const visitLimitReason = loopCheck.shouldAbort ? undefined : deps.stepVisitCheckEntry(step);
-  if (loopCheck.shouldAbort || visitLimitReason !== undefined) {
+  if (loopCheck.shouldAbort) {
     const abort = abortWorkflow(
       deps,
       'loop_detected',
-      visitLimitReason ?? ERROR_MESSAGES.LOOP_DETECTED(step.name, loopCheck.count),
+      ERROR_MESSAGES.LOOP_DETECTED(step.name, loopCheck.count),
     );
     return {
       response: {
