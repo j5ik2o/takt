@@ -140,7 +140,8 @@ about the post-save read modeled here (`runTaskFinishHooks`, `NamedHook`); the d
 same retry to `runHook`'s post-execution read, which is not modelled. The pre-execution stamp read
 of `withTaskFinishHook` is outside the model and is not retried. `noHookOnLoss` is the modeled part of the design's
 `noSilentLossOrUnconfirmedRun`; the at-least-once warning when the pre-read was unreadable is
-outside the model. The model does not include the hook command outcome (#148's
+outside the model. The "once" in `noUnnoticedLoss` and `noticeAtMostOnce` is once per invocation;
+the model has no state that deduplicates calls separated in time. The model does not include the hook command outcome (#148's
 `HookOutcome` does), the `terminalStamp` pre/post read, `callHook` rejection, the warning when the
 pre-read was unreadable, multiple task names in one warning, the exact lock wait, or concurrent
 processes. Those are covered by the code tests and PBT in the design document; they are not
@@ -161,11 +162,15 @@ quint test taskFinishHookNotice_test.qnt --main noticeUnboundedTest # 1 passing
 
 Rejected forms (1,000 samples, max-steps 8, seed `0x2a`):
 
-| Main | Violated invariant | Counterexample |
+Each row is one trace; a main that violates two invariants gets two rows.
+
+| Main | Violated invariant | Trace |
 |---|---|---|
-| `noticeBefore` (`Silent` + `None`) | `noUnnoticedLoss` | `ConfigUnreadable` reaches `Done` with `loss = true`, `notices = 0`. `retriesTimeouts` is also violated because a timeout is not retried. |
-| `noticeNoRetry` (`Fixed` + `None`) | `retriesTimeouts` | `ReadTimeout` reaches `Done` with `readAttempts = 1`, `loss = true`, `notices = 1`. The warning exists, but the retry bound is not used. |
-| `noticeUnbounded` (`Fixed` + `Unbounded`) | `retryBounded` | `readAttempts = 3`, `retries = 3`; the model keeps waiting. `retriesTimeouts` is also violated. |
+| `noticeBefore` (`Silent` + `None`) | `noUnnoticedLoss` | `ConfigUnreadable`, `path = StatesHook`, `phase = Done`, `loss = true`, `notices = 0`, `readAttempts = 0`. |
+| `noticeBefore` (`Silent` + `None`) | `retriesTimeouts` | `ReadTimeout`, `path = NamedHook`, `phase = Done`, `loss = true`, `notices = 0`, `readAttempts = 1`, `retries = 0`, `timedOut = true`. |
+| `noticeNoRetry` (`Fixed` + `None`) | `retriesTimeouts` | `ReadTimeout`, `path = NamedHook`, `phase = Done`, `loss = true`, `notices = 1`, `readAttempts = 1`, `retries = 0`, `timedOut = true`. The warning exists, but the retry bound is not used. |
+| `noticeUnbounded` (`Fixed` + `Unbounded`) | `retryBounded` | `path = NamedHook`, `phase = Waiting`, `loss = false`, `notices = 0`, `readAttempts = 2`, `retries = 2`, `timedOut = true`. |
+| `noticeUnbounded` (`Fixed` + `Unbounded`) | `retriesTimeouts` | `path = NamedHook`, `phase = Done`, `loss = true`, `notices = 1`, `readAttempts = 3`, `retries = 2`, `timedOut = true`. |
 
 The fixed form:
 
