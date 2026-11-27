@@ -336,6 +336,17 @@ function expectNoMoreMarkers(name: string, run: ToolRun, drive: (run: ToolRun, c
 // The cap and the alignment are not redaction and are not monotone in what the stream hides. A new
 // display that shows a marker the previous stream hid still fails: a stream that applies only the
 // last held unit's ranges, or a preview that leaves the held part unhidden, fails all four tests.
+// R12-4 (design 13th edition): runs on which a stream whose preview does not apply the inner tail's
+// previous ranges (`legacyMerged` and its trace) shows a marker the previous stream hid. Found by the
+// mutant in `sensitive-stream-union.mutants.mjs`; every display test runs them first, so the display
+// tests catch that mutant on every run, not only on a lucky seed.
+const DISPLAY_EXAMPLES: ToolRun[] = [
+  {"input": {"token": "'1f5i45c7ba2\u001b89w1bgp66\";"}, "chunks": ["TOKEN=Zq560Zq&&bk1h5s', 'https://token:p@host;cookie=q5se;j2w1m1'yZq337Zq", "g20v0gg161v3h=#\r\n&[-u a:b--password --password ||@@\r\nZq134Zq0', ''--user=\\\"#'516j4m\\\":}787}ojp40wp[Zq760Zq1i738o1#🔑\\\" \"ghp_Zq326Zqabcdefgh\t\nhttps://TOKEN:p@HOST-uuser:Zq110Zq"], "previews": [true, false]},
+  {"input": {}, "chunks": ["\"redis:", "//:Zq138Zqj", "@host/repo.git'[-u:|1y}Zq686Zq", ": [-u a:b--password --password \nZq226Zq=", "\n", "later output", ":", " Zq226Zq end"], "previews": [false, false, true, false, false, false, false, false]},
+  {"input": {"password": "\"--user=\": Zq142Zq🔑v705o041z8t9k997 \" "}, "chunks": ["'redis:", "//b8v5782352oy", "0hee8:", "Zq461Zq@h:", "5432/db;\"[\"https", ":", "//loc", "alhost:Zq906Zq\",\"ops", "@example.test\"]\""], "previews": [false, false, false, false, false, false, false, true, false]},
+  {"input": {}, "chunks": ["https", "://set-cookie", ":", "a@h Set-Cookie: s=Zq26Zq'http:", "//u", ":Zq44Zqa;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;a;Zq144Zq@host@TOKEN=token :&password=", "\" \"]01n6d🔑éZq52Zq<249rqt0nb495;[sk-Zq423Zqabcdefgh@'https://set-cookie:a@host,Cookie: 5'\\`q3edZq671Zq", "'", "\n", "echoed https://set-cookie:a@h Set-Cookie: s=Zq26Zq"], "previews": [false, false, false, false, false, false, true, false, false, false]},
+];
+
 function expectDisplayShowsOnlyWhatTheInnerStreamShowed(name: string, run: ToolRun, mode: 'compact' | 'expanded'): void {
   const next = driveToolActivityDisplay(run, mode);
   const inner = driveToolActivityDisplay(run, mode, createLegacySensitiveTextStreamRedactor);
@@ -347,11 +358,13 @@ describe('#151 2a: the tool paths show no marker more than the inner-only stream
   for (const mode of ['compact', 'expanded'] as const) {
     const name = `ToolActivityDisplay (${mode})`;
     it(`${name}: D2-stream`, () => {
-      fc.assert(fc.property(d2Runs, (run) => expectDisplayShowsOnlyWhatTheInnerStreamShowed(name, run, mode)), runs);
+      fc.assert(fc.property(d2Runs, (run) => expectDisplayShowsOnlyWhatTheInnerStreamShowed(name, run, mode)),
+        { ...runs, examples: DISPLAY_EXAMPLES.map((run) => [run] as [ToolRun]) });
     }, TIMEOUT);
 
     it(`${name}: D3-stream (the source, then a later output)`, () => {
-      fc.assert(fc.property(d3Runs, (run) => expectDisplayShowsOnlyWhatTheInnerStreamShowed(name, run, mode)), runs);
+      fc.assert(fc.property(d3Runs, (run) => expectDisplayShowsOnlyWhatTheInnerStreamShowed(name, run, mode)),
+        { ...runs, examples: DISPLAY_EXAMPLES.map((run) => [run] as [ToolRun]) });
     }, TIMEOUT);
   }
 
@@ -463,6 +476,21 @@ describe('#151 2a fixed examples (design 8)', () => {
     expectBufferProperties(run);
     expect(run.next.masked).not.toContain('Zq5Zq');
     expect(run.next.masked).not.toMatch(/(?<!Zq)5Zq/u);
+  });
+
+  // R12-1 (design 13th edition 7.1, rules 3a and 3b): a forced cut at the cap falls at the last
+  // previous boundary where the new reading of the held run is closed, before the open new value,
+  // not at the end of the held run. 10,000 plain characters, then a quote only the new reading keeps
+  // open, in one write: cutting at the end of the held run would read `Zq6Zq more` on its own.
+  it.each([
+    ['in one write', [('p'.repeat(99) + '\n').repeat(100) + "--password=''a'\n" + 'Zq6Zq more\n' + "end' x\n"]],
+    ['the plain lines first', [('p'.repeat(99) + '\n').repeat(100), "--password=''a'\n" + 'Zq6Zq more\n' + "end' x\n"]],
+    ['one line per write', [...(('p'.repeat(99) + '\n').repeat(100) + "--password=''a'\n" + 'Zq6Zq more\n' + "end' x\n").split(/(?<=\n)/u)]],
+  ])('A3 (iv) a cut at the cap keeps a new value whole, %s (R12-1)', (_name, chunks) => {
+    const run = runBuffer(writes(...chunks));
+    expectBufferProperties(run);
+    expect(run.next.masked).not.toContain('Zq6Zq');
+    expectHiddenEverywhere(chunks, ['Zq6Zq']);
   });
 
   it('A3 (ii) 20,000 plain characters in one write after a 200 character hold', () => {

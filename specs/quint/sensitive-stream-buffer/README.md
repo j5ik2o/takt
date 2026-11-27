@@ -7,7 +7,7 @@ A Quint model of where `SensitiveTextStreamBuffer` (`src/shared/utils/sensitive-
 | `sensitiveStreamBuffer.qnt` | The model. `withLegacyGuard` and `withNewGuard` choose which readers the guard asks. |
 | `sensitiveStreamBuffer_test.qnt` | Three instances and their scenario tests. |
 | `sensitiveStreamUnion.qnt` | The second PR's stream (design 7.1, 7.2): the inner stream (the first PR's) and the outer hold. |
-| `sensitiveStreamUnion_test.qnt` | The design (`unionStream`) and the seven broken streams, with scenario and witness tests. |
+| `sensitiveStreamUnion_test.qnt` | The design (`unionStream`, and `unionStreamSmallCap` with CAP 4) and the eight broken streams, with scenario and witness tests. |
 
 | Instance | Guard | Stands for |
 |---|---|---|
@@ -76,10 +76,12 @@ The second PR's model is `sensitiveStreamUnion.qnt` below.
 The inner stream cuts where the previous stream cut (the first PR's buffer, `firstClosedLine` with the previous reading, forced past the cap). The outer stream holds the previous units it gets and commits a run of them as one new unit (design 7.1):
 
 - rule 1: a forced previous unit commits everything held (forced);
-- rule 2: the new reading, from the start of the held run, is closed at the end of the unit (unforced). It is asked only at the last unit a write brings (design 7.1, 12th edition): asking it at every unit read the held run again per line;
-- rule 3a: the held run is longer than the cap (forced);
+- rule 2: the new reading, from the start of the held run, is closed at the end of the unit (unforced). It is asked only at the last unit a write brings, and the implementation asks it only when the held run has doubled since it last asked (design 7.1, 13th edition); `write(syms, extraAt, ask)` lets any write skip it, which covers every such schedule;
+- rule 3a: the held run is longer than the cap;
 - rule 4: otherwise it keeps holding;
-- rule 3b, after the units of a write: held text plus the inner pending tail is longer than the cap, so the held run is committed at its end, the last previous boundary (forced).
+- rule 3b, after the units of a write: held text plus the inner pending tail is longer than the cap.
+- At the cap (3a, 3b), the held run is cut at the last previous boundary where the new reading of the held run is closed (unforced), so an open new value stays whole (13th edition, R12-1). If the held run is still over the cap, the rest is committed under force (the fallback: an open new value about as long as the cap).
+- flush asks no rule: it holds the inner tail as a forced unit and commits everything under force.
 
 A new unit hides (s1) each previous unit's own range-path reading, (s2) the previous trace over each previous unit, (s3) both readings over the new unit, and (s6) the fourth-argument positions of every held unit. Writes are 1–3 symbols, and a write may name one position as its fourth argument.
 
@@ -103,7 +105,8 @@ Not modelled: the bounded value sets, PEM blocks, `preview`, the third argument 
 | `unitHidesLegacyDisplay` | The same for the previous trace (s2). |
 | `unitHidesExtra` | The same for the fourth argument (s6). |
 | `noSplitNew`, `noSplitLegacy` | An unforced new cut never falls between a key and its value, for the new and for the previous reading. |
-| `unionSafety` | All eight. |
+| `capCutsOutsideNewValues` | A cut at the cap falls where the new reading of the held run is closed, unless it is the fallback (13th edition). |
+| `unionSafety` | All nine. |
 
 | Instance (`mutation`) | Broken how | Breaks |
 |---|---|---|
@@ -114,8 +117,11 @@ Not modelled: the bounded value sets, PEM blocks, `preview`, the third argument 
 | `dropHeldHidden` | only the last held unit's (s1) is added | `unitHidesLegacy` |
 | `dropDisplayTrace` | (s2) is not added | `unitHidesLegacyDisplay` |
 | `dropEarlierExtra` | only the last held unit's fourth-argument positions are added | `unitHidesExtra` |
+| `capCutAtHeldEnd` | at the cap, the whole held run is cut at its end, through an open new value (the 12th edition, R12-1) | `capCutsOutsideNewValues` |
 
-### Record (2a, design 12th edition: rule 2 once per write)
+### Record (2a, design 13th edition)
+
+`unionStream` has CAP 8; `unionStreamSmallCap` has CAP 4. The simulator also writes three chunks at once (up to 15 symbols), so one write goes past the cap.
 
 ```
 $ quint test --main=unionStream sensitiveStreamUnion_test.qnt
@@ -125,19 +131,28 @@ $ quint test --main=unionStream sensitiveStreamUnion_test.qnt
     ok displayChainHiddenPerOldUnitTest passed 1 test(s)
     ok extraRangePreservedAcrossHeldWritesTest passed 1 test(s)
     ok ruleTwoAtTheEndOfAWriteTest passed 1 test(s)
+    ok capCutAtClosedBoundaryTest passed 1 test(s)
+    ok capCutWithoutRuleTwoTest passed 1 test(s)
+    ok capCutFallbackTest passed 1 test(s)
     ok flushCommitsEverythingTest passed 1 test(s)
+$ quint test --main=unionStreamSmallCap sensitiveStreamUnion_test.qnt
+    ok smallCapLongWriteTest passed 1 test(s)
 $ quint run --main=unionStream --invariant=unionSafety --max-steps=10 --max-samples=20000 --seed=1 sensitiveStreamUnion_test.qnt
 [ok] No violation found
 $ quint run --main=unionStream --invariant=unionSafety --max-steps=14 --max-samples=50000 --seed=2 sensitiveStreamUnion_test.qnt
 [ok] No violation found
 $ quint run --main=unionStream --invariant=unionSafety --max-steps=14 --max-samples=50000 --seed=3 sensitiveStreamUnion_test.qnt
 [ok] No violation found
+$ quint run --main=unionStreamSmallCap --invariant=unionSafety --max-steps=10 --max-samples=20000 --seed=1 sensitiveStreamUnion_test.qnt
+[ok] No violation found
+$ quint run --main=unionStreamSmallCap --invariant=unionSafety --max-steps=14 --max-samples=50000 --seed=2 sensitiveStreamUnion_test.qnt
+[ok] No violation found
 ```
 
 Each broken instance has a witness test (`quint test --main=<instance>`, it ends in a state that breaks the invariant), and simulation finds a violation of the invariant it must break:
 
 ```
-$ quint test --main=<instance> sensitiveStreamUnion_test.qnt        # ok <instance>WitnessTest, for all seven
+$ quint test --main=<instance> sensitiveStreamUnion_test.qnt        # ok <instance>WitnessTest, for all eight
 $ quint run --main=<instance> --invariant=<invariant> --max-steps=10 --max-samples=20000 --seed=1 sensitiveStreamUnion_test.qnt
 cutAtWriteEnd     boundariesSubset         [violation] Found an issue
 cutAtWriteEnd     unitHidesLegacy          [violation] Found an issue
@@ -148,6 +163,7 @@ newGuardOnly      noSplitLegacy            [violation] Found an issue
 dropHeldHidden    unitHidesLegacy          [violation] Found an issue
 dropDisplayTrace  unitHidesLegacyDisplay   [violation] Found an issue
 dropEarlierExtra  unitHidesExtra           [violation] Found an issue
+capCutAtHeldEnd   capCutsOutsideNewValues  [violation] Found an issue
 ```
 
 The simulator writes 1–3 random symbols or one of `CHUNKS`, the pieces of the shapes above; without them, a violation that needs three particular writes is too rare to sample.

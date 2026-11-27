@@ -251,8 +251,12 @@ describe('the union with the previous redaction stays linear', () => {
 // numbers go to the marshal before the merge (design 6).
 describe('the second PR stream stays linear on A3 (write + flush, write + preview + flush)', () => {
   const median = (samples: number[]): number => [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)]!;
-  const chunked = (text: string): string[] =>
-    Array.from({ length: Math.ceil(text.length / 4096) }, (_, index) => text.slice(index * 4096, (index + 1) * 4096));
+  // 4 KiB writes, and one line per write (a program that prints line by line, a small tool_output
+  // per line; design 13th edition, R12-2): the stream must stay linear whatever the writes are.
+  const WRITES: ReadonlyArray<readonly [name: string, split: (text: string) => string[]]> = [
+    ['4 KiB writes', (text) => Array.from({ length: Math.ceil(text.length / 4096) }, (_, index) => text.slice(index * 4096, (index + 1) * 4096))],
+    ['one line per write', (text) => text.split(/(?<=\n)/u)],
+  ];
   // A3, and A3 again every 10,000 characters (12th edition): each open key makes the outer hold read
   // a 10,000 character run again, so the repeated shape is where asking rule 2 per previous unit
   // instead of once per write showed (12.7 times the inner-only stream at 256 KiB).
@@ -264,12 +268,12 @@ describe('the second PR stream stays linear on A3 (write + flush, write + previe
     ['first PR (inner only)', createLegacySensitiveTextStreamRedactor],
     ['second PR', createSensitiveTextStreamRedactor],
   ];
-  it.each(SHAPES.flatMap(([shape, text]) => [
-    [`${shape}, write + flush`, text, false],
-    [`${shape}, write + preview + flush`, text, true],
-  ] as const))('%s', (name, shapeText, withPreview) => {
+  it.each(SHAPES.flatMap(([shape, text]) => WRITES.flatMap(([writes, split]) => [
+    [`${shape}, ${writes}, write + flush`, text, split, false],
+    [`${shape}, ${writes}, write + preview + flush`, text, split, true],
+  ] as const)))('%s', (name, shapeText, split, withPreview) => {
     const run = (create: SensitiveTextStreamRedactorFactory, bytes: number): number => {
-      const chunks = chunked(shapeText(bytes));
+      const chunks = split(shapeText(bytes));
       const start = performance.now();
       const redactor = create();
       for (const chunk of chunks) {

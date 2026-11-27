@@ -58,6 +58,8 @@ module sensitiveStreamUnion {
   var nLen: int
   var nBoundaries: Set[Boundary]
   var nHidden: Set[int]
+  /// Cuts rules 3a and 3b made at the cap: `fallback` when no held boundary had the new reading closed.
+  var capCuts: Set[{ at: int, fallback: bool }]
 
   // ------------------------------------------------------------------------------------------
   // Readings. `legacy` reads KL (unless a G came first) and `fresh` reads KN; both read KB.
@@ -120,7 +122,7 @@ module sensitiveStreamUnion {
 
   /// Cut every closed line, or all of the pending text past the cap. `extra` is relative to `pending`.
   pure def drainLegacy(pending: List[Sym], start: int, extra: Set[int], cap: int): Drain =
-    range(0, 5).foldl({ pending: pending, start: start, units: [], extra: extra, done: false }, (d, _) =>
+    range(0, 16).foldl({ pending: pending, start: start, units: [], extra: extra, done: false }, (d, _) =>
       if (d.done) d
       else {
         val cut = firstClosedLine(d.pending, true, false)
@@ -136,7 +138,7 @@ module sensitiveStreamUnion {
   // ------------------------------------------------------------------------------------------
   // The outer stream (design 7.1: rules 1, 3a, 4 per unit, rule 2 at the write's last unit, rule 3b after the units).
 
-  type Outer = { held: List[Unit], nLen: int, nBoundaries: Set[Boundary], nHidden: Set[int] }
+  type Outer = { held: List[Unit], nLen: int, nBoundaries: Set[Boundary], nHidden: Set[int], capCuts: Set[{ at: int, fallback: bool }] }
 
   pure def heldLength(held: List[Unit]): int = held.foldl(0, (n, u) => n + u.end - u.start)
   pure def unionOf(held: List[Unit], part: (Unit) => Set[int]): Set[int] = held.foldl(Set(), (s, u) => s.union(part(u)))
@@ -160,8 +162,45 @@ module sensitiveStreamUnion {
       else unionOf(o.held, u => u.displayHidden)
     val s3 = hiddenIn(unit, o.nLen, true, false).union(hiddenIn(unit, o.nLen, false, true))
     val s6 = if (mutation == "dropEarlierExtra") lastOf(o.held, u => u.extra) else unionOf(o.held, u => u.extra)
-    { held: [], nLen: end, nBoundaries: o.nBoundaries.union(Set({ at: end, forced: forced })),
+    { ...o, held: [], nLen: end, nBoundaries: o.nBoundaries.union(Set({ at: end, forced: forced })),
       nHidden: o.nHidden.union(s1).union(s2).union(s3).union(s6) }
+  }
+
+  /// Commit the first `count` held units as one new unit, and keep the rest held.
+  pure def commitFirst(o: Outer, text: List[Sym], count: int, forced: bool): Outer = {
+    val first = o.held.slice(0, count)
+    val committed = commit({ ...o, held: first }, text, first[count - 1].end, forced)
+    { ...committed, held: o.held.slice(count, o.held.length()) }
+  }
+
+  /// The largest `k` such that the new reading of the held run, from its start, is closed after its
+  /// first `k` units (0 when it is closed after none).
+  pure def closedHeldCount(o: Outer, text: List[Sym]): int =
+    range(1, o.held.length() + 1).foldl(0, (best, k) =>
+      if (valueState(text.slice(o.nLen, o.held[k - 1].end), false, true) == 0) k else best)
+
+  /// Rules 3a and 3b (design 7.1, 13th edition): at the cap, cut at the last held boundary where the
+  /// new reading is closed, so the open new value stays whole; if the held run is still over the cap
+  /// (the open value itself is about as long as the cap), commit the rest under force.
+  pure def overCap(q: Outer, restLength: int): bool = q.held.length() > 0 and heldLength(q.held) + restLength > CAP
+
+  pure def capCut(o: Outer, text: List[Sym], restLength: int): Outer = {
+    if (mutation == "capCutAtHeldEnd") {
+      val end = o.nLen + heldLength(o.held)
+      val c = commit(o, text, end, true)
+      { ...c, capCuts: c.capCuts.union(Set({ at: end, fallback: false })) }
+    } else {
+      val k = closedHeldCount(o, text)
+      val cut = if (k > 0) {
+        val c = commitFirst(o, text, k, false)
+        { ...c, capCuts: c.capCuts.union(Set({ at: c.nLen, fallback: false })) }
+      } else o
+      if (overCap(cut, restLength)) {
+        val end = cut.nLen + heldLength(cut.held)
+        val c = commit(cut, text, end, true)
+        { ...c, capCuts: c.capCuts.union(Set({ at: end, fallback: true })) }
+      } else cut
+    }
   }
 
   /// A unit the outer already passed (only after cutAtWriteEnd) is trimmed and read again from the
@@ -173,24 +212,25 @@ module sensitiveStreamUnion {
       legacyUnit(rest, nLen, u.extra.filter(p => p >= nLen), u.forced)
     }
 
-  /// `last`: the unit is the last one this write (or flush) brought. Rule 2 reads the held run from its
-  /// start, so it is asked once per write, at its last unit (design 7.1, 12th edition): asking it at every
-  /// unit made a run of short lines read the held run again per line (14 times the inner stream at 256 KiB).
-  pure def pushUnit(o: Outer, raw: Unit, text: List[Sym], last: bool): Outer =
+  /// `last`: the unit is the last one this write brought. `ask`: whether rule 2 is asked at all in this
+  /// write. Rule 2 reads the held run from its start, so the implementation asks it only at the last unit
+  /// of a write and only when the held run has doubled since it last asked (design 7.1, 13th edition);
+  /// the model lets any write skip it, which covers every such schedule.
+  pure def pushUnit(o: Outer, raw: Unit, text: List[Sym], last: bool, ask: bool): Outer =
     if (raw.end <= o.nLen) o
     else {
       val u = arriving(raw, text, o.nLen)
       val grown = { ...o, held: o.held.append(u) }
-      val newClosed = mutation == "noNewGuard" or (last and not(open(text.slice(o.nLen, u.end), false, true)))
+      val newClosed = mutation == "noNewGuard" or (last and ask and not(open(text.slice(o.nLen, u.end), false, true)))
       if (u.forced) commit(grown, text, u.end, true)                                // rule 1
       else if (newClosed) commit(grown, text, u.end, false)                         // rule 2
-      else if (heldLength(grown.held) > CAP) commit(grown, text, u.end, true)       // rule 3a
+      else if (heldLength(grown.held) > CAP) capCut(grown, text, 0)                 // rule 3a
       else grown                                                                    // rule 4
     }
 
   /// newGuardOnly (#165's stream): the outer cuts by the new reading alone, without waiting for the inner.
   pure def newOnlyCuts(o: Outer, text: List[Sym], flushing: bool): Outer =
-    range(0, 5).foldl(o, (q, _) => {
+    range(0, 16).foldl(o, (q, _) => {
       val rest = text.slice(q.nLen, text.length())
       val cut = firstClosedLine(rest, false, true)
       if (rest.length() == 0) q
@@ -199,13 +239,13 @@ module sensitiveStreamUnion {
       else q
     })
 
-  pure def outerAfterWrite(o: Outer, units: List[Unit], text: List[Sym], restLength: int): Outer =
+  pure def outerAfterWrite(o: Outer, units: List[Unit], text: List[Sym], restLength: int, ask: bool): Outer =
     if (mutation == "newGuardOnly") newOnlyCuts(o, text, false)
     else {
-      val pushed = range(0, units.length()).foldl(o, (q, i) => pushUnit(q, units[i], text, i == units.length() - 1))
+      val pushed = range(0, units.length()).foldl(o, (q, i) => pushUnit(q, units[i], text, i == units.length() - 1, ask))
       if (pushed.held.length() > 0 and heldLength(pushed.held) + restLength > CAP) {
         if (mutation == "cutAtWriteEnd") commit(pushed, text, text.length(), true)  // the current code's cut
-        else commit(pushed, text, pushed.nLen + heldLength(pushed.held), true)      // rule 3b
+        else capCut(pushed, text, restLength)                                       // rule 3b
       } else pushed
     }
 
@@ -215,17 +255,18 @@ module sensitiveStreamUnion {
   action init = all {
     written' = [], lPending' = [], lBoundaries' = Set(), lHidden' = Set(), lDisplayed' = Set(),
     expectedExtra' = Set(), pendingExtra' = Set(),
-    held' = [], nLen' = 0, nBoundaries' = Set(), nHidden' = Set(),
+    held' = [], nLen' = 0, nBoundaries' = Set(), nHidden' = Set(), capCuts' = Set(),
   }
 
   pure def unitBoundaries(units: List[Unit]): Set[Boundary] = units.foldl(Set(), (s, u) => s.union(Set({ at: u.end, forced: u.forced })))
 
-  /// write(syms, extraAt): `extraAt` is -1 (no fourth argument) or a position in `syms`.
-  action write(syms: List[Sym], extraAt: int): bool = {
+  /// write(syms, extraAt, ask): `extraAt` is -1 (no fourth argument) or a position in `syms`; `ask`
+  /// is whether rule 2 is asked at the write's last unit.
+  action write(syms: List[Sym], extraAt: int, ask: bool): bool = {
     val text = written.concat(syms)
     val extra = if (extraAt >= 0) pendingExtra.union(Set(lPending.length() + extraAt)) else pendingExtra
     val d = drainLegacy(lPending.concat(syms), written.length() - lPending.length(), extra, CAP)
-    val o = outerAfterWrite({ held: held, nLen: nLen, nBoundaries: nBoundaries, nHidden: nHidden }, d.units, text, d.pending.length())
+    val o = outerAfterWrite({ held: held, nLen: nLen, nBoundaries: nBoundaries, nHidden: nHidden, capCuts: capCuts }, d.units, text, d.pending.length(), ask)
     all {
       syms.length() > 0,
       written' = text,
@@ -235,20 +276,21 @@ module sensitiveStreamUnion {
       lBoundaries' = lBoundaries.union(unitBoundaries(d.units)),
       lHidden' = lHidden.union(unionOf(d.units, u => u.hidden)),
       lDisplayed' = lDisplayed.union(unionOf(d.units, u => u.displayHidden)),
-      held' = o.held, nLen' = o.nLen, nBoundaries' = o.nBoundaries, nHidden' = o.nHidden,
+      held' = o.held, nLen' = o.nLen, nBoundaries' = o.nBoundaries, nHidden' = o.nHidden, capCuts' = o.capCuts,
     }
   }
 
-  /// flush(): the inner commits its pending text (forced), the outer commits everything it holds.
+  /// flush(): the inner commits its pending text (forced); the outer asks no rule, holds that unit and
+  /// commits everything it holds under force (design 7.1, 13th edition).
   action flush = {
     val start = written.length() - lPending.length()
     val units = if (lPending.length() > 0) [legacyUnit(lPending, start, pendingExtra.map(p => start + p), true)] else []
-    val outer = { held: held, nLen: nLen, nBoundaries: nBoundaries, nHidden: nHidden }
+    val outer = { held: held, nLen: nLen, nBoundaries: nBoundaries, nHidden: nHidden, capCuts: capCuts }
     val o =
       if (mutation == "newGuardOnly") newOnlyCuts(outer, written, true)
       else {
-        val pushed = units.foldl(outer, (q, u) => pushUnit(q, u, written, true))
-        if (pushed.held.length() > 0) commit(pushed, written, pushed.nLen + heldLength(pushed.held), true) else pushed
+        val everything = { ...outer, held: held.concat(units.foldl([], (l, u) => l.append(arriving(u, written, nLen)))) }
+        if (everything.held.length() > 0) commit(everything, written, everything.nLen + heldLength(everything.held), true) else everything
       }
     all {
       written' = written, expectedExtra' = expectedExtra,
@@ -256,7 +298,7 @@ module sensitiveStreamUnion {
       lBoundaries' = lBoundaries.union(unitBoundaries(units)),
       lHidden' = lHidden.union(unionOf(units, u => u.hidden)),
       lDisplayed' = lDisplayed.union(unionOf(units, u => u.displayHidden)),
-      held' = o.held, nLen' = o.nLen, nBoundaries' = o.nBoundaries, nHidden' = o.nHidden,
+      held' = o.held, nLen' = o.nLen, nBoundaries' = o.nBoundaries, nHidden' = o.nHidden, capCuts' = o.capCuts,
     }
   }
 
@@ -266,13 +308,17 @@ module sensitiveStreamUnion {
       .union(tuples(ALPHABET, ALPHABET, ALPHABET).map(t => [t._1, t._2, t._3]))
 
   action step = {
-    nondet kind = 0.to(4).oneOf()
+    nondet kind = 0.to(5).oneOf()
     nondet random = WRITES.oneOf()
     nondet chunk = CHUNKS.oneOf()
+    nondet chunk2 = CHUNKS.oneOf()
+    nondet chunk3 = CHUNKS.oneOf()
     nondet at = (-1).to(2).oneOf()
-    val syms = if (kind <= 1) random else chunk
+    nondet ask = Set(true, false).oneOf()
+    // kind 5: one write of three chunks, longer than the cap, so rules 3a and 3b cut inside one write.
+    val syms = if (kind <= 1) random else if (kind == 5) chunk.concat(chunk2).concat(chunk3) else chunk
     val extraAt = if (at < syms.length()) at else -1
-    if (kind == 0) flush else write(syms, extraAt)
+    if (kind == 0) flush else write(syms, extraAt, ask)
   }
 
   // ------------------------------------------------------------------------------------------
@@ -308,6 +354,12 @@ module sensitiveStreamUnion {
   /// The same for the previous reading.
   val noSplitLegacy = noSplit(true, false)
 
-  val unionSafety = conservation and boundedPending and boundariesSubset and unitHidesLegacy
+  /// A cut at the cap falls where the new reading of the held run is closed, unless it is the fallback.
+  val capCutsOutsideNewValues = capCuts.forall(c => {
+    val start = runStart(c.at)
+    c.fallback or not(insideSecret(written.slice(start, written.length()), c.at - start, false, true))
+  })
+
+  val unionSafety = capCutsOutsideNewValues and conservation and boundedPending and boundariesSubset and unitHidesLegacy
     and unitHidesLegacyDisplay and unitHidesExtra and noSplitNew and noSplitLegacy
 }
