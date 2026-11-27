@@ -352,6 +352,39 @@ describe('a deletion reservation decides whether the mark may be cleared', () =>
   });
 });
 
+describe('one rejected owner inspection does not stop the rest of the project', () => {
+  it('publishes the next completion of the same project when one deletion reservation cannot be inspected', async () => {
+    const h = await open();
+    // Only this reservation fails to be inspected; the second record has no reservation.
+    const uninspectablePid = 424_242;
+    writeTasks(h.project, [
+      failedGoalTask('uninspectable-deletion', {
+        deletion: { id: '5a0e8400-e29b-41d4-a716-446655440003', owner_pid: uninspectablePid, owner_start_time: 'darwin-start-v2:1' },
+      }),
+      failedGoalTask('published-after-rejection'),
+    ]);
+    const persisted = await import('../infra/daemon/persistedFiles.js');
+    const actualInspect = persisted.inspectDeletionOwner;
+    const inspection = vi.spyOn(persisted, 'inspectDeletionOwner').mockImplementation(async (deletion) => {
+      if (deletion.owner_pid === uninspectablePid) throw new Error('owner inspection rejected');
+      return actualInspect(deletion);
+    });
+
+    // Today the rejection escapes here and the second completion is never published.
+    await taskCompletionsPass(h.source);
+
+    expect(inspection).toHaveBeenCalledTimes(1);
+    expect(readTasks(h.project).map((task) => [task.name, task.completion_publication_pending])).toEqual([
+      ['uninspectable-deletion', true],
+      ['published-after-rejection', undefined],
+    ]);
+    const accepted = await consumeInbox(h);
+    expect(accepted).toHaveLength(1);
+    expect(accepted[0]!.eventId).toMatch(COMPLETION_EVENT_ID);
+    expect(accepted[0]!.event).toMatchObject({ kind: 'task_failed', task: { taskName: 'published-after-rejection' } });
+  });
+});
+
 describe('a late clear of the first attempt never removes the second attempt mark', () => {
   it('keeps the second attempt pending when the first attempt is cleared after the requeue', async () => {
     const h = await open();
