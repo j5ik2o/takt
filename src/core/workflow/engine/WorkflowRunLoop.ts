@@ -1211,10 +1211,7 @@ async function runWorkflowToCompletionCore(deps: WorkflowRunLoopDeps): Promise<W
         break;
       }
 
-      if (
-        deps.stepVisitCheckEntry(deps.getStep(nextStep)) === undefined
-        && deps.stepVisitCheckEntry(step) === undefined
-      ) {
+      if (deps.stepVisitCheckEntry(deps.getStep(nextStep)) === undefined) {
         const cycleCheck = deps.cycleDetectorRecordAndCheck(step.name, nextStep);
         if (cycleCheck.triggered && cycleCheck.monitor) {
           log.info('Loop monitor cycle threshold reached', {
