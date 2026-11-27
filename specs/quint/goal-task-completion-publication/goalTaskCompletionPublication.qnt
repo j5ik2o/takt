@@ -260,10 +260,11 @@ module goalTaskCompletionPublication {
     }
   }
 
-  // A synthetic Running attempt with neither run_slug nor execution_id: this is how the model reaches
-  // the shape of a tasks.yaml record whose process died before updateRunningTaskExecution wrote
-  // run_slug (claim already writes execution_id, and updateRunningTaskExecution only writes run_slug).
-  // It moves a Pending task to Running, exactly like startTask(t, false) except hasExecId stays false;
+  // A synthetic Running attempt with neither run_slug nor execution_id: this shape stands for a legacy
+  // tasks.yaml record created before execution_id was introduced. It is not a record whose process died
+  // after claim and before updateRunningTaskExecution wrote run_slug: claim writes execution_id, so that
+  // record still carries execution_id. The model creates the legacy shape from a Pending task, exactly
+  // like startTask(t, false) except hasExecId stays false;
   // it does not read or adopt an existing Running record, and it is enabled only while goal == Active,
   // so it cannot represent reconcileLostRun of such a legacy record under Paused/Aborted. With this
   // shape, writeReconcileFailure flips hasExecId to true (the resolvedExecutionId branch), but the
@@ -888,16 +889,18 @@ module goalTaskCompletionPublication {
   //    pendingPub mark remains under an Aborted or Deleted goal. There is no explicit Paused
   //    exclusion: both implications in drainSettled are vacuous while the goal is Paused (their
   //    antecedents require Active or Aborted/Deleted), so the bound neither requires a wake nor
-  //    forbids a pendingPub mark there. The drain itself cannot be observed at the bound with the goal
-  //    Paused: drainProgressPossible counts goal == Paused (resumeGoal is enabled), so no stutter is
-  //    allowed and the drain must take resumeGoal before the bound.
+  //    forbids a pendingPub mark there. The drain can reach the bound with the goal still Paused:
+  //    drainProgressPossible counts resumeGoal as progress, but it also counts inbox consumption, the
+  //    writer, the daemon, and deletion, so no stutter is allowed while Paused yet not every drain step
+  //    resumes the goal. drainSettled is vacuously true under Paused, so reaching the bound there does
+  //    not change the checked result.
   val drainedDelivery: bool =
     (drain and dsteps >= DRAIN_STEPS) implies drainSettled
 
   // Drain witnesses: the drain reached DRAIN_STEPS after a delivery, after a daemon-only delivery,
   // and after an Aborted/Deleted settlement with the daemon idle-exited. There is no Paused-tail
-  // witness: with stutter gated on drainProgressPossible, goal == Paused is itself a progress
-  // condition (resumeGoal), so a Paused goal cannot remain at the bound.
+  // witness: a drain can reach the bound with the goal still Paused, and drainSettled is vacuously
+  // true there, so such a trace would say nothing about delivery.
   val wDrainedWoke: bool = drain and dsteps >= DRAIN_STEPS and ATTEMPT_KEYS.exists(p => wakes.get(p) == 1)
   val wDrainedDaemonOnlyWoke: bool = drain and dsteps >= DRAIN_STEPS
     and ATTEMPT_KEYS.exists(p => wakes.get(p) == 1 and daemonRepublished.contains(p) and not(writerPublished.contains(p)))
