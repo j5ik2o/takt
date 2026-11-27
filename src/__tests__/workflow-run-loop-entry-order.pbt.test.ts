@@ -5,6 +5,7 @@ import type {
   WorkflowMaxSteps,
   WorkflowStep,
 } from '../core/models/index.js';
+import { scaledMs } from '../../scripts/test-time-factor.mjs';
 import { createInitialState } from '../core/workflow/engine/state-manager.js';
 import { StepLoopGuard } from '../core/workflow/engine/step-visit-guard.js';
 import {
@@ -430,5 +431,5 @@ describe('WorkflowRunLoop iteration-entry order properties (#176)', () => {
         });
       }
     }
-  }, 900_000);
+  }, scaledMs(900_000));
 });

@@ -90,12 +90,10 @@ beforeEach(() => {
   });
   vi.mocked(mockRuleEvaluation).mockReturnValue({ index: 0, method: 'phase3_tag' });
   projectCwd = createTestTmpDir();
-  vi.stubEnv('TAKT_CONFIG_DIR', join(projectCwd, 'config'));
   writeChildWorkflow(projectCwd);
 });
 
 afterEach(() => {
-  vi.unstubAllEnvs();
   rmSync(projectCwd, { recursive: true, force: true });
 });
 

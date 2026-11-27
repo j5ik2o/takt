@@ -16,10 +16,12 @@
 ### Changed
 
 - 遷移先の step がすでに `max_visits` に達しているときは、loop monitor より上限を優先し、別の step へ逃がす judge rule があっても judge を呼ばずに `Visit limit reached` で中断するようにしました。
+- 反復先頭の検査順を、割り込みの直後に `max_visits`、その後に `max_steps` と `loop_detection` とするようにしました (#176)。現在の step が `max_visits` と `max_steps` に同時到達したときは、`exceeded` として保存せず `Visit limit reached`（`failed`）で終了します。
 
 ### Fixed
 
 - `system` step の `wait.on_timeout` が同じ判定のあいだに挟まったとき、`stop_on_repeated_verdict` が誤って停止しないようにしました。
+- `executeWorkflow` がタスクを `exceeded` として保存する条件を、workflow が実際に `iteration_limit` で中断した場合だけに絞りました (#176)。子 `workflow_call` の中で記録された `exceededInfo` が残っていても、親が `ABORT → COMPLETE` で完了した run が `exceeded` に書き換わったり、`parallel` で先に選ばれた `step_error` や `Visit limit reached` 停止（`development-core` の `implement` `ABORT → replan` など）が `exceeded` になったりしなくなります。
 
 ## [0.77.0] - 2026-11-24
 

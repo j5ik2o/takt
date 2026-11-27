@@ -376,12 +376,47 @@ describe('WorkflowRunLoop nextStep already at max_visits', () => {
     expect(abort?.reason).toBe(visitLimitReason('review', 1, 1));
     expect(iteration).toBe(2);
     expect(counters.runStepCalls).toBe(2);
-    expect(counters.cycleDetectorChecks).toBe(0);
+    // The completed step reaching its own max_visits does not skip monitoring;
+    // only a next step already at max_visits does. So the cycle detector runs
+    // once here (review -> replan), but the threshold is not reached and the
+    // judge stays out of it.
+    expect(counters.cycleDetectorChecks).toBe(1);
     expect(counters.judgeCalls).toBe(0);
     expect(counters.events).not.toContain('step:cycle_detected');
     expect(counters.iterationLimitEmits).toBe(0);
     expect(counters.onIterationLimitCalls).toBe(0);
     expect(counters.exceededInfo).toBe(false);
+  });
+
+  it('calls the loop monitor judge when only the completed step reached its own max_visits', async () => {
+    const guard = new StepLoopGuard();
+    // `review` reaches its own limit on this completion, but the next step
+    // (`replan`) is below its limit. Only a next step at the limit may skip the
+    // judge, so the judge must run and its ABORT must stop the run here.
+    const review = makeStep('review', { maxVisits: 1, rules: [makeRule('done', 'replan')] });
+    const replan = makeStep('replan', { rules: [makeRule('done', 'review')] });
+    const { deps, counters } = makeHarness({
+      steps: [review, replan],
+      initialStep: 'review',
+      maxSteps: 10,
+      guard,
+      cycleMonitor: monitor,
+      resolveDoneTransition: (step) => ({
+        nextStep: step.name === 'review' ? 'replan' : 'review',
+        commandGates: 'skip',
+      }),
+      runStep: async () => ({ response: doneResponse(), instruction: '' }),
+    });
+
+    const { abort } = await runMode('full', deps);
+
+    expect(counters.cycleDetectorChecks).toBe(1);
+    expect(counters.judgeCalls).toBe(1);
+    expect(counters.events).toContain('step:cycle_detected');
+    expect(abort?.kind).toBe('step_transition');
+    expect(abort?.reason).toBe('Workflow aborted by step transition');
+    // The judge's ABORT wins over the natural transition: `replan` never runs.
+    expect(counters.runStepCalls).toBe(1);
   });
 });
 
