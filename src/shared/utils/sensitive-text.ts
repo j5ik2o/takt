@@ -522,6 +522,16 @@ export function previousDisplayRanges(text: string, masked: readonly SensitiveRa
   return legacySequentialRanges(text, masked).ranges;
 }
 
+/**
+ * The new reading (a) alone: the ranges a fresh scan of `text` draws, without the previous
+ * display's trace (b) or the previous range path (c). The stream's outer hold-back guard
+ * reads this alone (design 7.1, 14th edition); what the previous reading holds back is the
+ * inner layer's business, one previous unit at a time.
+ */
+export function newReadingRanges(text: string): SensitiveRange[] {
+  return patternRanges(findSensitiveMatches(text));
+}
+
 export function sanitizeSensitiveText(text: string): string {
   if (!text) return text;
   return maskSensitiveRanges(text, displayRanges(text, legacySequentialRanges(text, []).ranges));

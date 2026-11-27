@@ -16,7 +16,7 @@ import {
   type SensitiveRange,
 } from './sensitive-text-legacy.js';
 import {
-  collectTrackedEmbeddedSensitiveValues, previousDisplayRanges, sensitiveTextRanges as newSensitiveTextRanges,
+  collectTrackedEmbeddedSensitiveValues, newReadingRanges, previousDisplayRanges, sensitiveTextRanges as newSensitiveTextRanges,
   substringSensitiveRanges as newSubstringSensitiveRanges,
 } from './sensitive-text.js';
 import { createBoundedSensitiveValues, type BoundedSensitiveValues } from './sensitive-value.js';
@@ -69,14 +69,25 @@ function pendingSensitiveValueRanges(text: string): SensitiveRange[] {
       .map((range) => ({ start: range.start, end: text.length })));
 }
 
-function pendingNewSensitiveValueRanges(text: string): SensitiveRange[] {
-  // The outer hold-back guard: the same construction as the previous guard, read with the
-  // new reading (design 7.1). A range that runs past the end of `text` means the new
-  // reading still holds a value open at the end of the held run.
-  return ['', '"', "'", '\\"', '@'].flatMap((quote) =>
-    newSensitiveTextRanges(text + 'x' + quote, new Set())
+const GUARD_QUOTES = ['', '"', "'", '\\"', '@'] as const;
+
+function pendingNewReadingRanges(text: string): SensitiveRange[] {
+  // The outer hold-back guard (design 7.1, 14th edition): the same construction as the
+  // previous guard — append `x` and each quote mark, and keep the ranges that run past
+  // the end — but read with the new reading (a) alone. The trace (b) and the previous
+  // range path (c) are not in it; what the previous reading holds back is the inner
+  // layer's business, one previous unit at a time. A range that runs past the end of
+  // `text` means the new reading still holds a value open at the end of the held run.
+  return GUARD_QUOTES.flatMap((quote) =>
+    newReadingRanges(text + 'x' + quote)
       .filter((range) => range.end > text.length)
       .map((range) => ({ start: range.start, end: text.length })));
+}
+
+function newReadingGuardReadings(text: string): SensitiveRange[] {
+  // Every range the guard's five readings draw over `text`, unclamped: the cut at the cap
+  // (rules 3a and 3b) looks for a previous boundary none of them straddles.
+  return GUARD_QUOTES.flatMap((quote) => newReadingRanges(text + 'x' + quote));
 }
 
 function knownValuePrefixSuffixRanges(text: string, values: ReadonlySet<string>): SensitiveRange[] {
@@ -106,28 +117,6 @@ function longestValuePrefixAtEnd(text: string, value: string): number {
     if (text[i] === value[matched]) matched++;
   }
   return matched;
-}
-
-/**
- * Splits ranges at the newlines inside them, so a range the new reading (or its trace)
- * drew across a line boundary hides the same characters on each line but not the
- * newline itself. The stream's masked output keeps the written text's line structure:
- * the tool paths print it line by line with a line cap, and a hidden newline would let
- * later lines into the cap that the previous stream's printing kept out.
- */
-function splitAtNewlines(text: string, ranges: readonly SensitiveRange[]): SensitiveRange[] {
-  const split: SensitiveRange[] = [];
-  for (const range of ranges) {
-    let start = range.start;
-    for (let at = range.start; at < range.end; at++) {
-      if (text[at] === '\n') {
-        if (at > start) split.push({ start, end: at });
-        start = at + 1;
-      }
-    }
-    if (range.end > start) split.push({ start, end: range.end });
-  }
-  return split;
 }
 
 function mergedRanges(ranges: readonly SensitiveRange[]): SensitiveRange[] {
@@ -318,14 +307,19 @@ interface HeldUnit {
 
 /**
  * The (s2) trace of one previous unit: the previous display run over the unit with its
- * masking already replaced. The trace starts from the unit's saved ranges and from the
- * occurrences of the values the previous collection found in the unit itself, as the
- * previous composition (`sanitizeTextWithValues`) hid the known values before running
- * its patterns; the bound's `collect({ token })` admission drops some of those finds
- * (a quoted space, for one), and the chain across a replaced value needs them.
+ * masking already replaced. The trace is the union of two runs (design 7.1, R12-9): one
+ * seeded with the unit's saved ranges alone, and one also seeded with the occurrences of
+ * the values the previous collection found in the unit itself, as the previous
+ * composition (`sanitizeTextWithValues`) hid the known values before running its
+ * patterns; the bound's `collect({ token })` admission drops some of those finds (a
+ * quoted space, for one), and the chain across a replaced value needs them. The trace is
+ * not monotone in its seed, so neither run replaces the other.
  */
 function displayTraceRanges(unit: HeldUnit): SensitiveRange[] {
-  return previousDisplayRanges(unit.text, [...unit.legacyRanges, ...knownValueRanges(unit.text, new Set(unit.foundValues))]);
+  const traced = previousDisplayRanges(unit.text, unit.legacyRanges);
+  if (unit.foundValues.length === 0) return traced;
+  const seeded = [...unit.legacyRanges, ...knownValueRanges(unit.text, new Set(unit.foundValues))];
+  return [...traced, ...previousDisplayRanges(unit.text, seeded)];
 }
 
 /** Complete value-bearing lines and closed PEM blocks become append-only output. */
@@ -334,6 +328,10 @@ export class SensitiveTextStreamBuffer implements SensitiveTextStreamBufferLike 
   private held: HeldUnit[] = [];
   private heldLength = 0;
   private pendingExtraRanges: SensitiveRange[] = [];
+  /** The held length when rule 2 last asked the new guard and found it open (design 7.1). */
+  private checkedLength = 0;
+  /** A preview whose tail the new guard hides from inside the held run (design 7.1, R12-2). */
+  private previewMemo: { masked: string; fullLength: number; valuesSize: number } | undefined;
 
   get sensitiveValues(): BoundedSensitiveValues {
     return this.inner.sensitiveValues;
@@ -350,28 +348,50 @@ export class SensitiveTextStreamBuffer implements SensitiveTextStreamBufferLike 
     const units = this.inner.write(text, source, substringValues);
     let committed = '';
     const ranges: SensitiveRange[] = [];
-    const commit = (): void => {
-      const unit = this.commitHeld(substringValues);
+    const emit = (unit: SensitiveTextCommit | undefined): void => {
       if (unit === undefined) return;
       for (const range of unit.ranges) ranges.push({ start: committed.length + range.start, end: committed.length + range.end });
       committed += unit.text;
     };
-    for (const unit of units) {
+    // The cut at the cap (design 7.1, R12-1): commit up to the last previous boundary the
+    // new reading's guard does not straddle, as a non-forced boundary; only if the run is
+    // still over the caller's limit afterwards, force the rest out (the last resort, for a
+    // single open new value as long as the cap itself).
+    const cutAtCap = (stillOver: () => boolean): void => {
+      const count = this.closedHeldUnitCount();
+      if (count > 0) emit(this.commitHeld(substringValues, count));
+      if (this.held.length > 0 && stillOver()) emit(this.commitHeld(substringValues));
+    };
+    units.forEach((unit, index) => {
       this.hold(unit, substringValues);
       if (unit.forced) {
         // Rule 1: the previous stream cut here under force; the new stream cuts here too.
-        commit();
-      } else if (pendingNewSensitiveValueRanges(this.heldText()).length === 0) {
-        // Rule 2: both readings are closed at the end of this previous unit.
-        commit();
-      } else if (this.heldLength > MAX_PENDING_SENSITIVE_LINE_LENGTH) {
-        // Rule 3a: the held run itself is past the cap.
-        commit();
+        emit(this.commitHeld(substringValues));
+        return;
       }
-    }
+      // Rule 2 (design 7.1, 13th edition): asked only at the last unit this write brought
+      // in, and only once the held run has doubled since the guard was last asked, so a
+      // stream of short writes does not reread the run for every unit.
+      let committedByRule = false;
+      if (index === units.length - 1 && this.heldLength >= 2 * this.checkedLength) {
+        if (pendingNewReadingRanges(this.heldText()).length === 0) {
+          emit(this.commitHeld(substringValues));
+          committedByRule = true;
+        } else {
+          this.checkedLength = this.heldLength;
+        }
+      }
+      // Rule 3a: the held run itself is past the cap (the write's unprocessed rest and the
+      // inner tail are not added here).
+      if (!committedByRule && this.heldLength > MAX_PENDING_SENSITIVE_LINE_LENGTH) {
+        cutAtCap(() => this.heldLength > MAX_PENDING_SENSITIVE_LINE_LENGTH);
+      }
+    });
     // Rule 3b: after the write's units, the held run plus the inner tail is past the cap;
-    // cut at the last previous boundary (the end of the held run), never inside the tail.
-    if (this.held.length > 0 && this.heldLength + this.inner.pendingLength > MAX_PENDING_SENSITIVE_LINE_LENGTH) commit();
+    // cut inside the held run only, never inside the inner tail.
+    if (this.held.length > 0 && this.heldLength + this.inner.pendingLength > MAX_PENDING_SENSITIVE_LINE_LENGTH) {
+      cutAtCap(() => this.heldLength + this.inner.pendingLength > MAX_PENDING_SENSITIVE_LINE_LENGTH);
+    }
     return { text: committed, ranges };
   }
 
@@ -397,16 +417,42 @@ export class SensitiveTextStreamBuffer implements SensitiveTextStreamBufferLike 
     if (this.inner.inPemBlock && innerText.length > MAX_PENDING_SENSITIVE_LINE_LENGTH) {
       // The previous preview showed none of the pending PEM text (design 7.1, step 2).
       if (heldText === '') return REDACTED_VALUE;
-      const heldRanges = this.previewRanges(heldText + innerText, values, legacyMerged, tailPreview.foundValues)
+      const heldRanges = this.previewRanges(heldText + innerText, values, legacyMerged, tailPreview.foundValues, [])
         .filter((range) => range.start < heldText.length)
         .map((range) => ({ start: range.start, end: Math.min(range.end, heldText.length) }));
       const masked = maskSensitiveRanges(heldText, heldRanges) + REDACTED_VALUE;
       return sliceUtf8(masked, 0, SENSITIVE_PREVIEW_BYTES, true).content;
     }
     const full = heldText + innerText;
+    // The preview memo (design 7.1, R12-2): when the new guard hides the text from a
+    // point inside the held run, every later preview hides it too, so the masked prefix
+    // up to that point is remembered and returned with the tail replaced — without
+    // reading the text again — until the text doubles, the value set changes, or a
+    // commit discards the memo.
+    if (this.previewMemo !== undefined) {
+      const memo = this.previewMemo;
+      if (full.length < 2 * memo.fullLength && values.all.size === memo.valuesSize) {
+        return sliceUtf8(memo.masked + REDACTED_VALUE, 0, SENSITIVE_PREVIEW_BYTES, true).content;
+      }
+      this.previewMemo = undefined;
+    }
+    const guard = pendingNewReadingRanges(full);
     const legacyMasked = maskSensitiveRanges(innerText, legacyMerged);
     const legacySlice = sliceUtf8(legacyMasked, 0, SENSITIVE_PREVIEW_BYTES, true);
-    const outerRanges = this.previewRanges(full, values, legacyMerged, tailPreview.foundValues, legacySlice.truncated);
+    const outerRanges = this.previewRanges(full, values, legacyMerged, tailPreview.foundValues, guard);
+    if (heldText !== '' && guard.length > 0) {
+      const guardStart = Math.min(...guard.map((range) => range.start));
+      if (guardStart < heldText.length) {
+        const clipped = outerRanges
+          .filter((range) => range.start < guardStart)
+          .map((range) => ({ start: range.start, end: Math.min(range.end, guardStart) }));
+        this.previewMemo = {
+          masked: maskSensitiveRanges(full.slice(0, guardStart), clipped),
+          fullLength: full.length,
+          valuesSize: values.all.size,
+        };
+      }
+    }
     if (innerText === '' || !legacySlice.truncated) {
       return sliceUtf8(maskSensitiveRanges(full, outerRanges), 0, SENSITIVE_PREVIEW_BYTES, true).content;
     }
@@ -461,26 +507,29 @@ export class SensitiveTextStreamBuffer implements SensitiveTextStreamBufferLike 
     this.heldLength += length;
   }
 
-  /** Commits every held unit as one new unit, hiding the union (s1)–(s6) (design 7.1). */
-  private commitHeld(substringValues: readonly string[]): SensitiveTextCommit | undefined {
+  /**
+   * Commits the first `count` held units (all of them by default) as one new unit,
+   * hiding the union (s1)–(s6) (design 7.1). Every commit restarts rule 2's doubling
+   * count and discards the preview memo.
+   */
+  private commitHeld(substringValues: readonly string[], count = this.held.length): SensitiveTextCommit | undefined {
     if (this.held.length === 0) return undefined;
-    const units = this.held;
-    this.held = [];
-    this.heldLength = 0;
+    const units = this.held.slice(0, count);
+    this.held = this.held.slice(units.length);
+    this.heldLength -= units.reduce((total, unit) => total + unit.text.length, 0);
+    this.checkedLength = 0;
+    this.previewMemo = undefined;
     const text = units.map((unit) => unit.text).join('');
     const ranges: SensitiveRange[] = [];
     let offset = 0;
     for (const unit of units) {
       // (s1) the ranges the inner layer found for this unit at its own time, (s2) the
       // previous display's trace over this unit, (s4) this unit's own third argument,
-      // (s6) this unit's own fourth argument.
+      // (s6) this unit's own fourth argument, applied as given.
       for (const range of unit.legacyRanges) ranges.push({ start: offset + range.start, end: offset + range.end });
-      for (const range of splitAtNewlines(unit.text, displayTraceRanges(unit))) ranges.push({ start: offset + range.start, end: offset + range.end });
+      for (const range of displayTraceRanges(unit)) ranges.push({ start: offset + range.start, end: offset + range.end });
       for (const range of unit.substringRanges) ranges.push({ start: offset + range.start, end: offset + range.end });
-      for (const range of unit.extraRanges) {
-        const widened = widenedToWord(unit.text, range);
-        ranges.push({ start: offset + widened.start, end: offset + widened.end });
-      }
+      for (const range of unit.extraRanges) ranges.push({ start: offset + range.start, end: offset + range.end });
       offset += unit.text.length;
     }
     // (s3) the new reading over the whole new unit. Values the new collection finds in the
@@ -490,75 +539,71 @@ export class SensitiveTextStreamBuffer implements SensitiveTextStreamBufferLike 
     collectTrackedEmbeddedSensitiveValues(text, found);
     const newOnly = [...found.all].filter((value) => !found.legacy.has(value));
     if (newOnly.length > 0) this.sensitiveValues.collectNewOnly({ token: newOnly });
-    ranges.push(...splitAtNewlines(text, newSensitiveTextRanges(text, this.sensitiveValues.all)));
+    // Ranges are appended one by one, never spread into `push`: a long unit can carry
+    // more ranges than the call stack takes as arguments (design 6, note 15).
+    for (const range of newSensitiveTextRanges(text, this.sensitiveValues.all)) ranges.push(range);
     // (s5) prefixes of known values at the end of the new unit.
-    ranges.push(...knownValuePrefixSuffixRanges(text, this.sensitiveValues.all));
+    for (const range of knownValuePrefixSuffixRanges(text, this.sensitiveValues.all)) ranges.push(range);
     // (s4) the committing call's third argument over the whole new unit.
-    ranges.push(...newSubstringSensitiveRanges(text, substringValues));
+    for (const range of newSubstringSensitiveRanges(text, substringValues)) ranges.push(range);
     return { text, ranges };
   }
 
   /** The union ranges over `full` (held run plus inner tail) for a preview, on the copy `values`. */
-  private previewRanges(full: string, values: BoundedSensitiveValues, legacyMerged: readonly SensitiveRange[], tailFinds: readonly string[], includeWholeFull = false): SensitiveRange[] {
+  private previewRanges(full: string, values: BoundedSensitiveValues, legacyMerged: readonly SensitiveRange[], tailFinds: readonly string[], guard: readonly SensitiveRange[]): SensitiveRange[] {
     const ranges: SensitiveRange[] = [];
-    const extra: SensitiveRange[] = [];
     let offset = 0;
     for (const unit of this.held) {
       for (const range of unit.legacyRanges) ranges.push({ start: offset + range.start, end: offset + range.end });
-      for (const range of splitAtNewlines(unit.text, displayTraceRanges(unit))) {
-        ranges.push({ start: offset + range.start, end: offset + range.end });
-      }
+      for (const range of displayTraceRanges(unit)) ranges.push({ start: offset + range.start, end: offset + range.end });
       for (const range of unit.substringRanges) ranges.push({ start: offset + range.start, end: offset + range.end });
-      for (const range of unit.extraRanges) extra.push({ start: offset + range.start, end: offset + range.end });
+      for (const range of unit.extraRanges) ranges.push({ start: offset + range.start, end: offset + range.end });
       offset += unit.text.length;
     }
     const heldLength = offset;
     const innerText = full.slice(heldLength);
     for (const range of legacyMerged) ranges.push({ start: heldLength + range.start, end: heldLength + range.end });
-    // The pending tail gets the same (s2) trace as a held unit: the previous display run
-    // over the tail with its masking (and the occurrences of the values its masking found
-    // in it) already replaced.
+    // The pending tail gets the same (s2) trace as a held unit (the union of the two runs,
+    // R12-9): the previous display run over the tail with its masking already replaced,
+    // and the same run also seeded with the occurrences of the values its masking found.
     if (innerText !== '') {
-      const initial = [...legacyMerged, ...knownValueRanges(innerText, new Set(tailFinds))];
-      for (const range of splitAtNewlines(innerText, previousDisplayRanges(innerText, initial))) {
+      for (const range of previousDisplayRanges(innerText, legacyMerged)) {
         ranges.push({ start: heldLength + range.start, end: heldLength + range.end });
       }
-    }
-    for (const range of this.pendingExtraRanges) extra.push({ start: heldLength + range.start, end: heldLength + range.end });
-    // The fourth argument's ranges are applied to a preview widened to the word they cut:
-    // cutting one character out of a value the previous preview showed whole would split
-    // it and show its head as a shorter value.
-    for (const range of extra) ranges.push(widenedToWord(full, range));
-    // The new reading over the whole `full` and the prefix ranges are part of every
-    // preview: they are what the commit of this text will hide, and the tool paths print
-    // previews and commits incrementally, so a preview that hides less than the commit
-    // (or other parts) falls out of alignment with it.
-    for (const range of splitAtNewlines(full, newSensitiveTextRanges(full, values.all))) ranges.push(range);
-    ranges.push(...knownValuePrefixSuffixRanges(full, values.all));
-    // The new guard over `full` (a value the new reading still holds open at the end of
-    // the shown text) is applied only when the previous preview cut the tail's head off
-    // (the window path, R10-1): there it decides how far back the window may reach. In a
-    // preview that shows the tail from its head, the guard would hide a head the previous
-    // preview showed and the commit also shows.
-    if (includeWholeFull) {
-      for (const range of pendingNewSensitiveValueRanges(full)) {
-        if (range.end > heldLength) ranges.push({ start: Math.max(range.start, heldLength), end: range.end });
+      if (tailFinds.length > 0) {
+        const seeded = [...legacyMerged, ...knownValueRanges(innerText, new Set(tailFinds))];
+        for (const range of previousDisplayRanges(innerText, seeded)) {
+          ranges.push({ start: heldLength + range.start, end: heldLength + range.end });
+        }
       }
     }
+    for (const range of this.pendingExtraRanges) ranges.push({ start: heldLength + range.start, end: heldLength + range.end });
+    // The new reading over the whole `full` and the prefix ranges are part of every
+    // preview: they are what the commit of this text will hide.
+    for (const range of newSensitiveTextRanges(full, values.all)) ranges.push(range);
+    for (const range of knownValuePrefixSuffixRanges(full, values.all)) ranges.push(range);
+    // The new guard over the whole `full`, held units included, always applied as drawn
+    // (design 7.1, preview step 4): a line inside a value only the new reading keeps open
+    // is not shown before the value closes.
+    for (const range of guard) ranges.push(range);
     return ranges;
   }
-}
 
-/**
- * Widens a range to the whole alphanumeric word it cuts, if it cuts one: a range that
- * starts or ends inside a word is extended to that word's ends.
- */
-function widenedToWord(text: string, range: SensitiveRange): SensitiveRange {
-  const isWord = (at: number): boolean => at >= 0 && at < text.length && /[A-Za-z0-9]/u.test(text[at]!);
-  let { start, end } = range;
-  if (isWord(start - 1) && isWord(start)) while (isWord(start - 1)) start--;
-  if (isWord(end - 1) && isWord(end)) while (isWord(end)) end++;
-  return { start, end };
+  /**
+   * How many leading held units end at or before the last previous boundary the new
+   * reading's guard readings do not straddle (design 7.1, the cut at the cap in rules 3a
+   * and 3b). Zero when every unit boundary is straddled.
+   */
+  private closedHeldUnitCount(): number {
+    const readings = newReadingGuardReadings(this.heldText());
+    let count = 0;
+    let end = 0;
+    for (const [index, unit] of this.held.entries()) {
+      end += unit.text.length;
+      if (!readings.some((range) => range.start < end && end < range.end)) count = index + 1;
+    }
+    return count;
+  }
 }
 
 /**
