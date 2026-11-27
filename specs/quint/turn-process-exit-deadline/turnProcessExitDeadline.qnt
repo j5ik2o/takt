@@ -3,7 +3,8 @@
 // (src/app/daemon-turn/index.ts + src/features/daemonTurn/processRuntime.ts
 //  + src/features/daemon/turnProcessHost.ts).
 //
-// Issue: https://github.com/j5ik2o/takt/issues/141
+// Issue: https://github.com/j5ik2o/takt/issues/141 (exit deadline)
+//        https://github.com/j5ik2o/takt/issues/177 (descendants left in the turn process group)
 // PR:    https://github.com/j5ik2o/takt/pull/166
 //
 // DESIGN picks the child exitAfter implementation:
@@ -11,8 +12,25 @@
 //   "UnrefTimer" - exitAfter sets a TURN_SHUTDOWN_GRACE_MS timer, but calls .unref() on it.
 //   "Fixed"      - 0a8bf2f2b: exitAfter sets a ref'd setTimeout(..., TURN_SHUTDOWN_GRACE_MS)
 //                  that writes 'Turn process cleanup timed out\n' and calls process.exit(1).
+//
+// GROUP_SIGNAL picks what exitAfter sends to the turn process's own group (#177):
+//   "None"        - 0a8bf2f2b: nothing. Descendants in the group stay when the parent is gone.
+//   "TimeoutOnly" - the deadline timer calls process.kill(-process.pid, 'SIGTERM') before exit(1).
+//   "EveryExit"   - both exits in exitAfter (deadline timer and cleanup settled) signal the group
+//                   before process.exit.
+//
+// SWEEP_ZOMBIE_EPERM picks how spawn.ts handles macOS EPERM on a zombie-only process group during
+// the parent's post-exit managed.terminate() sweep (#177 review M3):
+//   "Throw"    - current spawn.ts: only ignores ESRCH and rethrows EPERM to turnProcessHost's onError.
+//   "WaitReap" - fixed spawn.ts: on darwin, polls kill(-pid, 0) through EPERM until launchd reaps
+//                the zombie and ESRCH confirms the group is gone. The model covers only that
+//                ESRCH-within-the-settle-deadline transition; rethrowing the EPERM that persists
+//                for TERMINATION_SETTLE_TIMEOUT_MS (2s) is outside it (managed-spawn.test.ts and
+//                devin-client.test.ts check that branch).
 module turnProcessExitDeadline {
   const DESIGN: str
+  const GROUP_SIGNAL: str
+  const SWEEP_ZOMBIE_EPERM: str
   // true: shutdown() aborts the active turn first (processRuntime.ts:71). false is a mutant that
   // drops the abort, used to check that the model notices a regression there.
   const ABORTS_ON_SHUTDOWN: bool
@@ -30,6 +48,11 @@ module turnProcessExitDeadline {
   type CleanupState = CleanIdle | Cleaning | CleanupDone | CleanupFailed
   type ExitStatus = Running | ExitedZero | ExitedOne | KilledByParent
   type ParentState = ParentAlive | ParentDead
+  // A descendant in the turn process group that did not come from spawnManagedProcess (which
+  // gives every child its own group), for example a child an SDK spawned directly.
+  type Descendant = DescNone | DescHonorsTerm | DescIgnoresTerm
+  // State of the live parent's post-exit managed.terminate() sweep (turnProcessHost.ts:182).
+  type SweepState = SweepIdle | SweepWaitingReap | SweepDone
 
   type State = {
     // Initial run configuration
@@ -38,6 +61,10 @@ module turnProcessExitDeadline {
     stallAt: StallPoint,
     holdsHandle: bool,
     closeFails: bool,
+    desc: Descendant,
+    // The turn process leads its own group (turnProcessHost spawns it with detached: true).
+    // false: something else spawned it without detached, so -process.pid names no group.
+    groupLeader: bool,
 
     // Parent and IPC channel state
     parent: ParentState,
@@ -56,6 +83,14 @@ module turnProcessExitDeadline {
     exitAfterCount: int,
     status: ExitStatus,
     lastAction: str,
+
+    // Turn process group state (#177)
+    descAlive: bool,
+    descZombie: bool,
+    descTermed: bool,
+    groupSignalled: bool,
+    sweep: SweepState,
+    parentSweepError: bool,
   }
 
   var s: State
@@ -73,6 +108,23 @@ module turnProcessExitDeadline {
     // close() either hangs or rejects, not both.
     stall != StallClose or not(closeErr),
   }
+
+  // process.kill(-process.pid, 'SIGTERM'). It reaches the group only when the turn process leads
+  // it; otherwise the kill fails with ESRCH and nothing outside the group is touched.
+  pure def signalOwnGroup(st: State): State = {
+    ...st,
+    groupSignalled: true,
+    descTermed: st.descTermed or (st.groupLeader and st.descAlive),
+  }
+
+  // exitAfter's `cleanup.finally(() => process.exit())`. Every cleanupResolve / cleanupReject in the
+  // real code ends there: the shutdown message path calls process.disconnect(), and 'disconnect'
+  // enters exitAfter. The model takes that path as a shortcut, so the group signal is applied here.
+  pure def signalOnSettledExit(st: State): State =
+    if (GROUP_SIGNAL == "EveryExit") signalOwnGroup(st) else st
+
+  pure def signalOnDeadlineExit(st: State): State =
+    if (GROUP_SIGNAL == "None") st else signalOwnGroup(st)
 
   pure def startShutdownState(st: State): State =
     if (st.cleanup != CleanIdle) st
@@ -142,6 +194,13 @@ module turnProcessExitDeadline {
     { ...updated, lastAction: "ipcDisconnectWhileParentAlive" }
   }
 
+  // The parent can also die while the turn process is still running after IPC already disconnected.
+  pure def canParentCrashAfterDisconnect(st: State): bool =
+    st.status == Running and st.parent == ParentAlive and not(st.ipcConnected)
+
+  pure def applyParentCrashAfterDisconnect(st: State): State =
+    { ...st, parent: ParentDead, parentShutdownAt: -1, lastAction: "parentCrashAfterDisconnect" }
+
   pure def canCleanupResolve(st: State): bool =
     st.status == Running
       and st.cleanup == Cleaning
@@ -151,7 +210,7 @@ module turnProcessExitDeadline {
 
   pure def applyCleanupResolve(st: State): State = {
     {
-      ...st,
+      ...signalOnSettledExit(st),
       cleanup: CleanupDone,
       ipcConnected: false,
       status: ExitedZero,
@@ -168,7 +227,7 @@ module turnProcessExitDeadline {
 
   pure def applyCleanupReject(st: State): State = {
     {
-      ...st,
+      ...signalOnSettledExit(st),
       cleanup: CleanupFailed,
       ipcConnected: false,
       status: ExitedOne,
@@ -201,7 +260,7 @@ module turnProcessExitDeadline {
 
   pure def applyChildDeadlineFire(st: State): State = {
     {
-      ...st,
+      ...signalOnDeadlineExit(st),
       timedOutMsg: true,
       status: ExitedOne,
       lastAction: "childDeadlineFire",
@@ -210,6 +269,7 @@ module turnProcessExitDeadline {
 
   // Discretized: the real parent signals the group GRACE after shutdown, then SIGKILLs it
   // TERMINATION_GRACE_MS (250 ms) later (spawn.ts). The 250 ms is absorbed into the same tick.
+  // The SIGKILL also ends every descendant in the group, including one that ignores SIGTERM.
   pure def canParentSigkill(st: State): bool =
     st.status == Running
       and st.parent == ParentAlive
@@ -220,9 +280,64 @@ module turnProcessExitDeadline {
     {
       ...st,
       status: KilledByParent,
+      descAlive: st.descAlive and not(st.groupLeader),
+      sweep: if (st.groupLeader) SweepDone else st.sweep,
       lastAction: "parentSigkill",
     }
   }
+
+  // A live parent sweeps the group after the leader exits: turnProcessHost.ts `managed.waitForExit()`
+  // then `managed.terminate()` (SIGTERM, 250 ms, SIGKILL to -pid).
+  // On macOS, a group whose remaining members are all unreaped zombies returns EPERM (not ESRCH)
+  // until launchd reaps them.
+  pure def canParentSweepAfterExit(st: State): bool =
+    st.status != Running
+      and st.status != KilledByParent
+      and st.parent == ParentAlive
+      and st.groupLeader
+      and st.sweep == SweepIdle
+      and (st.descAlive or st.descZombie)
+
+  pure def applyParentSweepAfterExit(st: State): State =
+    if (st.descAlive)
+      { ...st, descAlive: false, descZombie: false, sweep: SweepDone, lastAction: "parentSweepAfterExit" }
+    else if (SWEEP_ZOMBIE_EPERM == "Throw")
+      { ...st, sweep: SweepDone, parentSweepError: true, lastAction: "parentSweepAfterExit" }
+    else
+      { ...st, sweep: SweepWaitingReap, lastAction: "parentSweepAfterExit" }
+
+  // Under WaitReap, waitForPosixProcessGroupExit polls through macOS EPERM and completes
+  // cleanly once launchd reaps the zombie and kill(-pid, 0) returns ESRCH.
+  pure def canParentSweepFinishAfterReap(st: State): bool =
+    st.sweep == SweepWaitingReap
+      and st.parent == ParentAlive
+      and not(st.descAlive)
+      and not(st.descZombie)
+
+  pure def applyParentSweepFinishAfterReap(st: State): State =
+    { ...st, sweep: SweepDone, lastAction: "parentSweepFinishAfterReap" }
+
+  // The parent can die after the turn process exited but before its sweep ran (or finished).
+  pure def canParentCrashAfterExit(st: State): bool =
+    st.status != Running and st.parent == ParentAlive
+
+  pure def applyParentCrashAfterExit(st: State): State =
+    { ...st, parent: ParentDead, ipcConnected: false, lastAction: "parentCrashAfterExit" }
+
+  // A descendant that keeps the default SIGTERM action (or handles it and exits) ends after SIGTERM.
+  // On POSIX, an exited child remains an unreaped zombie until init / launchd reaps it.
+  pure def canDescendantExitOnTerm(st: State): bool =
+    st.descAlive and st.descTermed and st.desc == DescHonorsTerm
+
+  pure def applyDescendantExitOnTerm(st: State): State =
+    { ...st, descAlive: false, descZombie: true, lastAction: "descendantExitOnTerm" }
+
+  // init / launchd reaps an exited descendant that was waiting as a zombie.
+  pure def canDescendantReaped(st: State): bool =
+    st.descZombie
+
+  pure def applyDescendantReaped(st: State): State =
+    { ...st, descZombie: false, lastAction: "descendantReaped" }
 
   // Timers fire exactly at their deadline: the clock does not pass a pending deadline.
   // Invariants 1 and 6 rely on this (the event loop is assumed not to be blocked).
@@ -237,14 +352,19 @@ module turnProcessExitDeadline {
 
   // ---------- state machine ----------
 
-  action initWith(initDone: bool, turn: bool, stall: StallPoint, holds: bool, closeErr: bool): bool = all {
+  action initWithGroup(initDone: bool, turn: bool, stall: StallPoint, holds: bool, closeErr: bool,
+                       d: Descendant, leader: bool): bool = all {
     validConfig(initDone, turn, stall, closeErr),
+    // Only a running turn (or business.close()) can have spawned a descendant.
+    d == DescNone or initDone,
     s' = {
       initialized: initDone,
       hasTurn: turn,
       stallAt: stall,
       holdsHandle: holds,
       closeFails: closeErr,
+      desc: d,
+      groupLeader: leader,
       parent: ParentAlive,
       ipcConnected: true,
       parentShutdownAt: -1,
@@ -259,8 +379,18 @@ module turnProcessExitDeadline {
       exitAfterCount: 0,
       status: Running,
       lastAction: "init",
+      descAlive: d != DescNone,
+      descZombie: false,
+      descTermed: false,
+      groupSignalled: false,
+      sweep: SweepIdle,
+      parentSweepError: false,
     },
   }
+
+  // The #141 scenarios: no descendant, and the turn process leads its group as in production.
+  action initWith(initDone: bool, turn: bool, stall: StallPoint, holds: bool, closeErr: bool): bool =
+    initWithGroup(initDone, turn, stall, holds, closeErr, DescNone, true)
 
   action init: bool = {
     nondet initDone = Set(true, false).oneOf()
@@ -268,7 +398,9 @@ module turnProcessExitDeadline {
     nondet stall = Set(StallNone, StallTurn, StallClose, StallInit).oneOf()
     nondet holds = Set(true, false).oneOf()
     nondet closeErr = Set(true, false).oneOf()
-    initWith(initDone, turn, stall, holds, closeErr)
+    nondet d = Set(DescNone, DescHonorsTerm, DescIgnoresTerm).oneOf()
+    nondet leader = Set(true, false).oneOf()
+    initWithGroup(initDone, turn, stall, holds, closeErr, d, leader)
   }
 
   action receiveShutdownMsg: bool = all {
@@ -289,6 +421,11 @@ module turnProcessExitDeadline {
   action ipcDisconnectWhileParentAlive: bool = all {
     canIpcDisconnectWhileParentAlive(s),
     s' = applyIpcDisconnectWhileParentAlive(s, DESIGN),
+  }
+
+  action parentCrashAfterDisconnect: bool = all {
+    canParentCrashAfterDisconnect(s),
+    s' = applyParentCrashAfterDisconnect(s),
   }
 
   action cleanupResolve: bool = all {
@@ -321,10 +458,44 @@ module turnProcessExitDeadline {
     s' = applyTick(s),
   }
 
-  action step: bool = any {
+  action parentSweepAfterExit: bool = all {
+    canParentSweepAfterExit(s),
+    s' = applyParentSweepAfterExit(s),
+  }
+
+  action parentSweepFinishAfterReap: bool = all {
+    canParentSweepFinishAfterReap(s),
+    s' = applyParentSweepFinishAfterReap(s),
+  }
+
+  action parentCrashAfterExit: bool = all {
+    canParentCrashAfterExit(s),
+    s' = applyParentCrashAfterExit(s),
+  }
+
+  action descendantExitOnTerm: bool = all {
+    canDescendantExitOnTerm(s),
+    s' = applyDescendantExitOnTerm(s),
+  }
+
+  action descendantReaped: bool = all {
+    canDescendantReaped(s),
+    s' = applyDescendantReaped(s),
+  }
+
+  // Focused runs for the zombie-reap race (`wParentSweepWaitsZombieReap` is rare under `init` / `step`):
+  // the parent stays alive, and the turn process leads a group with a descendant that honors SIGTERM.
+  action initParentAliveHonoringDescendant: bool = {
+    nondet turn = Set(true, false).oneOf()
+    nondet stall = Set(StallNone, StallTurn, StallClose, StallInit).oneOf()
+    nondet holds = Set(true, false).oneOf()
+    nondet closeErr = Set(true, false).oneOf()
+    initWithGroup(true, turn, stall, holds, closeErr, DescHonorsTerm, true)
+  }
+
+  action stepParentAlive: bool = any {
     receiveShutdownMsg,
     receiveSigterm,
-    parentCrashAndDisconnect,
     ipcDisconnectWhileParentAlive,
     cleanupResolve,
     cleanupReject,
@@ -332,6 +503,29 @@ module turnProcessExitDeadline {
     childDeadlineFire,
     parentSigkill,
     tick,
+    parentSweepAfterExit,
+    parentSweepFinishAfterReap,
+    descendantExitOnTerm,
+    descendantReaped,
+  }
+
+  action step: bool = any {
+    receiveShutdownMsg,
+    receiveSigterm,
+    parentCrashAndDisconnect,
+    ipcDisconnectWhileParentAlive,
+    parentCrashAfterDisconnect,
+    cleanupResolve,
+    cleanupReject,
+    eventLoopDrain,
+    childDeadlineFire,
+    parentSigkill,
+    tick,
+    parentSweepAfterExit,
+    parentSweepFinishAfterReap,
+    parentCrashAfterExit,
+    descendantExitOnTerm,
+    descendantReaped,
   }
 
   // ---------- invariants ----------
@@ -372,6 +566,30 @@ module turnProcessExitDeadline {
   val cleanupAbortsActiveTurn: bool =
     (s.cleanup != CleanIdle and s.hasTurn) implies s.aborted
 
+  // 8. (#177) Once the turn process has exited and no parent is left to sweep its group, every
+  //    descendant still running in that group has been sent SIGTERM. A descendant that ignores
+  //    SIGTERM can still stay (see wOrphanIgnoringDescendantLeft); nothing can SIGKILL it.
+  val orphanedGroupSignalled: bool =
+    (s.status != Running and s.parent == ParentDead and s.groupLeader and s.descAlive)
+      implies s.descTermed
+
+  // 9. (#177, by construction) The turn process signals only the group it leads. When it is not a
+  //    group leader, -process.pid names no group and a descendant in someone else's group is not
+  //    touched.
+  val signalsOnlyOwnGroup: bool =
+    not(s.groupLeader) implies not(s.descTermed)
+
+  // 10. (#177 / macOS) Parent's post-exit managed.terminate() does not report a spurious EPERM
+  //     to turnProcessHost's onError when the group holds only unreaped zombies left by signalOwnGroup().
+  val noSpuriousParentSweepError: bool =
+    not(s.parentSweepError)
+
+  // 11. (#177 / macOS, by construction) A clean parent sweep finishes only after no live or zombie
+  //     member remains in the group (waitForPosixProcessGroupExit observed ESRCH).
+  val parentSweepClearsGroup: bool =
+    (s.sweep == SweepDone and not(s.parentSweepError))
+      implies (not(s.descAlive) and not(s.descZombie))
+
   val safety: bool = all {
     exitsByDeadline,
     noZeroExitWithoutCleanup,
@@ -380,6 +598,10 @@ module turnProcessExitDeadline {
     failedCleanupNeverExitsZero,
     parentAliveBoundedShutdown,
     cleanupAbortsActiveTurn,
+    orphanedGroupSignalled,
+    signalsOnlyOwnGroup,
+    noSpuriousParentSweepError,
+    parentSweepClearsGroup,
   }
 
   // ---------- witnesses ----------
@@ -420,21 +642,69 @@ module turnProcessExitDeadline {
 
   val wShutdownMsgThenParentCrashTimeout: bool =
     s.status == ExitedOne and s.timedOutMsg and s.parent == ParentDead and s.inExitAfter
+
+  // #177 witnesses
+  // `sweep == SweepIdle`: the parent never swept the group, so the descendant ended on the turn process's
+  // own SIGTERM (`descendantExitOnTerm`), not on a sweep the parent ran before it crashed.
+  val wOrphanDescendantGoneAfterTimeout: bool =
+    s.timedOutMsg and s.parent == ParentDead and s.desc == DescHonorsTerm and s.groupLeader and not(s.descAlive)
+      and s.sweep == SweepIdle
+
+  val wOrphanDescendantGoneAfterFailedCleanup: bool =
+    s.cleanup == CleanupFailed and not(s.timedOutMsg) and s.parent == ParentDead
+      and s.desc == DescHonorsTerm and s.groupLeader and not(s.descAlive) and s.sweep == SweepIdle
+
+  // Known residual: a descendant that ignores SIGTERM stays once the parent is gone.
+  val wOrphanIgnoringDescendantLeft: bool =
+    s.status != Running and s.parent == ParentDead and s.desc == DescIgnoresTerm and s.groupLeader
+      and s.descAlive and s.descTermed
+
+  val wParentSweepAfterExit: bool =
+    s.lastAction == "parentSweepAfterExit"
+
+  val wParentCrashAfterExitSignalled: bool =
+    s.lastAction == "parentCrashAfterExit" and s.groupLeader and s.descAlive and s.descTermed
+
+  val wNonLeaderDescendantUntouched: bool =
+    s.status != Running and not(s.groupLeader) and s.groupSignalled and s.descAlive and not(s.descTermed)
+
+  val wParentSweepWaitsZombieReap: bool =
+    s.lastAction == "parentSweepFinishAfterReap" and s.sweep == SweepDone and not(s.parentSweepError)
+
+  val wParentCrashAfterDisconnect: bool =
+    s.lastAction == "parentCrashAfterDisconnect"
 }
 
 module before {
-  import turnProcessExitDeadline(DESIGN = "Before", ABORTS_ON_SHUTDOWN = true).*
+  import turnProcessExitDeadline(DESIGN = "Before", GROUP_SIGNAL = "None", SWEEP_ZOMBIE_EPERM = "Throw", ABORTS_ON_SHUTDOWN = true).*
 }
 
 module unrefTimer {
-  import turnProcessExitDeadline(DESIGN = "UnrefTimer", ABORTS_ON_SHUTDOWN = true).*
+  import turnProcessExitDeadline(DESIGN = "UnrefTimer", GROUP_SIGNAL = "None", SWEEP_ZOMBIE_EPERM = "Throw", ABORTS_ON_SHUTDOWN = true).*
 }
 
+// The code as of #141 (0a8bf2f2b): the deadline exists, but nothing is sent to the group.
+module noGroupSignal {
+  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "None", SWEEP_ZOMBIE_EPERM = "Throw", ABORTS_ON_SHUTDOWN = true).*
+}
+
+// The proposal in #177 as written: only the deadline timer signals the group.
+module timeoutOnlyGroupSignal {
+  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "TimeoutOnly", SWEEP_ZOMBIE_EPERM = "Throw", ABORTS_ON_SHUTDOWN = true).*
+}
+
+// Pre-review #177 design (06c8b3f1f): signals on every exit, but spawn.ts still throws on macOS
+// zombie-only group EPERM during the parent's post-exit managed.terminate() sweep.
+module everyExitWithoutEpermFix {
+  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "EveryExit", SWEEP_ZOMBIE_EPERM = "Throw", ABORTS_ON_SHUTDOWN = true).*
+}
+
+// Target: #141 deadline + group SIGTERM before every exit in exitAfter + macOS zombie-group EPERM wait (#177).
 module fixed {
-  import turnProcessExitDeadline(DESIGN = "Fixed", ABORTS_ON_SHUTDOWN = true).*
+  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "EveryExit", SWEEP_ZOMBIE_EPERM = "WaitReap", ABORTS_ON_SHUTDOWN = true).*
 }
 
 // Mutant: the fixed exitAfter, but shutdown() forgets to abort the active turn.
 module noAbort {
-  import turnProcessExitDeadline(DESIGN = "Fixed", ABORTS_ON_SHUTDOWN = false).*
+  import turnProcessExitDeadline(DESIGN = "Fixed", GROUP_SIGNAL = "EveryExit", SWEEP_ZOMBIE_EPERM = "WaitReap", ABORTS_ON_SHUTDOWN = false).*
 }
