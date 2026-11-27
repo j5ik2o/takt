@@ -136,7 +136,13 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
    */
   private async countsAsWork(repositoryDirectory: string, completion: PendingGoalTaskCompletion): Promise<boolean> {
     if (completion.deletion === undefined) return true;
-    const owner = await inspectDeletionOwner(completion.deletion);
+    let owner: Awaited<ReturnType<typeof inspectDeletionOwner>>;
+    try {
+      owner = await inspectDeletionOwner(completion.deletion);
+    } catch (error) {
+      await this.pendingCompletionReports.invalid(unknownDeletionKey(repositoryDirectory, completion.name), error);
+      return false;
+    }
     if (owner === 'unknown') {
       await this.pendingCompletionReports.invalid(unknownDeletionKey(repositoryDirectory, completion.name),
         new Error(`Pending goal task completion for task ${completion.name} in ${join(repositoryDirectory, '.takt', 'tasks.yaml')} is guarded by a deletion whose owner cannot be checked; leaving it for the next daemon start.`));
@@ -151,10 +157,19 @@ export class FileDaemonWatchSource implements DaemonWatchSource {
       const completions = await readPendingGoalTaskCompletions(project.repositoryDirectory, this.pendingCompletionReports);
       const publishable: PendingGoalTaskCompletion[] = [];
       for (const completion of completions) {
-        if (completion.deletion !== undefined && (await inspectDeletionOwner(completion.deletion)) === 'unknown') {
-          await this.pendingCompletionReports.invalid(unknownDeletionKey(project.repositoryDirectory, completion.name),
-            new Error(`Pending goal task completion for task ${completion.name} in ${join(project.repositoryDirectory, '.takt', 'tasks.yaml')} is guarded by a deletion whose owner cannot be checked; leaving it for the next daemon start.`));
-          continue;
+        if (completion.deletion !== undefined) {
+          let owner: Awaited<ReturnType<typeof inspectDeletionOwner>>;
+          try {
+            owner = await inspectDeletionOwner(completion.deletion);
+          } catch (error) {
+            await this.pendingCompletionReports.invalid(unknownDeletionKey(project.repositoryDirectory, completion.name), error);
+            continue;
+          }
+          if (owner === 'unknown') {
+            await this.pendingCompletionReports.invalid(unknownDeletionKey(project.repositoryDirectory, completion.name),
+              new Error(`Pending goal task completion for task ${completion.name} in ${join(project.repositoryDirectory, '.takt', 'tasks.yaml')} is guarded by a deletion whose owner cannot be checked; leaving it for the next daemon start.`));
+            continue;
+          }
         }
         publishable.push(completion);
       }
