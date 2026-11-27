@@ -57,7 +57,7 @@ export class TaskClaimLockAcquisitionError extends Error {
     options?: ErrorOptions & { lock?: TaskClaimLock },
   ) {
     super(message, options);
-    this.lock = 'tasks.yaml';
+    this.lock = options?.lock ?? 'tasks.yaml';
   }
 }
 
