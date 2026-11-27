@@ -167,7 +167,7 @@ macOS（XNU `bsd/kern/kern_sig.c` の `killpg1`）では、プロセスグルー
   - `SIGTERM` が `darwin` の `EPERM` を返したときは、直ちに `waitForPosixProcessGroupExit(pid)` で回収を待つ。期限内に `ESRCH` が確認できれば「生存メンバーへ送らず自然に消滅した」として `false` を返す（`waitCommandProcess.ts:34` の自然終了判定も維持される）。期限まで `EPERM` が続けば `EPERM` を投げる。
   - `SIGTERM` が成功（`true`）したあとに `SIGKILL` が `darwin` の `EPERM` を返したときは、その `EPERM` を保留して `waitForPosixProcessGroupExit(pid)` を待ち、`ESRCH` でグループ消滅を確認できれば保留した `EPERM` を消して `true` を返す。期限まで `EPERM` が続けば `EPERM` を投げる。
   - `EACCES` や非 `darwin` の `EPERM` は従来どおり即座に失敗させる。
-  - Linux 等の他 POSIX では、未回収ゾンビだけのグループへの `kill(-pgid, sig)` が回収前は成功する（`ESRCH` にならない）ため、`terminatePosixProcessTree` は SIGTERM/SIGKILL の成功として `true` を返す。回収後は SIGTERM が `ESRCH` を返して `false` になる。
+  - Linux 等の他 POSIX では、未回収ゾンビだけのグループへの `kill(-pgid, sig)` が回収前は成功する（`ESRCH` にならない）ため、SIGTERM/SIGKILL そのものは失敗しない。ただし常に `true` を返すわけではない。`waitForPosixProcessGroupExit(pid)` が `TERMINATION_SETTLE_TIMEOUT_MS`（2 秒）以内にグループの消滅（`ESRCH`）を確認できれば `true` を返し、期限まで残っていれば（回収されないゾンビや SIGKILL で消えない生存メンバー）`Process group <pid> did not terminate` を投げる。回収後は SIGTERM が `ESRCH` を返して `false` になる。
 - `turnProcessHost.ts:182-183` は変えない。`spawn.ts` が一過性のゾンビ由来 `EPERM` を吸収し、本物の権限エラーだけが `input.onError(error)` へ伝わる契約を保つ。
 
 ### 3. 残存プロセス検査の拡張（`scripts/leftover-turn-processes.mjs`・`scripts/run-heavy-it-parallel.mjs`）
@@ -251,7 +251,7 @@ macOS（XNU `bsd/kern/kern_sig.c` の `killpg1`）では、プロセスグルー
 | 別のグループ（`setsid`・`detached: true` の子孫、`spawnManagedProcess` の子） | 届かない。`spawnManagedProcess` の子は `close()` が止める（`close()` や `initialization` が止まった場合、`close()` 後に新規起動された場合は範囲の外） | 範囲の外として明記 |
 | PID の再利用 | 送るのは自分が生きている間で、自分の PID はほかのプロセスに使われない。グループを率いていないのに同じ ID のグループが残っている状況は、そのグループの元の主が同じ PID を持っていて、それが再利用されたことを意味する。Linux と macOS は、グループ ID として使われている番号をプロセスに割り当てない（OS の前提） | 前提として明記 |
 | 権限（setuid された子孫など、送れないメンバーがいる） | Linux でも macOS（XNU `killpg1` は送信可能なメンバーへ順に配送して `nfound` を加算し、`nfound == 0` のときだけ `EPERM`）でも、`signalOwnGroup()` では自分自身が送信可能メンバーなので権限のある子孫へは届き、届かないのは euid の違う子孫だけ（範囲の外。macOS の `kill(2)` man ページの文言より実挙動が緩い）。親側の `spawn.ts` では送信不能な生存メンバーだけが残ると 2 秒間 `EPERM` が続くため、本物の `EPERM` として報告される | XNU 実挙動・`managed-spawn.test.ts`・前提として明記 |
-| macOS と Linux の違い | 違いは「残存メンバーが未回収ゾンビだけのグループへの `kill(-pgid, sig)`（`sig=0` 含む）の結果」だけ。macOS は回収まで `EPERM`、Linux は回収前は送信が成功し（`ESRCH` にならない）、回収後に `ESRCH` を返す。そのため `terminatePosixProcessTree` は、Linux ではゾンビだけのグループへの SIGTERM/SIGKILL が成功して `true` を返し（回収後は SIGTERM が `ESRCH` で `false`）、macOS は `darwin` 限定で `EPERM` を `ESRCH` までポーリングして吸収する。`kill(-pgid)` のグループ配送・`ESRCH`・euid 違いに対する実挙動は共通 | Quint (`everyExitWithoutEpermFix`, `fixed`)・CI（Linux）・手元（macOS）で IT |
+| macOS と Linux の違い | 違いは「残存メンバーが未回収ゾンビだけのグループへの `kill(-pgid, sig)`（`sig=0` 含む）の結果」だけ。macOS は回収まで `EPERM`、Linux は回収前は送信が成功し（`ESRCH` にならない）、回収後に `ESRCH` を返す。そのため `terminatePosixProcessTree` の結果も分かれる。Linux は SIGTERM/SIGKILL が失敗せず、`waitForPosixProcessGroupExit` が 2 秒以内にグループの消滅を確認できれば `true`、期限まで残れば `Process group <pid> did not terminate` を投げる（回収後は SIGTERM が `ESRCH` で `false`）。macOS は `darwin` 限定で `EPERM` を `ESRCH` までポーリングして吸収し、期限内に消えれば `true`（SIGTERM の `EPERM` から始まった場合は `false`）、期限まで `EPERM` が続けばその `EPERM` を投げる。`kill(-pgid)` のグループ配送・`ESRCH`・euid 違いに対する実挙動は共通 | Quint (`everyExitWithoutEpermFix`, `fixed`)・CI（Linux）・手元（macOS）で IT |
 | イベントループが同期処理で塞がる | 期限のタイマーと同じく、送信も遅れる（前提は前半と同じ） | 前提として明記 |
 | Windows | 何もしない | コード確認 |
 
