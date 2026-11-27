@@ -74,6 +74,14 @@ describe('sensitiveText', () => {
     });
   });
 
+  it('566-keeps-the-host-when-the-streamed-URL-userinfo-hides-an-embedded-assignment', () => {
+    const text = 'https://alice:@LEFT;token=RIGHT@host';
+    const redactor = createSensitiveTextStreamRedactor();
+    const streamed = redactor.write(text, {}) + redactor.flush({});
+
+    expect(streamed).toBe(sanitizeSensitiveText(text));
+  });
+
   describe('T7', () => {
     const text = 'curl https://u:p@host;TOKEN=left@RIGHT_SECRET';
     const expected = 'curl https://[REDACTED]@host;TOKEN=[REDACTED]';
