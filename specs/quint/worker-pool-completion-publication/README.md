@@ -7,6 +7,7 @@
 | ファイル | 内容 |
 |---|---|
 | `workerPoolCompletionPublication.qnt` | 状態、遷移、不変条件、witness。末尾の `current`（595d6a826）と `design`（設計のあと）が `DESIGN` を選ぶ。 |
+| `workerPoolRemoteHookLease.qnt` | I7。遠隔の実行 2 つ、daemon の列、heartbeat と renew、60 秒の lease、点検、host への要求の 30 秒の時間切れ。`hookBeforeReply` と `hookAfterReply` が `DESIGN` を選ぶ。 |
 
 quint は 0.32.0。流したのは `quint typecheck` と `quint run`（`quint verify` はしていない）。
 
@@ -29,7 +30,9 @@ cd specs/quint/worker-pool-completion-publication
 | `save(k)` | 失敗の記録を保存する。`k` は読めない内容、claim の setup 失敗、遠隔の終わりのどれか。印は同じ書き込みで付く。 |
 | `publish` / `publishFails` | runtime の `saveManagerEvent` が通る / ENOSPC で投げる。 |
 | `clearMark` / `clearFails` | 通知のあとで印を消す / 消すのに失敗して警告する。 |
-| `finishAttempt(lost)` | 終了フックを呼ぶ（`lost` ならフックを失って警告する）。`design` は遠隔の終わりでも呼ぶ。runtime が返る。 |
+| `returnReply` | runtime が返事を返す。フックは始めるだけで待たない。 |
+| `runScheduledHook(lost)` | 返事のあとにフックが走る（`lost` ならフックを失って警告する）。`design` は遠隔の終わりでも呼ぶ。 |
+| `closeRuntime` | フックが残っているうちに runtime を閉じる。`close()` はフックを待つ。 |
 | `repeatRemoteFinish` | 遠隔の worker が `finish` を送り直す。記録はもう `running` でないので、何も保存せず、フックも呼ばない。 |
 | `kill` | 保存のあと、runtime のプロセスが死ぬ。 |
 | `daemonResend` | daemon が印のある記録を受信箱へ書き、印を消す。 |
@@ -41,7 +44,8 @@ cd specs/quint/worker-pool-completion-publication
 |---|---|
 | `deliveredOrMarked`（I1） | 保存した完了は届いたか、印が残っている。 |
 | `notificationFailureStaysInside`（I2） | 通知の失敗でプロジェクトの host が閉じない。 |
-| `localSaveCallsHook`（I3） | 保存（ローカルも遠隔も）のあとで runtime が返るとき、フックが走ったか警告が出ている。 |
+| `localSaveCallsHook`（I3） | 保存（ローカルも遠隔も）のあと、返事のあとのフックが終わったとき（または `close()` が待ち終えたとき）、フックが走ったか警告が出ている。 |
 | `publishedClearsMark`（I4） | runtime が通知したあと、印を消すのに失敗した場合を除いて印は残らない。 |
 | `unpublishedIsWarned`（I5） | 通知できずに返るときは警告が出ている。 |
 | `hookAtMostOnce`（I6） | フックは 1 回の試みにつき 1 回まで。`finish` の送り直しでも増えない。 |
+| `noLeaseLossWhileConnected`・`hostStaysOpen`（I7、`workerPoolRemoteHookLease.qnt`） | フックが長くても、ほかの遠隔の実行の lease が切れず、host への要求も時間切れにならない。 |

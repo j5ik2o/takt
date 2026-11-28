@@ -22,7 +22,11 @@
 //               (src/features/tasks/execute/claimTasks.ts:100-112), catches and warns, and then calls
 //               runTaskFinishHooksForStates for every save, the remote one included: the remote
 //               child runs executeWorkflowForRun (remoteTaskProcess.ts:75) and never calls the hook,
-//               so without the daemon's call nobody would.
+//               so without the daemon's call nobody would. The hook runs after the runtime has
+//               returned its reply, never inside it: a reply that waits for the hook would hold the
+//               project host's request past its 30 s timeout (projectHost.ts:72-74) and the daemon's
+//               remote tail past the other leases (workerPoolRemoteHookLease.qnt). The runtime's
+//               close() waits for the hooks still running.
 //
 // A remote worker may send its finish again (a retry after a lost reply). The repeated request finds
 // the record no longer running (remoteTaskLifecycle.ts:93, :123) and saves nothing, so it must not
@@ -39,11 +43,12 @@ module workerPoolCompletionPublication {
   //   Idle       — nothing saved yet.
   //   Saved      — the terminal record is in tasks.yaml; the runtime has not published yet.
   //   Published  — saveManagerEvent returned; the mark may still need clearing.
-  //   HookDue    — publication handled (sent, or failed and warned); the hook is next.
-  //   Done       — the runtime has returned from this attempt.
+  //   HookDue    — publication handled (sent, or failed and warned); the reply is next.
+  //   Returned   — the runtime has returned its reply; the hook is scheduled and still to run.
+  //   Done       — the hook has run (or was reported lost) after the reply, or close() waited for it.
   //   Escaped    — an exception left the runtime (Current only); the project host is closed.
   //   Killed     — the runtime process died after the save.
-  type Phase = Idle | Saved | Published | HookDue | Done | Escaped | Killed
+  type Phase = Idle | Saved | Published | HookDue | Returned | Done | Escaped | Killed
   type Hook = HookNotCalled | HookCalled | HookLostWarned
 
   pure val KINDS: Set[Kind] = Set(Unreadable, ClaimFailed, Remote)
@@ -71,6 +76,8 @@ module workerPoolCompletionPublication {
   pure def callsHook(k: Kind): bool = DESIGN == "Design"
   // A repeated remote finish saves nothing and calls nothing.
   pure def repeatCallsHook: bool = false
+  // close() waits for the hooks scheduled after a reply.
+  pure def closeAwaitsHooks: bool = true
   pure def clearsMark: bool = DESIGN == "Design"
   pure def catchesNotification: bool = DESIGN == "Design"
 
@@ -130,21 +137,42 @@ module workerPoolCompletionPublication {
     lastAction' = "clearFails",
   }
 
-  // runTaskFinishHooksForStates for the local saves. It never throws: the hook runs, or a lost-hook
-  // warning names the task (taskFinishHook.ts:281-310). `lost` picks which.
-  action finishAttempt(lost: bool): bool = all {
+  // The runtime returns its reply. The hook is scheduled, not awaited.
+  action returnReply: bool = all {
     phase == HookDue,
+    phase' = Returned,
+    kind' = kind, mark' = mark, delivered' = delivered, publishedByRuntime' = publishedByRuntime,
+    notifyWarned' = notifyWarned, clearWarned' = clearWarned, hook' = hook, hookCalls' = hookCalls,
+    full' = full, projectClosed' = projectClosed,
+    lastAction' = "returnReply",
+  }
+
+  // The scheduled hook runs: runTaskFinishHooksForStates never throws, the hook runs or a lost-hook
+  // warning names the task (taskFinishHook.ts:281-310). `lost` picks which.
+  action runScheduledHook(lost: bool): bool = all {
+    phase == Returned,
     phase' = Done,
     hook' = if (not(callsHook(kind))) hook else if (lost) HookLostWarned else HookCalled,
     hookCalls' = if (callsHook(kind)) hookCalls + 1 else hookCalls,
     kind' = kind, mark' = mark, delivered' = delivered, publishedByRuntime' = publishedByRuntime,
     notifyWarned' = notifyWarned, clearWarned' = clearWarned, full' = full, projectClosed' = projectClosed,
-    lastAction' = "finishAttempt",
+    lastAction' = "runScheduledHook",
+  }
+
+  // The runtime closes while the hook is still scheduled. close() waits for it, so it runs.
+  action closeRuntime: bool = all {
+    phase == Returned,
+    phase' = Done,
+    hook' = if (callsHook(kind) and closeAwaitsHooks) HookCalled else hook,
+    hookCalls' = if (callsHook(kind) and closeAwaitsHooks) hookCalls + 1 else hookCalls,
+    kind' = kind, mark' = mark, delivered' = delivered, publishedByRuntime' = publishedByRuntime,
+    notifyWarned' = notifyWarned, clearWarned' = clearWarned, full' = full, projectClosed' = projectClosed,
+    lastAction' = "closeRuntime",
   }
 
   // The runtime process dies after the save and before it returns.
   action kill: bool = all {
-    phase == Saved or phase == Published or phase == HookDue,
+    phase == Saved or phase == Published or phase == HookDue or phase == Returned,
     phase' = Killed,
     kind' = kind, mark' = mark, delivered' = delivered, publishedByRuntime' = publishedByRuntime,
     notifyWarned' = notifyWarned, clearWarned' = clearWarned, hook' = hook, hookCalls' = hookCalls, full' = full,
@@ -155,7 +183,7 @@ module workerPoolCompletionPublication {
   // The remote worker sends its finish again after the attempt is done. The record is no longer
   // running, so nothing is saved or published.
   action repeatRemoteFinish: bool = all {
-    phase == Done, kind == Remote,
+    (phase == Done or phase == Returned), kind == Remote,
     hookCalls' = if (repeatCallsHook) hookCalls + 1 else hookCalls,
     kind' = kind, phase' = phase, mark' = mark, delivered' = delivered,
     publishedByRuntime' = publishedByRuntime, notifyWarned' = notifyWarned, clearWarned' = clearWarned,
@@ -192,7 +220,8 @@ module workerPoolCompletionPublication {
     nondet k = KINDS.oneOf()
     nondet lost = Set(true, false).oneOf()
     any {
-      save(k), publish, publishFails, clearMark, clearFails, finishAttempt(lost), kill,
+      save(k), publish, publishFails, clearMark, clearFails, returnReply, runScheduledHook(lost),
+      closeRuntime, kill,
       repeatRemoteFinish, daemonResend, diskFills, diskFrees,
     }
   }
@@ -206,8 +235,8 @@ module workerPoolCompletionPublication {
   // the tasks it runs are not aborted.
   val notificationFailureStaysInside: bool = not(projectClosed)
 
-  // I3. When the runtime returns from a save (local or remote), the finish hook ran or a warning
-  // named it.
+  // I3. Once the attempt is done (the scheduled hook ran, or close() waited for it), the finish hook
+  // ran or a warning named it, for local and remote saves alike. The reply itself comes first.
   val localSaveCallsHook: bool =
     phase == Done implies hook != HookNotCalled
 
@@ -242,6 +271,8 @@ module workerPoolCompletionPublication {
   val wResendAfterKill: bool = phase == Killed and delivered and not(publishedByRuntime)
   val wResendAfterFailure: bool = phase == Done and notifyWarned and delivered
   val wDone: bool = phase == Done
+  val wReturned: bool = phase == Returned
+  val wClosedWithHook: bool = lastAction == "closeRuntime" and hook == HookCalled
   val wRemoteHook: bool = kind == Remote and hook == HookCalled
   val wRepeatRemoteFinish: bool = lastAction == "repeatRemoteFinish"
 }
