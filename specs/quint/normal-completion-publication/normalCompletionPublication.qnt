@@ -251,6 +251,9 @@ module normalCompletionPublication {
   // J3 (worker pool only; takt run has no host): a notification failure never closes the project host.
   val hostStaysOpen: bool = not(s.hostClosed)
   // J4: after the caller published and neither the clear nor the read-back failed (both warn), no mark is left.
+  // clearWarned stands for both warnings. Another writer that rewrites the record between the read-back and the
+  // clear (the PR re-creation, completePublishedTask) is not modelled: the clear then matches nothing and stays
+  // silent, and the daemon resends the record with the same eventId (see the design, Quint (d)).
   val publishedClearsMark: bool =
     (s.phase == Returned and s.publishedByCaller and not(s.clearWarned)) implies not(s.mark)
   // J5: a completion the caller should have published and did not is warned.
@@ -267,11 +270,16 @@ module normalCompletionPublication {
     and unpublishedIsWarned and legacyNotResent and noNewSends and oneEventPerAttempt
 
   // Liveness: under weak fairness of the caller's own moves, a caller that has saved always leaves the attempt.
+  // It holds because callerStep is enabled in every in-attempt state (no state leaves the caller stuck);
+  // that is all it shows. TLC reads it as WF_s(callerStep) => [](inAttempt => <>settled).
   temporal callerSettles: bool =
     weakFair(callerStep, s) implies always(inAttempt(s.phase) implies eventually(settled(s.phase)))
-  // The same property without fairness. It must fail (the caller may stutter at Saved forever), which shows
-  // the check above is not vacuous.
+  // Without fairness it fails, and its counterexample is plain stuttering at an in-attempt state.
   temporal callerSettlesUnfair: bool = always(inAttempt(s.phase) implies eventually(settled(s.phase)))
+  // With fairness on the whole step only (no stuttering forever), it still fails: the disk fills and frees
+  // forever while the caller never moves. So the fairness of the caller's own moves is what callerSettles needs.
+  temporal callerSettlesSystemFair: bool =
+    weakFair(step, s) implies always(inAttempt(s.phase) implies eventually(settled(s.phase)))
 
   // Witnesses of actions (each should be reached in some trace).
   val wSave: bool = s.lastAction == "save"
@@ -298,6 +306,9 @@ module normalCompletionPublication {
   val wJ7Instruct: bool = s.caller == Instruct and s.phase == Returned and recordRunSlug(s.shape)
   val wJ7Paused: bool = s.shape == PausedBeforeWorkflow and settled(s.phase) and publishes(s.caller)
   val wJ8Overlap: bool = s.publishedByCaller and s.daemonSent
+  // The paused attempt whose read-back fails (H1 of the second adversarial read): the caller sends its RunId,
+  // the record has no mark, so the daemon never sends an ExecId.
+  val wPausedReadBackFails: bool = s.shape == PausedBeforeWorkflow and s.lastAction == "readBackFails"
   val wPausedLost: bool = s.shape == PausedBeforeWorkflow and s.phase == Returned and not(delivered) and s.notifyWarned
   val wResendAfterFailure: bool = s.lastAction == "daemonResend" and s.notifyWarned
   val wResendAfterKill: bool = s.lastAction == "daemonResend" and s.phase == Killed

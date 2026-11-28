@@ -18,15 +18,16 @@ quint typecheck normalCompletionPublication.qnt
 # 全部の状態を TLC で調べる（版ごと・不変条件ごと。同時に流すと TLC の作業ファイルがぶつかるので 1 本ずつ）
 quint verify normalCompletionPublication.qnt --main sameWrite --backend tlc --invariant safety
 quint verify normalCompletionPublication.qnt --main brokenMarkOnSchema --backend tlc --invariant oneEventPerAttempt
-# 呼び出し側が試みから抜けること（弱い公平性のもと）。公平性を外した版は違反する
+# 呼び出し側が試みから抜けること（呼び出し側の遷移に弱い公平性）。公平性を外した版と、遷移全体にだけ公平性を置いた版は違反する
 quint verify normalCompletionPublication.qnt --main sameWrite --backend tlc --temporal callerSettles
-quint verify normalCompletionPublication.qnt --main sameWrite --backend tlc --temporal callerSettlesUnfair
+quint verify normalCompletionPublication.qnt --main sameWrite --backend tlc --temporal callerSettlesUnfair        # 反例は止まり続けること
+quint verify normalCompletionPublication.qnt --main sameWrite --backend tlc --temporal callerSettlesSystemFair   # 反例はディスクが埋まって空くことの繰り返し
 # 乱択と witness
 quint run normalCompletionPublication.qnt --main sameWrite --max-samples 50000 --max-steps 16 --seed 0x2a --invariant safety
 quint run normalCompletionPublication.qnt --main sameWrite --max-samples 20000 --max-steps 16 --seed 0x2a --invariant safety \
   --witnesses wSave wSkip wInstruct wReadBackFails wPublish wPublishFails wClear wClearFails wKill wResend \
   wJ1OnlyMark wJ1Delivered wJ2AfterFailure wJ3PoolFailure wJ3PoolNoResult wJ4Cleared wJ5Warned wJ7Instruct wJ7Paused wJ8Overlap \
-  wPausedLost wResendAfterFailure wResendAfterKill wPoolReturnedAfterFailure
+  wPausedReadBackFails wPausedLost wResendAfterFailure wResendAfterKill wPoolReturnedAfterFailure
 ```
 
 結果の表（どの版がどの不変条件に違反するか、witness の数）は設計の文書の「Quint」の節にある。quint 0.32.0、TLC は quint の同梱のもの。`quint verify` が作る `_apalache-out/` はコミットしない。
@@ -35,6 +36,7 @@ quint run normalCompletionPublication.qnt --main sameWrite --max-samples 20000 -
 
 - 2 回目以降の試み（再キュー・再 claim で印が外れる展開）と、別の試みの記録との取り違え（設計では読み直しを `execution_id` で絞ってふさぐ）。
 - 2 つのタスクの同時の保存。
+- 読み直しから印の消し込みまでの間に、ほかの書き手（PR の作り直し）が記録を書き換える形。消し込みは警告なしで何もせず、印は daemon が同じ `eventId` で出し直して消す（設計の J4 と Quint の（d））。
 - daemon が印を消し切ること（#170 のモデル `goal-task-completion-publication/` の範囲）。
 - 保存そのものの失敗。
 
