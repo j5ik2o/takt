@@ -9,7 +9,7 @@
 - `sameWrite`：案 A（この設計）。頼まれた保存と同じ書き込みで印を付け、通知の成功で消し、失敗は警告する。
 - `current`：e626fcce3。印なし、通知は `try` なし。
 - `markOnFailure`：案 B。通知に失敗したときだけ 2 回目の書き込みで印を付ける。
-- `broken*`：案 A を 1 か所ずつ壊した版（`NoClear`、`NoCatch`、`NoWarn`、`ResendUnmarked`、`MarkOnSchema`、`MarkUnrequested`、`SilentReadBack`、`CallerForgetsRequest`）。
+- `broken*`：案 A を 1 か所ずつ壊した版（`NoClear`、`NoCatch`、`NoWarn`、`ResendUnmarked`、`MarkOnSchema`、`MarkUnrequested`、`SilentReadBack`、`CallerForgetsRequest`、`PoolThrowsWithoutResult`）。
 
 ## 流し方
 
@@ -25,7 +25,7 @@ quint verify normalCompletionPublication.qnt --main sameWrite --backend tlc --te
 quint run normalCompletionPublication.qnt --main sameWrite --max-samples 50000 --max-steps 16 --seed 0x2a --invariant safety
 quint run normalCompletionPublication.qnt --main sameWrite --max-samples 20000 --max-steps 16 --seed 0x2a --invariant safety \
   --witnesses wSave wSkip wInstruct wReadBackFails wPublish wPublishFails wClear wClearFails wKill wResend \
-  wJ1OnlyMark wJ1Delivered wJ2AfterFailure wJ3PoolFailure wJ4Cleared wJ5Warned wJ7Instruct wJ7Paused wJ8Overlap \
+  wJ1OnlyMark wJ1Delivered wJ2AfterFailure wJ3PoolFailure wJ3PoolNoResult wJ4Cleared wJ5Warned wJ7Instruct wJ7Paused wJ8Overlap \
   wPausedLost wResendAfterFailure wResendAfterKill wPoolReturnedAfterFailure
 ```
 

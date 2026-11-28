@@ -53,7 +53,7 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 - `completeTask`・`failTask`・`prFailTask`（`taskLifecycleService.ts`）と `exceedTask`（`taskExceedService.ts`）が `store.update` の中で作る終端の記録を、この関数に通す（`requested` は `result.completionPublicationPending` か `options.completionPublicationPending`）。保存と同じ書き込みで印が付くので、保存のあとでプロセスが死んでも印は残る。
 - 記録の `run_slug` を条件に入れるのは、同じ試みの知らせを受信箱で 1 つにまとめるためである（元帥の決め「同じ知らせが 2 回届いても二重に積まない」、J8）。受信箱の `eventId` は、`runSlug` があれば `(ゴール, タスク, 'run', runSlug)`、無ければ `(ゴール, タスク, 'execution', executionId)` から決まる（`inbox.ts:49-53`）。呼び出し側は結果の `runSlug` で送り、daemon は記録の身元で送る（`pendingGoalTaskCompletions.ts:49-54`）。記録に `run_slug` があれば両者の `eventId` は同じになる。
 - `run_slug` の無い記録が実際に出るのは、`GoalPausedError` でワークフローの前に止まった試みである。`taskExecution.ts:462-465` が `taskForPersistence.runSlug` を外し、`failTask` が `run_slug: result.task.runSlug`（`taskLifecycleService.ts:654`）で記録の `run_slug` を消す。ところが返す結果には、`:217` で付けた `setup-…` の `runSlug` が残る（`:479`）。e626fcce3 の使い捨ての木で 1 回流すと、記録は `run_slug` が無く `execution_id` と `completion` を持ち、結果は `runSlug: setup-…` を持ち、`fillSlots` と同じ判定で `saveManagerEvent` が 1 回呼ばれて受信箱に完了が 1 件入った。つまり今の呼び出し側はこの完了も通知している。
-- この記録に `isValidCompletionPublicationPending`（`taskRecordSchemas.ts:19-26`、`execution_id` だけでも有効）に合わせて印を付けると、呼び出し側の `runSlug` の知らせと daemon の `executionId` の知らせで `eventId` がずれ、manager に 2 回届く（Quint の `brokenMarkOnSchema` が J8 に違反する）。そこで印は付けない。代わりに、この試みの通知が失敗すると、今と同じく知らせは失われる（警告は出て、run の数え方は正しくなる）。この扱いを推す理由と別の案は、上げる点 6 に書いた。
+- この記録に `isValidCompletionPublicationPending`（`taskRecordSchemas.ts:19-26`、`execution_id` だけでも有効）に合わせて印を付けると、daemon が呼び出し側より先に出し直したとき、または呼び出し側の読み直しが失敗したときに、呼び出し側の `runSlug` の知らせと daemon の `executionId` の知らせで `eventId` がずれ、manager に 2 回届く（Quint の `brokenMarkOnSchema` が J8 に違反する。反例は読み直しの失敗の形）。読み直しが成功すれば、呼び出し側も記録の `executionId` で送って印を消すので 1 回にまとまるが、この 2 つの順番は防げない。そこで印は付けない。代わりに、この試みの通知が失敗すると、今と同じく知らせは失われる（警告は出て、run の数え方は正しくなる）。この扱いを推す理由と別の案は、上げる点 6 に書いた。
 - `parallelExecution.ts:499-502` の「結果に `completion` か `runSlug` が無い」の分かれは、ゴールタスクでは結果に `completion` が無いときだけ起きる（`runSlug` は `:217` で必ず付く）。たとえば merge の経路で `updateRunningTaskExecution`（`merge/index.ts:155`）が投げると、`taskExecution.ts:155-158` が `running` のままの記録を読み、`completion` の無い結果を返す。このとき終端の記録は保存されないので、印も付かない。
 - `exceedTask` は `buildExceededTaskRecord`（`taskRecordMutations.ts:84-102`）を通る。`clearRetryMetadata` は `run_slug` を消さないので、`running` のときの `run_slug` が残り、印の条件を満たす。
 - merge の経路は、`updateRunningTaskExecution(task.name, { runSlug, ... })`（`merge/index.ts:155-157`）で保存した `run_slug` をそのまま `result.runSlug` として返す（`:221`・`:235`・`:263`）。`:253` の `failTask` は `runSlug` を持つ `runningTask` を渡すので、merge の経路の一時停止では `run_slug` は消えない。`:271` で投げ直したときは、`taskExecution.ts:155-158` が保存済みの記録を読み、その `completion` と `run_slug` を返す。どの形でも、保存した `run_slug` と通知の `runSlug` は同じになる。
@@ -117,7 +117,7 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 
 ### (a) 不変条件が恒真でない
 
-全部の状態を TLC で調べた（`quint verify --backend tlc --invariant <J>`、版ごと・不変条件ごとに 1 本ずつ、計 88 本）。`sameWrite` の状態は 319 個で、深さ 7 で尽きる。乱択の `quint run`（10,000 サンプル、max-steps 12、seed 0x2a）でも同じ 88 本を流し、違反の出る所は TLC と同じだった。V は違反、空欄は違反なし。
+全部の状態を TLC で調べた（`quint verify --backend tlc --invariant <J>`、版ごと・不変条件ごとに 1 本ずつ、計 96 本）。`sameWrite` の状態は 319 個で、深さ 7 で尽きる。乱択の `quint run`（10,000 サンプル、max-steps 12、seed 0x2a）でも `brokenPoolThrowsWithoutResult` を足す前の 88 本を流し、違反の出る所は TLC と同じだった。V は違反、空欄は違反なし。
 
 | 版 | J1 | J2 | J3 | J4 | J5 | J6 | J7 | J8 |
 |---|---|---|---|---|---|---|---|---|
@@ -132,10 +132,11 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 | `brokenMarkUnrequested`（頼まない instruct の保存にも印を付ける） | | | | | | | V | |
 | `brokenSilentReadBack`（読み直しの失敗を警告しない） | | | | V | | | | |
 | `brokenCallerForgetsRequest`（takt run が `publishesGoalCompletion` を渡さない） | V | | | | | | | |
+| `brokenPoolThrowsWithoutResult`（W5 が結果の欠けで `throw` したまま、P6 の `:223` の直しなし） | | | V | | | | | |
 
 8 つの不変条件は、どれもどれかの壊した版で違反する。`sameWrite` は、まとめた `safety` を乱択で 50,000 サンプル、max-steps 16 で流しても違反しない。
 
-- `current` の J1 は「通知が ENOSPC で投げ、印も無い」、J2 は「成功した実行が失敗と数えられる」、J3 は「worker pool で host が閉じる」。最初の確かめ（a）（b）と同じ形である。
+- `current` の J1 は「通知が ENOSPC で投げ、印も無い」、J2 は「成功した実行が失敗と数えられる」で、最初の確かめ（a）（b）と同じ形である。J3 の最短の反例は「worker pool で結果に `completion` が無く、`:223` が投げて host が閉じる」。通知の失敗で host が閉じる形は、`current` と `brokenNoCatch` で同じ遷移（失敗を捕まえない）で、`brokenNoCatch` の J3 の反例がそれである。2 つの原因は別の版に分けたので、`sameWrite` の J3 は P6 の `:223` の直し（`brokenPoolThrowsWithoutResult` で外す）と、通知の失敗を捕まえること（`brokenNoCatch` で外す）の両方に支えられていると分かる。
 - `markOnFailure` の J1 は、保存の直後にプロセスが死ぬ形と、通知の失敗のあとの 2 回目の書き込みも ENOSPC で落ちる形で出る。案 B を採らない理由の裏づけになる。
 - `brokenMarkOnSchema` の J8 の反例は「一時停止の記録に印を付ける → 読み直しが投げて呼び出し側が結果の `runSlug` で送る（`RunId`）→ daemon が記録の `executionId` で出し直す（`ExecId`）」。一時停止の記録に印を付けない理由（「直し方」の 1）の裏づけである。前の版のモデルでは、この版は J7 に違反していたが、それは「`run_slug` の無い完了は今は通知しない」という誤った読みからだった。
 - `brokenCallerForgetsRequest` の J1 の反例は「takt run が頼まずに保存（印なし）→ ディスクが埋まる → プロセスが死ぬ」。呼び出し側が頼むことを試験で固定する理由（R4・R5、「red のテスト」の節）になる。
@@ -152,7 +153,7 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 | プロセスの死 / daemon の出し直し | 10134 / 4068 |
 | J1：抜けたあと受信箱に無く、印だけが残る / 受信箱にあり、印は無い | 2004 / 4228 |
 | J2：通知が失敗しても成功と数える（takt run） | 151 |
-| J3：worker pool の通知の失敗 | 574 |
+| J3：worker pool の通知の失敗 / worker pool の結果の欠け | 574 / 1159 |
 | J4：保存で印を付け、通知して、警告なしで返る | 482 |
 | J5：通知すべき完了を通知せずに返る | 1142 |
 | J7：instruct が `run_slug` のある記録を保存して返る / 一時停止の試みを抜ける | 1067 / 4438 |
@@ -170,7 +171,7 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 |---|---|
 | `save` | `taskLifecycleService.ts:598-660`・`:736-765`（`completeTask`・`failTask`・`prFailTask`）、`taskExceedService.ts:25-41`（`exceedTask`）。`markedOnSave` は「直し方」の 1 の `markNormalCompletionPublicationPending`。`requested` は P5・P6・P8 の `publishesGoalCompletion` |
 | `shape` | `Normal`：`taskExecution.ts:268` → `:450` ほか、`merge/index.ts:155` → `:220`・`:223`・`:253`。`PausedBeforeWorkflow`：`taskExecution.ts:462-465`・`:479`、`taskLifecycleService.ts:654`。`NoResult`：`taskExecution.ts:155-158`（`running` のままの記録を読む） |
-| `skipWithoutResult` | takt run：`parallelExecution.ts:499-502` の `log.error`。worker pool：601fb47ec の `builtinProjectRuntime.ts:223` の `throw`（`Current` では host が閉じる）。この設計では P6 で `log.error` と `finished` にそろえる |
+| `skipWithoutResult` | takt run：`parallelExecution.ts:499-502` の `log.error`。worker pool：601fb47ec の `builtinProjectRuntime.ts:223` の `throw`（`Current` と `brokenPoolThrowsWithoutResult` では host が閉じる）。この設計では P6 で `log.error` と `finished` にそろえる |
 | `returnWithoutPublishing`（`Instruct`） | `taskInstructionActions.ts:292`（`executeAndCompleteTask` は通知しない） |
 | `readBackFails` | 「直し方」の 2 の 3（`listTaskStateItems` → `store.read()` が投げる、`store.ts:36-38`） |
 | `publish` / `publishFails` | `Current`：`parallelExecution.ts:503-506`、`builtinProjectRuntime.ts:224-225`。`SameWrite`：「直し方」の 2 の `publishTaskCompletion` → `claimTasks.ts:81-112`（`publishGoalCompletion` は記録に `runSlug` があればそれで、無ければ `executionId` で送る） |
@@ -262,9 +263,9 @@ R4〜R6・R12・R14 は、`executeRunTaskAndCompleteWithDetails` を mock に替
 | R10 | `src/__tests__/workerPool.test.ts`（既存に足す、単体） | `counts a goal task by its execution result when its completion notification fails` を `it.each([true, false])` | 既存の `ゴールのタスクの終了を受信箱へ保存し…` と同じ形で `saveEvent` が ENOSPC を投げる。結果は R5 と同じ数え方で、`[WARN]` が 1 行。runner の mock の `listTaskStateItems`（`workerPool.test.ts:65`、`[]` を返す）のままで、印のある記録は見つからず、`result` から送る経路を通る | P4 の `try/catch`（外すと約束が reject して失敗と数える）、P5 の `return result.success`。印の消し込みはこの試験では通らない（R4・R6 が見る） |
 | R11 | `it-normal-completion-publication.test.ts` | `does not mark a goal completion saved by a caller that does not publish it` を `it.each(['completeTask', 'failTask', 'prFailTask', 'exceedTask'])` | R1 と同じ記録を、`completionPublicationPending` を渡さずに各関数へ通すと、印が無く、`readPendingGoalTaskCompletions` は空（instruct の再実行の保存の形） | P1・P2・P3 の `requested`（頼まれなくても付けると落ちる） |
 | R12 | 同上 | `notifies from the run result and keeps the mark when the saved record cannot be read back` | R4 の形で、保存のあとの最初の `listTaskStateItems` だけを ENOSPC で投げさせる。`saveManagerEvent` は今と同じ引数でちょうど 1 回呼ばれ、結果は `{ success: 1, fail: 0 }`、記録には印が残る（daemon が出し直す）。`[WARN]` の行のうちタスク名と `could not be read back` を含むものがちょうど 1 行 | P4 の 3（読み直しの失敗で通知を止めると落ちる）。今の本番には読み直しが無いので、仕掛けた失敗は完了のあとの claim の読みに当たり、claim の再試行（5 秒）を 1 回待ってから落ちる |
-| R13 | 同上 | `gives the caller's notice and the daemon's resend of one attempt one inbox event id: %s` を `it.each(['normal', 'paused before the workflow'])` | 元帥の決め「同じ知らせが 2 回届いても二重に積まない」の試験。`normal` は R6 の形（消し込みが投げて印が残る）、`paused before the workflow` は R2 の記録に結果の `runSlug: 'setup-…'` で通知する形。どちらも本物の `saveManagerEvent` で呼び出し側が通知したあと、本物の `readPendingGoalTaskCompletions` → `publishPendingGoalTaskCompletions` で daemon が出し直す。受信箱のファイルを `receiveInboxChange` に渡し（`goal-completion-inbox-event-id.test.ts` の記録する ingress と同じ形）、渡った `eventId` の種類がちょうど 1 つ | P1 の `run_slug` の条件（一時停止の記録に印を付けると、`paused` の行で `eventId` が 2 種類になる）、P4（読み直した記録の身元ではなく別の身元で送ると、`normal` の行で 2 種類になる） |
+| R13 | 同上 | `gives the caller's notice and the daemon's resend of one attempt one inbox event id: %s` を `it.each(['normal', 'paused before the workflow'])` | 元帥の決め「同じ知らせが 2 回届いても二重に積まない」の試験。R4 の mock の保存のあと、**呼び出し側が通知する前に** daemon が出し直す順にする（mock の保存のあとで、本物の `readPendingGoalTaskCompletions` → `publishPendingGoalTaskCompletions` を呼ぶ）。そのあと呼び出し側が本物の `saveManagerEvent` で通知する。`normal` は R4 の記録、`paused before the workflow` は R2 の形の記録（`run_slug` なし）を頼んで保存し、結果の `runSlug: 'setup-…'` で通知する形。受信箱のファイルを `receiveInboxChange` に渡し（`goal-completion-inbox-event-id.test.ts` の記録する ingress と同じ形）、渡った `eventId` の種類がちょうど 1 つ | `paused` の行：P1 の `run_slug` の条件（一時停止の記録に印を付けると、daemon が `executionId` で、呼び出し側が結果の `runSlug` で送り、2 種類になる）。`normal` の行は守り（記録と結果の `run_slug` が同じなので、今の形の変更で 2 種類になるものは見つけていない。R7 と同じく、将来の身元の変更で落ちる） |
 | R14 | 同上 | `does not publish or clear another attempt's mark when reading the saved record back` | R4 の mock の保存のあと、通知の前に、同じタスクを再キューして再 claim し、次の試みを頼んで `completeTask` で保存する（印あり、`execution_id` が違う）。最初の試みの通知は結果の `runSlug` で 1 回だけ送られ、次の試みの記録の印は残る | P4 の `executionId` の絞り込み（名前とゴールだけで探すと、次の試みの完了を送ってその印を消す） |
-| R15 | 同上 | `passes the caller's request from the execution to the save: %s` を `it.each(['completed', 'failed'])` | 本物の `executeTaskAndCompleteWithDetails` を、`resolveTaskExecution` と実行を mock にして（`it-goal-task-stop.test.ts` と同じ形）流す。5 番目の引数に `{ publishesGoalCompletion: true }` を渡すと記録に印が付き、渡さないと付かない | P8（`executeTaskAndCompleteWithDetailsInScope` から `persist*` を経て保存の関数まで渡さないと落ちる） |
+| R15 | 同上 | `passes the caller's request from the execution to the save: %s` を `it.each(['completed', 'failed'])` | 本物の `executeTaskAndCompleteWithDetails` を、`resolveTaskExecution` と実行を mock にして（`it-goal-task-stop.test.ts` と同じ形）流す。6 番目の引数（`parallelOptions`）に `{ publishesGoalCompletion: true }` を渡すと記録に印が付き、渡さないと付かない | P8（`executeTaskAndCompleteWithDetailsInScope` から `persist*` を経て保存の関数まで渡さないと落ちる） |
 
 既存の `workerPool.test.ts` の「ゴールのタスクの終了を受信箱へ保存し、イベントを処理せず終了する」（`saveEvent` を同じ引数でちょうど 1 回）は変えない。`worker-pool-runtime.test.ts` の M18 の試験（#193）は、runner の mock に `listTaskStateItems` が無いと `publishTaskCompletion` が投げて警告に回る。assert は変えず、mock に `listTaskStateItems: vi.fn(() => [])` を足すだけにする。
 
@@ -315,11 +316,11 @@ R4〜R6・R12・R14 は、`executeRunTaskAndCompleteWithDetails` を mock に替
 
 別の担当（DS41F）の敵対的な読み（重い 10 件・中 7 件・軽い 5 件）に、e626fcce3 の本番のコード（worker pool は #193 の 601fb47ec）と Quint で 1 件ずつ答える。中と軽の 12 件は、原文が 1 行ずつの列挙だけで詳細が届いていないので、文から読み取れる範囲で確かめた。読み取れないものは「材料が少ない」とし、どこまで確かめたかを書いた。
 
-当たる 5 件、一部当たる 4 件、当たらない 3 件、読み違い 6 件、材料が少ない 4 件。指摘 4 は当たらなかったが、その近くで一時停止の経路の穴が見つかった（表の最後の行）。
+当たる 5 件、一部当たる 5 件、当たらない 3 件、読み違い 5 件、材料が少ない 4 件。指摘 4 は当たらなかったが、その近くで一時停止の経路の穴が見つかった（表の最後の行）。
 
 | # | 指摘（要約） | 答え | 理由 | 直したこと |
 |---|---|---|---|---|
-| 重 1 | 設計は印を「頼んだときだけ」と書くが、Quint は呼び出し側の種類で決めており、R11 と `safety` が両立しない | 読み違い | R11 は「頼まずに保存すると印が無い」を見る。前の版のモデルでは「頼まない」が `Instruct` に当たり、J7 は `Instruct` の印を禁じるので、R11 と同じことを言っている。食い違いは無い。ただ、頼むことと呼び出し側の種類を 1 つの値にまとめていたので、takt run が頼み忘れる形をモデルで外せなかった | `requested` を別の値にし、`brokenCallerForgetsRequest` を足した（J1 に違反する） |
+| 重 1 | 設計は印を「頼んだときだけ」と書くが、Quint は呼び出し側の種類で決めており、R11 と `safety` が両立しない | 一部当たる | R11 は「頼まずに保存すると印が無い」を見る。前の版のモデルでは「頼まない」が `Instruct` に当たり、J7 は `Instruct` の印を禁じるので、R11 と同じことを言っている。両立しないという点は読み違いである。ただ、頼むことと呼び出し側の種類を 1 つの値にまとめていたので、takt run が頼み忘れる形をモデルで外せなかった | `requested` を別の値にし、`brokenCallerForgetsRequest` を足した（J1 に違反する） |
 | 重 2 | takt run では J3 が実行の結果に関係なく恒真 | 当たる（書き方） | `hostClosed` を立てるのは worker pool の遷移だけ。takt run には host が無いので、J3 は worker pool だけの性質である。設計にそう書いていなかった | J3 を worker pool だけと書き、worker pool の通知の失敗に届く witness（574 trace）を足した |
 | 重 3 | `.then` は `result.success` を返すので、`:296-302` の失敗の数え方はこの経路に当たらない | 読み違い | `saveManagerEvent` が `.then` の中で投げると約束が reject し、`:253` で `false` になって `:296-302` で失敗と数える。最初の確かめ（a）で、本物の `runWithWorkerPool` が `{ success: 0, fail: 1 }` を返すことを流して確かめている | なし |
 | 重 4 | `completeTask` は `failTask` と違って `run_slug` を書かないので、成功の完了に印が付かない | 当たらない | `completeTask` は `buildTerminalTaskRecord` を通り、`...task` で記録を引き継ぐ（`taskRecordMutations.ts:69-74`）。`clearRetryMetadata`（`:178-190`）は `run_slug` を消さない。ゴールタスクの `completeTask` は、どれも `updateRunningTaskExecution` で `run_slug` を書いたあとに呼ばれる（`taskExecution.ts:268` → `:450`、`merge/index.ts:155` → `:223`）。`failTask` の `:654` は書くためではなく、一時停止の経路で消すためにある。Sonnet の R1 も、`completeTask` の行は `run_slug` が残り、印が無いことだけで落ちた | なし（近くの穴は最後の行） |
@@ -355,7 +356,7 @@ R4〜R6・R12・R14 は、`executeRunTaskAndCompleteWithDetails` を mock に替
    - 別の案 B：一時停止の記録にも印を付け、呼び出し側は読み直した記録の `executionId` で送る。読み直しが投げたときは結果から送らず、daemon に任せる。知らせは失われず 2 回にもならないが、この試みの `eventId` が `run` から `execution` に変わり、「読み直しの失敗でも通知する」（03bd67d74 の決め）をこの形だけ変えることになる。
    - 別の案 C：結果からも `runSlug` を外し、記録とそろえる。呼び出し側は `:499-502` で通知しなくなる。今 manager に届いている知らせが届かなくなるので採らない。
 7. **読み直しを `execution_id` で絞ること**。読み直しで別の試みの印のある記録を拾う穴（重 9）をふさぐため、`publishTaskCompletion` に `executionId` を渡す形にした（P4・P5・P6）。claim した `TaskInfo` は必ず `executionId` を持つ（`taskExecution.ts:222` が無ければ投げる）ので、新しい失敗の形は生まれないと読んだ。
-8. **W5 の結果が欠けたときの扱い**。601fb47ec の W5（`builtinProjectRuntime.ts:223`）は、結果に `completion` か `runSlug` が無いと `throw` し、host を閉じる。takt run は `log.error` して返す。P6 で W5 も `log.error` と `finished` にそろえる形を推す。#193 の M18 の範囲なので、#193 の担当が別の形をもう決めていれば、そちらに合わせてよい。
+8. **W5 の結果が欠けたときの扱い**。601fb47ec の W5（`builtinProjectRuntime.ts:223`）は、結果に `completion` か `runSlug` が無いと `throw` し、host を閉じる。takt run は `log.error` して返す。P6 で W5 も `log.error` と `finished` にそろえる形を推す。#193 の M18 の範囲なので、#193 の担当が別の形をもう決めていれば、そちらに合わせてよい。ただし `throw` のままにすると、Quint の `brokenPoolThrowsWithoutResult` のとおり J3 が成り立たなくなる。
 
 ## 確かめていないこと
 
@@ -365,3 +366,4 @@ R4〜R6・R12・R14 は、`executeRunTaskAndCompleteWithDetails` を mock に替
 - R13〜R15 と、直しの一部を外したときに各試験が本当に落ちること。直しの本番がまだ無いので、試験の表の「外せば落ちる」は、R1〜R12 の今の本番での赤と緑（Sonnet の 16 件）と、コードの読みに基づく。
 - 中と軽の 12 件のうち、文が崩れていた中 1・中 3・中 7・軽 5 の元の意味。
 - 2 つのタスクの同時の保存（Quint の（d））。
+- natural-japanese の段落ごとの確認と `newfacts.py`。lint と `calques.py` だけを流した。

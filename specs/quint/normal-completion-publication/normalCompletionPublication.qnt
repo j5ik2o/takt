@@ -44,7 +44,8 @@
 //   "NoWarn" (a caught failure is not warned), "ResendUnmarked" (the daemon also resends an unmarked
 //   old record), "MarkOnSchema" (the mark follows the schema's rule, run slug or execution id),
 //   "MarkUnrequested" (the save marks for a caller that did not ask), "SilentReadBack" (a failed read-back
-//   is not warned), "CallerForgetsRequest" (takt run does not pass publishesGoalCompletion).
+//   is not warned), "CallerForgetsRequest" (takt run does not pass publishesGoalCompletion),
+//   "PoolThrowsWithoutResult" (the worker pool keeps throwing when the result has no completion, P6 not applied).
 //
 // The disk can fill and empty at any time (ENOSPC on saveManagerEvent and on every tasks.yaml write).
 // The process can be killed after the save. The daemon resends a marked record when the disk lets it
@@ -107,6 +108,8 @@ module normalCompletionPublication {
     sameWrite and (requested or BREAK == "MarkUnrequested") and recordCompletion(sh)
       and (recordRunSlug(sh) or BREAK == "MarkOnSchema")
   pure def resendsUnmarked: bool = BREAK == "ResendUnmarked"
+  // 601fb47ec builtinProjectRuntime.ts:223 throws when the result has no completion; P6 makes it log and finish.
+  pure def poolThrowsWithoutResult: bool = DESIGN == "Current" or BREAK == "PoolThrowsWithoutResult"
 
   // The caller returns normally; the run counts the execution's own result.
   pure def returned(st: St, name: str): St =
@@ -138,7 +141,7 @@ module normalCompletionPublication {
   // The worker pool throws on 601fb47ec (builtinProjectRuntime.ts:223); the design (P6) logs and finishes instead.
   action skipWithoutResult: bool = all {
     s.phase == Saved, publishes(s.caller), not(resultRunSlug(s.shape)),
-    s' = if (s.caller == WorkerPool and not(catches))
+    s' = if (s.caller == WorkerPool and poolThrowsWithoutResult)
            { ...s, phase: Escaped, hostClosed: true, lastAction: "skipWithoutResult" }
          else returned(s, "skipWithoutResult"),
   }
@@ -289,6 +292,7 @@ module normalCompletionPublication {
   val wJ1Delivered: bool = settled(s.phase) and publishes(s.caller) and recordRunSlug(s.shape) and delivered and not(s.mark)
   val wJ2AfterFailure: bool = s.count == CountedSuccess and s.notifyWarned
   val wJ3PoolFailure: bool = s.caller == WorkerPool and s.lastAction == "publishFails"
+  val wJ3PoolNoResult: bool = s.caller == WorkerPool and s.lastAction == "skipWithoutResult"
   val wJ4Cleared: bool = s.phase == Returned and s.publishedByCaller and not(s.clearWarned) and s.markedAtSave
   val wJ5Warned: bool = s.phase == Returned and publishesToday(s.caller, s.shape) and not(s.publishedByCaller)
   val wJ7Instruct: bool = s.caller == Instruct and s.phase == Returned and recordRunSlug(s.shape)
@@ -311,3 +315,4 @@ module brokenMarkOnSchema { import normalCompletionPublication(DESIGN = "SameWri
 module brokenMarkUnrequested { import normalCompletionPublication(DESIGN = "SameWrite", BREAK = "MarkUnrequested").* }
 module brokenSilentReadBack { import normalCompletionPublication(DESIGN = "SameWrite", BREAK = "SilentReadBack").* }
 module brokenCallerForgetsRequest { import normalCompletionPublication(DESIGN = "SameWrite", BREAK = "CallerForgetsRequest").* }
+module brokenPoolThrowsWithoutResult { import normalCompletionPublication(DESIGN = "SameWrite", BREAK = "PoolThrowsWithoutResult").* }
