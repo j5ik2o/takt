@@ -10,7 +10,7 @@
 
 ゴールタスクの通常の完了も、#170 と同じ `completion_publication_pending` の印を、完了の保存と同じ書き込みで付ける。通知が成功したら印を消す。通知に失敗したら警告し、外へ投げず、run の成功・失敗の数は実行の結果のまま数える。印が残るので daemon が出し直す（元帥の決め 1・4、互換は案 A で確定）。
 
-1. 印を付けるのは、`completeTask`・`failTask`・`prFailTask`・`exceedTask` が書く記録のうち、ゴールの id・`completion`・`run_slug` がそろったものだけ。これは、今の呼び出し側が通知を出す条件（`parallelExecution.ts:499-502`）と同じである。
+1. 印を付けるのは、通知を出す呼び出し側（takt run の `fillSlots` と worker pool の W5）が頼んだ保存で、`completeTask`・`failTask`・`prFailTask`・`exceedTask` が書く記録のうち、ゴールの id・`completion`・`run_slug` がそろったものだけ。これは、今の呼び出し側が通知を出す条件（`parallelExecution.ts:499-502`）と同じである。同じ保存の関数を通っても通知しない経路（instruct の再実行）には付けない。
 2. 通知は、新しく export する `publishTaskCompletion`（`claimTasks.ts`）を通す。中で保存済みの記録を読み直し、マージ済みの `publishAndClearPendingMark` で通知して印を消す。失敗は捕まえて警告する。
 3. `takt run`（`parallelExecution.ts`）と worker pool の W5（`builtinProjectRuntime.ts`）は、どちらもこの関数を呼ぶ。`completeTask` は両方の経路が共有しているので、印の付け方は 1 か所の変更で両方にそろう。
 4. 印の無い古い記録は、出し直し待ちと読まない。読み替えも書き戻しもしない（元帥の決め 2）。
@@ -22,7 +22,7 @@ e626fcce3 の使い捨ての木（`git worktree add --detach`、コミットせ�
 
 - (a) 結果は `{ success: 0, fail: 1, executedTaskNames: ['goal-a'] }`。成功したタスクが失敗として数えられた。
 - (b) tasks.yaml の記録は `status: completed` で `completion` を持ち、`completion_publication_pending` が無い。`readPendingGoalTaskCompletions` は `[]` を返した。
-- 警告もログの行も出なかった（`.then` の例外は `:253` で `false` に変わるだけ）。
+- 警告もログも出ないと読める。`.then` の例外は `:253` で `false` に変わるだけで、その経路に `warn()` も `log` の呼び出しも無い（試験の出力は絞って読んだので、出力そのものでは確かめていない）。
 
 issue の本文の読みのとおりだった。
 
@@ -36,17 +36,23 @@ issue の本文の読みのとおりだった。
 | worker pool の W5（`builtinProjectRuntime.ts:217-239`） | 同じ `executeRunTaskAndCompleteWithDetails` → 同じ 4 つの関数 | 付かない | `saveManagerEvent` を直接（`:224-225`） | #193 の設計の前は、runtime の `failed` から host が閉じ、そのプロジェクトの実行がすべて止まる。#193 の M18 のあとは、警告して `finished` を呼ぶ（印は付けない） | 拾わない |
 | worker pool の遠隔の終わり（W6、`remoteTaskLifecycle.ts:120-167`） | daemon 側の `buildTerminalTaskRecord`。`completeTask` は通らない | #193 の M6 で、ゴールタスクには付く | #193 の M6 で `publishAndClearPendingMark` | #193 の M6 で、警告して返事を返す | #193 のあとは拾う |
 | PR の作り直し（`taskPullRequestActions.ts:264-276` の `completePublishedTask`） | `pr_failed` を `completed` に書き換える | 付けない（この設計でも付けない） | 通知しない（今もしない） | — | — |
+| instruct の再実行（`taskInstructionActions.ts:292` の `executeAndCompleteTask`） | `completed`・`pr_failed` のタスクを `startReExecution` で `running` に戻し、同じ `executeTaskAndCompleteWithDetails` で保存する。ゴールタスクにもかけられ（ゴールの確かめは無い）、ゴールタスクなら `completion` と `run_slug` が付く | 付かない（この設計でも付けない） | 通知しない（今もしない） | — | — |
+| `takt` の直接の実行（`selectAndExecute.ts:242`・`:263`） | `persistTaskError`・`persistTaskResult` | 付かない（`buildBooleanTaskResult` に `completion` が無い） | 通知しない | — | — |
+| `takt merge` の直接の実行（`merge/index.ts:94-100` の `executePrWorkflow`） | `createPrMergeTask` が `goal` なしで作るので、ゴールの id が無い | 付かない | 通知しない | — | — |
 
-W6 は #193 が通常の完了も含めて直すので、この設計で足すことは無い。PR の作り直しは、`pr_failed` の完了をもう一度知らせる経路ではないので範囲の外に置く（「範囲の外」の節）。
+W6 は #193 が通常の完了も含めて直すので、この設計で足すことは無い。PR の作り直しは、`pr_failed` の完了をもう一度知らせる経路ではないので範囲の外に置く（「範囲の外」の節）。instruct の再実行は、今は manager に通知しない。保存の関数で一律に印を付けると、daemon が今は送っていない完了を送り始める（J7 に反する）ので、印は通知する呼び出し側が頼んだときだけ付ける（「直し方」の 1）。instruct のゴールタスクを manager に知らせるかは、別に決める（上げる点 4）。
 
 ## 直し方
 
 ### 1. 印を付ける場所
 
-- `src/infra/task/taskRecordMutations.ts` に `markNormalCompletionPublicationPending(record)` を足す。記録が `goal_id`・`completion`・`run_slug` を持つときだけ `completion_publication_pending: true` を付け、それ以外はそのまま返す。
-- `completeTask`・`failTask`・`prFailTask`（`taskLifecycleService.ts`）と `exceedTask`（`taskExceedService.ts`）が `store.update` の中で作る終端の記録を、この関数に通す。保存と同じ書き込みで印が付くので、保存のあとでプロセスが死んでも印は残る。
+- 印は、通知する呼び出し側が頼む。`TaskExecutionParallelOptions`（`src/features/tasks/execute/types.ts:354-360`）に `publishesGoalCompletion?: true` を足し、`fillSlots` のゴールタスクの呼び出し（`parallelExecution.ts:487-497` の `executionOptions`）と worker pool の W5（`builtinProjectRuntime.ts:219-221`）が `true` を渡す。instruct（`executeAndCompleteTask`）は渡さない。
+- `executeTaskAndCompleteWithDetailsInScope`（`taskExecution.ts:132-`）は、この値を保存の関数へ渡す。`TaskResult` に `completionPublicationPending?: true` を足して `persistTaskResult`・`persistPrFailedTaskResult`・`persistTaskError` の結果に載せ、`ExceedTaskOptions` にも同じ欄を足して `persistExceededTaskResult` に載せる。merge の経路は `executePersistedPrMergeTask`（`merge/index.ts:144-`）の引数に同じ値を足し、`:220`・`:223`・`:253` の `terminal` に載せる。
+- `src/infra/task/taskRecordMutations.ts` に `markNormalCompletionPublicationPending(record, requested)` を足す。`requested` が `true` で、記録が `goal_id`・`completion`・`run_slug` を持つときだけ `completion_publication_pending: true` を付け、それ以外はそのまま返す。
+- `completeTask`・`failTask`・`prFailTask`（`taskLifecycleService.ts`）と `exceedTask`（`taskExceedService.ts`）が `store.update` の中で作る終端の記録を、この関数に通す（`requested` は `result.completionPublicationPending` か `options.completionPublicationPending`）。保存と同じ書き込みで印が付くので、保存のあとでプロセスが死んでも印は残る。
 - `run_slug` を条件に入れるのは、今の呼び出し側が `result.runSlug` の無い完了を通知しない（`parallelExecution.ts:499-502`）からである。`isValidCompletionPublicationPending`（`taskRecordSchemas.ts:19-26`）は `execution_id` だけでも印を有効と読むので、それに合わせて印を付けると、`GoalPausedError` でワークフローの前に止まった試み（`taskExecution.ts:462-465` が `runSlug` を外して保存する）の完了を、今は送らないのに daemon が送るようになる。今送っていないものを新しく送らないこと（J7）を守るため、条件は呼び出し側の条件にそろえる。
 - `exceedTask` は `buildExceededTaskRecord`（`taskRecordMutations.ts:84-102`）を通る。`clearRetryMetadata` は `run_slug` を消さないので、`running` のときの `run_slug` が残り、印の条件を満たす。
+- merge の経路は、`updateRunningTaskExecution(task.name, { runSlug, ... })`（`merge/index.ts:155-157`）で保存した `run_slug` をそのまま `result.runSlug` として返す（`:221`・`:235`）。保存した `run_slug` と通知の `runSlug` は同じになる。
 - #170 の 3 経路（`buildSetupFailedTaskRecord`、中断の回収、`reconcileLostRun`）は、もう印を付けている。変えない。
 
 ### 2. 通知の関数
@@ -55,8 +61,8 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 
 1. `taskRunner.listTaskStateItems()` から、名前とゴールの id が一致し、状態が終端で、印のある記録を探す。`run_slug` では探さない。保存した `run_slug` と `result.runSlug` がずれていても、daemon が出し直すときと同じ `run_slug` で送るためである。
 2. 見つかったら、その記録を `publishAndClearPendingMark`（`claimTasks.ts:98-112`）に渡す。保存した `completion` と `run_slug` で通知し、成功したら、保存した `status`・`run_slug`・`execution_id` を身元にして印を消す。呼び出し側は保存した `status` と `execution_id` を持っていないので、読み直しで身元をそろえる。
-3. 見つからない（印の付かない記録、または試みのあいだに消された記録）ときは、今と同じく `result` から `saveManagerEvent` を呼ぶ。消す印は無い。
-4. 1〜3 をまとめて `try/catch` で囲む。失敗したら `warn()` と `log.error()` を出し、投げない。警告の文は「Goal task <name> (goal <goal id>, run <run_slug>) finished and is saved in .takt/tasks.yaml, but the manager was not notified; the daemon will resend it: <detail>」。`detail` は `sanitizeSensitiveText` を通す。
+3. 見つからない（印の付かない記録、または試みのあいだに消された記録）ときと、1 の読み直しが投げたとき（`listTaskStateItems` は `store.read()` でロックを取る、`store.ts:36-38`。ロックの時間切れや ENOSPC で投げうる）は、今と同じく `result` から `saveManagerEvent` を呼ぶ。印は消さない。読み直しの失敗で印が残っても、daemon が出し直し、同じ `eventId` で 1 回にまとまる。
+4. 2・3 の通知を `try/catch` で囲む。失敗したら `warn()` と `log.error()` を出し、投げない。警告の文は「Goal task <name> (goal <goal id>, run <run_slug>) finished and is saved in .takt/tasks.yaml, but the manager was not notified: <detail>」。2 の経路（印のある記録が見つかった）では、その後ろに「; the daemon will resend it from its completion mark」を足す。3 の経路では出し直しを約束しない。`detail` は `sanitizeSensitiveText` を通す。
 
 送る中身は今と同じになる。保存した `completion` は呼び出し側の `result.completion` をそのまま保存したもので、`run_slug` も同じ試みの値である。受信箱の `eventId` は `(受信箱, goalId, taskName, 'run', runSlug)` から決まる（`inbox.ts:49-50`）ので、この関数の通知と daemon の出し直しが重なっても 1 回にまとまる。
 
@@ -78,9 +84,9 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 
 どちらが先に入っても食い違わない。
 
-- **#216 が先**（推し、「PR の分け方」の節）：統合ブランチの `completeTask` が印を付けるようになる。#193 を取り込み直すとき、W5 を「直し方」の 3 のとおり `publishTaskCompletion` にする。#193 の S21（「B の記録は `completed` で、印は無い」）は「B の記録は `completed` で印が残り、`readPendingGoalTaskCompletions` が B を返す」に改める。#193 の設計の 5 節の「印は付けない（推し）」と、#193 の設計の上げる点 1・2 は、この設計で決まったと書き換える。
+- **#216 が先**（推し、「PR の分け方」の節）：統合ブランチの `completeTask` などが、頼まれたときに印を付けるようになる。#193 を取り込み直すとき、W5 を「直し方」の 3 のとおり `publishesGoalCompletion` を渡して `publishTaskCompletion` を呼ぶ形にする。#193 の S21（「B の記録は `completed` で、印は無い」）は「B の記録は `completed` で印が残り、`readPendingGoalTaskCompletions` が B を返す」に改める。#193 の設計の 5 節の「印は付けない（推し）」と、#193 の設計の上げる点 1・2 は、この設計で決まったと書き換える。
 - **#193 が先**：#193 の M18 は今の設計のまま入る。#216 の PR が W5 を `publishTaskCompletion` に替え、S21 を同じく改める。
-- 置き換えを忘れた場合：W5 が `saveManagerEvent` を直接呼んだままでも、印は `completeTask` が付けるので消えずに残り、daemon が出し直す。受信箱で 1 回にまとまるので、manager に 2 回は届かない。ただし worker pool の通常の完了のたびに daemon の出し直しが 1 回走る。これを防ぐため、worker pool の試験に「通知が成功したら印が消える」を足す（R8）。
+- 置き換えを忘れた場合：W5 が `publishesGoalCompletion` を渡さず `saveManagerEvent` を直接呼んだままなら、印は付かず、#193 の M18 の形（警告だけ）のままになる。worker pool の通常の完了の通知の失敗が出し直されないので、worker pool の試験に「通知が失敗したら印が残る」（R9）と「通知が成功したら印が消える」（R8）を置いて、取り込み直しで落ちるようにする。
 
 ## 守る不変条件
 
@@ -92,7 +98,7 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 - **J4** 呼び出し側が通知し、印を消すのに失敗しなかったときは、印は残らない。
 - **J5** 呼び出し側が通知すべき完了を通知できずに返ったときは、警告が出ている。
 - **J6** 印の無い古い記録は、出し直されない。
-- **J7** 今の呼び出し側が通知しない完了（`run_slug` なし）には、印も送りも生まれない。
+- **J7** 今の呼び出し側が通知しない完了（`run_slug` が無い完了、通知しない instruct の再実行）には、印も送りも生まれない。
 
 ## Quint
 
@@ -138,7 +144,7 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 
 | モデル | 本番 |
 |---|---|
-| `save` | `taskLifecycleService.ts:598-660`・`:736-765`（`completeTask`・`failTask`・`prFailTask`）、`taskExceedService.ts:25-41`（`exceedTask`）。`markedOnSave` は「直し方」の 1 の `markNormalCompletionPublicationPending` |
+| `save` | `taskLifecycleService.ts:598-660`・`:736-765`（`completeTask`・`failTask`・`prFailTask`）、`taskExceedService.ts:25-41`（`exceedTask`）。`markedOnSave` は「直し方」の 1 の `markNormalCompletionPublicationPending`。モデルの呼び出し側は通知する 2 つだけなので、`requested` は常に `true` と置いた。instruct（頼まない呼び出し側）は J7 の側で、`brokenMarkOnSchema` と同じく「今送らないものに印を付ける」壊し方に当たる |
 | `skipWithoutRunSlug` | `parallelExecution.ts:499-502` の `log.error` |
 | `publish` / `publishFails` | `Current`：`parallelExecution.ts:503-506`、`builtinProjectRuntime.ts:224-225`。`SameWrite`：「直し方」の 2 の `publishTaskCompletion` → `claimTasks.ts:98-112` |
 | `Escaped` の数え方と `hostClosed` | `parallelExecution.ts:253`・`:296-302`、`builtinProjectRuntime.ts:234-239`（`failed` → 子の `stop()` → host の切断） |
@@ -146,7 +152,7 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 | `markAfterFailure` / `markAfterFailureFails` | 本番のコードは無い（案 B の比べのためだけの遷移） |
 | `clearMark` / `clearFails` | `taskLifecycleService.ts:509-533`、`claimTasks.ts:101-111` |
 | `kill` | 本番のコードは無い（プロセスの終了） |
-| `daemonResend` | `watchSource.ts:125`・`:157` → `readPendingGoalTaskCompletions`（`taskStateReader.ts:96-150`）→ `publishPendingGoalTaskCompletions` |
+| `daemonResend` | `watchSource.ts:155-181`（`taskCompletions`）→ `readPendingGoalTaskCompletions`（`taskStateReader.ts:96-150`）→ `publishPendingGoalTaskCompletions`（`pendingGoalTaskCompletions.ts:16-60`）。書いた側のプロセスが生きているかは見ず、削除の予約の持ち主だけを見る（`:25-29`）ので、保存から印を消すまでの間でも出し直しうる。ゴールが終わっているか消えているときは、送らずに印だけ消す（`:39-48`） |
 | `daemonReadsLegacy` | `taskStateReader.ts:129`（印が `true` でない記録は `completion` を読まずに飛ばす） |
 | `diskFills` / `diskFrees` | 本番のコードは無い（環境） |
 
@@ -154,6 +160,7 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 
 - 1 回の試みだけ。自動の再キュー（`parallelExecution.ts:276-298`）や再 claim で記録が `pending` に戻ると、`buildClaimedTaskRecord`・`buildRetryTaskRecord` が印を外す（#170 の 1 節）。`failed` の通知に失敗した試みがすぐ再キューされると、その試みの完了は届かず、次の試みの完了が届く。これは #170 の決めのままで、J1 は試みごとの性質としてだけ見ている。
 - 受信箱の写しの数は見ていない。`delivered` は 1 ビットで、同じ試みの写しは `eventId` で 1 回にまとまる（「直し方」の 2、「受信箱の指摘」の節）。daemon が印を消すことと、印のある間 daemon が止まらないことは #170 のモデル（`specs/quint/goal-task-completion-publication/`）の範囲で、ここでは見ていない。
+- daemon がゴールの終わりを見て送らずに印を消す形（`pendingGoalTaskCompletions.ts:39-48`）は入れていない。`delivered` は「manager に届いた、または届ける必要が無くなった」と読む。
 - 保存そのものの失敗（tasks.yaml の書き込みの ENOSPC）は見ていない。`save` はディスクが空いているときだけ起きる。保存が失敗したときの扱いは今のまま変えない。
 - 古い記録は「印の無い記録が 1 つある」とだけ置き、その中身は見ていない。J6 は、daemon が印で記録を選ぶことだけを見る。
 - max-steps 12（比べ）と 16（witness と `safety`）。ディスクの出し入れでどの trace も伸びるが、呼び出し側の遷移は 4 つ以下で終わる。
@@ -208,7 +215,7 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 
 | # | ファイル | 試験の名前 | 確かめること | 本番のどこを外せば落ちるか |
 |---|---|---|---|---|
-| R1 | `src/__tests__/it-normal-completion-publication.test.ts`（新規、light IT） | `marks a normal goal completion for resend in the same save: %s` を `it.each(['completeTask', 'failTask', 'prFailTask', 'exceedTask'])` | `run_slug` のある `running` のゴールタスクを本物の `TaskRunner` で各関数に通すと、tasks.yaml の生の記録に `completion_publication_pending: true` があり、`readPendingGoalTaskCompletions` がその名前と `runSlug` を返す | P2・P3（どれか 1 つの関数で印を付けなければ、その行が落ちる） |
+| R1 | `src/__tests__/it-normal-completion-publication.test.ts`（新規、light IT） | `marks a normal goal completion for resend in the same save: %s` を `it.each(['completeTask', 'failTask', 'prFailTask', 'exceedTask'])` | `run_slug` のある `running` のゴールタスクを本物の `TaskRunner` で、`completionPublicationPending: true` を付けて各関数に通すと、tasks.yaml の生の記録に `completion_publication_pending: true` があり、`readPendingGoalTaskCompletions` がその名前と `runSlug` を返す | P2・P3（どれか 1 つの関数で印を付けなければ、その行が落ちる） |
 | R2 | 同上 | `does not mark a goal completion saved without a run slug` | `run_slug` が無く `execution_id` のある記録を `failTask`（`completion` あり）で保存すると、印が無く、`readPendingGoalTaskCompletions` は空 | P1 の条件（`execution_id` でも付けると落ちる） |
 | R3 | 同上 | `does not mark a completion of a task without a goal` | `goal_id` の無いタスクを `completeTask` で保存すると、印が無い | P1 の条件 |
 | R4 | 同上 | `clears the mark after takt run notifies a normal completion` | `runWithWorkerPool` に本物の `TaskRunner` と、本物の `completeTask` を呼ぶ実行を渡す。`saveManagerEvent`（spy、成功）は今と同じ引数でちょうど 1 回呼ばれ、そのあと記録に印が無く、結果は `{ success: 1, fail: 0 }` | P4・P5（消し込みを外すと印が残る。送る中身を変えると引数が合わない） |
@@ -217,6 +224,8 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 | R7 | 同上 | `reads an old completed goal record without the mark as not pending` | 印の無い `completed` のゴールタスクだけの tasks.yaml で、`readPendingGoalTaskCompletions` が空、`TaskStore.read()` が通り、ファイルのバイトが変わらない | 今も緑（決め 2 の守り）。`readPendingGoalTaskCompletions` が印の無い記録を拾う変更で落ちる |
 | R8 | `src/__tests__/it-worker-pool-completion-publication.test.ts`（#193 の枝。既存に足す） | `clears the completion mark after the worker pool notifies a normal completion` | 組み込みの実行が `completed` で終わり、`saveManagerEvent` が成功すると、記録に印が無く、受信箱の完了がちょうど 1 件 | P6（W5 が `saveManagerEvent` を直接呼んだままだと印が残る） |
 | R9 | 同上（S21 を改める） | `keeps the project open when the notification of a normal completion fails` | 「B の記録は `completed` で、印は無い」を「B の記録は `completed` で印が残り、`readPendingGoalTaskCompletions` が B を返す」に改める。ほかの assert（A を中断しない、host を閉じない、`finished` が B で呼ばれる、警告の 1 行）はそのまま | P2（印を付けない） |
+| R11 | `it-normal-completion-publication.test.ts` | `does not mark a goal completion saved by a caller that does not publish it` を `it.each(['completeTask', 'failTask', 'prFailTask', 'exceedTask'])` | R1 と同じ記録を、`completionPublicationPending` を渡さずに各関数へ通すと、印が無く、`readPendingGoalTaskCompletions` は空（instruct の再実行の保存の形） | P1・P2・P3 の `requested`（頼まれなくても付けると落ちる） |
+| R12 | 同上 | `notifies from the run result and keeps the mark when the saved record cannot be read back` | R4 の形で、通知の前の `listTaskStateItems` だけを `PrivateFileLockAcquisitionError('cannot read tasks', 'ENOSPC')` で投げさせる。`saveManagerEvent` は今と同じ引数でちょうど 1 回呼ばれ、結果は `{ success: 1, fail: 0 }`、記録には印が残る（daemon が出し直す）、警告は出ない | P4 の 3（読み直しの失敗で通知を止めると落ちる） |
 | R10 | `src/__tests__/workerPool.test.ts`（既存に足す、単体） | `counts a goal task by its execution result when its completion notification fails` を `it.each([true, false])` | 既存の `ゴールのタスクの終了を受信箱へ保存し…` と同じ形で `saveEvent` が ENOSPC を投げる。結果は R5 と同じ数え方で、`[WARN]` が 1 行。runner の mock の `listTaskStateItems` は `[]` のままで、`result` から送る経路を通る | P5 |
 
 既存の `workerPool.test.ts` の「ゴールのタスクの終了を受信箱へ保存し、イベントを処理せず終了する」（`saveEvent` を同じ引数でちょうど 1 回）は変えない。`worker-pool-runtime.test.ts` の M18 の試験（#193）は、runner の mock に `listTaskStateItems` が無いと `publishTaskCompletion` が投げて警告に回る。assert は変えず、mock に `listTaskStateItems: vi.fn(() => [])` を足すだけにする。
@@ -225,20 +234,21 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 
 | # | ファイル | 関数 | 変えること |
 |---|---|---|---|
-| P1 | `src/infra/task/taskRecordMutations.ts` | `markNormalCompletionPublicationPending`（新規） | `goal_id`・`completion`・`run_slug` がそろう記録にだけ `completion_publication_pending: true` を付ける |
-| P2 | `src/infra/task/taskLifecycleService.ts` | `completeTask`、`failTask`、`prFailTask` | `store.update` の中で作る終端の記録を P1 に通す |
-| P3 | `src/infra/task/taskExceedService.ts` | `exceedTask` | `buildExceededTaskRecord` の結果を P1 に通す |
+| P1 | `src/infra/task/taskRecordMutations.ts` | `markNormalCompletionPublicationPending`（新規） | `requested` が `true` で、`goal_id`・`completion`・`run_slug` がそろう記録にだけ `completion_publication_pending: true` を付ける |
+| P2 | `src/infra/task/taskLifecycleService.ts`、`src/infra/task/types.ts`（`TaskResult`、`:23`） | `completeTask`、`failTask`、`prFailTask`、`TaskResult` | `TaskResult` に `completionPublicationPending?: true` を足し、`store.update` の中で作る終端の記録を P1 に通す |
+| P3 | `src/infra/task/taskExceedService.ts`（`ExceedTaskOptions` も同じファイル、`:7`） | `exceedTask` | `ExceedTaskOptions` に同じ欄を足し、`buildExceededTaskRecord` の結果を P1 に通す |
+| P8 | `src/features/tasks/execute/types.ts`、`taskExecution.ts`、`taskResultHandler.ts`、`src/features/merge/index.ts` | `TaskExecutionParallelOptions`、`executeTaskAndCompleteWithDetailsInScope`、`persist*`、`executePersistedPrMergeTask` | `publishesGoalCompletion?: true` を足し、保存の関数の `completionPublicationPending` まで渡す（「直し方」の 1） |
 | P4 | `src/features/tasks/execute/claimTasks.ts` | `publishTaskCompletion`（新規、export）、`publishAndClearPendingMark` | 「直し方」の 2 のとおり。印を消せなかったときの警告を `saved as ${task.status}` にする |
-| P5 | `src/features/tasks/execute/parallelExecution.ts` | `fillSlots`（`:503-506`） | `saveManagerEvent` を P4 に替える。`return result.success` は変えない |
-| P6 | `src/features/workerPool/builtinProjectRuntime.ts`（#193） | `startTask` の実行の `.then`（`:224-225`） | `saveManagerEvent` を P4 に替える。#193 の M18 の `try/catch` は P4 の中に入るので外し、`settled = true` と `finished` は残す |
+| P5 | `src/features/tasks/execute/parallelExecution.ts` | `fillSlots`（`:487-506`） | ゴールタスクの `executionOptions` に `publishesGoalCompletion: true` を足し、`saveManagerEvent` を P4 に替える。`return result.success` は変えない |
+| P6 | `src/features/workerPool/builtinProjectRuntime.ts`（#193） | `startTask`（`:219-225`） | `executeRunTaskAndCompleteWithDetails` の第 5 引数に `publishesGoalCompletion: true` を足し、`.then` の `saveManagerEvent` を P4 に替える。#193 の M18 の `try/catch` は P4 の中に入るので外し、`settled = true` と `finished` は残す |
 | P7 | `docs/goal-management.md`（ja も） | — | ゴールタスクの完了の通知が失敗しても、印から daemon が出し直すことを 1 文足す（#193 の M8 と同じ文に合わせる） |
 
 ## PR の分け方
 
-**推し：takt run の分（P1〜P5、P7、R1〜R7、R10）を、#193 を待たずに統合ブランチ宛ての別の PR で先に入れる。worker pool の分（P6、R8、R9）は #193 に入れる。**
+**推し：takt run の分（P1〜P5、P7、P8、R1〜R7、R10〜R12）を、#193 を待たずに統合ブランチ宛ての別の PR で先に入れる。worker pool の分（P6、R8、R9）は #193 に入れる。**
 
 - 統合ブランチでは、takt run と watch の経路がもう動いていて、通常の完了の通知が失敗すると今も知らせが失われ、成功が失敗と数えられる。#193 はマージを止めてあるので、#193 に入れるとその期間が #193 のマージまで延びる。
-- 直しは infra の 3 ファイルと features の 2 ファイルに収まり、worker pool のコードに触れない。#193 の差分を大きくしない。
+- 直しは infra の 4 ファイルと features の 5 ファイル（`claimTasks.ts`、`parallelExecution.ts`、`types.ts`、`taskExecution.ts`・`taskResultHandler.ts`、`merge/index.ts`）に収まり、worker pool のコードに触れない。#193 の差分を大きくしない。
 - 「直し方」の 5 のとおり、どちらが先でも食い違わない。#216 が先なら、#193 の取り込み直しで P6 と S21（R9）を直すだけで、置き換えを忘れても知らせは失われない（印が残り、daemon が出し直す）。
 - #193 にまとめると、#193 の差分に takt run の経路が混ざり、#193 の設計で範囲の外に置いた所（#193 の設計の上げる点 1・2）を #193 で変えることになる。
 
@@ -265,12 +275,14 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 
 ## 上げる点
 
-1. **R1〜R7 を置くファイル**。新しい light IT にした。`it-goal-task-completion-publication` 系の既存のファイルに足すほうがよければ、Sonnet が決めてよい（assert は変えない）。
+1. **R1〜R7・R11・R12 を置くファイル**。新しい light IT にした。`it-goal-task-completion-publication` 系の既存のファイルに足すほうがよければ、Sonnet が決めてよい（assert は変えない）。
 2. **P7 の docs の場所**。`docs/goal-management.md` にした。完了の通知の説明が別の節にあれば、muse がそこへ置く。#193 の M8 と同じ文にそろえる。
 3. **出し直しの頻度**。通常の完了のたびに、保存から印を消すまでの短い間に daemon が出し直すことがある。受信箱で 1 回にまとまるので害は無いが、受信箱に写しのファイルが増える。気になるなら、daemon が印を読むときに `completed_at` から数秒の猶予を置く形を別に考える（この設計では入れない）。
+4. **instruct の再実行のゴールタスク**。instruct（`taskInstructionActions.ts:292`）はゴールタスクにもかけられるが、今も manager に完了を通知しない。この設計では印を付けず、今の振る舞いのままにした。manager に知らせるべきなら、instruct も `publishesGoalCompletion` を渡して `publishTaskCompletion` を呼ぶ形で、別に直す。
+5. **#193 の文書の書き換え**。#193 の設計（`worker-pool-completion-publication.md` の 5 節と上げる点 1・2）と `193-worker-pool-requests.md` の S21・M18 の行は、まだ「通常の完了には印を付けない」と書いている。#216 の設計が採られたら、#193 の設計の担当（Opus）がそこを書き換え、Sonnet が S21 を R9 のとおりに改める。この担当は #193 の作業ツリーに段0 のほかは書いていない。
 
 ## 確かめていないこと
 
 - 実際の daemon を起こしての、出し直しから manager の 1 回の起動までの通し。#170 の試験（`goal-task-completion-publication` の IT）が見ている範囲で、ここでは流していない。
 - `publishTaskCompletion` の読み直し（`listTaskStateItems`）が tasks.yaml のロックで待つ時間。読みだけで、ロックの時間切れは警告に回る（印は残る）と読んだが、流していない。
-- merge の経路（`merge/index.ts:220`・`:223`）で、保存した `run_slug` と `result.runSlug` が一致すること。コードの読みでは一致するが、試験では見ていない。「直し方」の 2 の 1 は保存した記録の `run_slug` で送るので、ずれていても daemon の出し直しと同じ `eventId` になり、manager に 2 回は届かない。送る `runSlug` が今と変わるのは、ずれていた場合だけである。
+- merge の経路で、保存した `run_slug` と `result.runSlug` が一致すること。コードの読み（「直し方」の 1）だけで、試験では見ていない。
