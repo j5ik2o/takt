@@ -1520,7 +1520,12 @@ isolatedWorkerTest.each([false, true])('keeps received records after expiry and 
     f.store.update((current) => ({ tasks: current.tasks.map((task) => ({ ...task,
       remote_assignment: { ...task.remote_assignment!, leaseExpiresAt: 0 } })) }));
     if (restart) await f.start();
-    await vi.waitFor(() => expect(f.store.read().tasks[0]!.status).toBe('failed'), { timeout: 10_000 });
+    // The terminal save marks a goal task and the same handler clears the mark after publishing (#170).
+    await vi.waitFor(() => {
+      const task = f.store.read().tasks[0]!;
+      expect(task.status).toBe('failed');
+      expect(task.completion_publication_pending).toBeUndefined();
+    }, { timeout: 10_000 });
     const failed = f.store.read().tasks[0]!;
     expect(failed.failure?.error).toMatch(/connection.*lost|lease expired/i);
     expect(JSON.stringify(runPage(f, 'report', 'phase-1.md'))).toContain('remote report 1');
