@@ -64,7 +64,7 @@ const HTTP_HEADER_PREFIX_REGEX = /\b(Authorization|(?:Set-)?Cookie)\s*:\s*/gi;
 // a scheme character" lookbehind would miss `1-http://user:pass@host`.
 // The userinfo is split at its first colon past the first character: trying each colon as the
 // separator finds the same matches but rescans the rest of a colon-separated run every time.
-const URL_USERINFO_CREDENTIALS_REGEX = /(:\/\/)(?<=\b[A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#\s@][^/?#\s@:]*:(?:@[^/?#\s@]+|[^/?#\s@]+))@/g;
+const URL_USERINFO_CREDENTIALS_REGEX = /(:\/\/)(?<=\b[A-Za-z][A-Za-z0-9+.-]*:\/\/)([^/?#\s@][^/?#\s@:]*:[^/?#\s@]+)@/g;
 const CURL_USER_VALUE_PATTERN = [
   String.raw`(?<=\\")(?!\+)[^":]*:[^"]*?(?=\\")`,
   String.raw`"(?!\+)[^":]*:[^"]*"`,
