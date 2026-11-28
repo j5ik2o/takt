@@ -4,7 +4,7 @@
  * manager asks for it. `takt run` notifies through the saved record, clears the mark on success,
  * and keeps the mark (for the daemon to resend) and warns when the notice fails, without counting
  * a finished execution differently. Real tasks.yaml, no child process.
- * Design: docs/design/issue-216-normal-completion-publication.md (R1–R7, R11–R13, R15, and the
+ * Design: docs/design/issue-216-normal-completion-publication.md (R1–R7, R11–R15, and the
  * one-manager-turn check of the decision that backs R13).
  * Model: specs/quint/normal-completion-publication/.
  */
@@ -364,6 +364,69 @@ describe('takt run notifies a normal goal completion through its saved record', 
     expect(await pending(dir)).toEqual([{ name: added.name, runSlug: RUN_SLUG }]);
     const lines = warnings().filter((line) => line.includes(added.name) && line.includes('could not be read back'));
     expect(lines).toHaveLength(1);
+  });
+});
+
+describe('the read back stays on the attempt that notifies', () => {
+  // R14: while the first attempt is between its save and its notice, the task is requeued, claimed
+  // again and saved again with its own mark. The caller's read back must not pick up that record.
+  it("does not publish or clear another attempt's mark when reading the saved record back", async () => {
+    const dir = project();
+    const runner = new TaskRunner(dir);
+    const added = runner.addTask('Normal goal work', { workflow: 'default', goal_id: goalId });
+    const FIRST_RUN = 'run-first-attempt';
+    const NEXT_RUN = 'run-next-attempt';
+    const firstCompletion: GoalTaskResult = {
+      success: false, interrupted: false, workflowResult: 'error', failureReason: 'first attempt: review rejected the change',
+    };
+    const nextCompletion: GoalTaskResult = { success: true, interrupted: false, workflowResult: 'completed' };
+    const seen: { firstExecutionId?: string; nextExecutionId?: string; nextRecord?: Row; errors: unknown[] } = { errors: [] };
+    const clear = vi.spyOn(runner, 'clearCompletionPublicationPending');
+    executeWithDetails.mockImplementation(async (
+      task: TaskInfo, taskRunner: TaskRunner, _cwd: string, _options: unknown, parallel: ParallelRequest,
+    ) => {
+      const requested = parallel?.publishesGoalCompletion === true ? { completionPublicationPending: true as const } : {};
+      seen.firstExecutionId = task.executionId;
+      const first = taskRunner.updateRunningTaskExecution(task.name, { runSlug: FIRST_RUN });
+      taskRunner.failTask({ ...taskResult(first, false, false), completion: firstCompletion, ...requested });
+      // The next attempt runs and saves before this attempt's caller reads its record back.
+      taskRunner.requeueFailedTask(task.name);
+      const [again] = taskRunner.claimNextTasks(1, { setupFailureReason: () => undefined });
+      if (again === undefined) throw new Error('the requeued task was not claimed again');
+      seen.nextExecutionId = again.executionId;
+      const next = taskRunner.updateRunningTaskExecution(task.name, { runSlug: NEXT_RUN });
+      taskRunner.completeTask({ ...taskResult(next, true, false), completion: nextCompletion, ...requested });
+      seen.nextRecord = rawRecord(dir, task.name);
+      return { success: false, runSlug: FIRST_RUN, completion: firstCompletion };
+    });
+
+    const result = await runWithWorkerPool(runner, [], 1, dir, undefined, undefined, 60_000, 'run');
+
+    // Premise: the next attempt's record is a marked goal completion of another execution, so a read
+    // back that ignores the execution id would find it and publish it.
+    expect(seen.firstExecutionId).toEqual(expect.any(String));
+    expect(seen.nextExecutionId).toEqual(expect.any(String));
+    expect(seen.nextExecutionId).not.toBe(seen.firstExecutionId);
+    expect(seen.nextRecord).toMatchObject({
+      status: 'completed', goal_id: goalId, execution_id: seen.nextExecutionId, run_slug: NEXT_RUN,
+      completion: nextCompletion, completion_publication_pending: true,
+    });
+    expect(result).toEqual({ success: 0, fail: 1, executedTaskNames: [added.name] });
+    // A: the caller notifies its own attempt, from its result.
+    expect(save).toHaveBeenCalledExactlyOnceWith(dir, {
+      kind: 'completion', goalId, taskName: added.name, runSlug: FIRST_RUN, result: firstCompletion,
+    });
+    // B: the next attempt keeps its mark for the daemon.
+    expect(rawRecord(dir, added.name)).toMatchObject({
+      execution_id: seen.nextExecutionId, run_slug: NEXT_RUN, completion_publication_pending: true,
+    });
+    const invalid: unknown[] = [];
+    const completions = await readPendingGoalTaskCompletions(dir, { invalid: (_key, error) => { invalid.push(error); }, valid: () => {} });
+    expect(invalid).toEqual([]);
+    expect(completions.map((item) => ({ name: item.name, runSlug: item.runSlug, executionId: item.executionId })))
+      .toEqual([{ name: added.name, runSlug: NEXT_RUN, executionId: seen.nextExecutionId }]);
+    // C: nothing clears a mark on behalf of the first attempt.
+    expect(clear).not.toHaveBeenCalled();
   });
 });
 

@@ -83,3 +83,23 @@ R13 は、設計の表のとおり「受信箱のファイルを `receiveInboxCh
 - 直しの本番で落ちる所：P1・P2・P5・P8 を外すと、前提の assert で落ちる。`inbox.ts:49-53` で `executionId` を `runSlug` より先に見るように入れ替えると、turn の数の assert で落ちる。
 
 外した木で確かめた：1 コミット目と同じ使い捨ての木（`completeTask`・`failTask` が頼まれたときに `run_slug` のある記録に印を付け、`fillSlots` が `publishesGoalCompletion: true` を渡す）で、この試験は通った。そこから `inbox.ts` の順を入れ替えると、新しい turn が 2 つになって落ちた（`expected [ … ] to have a length of 1 but got 2`）。
+
+## 4 コミット目：別の試みの印を読み直しで拾わない（R14）
+
+設計が通ったあとに頼まれた分。ファイル：`src/__tests__/it-normal-completion-publication.test.ts`（同じファイルに足す）。
+
+| # | 試験 | 組み方 |
+|---|---|---|
+| R14 | `does not publish or clear another attempt's mark when reading the saved record back` | R4 の mock を、最初の試み（claim した `executionId` を E1、`runSlug` を `run-first-attempt` とする）を頼んで `failTask` で保存する形にする。mock は返る前に、同じタスクを `requeueFailedTask` で再キューし、`claimNextTasks` で claim し直し（E2）、`runSlug` を `run-next-attempt` にして、次の試みを頼んで `completeTask` で保存する。2 つの `completion` は中身が違う（最初は `failureReason` 付きの失敗、次は成功）。mock は最初の試みの結果（`success: false`、`run-first-attempt`、最初の `completion`）を返す。`autoRequeueMaxAttempts` は既定の 0 のまま。**前提**：E2 が E1 と違い、mock の中の次の試みの保存の直後の生の記録が `status: completed`・`goal_id`・`execution_id: E2`・`run_slug: run-next-attempt`・次の `completion`・`completion_publication_pending: true` を持つ。**A**：`saveManagerEvent` がちょうど 1 回、`runSlug: run-first-attempt` と最初の `completion` で呼ばれる。**B**：返ったあと生の記録が E2・`run-next-attempt`・印を持ち、`readPendingGoalTaskCompletions` が E2 の 1 件を返す。**C**：`runWithWorkerPool` に渡す本物の `TaskRunner` の `clearCompletionPublicationPending` の spy が 1 回も呼ばれない。結果は `{ success: 0, fail: 1 }` |
+
+流し方：1 コミット目と同じ。
+
+結果：**22 件が走り、14 件が落ち、8 件が通った。** 足した R14 は落ちた。前の 21 件の結果は変わらない（13 件が落ち、8 件が通った）。`npx tsc -p tsconfig.tests.json --noEmit` は通った。
+
+- 落ちた所：前提の assert で、次の試みの生の記録に `completion_publication_pending` が無い（今の本番は印を付けない）。E2 と E1 が違うこと、`status`・`goal_id`・`execution_id`・`run_slug`・`completion` は合っていた（下の木で前提が通ることから）。
+- 直しの本番で落ちる所：P1・P2・P5・P8 を外すと前提で落ちる。P4 の読み直しの絞り込みから `executionId` の一致を外すと、A・B・C がそれぞれ落ちる（下の確かめ）。
+
+外した木で確かめた（1 コミット目と同じ使い捨ての木に、P4 の代わりを足した）：`fillSlots` が `saveManagerEvent` の代わりに、`listTaskStateItems` から名前・ゴールの id・`executionId`・終端の状態・印で記録を探し、見つかればマージ済みの `publishAndClearPendingMark` に渡し、無ければ結果から `saveManagerEvent` を呼ぶ関数を呼ぶ。
+
+- `executionId` の一致を入れた木：R14 は通った（前提・A・B・C とも）。
+- `executionId` の一致を外した木：A で落ちた（`saveManagerEvent` が次の試みの `run-next-attempt` と次の `completion` で呼ばれた）。A を外して流すと B で落ちた（印が消えた）。A と B を外して流すと C で落ちた（`clearCompletionPublicationPending` が 1 回呼ばれた）。A・B・C は、それぞれ単独で `executionId` の一致を外したことを捕まえる。
