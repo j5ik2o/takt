@@ -63,3 +63,40 @@
 - S5：`rejects.toBe(failure)` を `resolves.toEqual({ kind: 'declined' })` に替えた。`doubles.event` の `toHaveBeenCalledExactlyOnceWith(...)`、`execute` と `finished` が呼ばれないことの assert は残した。足した assert：runtime の `failed` が呼ばれない、`clearCompletionPublicationPending` が呼ばれない（fixture の `saved` に `completion_publication_pending: true` を足し、その印が `saved` に乗っていることも確かめる）、`[WARN]` の行のうちタスク名と `manager was not notified` を含むものがちょうど 1 行。`claim_retry` を返さないことは `toEqual({ kind: 'declined' })` が見る。
 - S6：後半の `rejects.toBe(failure)` を `resolves.toEqual({ kind: 'claim', assignment: null })` に替え、`doubles.event` が 2 回目まで呼ばれたこと（`toHaveBeenCalledTimes(2)`）と警告の 1 行を足した。前半の assert と、そのあとの「Git or storage failed」で reject する assert は残した。
 - fixture：`claimTasks.js` の mock を、本物を広げたうえで `CLAIM_RETRY_INTERVAL_MS` と `failInterruptedTasksWithGoalEvents` だけを差し替える形にした（M5 のあと本番が `publishSetupFailure` を import しても mock に無い export で落ちないように）。`TaskRunner` の mock に `clearCompletionPublicationPending` を足した。警告は `console.log` を覗いて `[WARN]` の行を拾う（`shared/ui` の `warn()` の出口）。
+
+## #209（S9〜S13）
+
+### 足した試験
+
+- S9 `worker-pool-local-resume-routing.test.ts` › keeps a local resume retry off remote workers in the pool schedule
+- S10 同 › marks a pending retry that resumes a local run as builtin only: %s（source_run_slug / start_step / resume_point）
+- S11 同 › does not assign a local resume retry to a remote claim
+- S12 同 › explains that a local resume retry waits for the builtin worker when its concurrency is 0
+- S13 同 › shows and warns once that a local resume retry waits for the builtin worker
+
+`PoolTask.builtinOnly` と `BUILTIN_RESUME_WAITING_REASON` はまだ無いので、試験は import しない。`builtinOnly` は変数を経由して `PoolTask` に渡し、待ちの理由の文は設計の文字列をそのまま書き、S12 で `scheduler` の export がその文と同じであることを確かめる。tasks.yaml は `TaskStore.prototype` の `read` / `update` を手元の状態に向けて差し替え、実のファイルに触らない（単体の層のまま）。
+
+### 直す前の本番で流した結果
+
+7 件走り、7 件落ちた。
+
+| 試験 | 落ちた理由（期待 → 実際） |
+|---|---|
+| S9 | 遠隔の worker だけのときの割り当てが空 → 遠隔の worker に 1 件割り当たる |
+| S10 source_run_slug | `inspect()` の再試行のタスクに `builtinOnly: true` → 欄が無い |
+| S10 start_step | 同上 |
+| S10 resume_point | 同上 |
+| S11 | 遠隔の claim が `{ kind: 'claim', assignment: null }` → 割り当てを返す |
+| S12 | `scheduler` の `BUILTIN_RESUME_WAITING_REASON` が設計の文 → `undefined` |
+| S13 | タスク名と `daemon.builtin_worker.concurrency` を含む `[WARN]` の行が 1 行 → 0 行（`waiting_reason` の書き込みは今も通る） |
+
+### 本番のどこを外せば落ちるか
+
+| 設計の行 | 当たる試験 |
+|---|---|
+| M9（`resumesLocalRun`） | S10（3 行）、S11 |
+| M11（`eligible` の `builtinOnly`） | S9、S12（割り当てが遠隔に行く） |
+| M11（理由の文） | S12 |
+| M12（`inspect` の付与） | S10。`remote_assignment` のある再試行に `builtinOnly` を付けても S10 が落ちる |
+| M12（警告と、1 回にする覚え） | S13（0 回でも 2 回でも落ちる） |
+| M13（claim の判定） | S11 |
