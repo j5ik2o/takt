@@ -84,6 +84,8 @@ For example, set the URL to `https://daemon.example.test` and inject the issued 
 
 Check the worker's startup output for `Worker cloud-1 connected`. Then submit a goal task through manager on the daemon machine and inspect the worker name in the task list, the execution result, and the run logs and reports collected on the daemon. A task may also run on `builtin`. If you temporarily set the builtin limit to 0 to verify remote execution alone, restore it afterward and restart the daemon. PR merge tasks, tasks without origin, and retries that resume a run saved on the daemon machine after failing on the builtin worker cannot progress while it is 0.
 
+When the daemon stops, it stops the builtin worker process 5 seconds after asking it to shut down. A task finish hook that is still running at that point is cut off, and a warning names the task whose hook was cut off. A finish hook that has not started within those 5 seconds is never run, and no warning is issued for it.
+
 A disconnected execution can continue on the same worker within the 60-second lease deadline. Expired tasks are recorded as failed, and received records remain available. A failed task reserves one slot on its original worker. Requeue/retry can resume on that worker if its workspace remains. If the registration is removed or a disconnection persists for 60 seconds during retry, execution starts again from the saved original SHA using another worker's capacity. A lost workspace also causes execution to start from the original SHA in a new workspace. In-progress state is not transferred between workers.
 
 To remove a registration, run the following on the daemon machine. A connected worker is disconnected, and further results from that assignment are rejected.

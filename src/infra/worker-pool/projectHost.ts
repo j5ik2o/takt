@@ -13,6 +13,7 @@ export class BuiltinProjectHost implements WorkerProject {
   private closing: Promise<void> | undefined;
   private ended = false;
   private stderr = '';
+  private readonly runningHooks = new Set<string>();
 
   constructor(cwd: string, configDirectory: string, private readonly finished: (taskName?: string) => void, remoteEnabled = false) {
     // Source execution uses the repository's installed tsx ESM loader; packaged execution needs no loader.
@@ -42,6 +43,10 @@ export class BuiltinProjectHost implements WorkerProject {
       try {
         const reply = ProjectReplySchema.parse(value);
         if (reply.kind === 'finished') { this.finished(reply.taskName); return; }
+        if (reply.kind === 'finish_hook') {
+          if (reply.running) this.runningHooks.add(reply.taskName); else this.runningHooks.delete(reply.taskName);
+          return;
+        }
         const request = this.pending.get(reply.id);
         if (request === undefined) return;
         this.pending.delete(reply.id);
@@ -109,8 +114,16 @@ export class BuiltinProjectHost implements WorkerProject {
     return this.closing ??= (async () => {
       if (!this.ended && this.managed.child.connected) this.managed.child.send({ kind: 'shutdown', id: randomUUID() }, () => {});
       let timer: ReturnType<typeof setTimeout> | undefined;
-      try { await Promise.race([this.exited, new Promise<void>((resolve) => { timer = setTimeout(resolve, 5_000); })]); }
-      finally { clearTimeout(timer); }
+      let exitedInTime = false;
+      try {
+        await Promise.race([this.exited.then(() => { exitedInTime = true; }),
+          new Promise<void>((resolve) => { timer = setTimeout(resolve, 5_000); })]);
+      } finally { clearTimeout(timer); }
+      if (!exitedInTime) {
+        for (const taskName of this.runningHooks) {
+          this.report(new Error(`Builtin worker stopped while the finish hook for goal task ${taskName} was still running; the hook was cut off`));
+        }
+      }
       if (this.managed.child.pid !== undefined) await this.managed.terminate();
       await this.exited;
     })();

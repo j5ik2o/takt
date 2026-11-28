@@ -24,9 +24,9 @@ import { prepareSharedServerPoolForForcedShutdown } from '../../infra/opencode/s
 import { RemoteTaskLifecycle } from '../../infra/task/remoteTaskLifecycle.js';
 import { resumesLocalRun } from '../../infra/task/taskRecordMutations.js';
 import { initGitProvider } from '../../infra/git/index.js';
-import { BUILTIN_RESUME_WAITING_REASON } from '../../core/worker-pool/scheduler.js';
 import { warn } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
+import { BUILTIN_RESUME_WAITING_REASON } from '../../core/worker-pool/scheduler.js';
 import type { RemoteProjectRequest, RemoteProjectReply } from '../../core/worker-pool/remoteProtocol.js';
 import { prepareRemoteExecutionInput } from './remoteExecutionInput.js';
 
@@ -49,7 +49,8 @@ export class BuiltinProjectRuntime implements WorkerProject {
   private readonly builtinResumeWarned = new Set<string>();
 
   constructor(private readonly cwd: string, private readonly finished: (taskName: string) => void,
-    private readonly failed: (error: unknown) => void, private readonly remoteEnabled = false) {
+    private readonly failed: (error: unknown) => void, private readonly remoteEnabled = false,
+    private readonly onFinishHookRunning?: (taskName: string, running: boolean) => void) {
     const onAcquisitionError = (error: unknown): never => {
       if (error instanceof Error && 'code' in error && error.code === 'ENOSPC') {
         throw new TaskClaimLockAcquisitionError(error.message, 'ENOSPC', { cause: error });
@@ -199,11 +200,13 @@ export class BuiltinProjectRuntime implements WorkerProject {
    * a lost hook is reported with the task name by the hook runner itself.
    */
   private scheduleFinishHook(task: TaskState): void {
-    const hookPromise: Promise<void> = runTaskFinishHooksForStates(this.cwd, [task]).then(
-      () => { this.pendingHooks.delete(hookPromise); },
-      () => { this.pendingHooks.delete(hookPromise); },
-    );
+    const settle = (): void => {
+      this.pendingHooks.delete(hookPromise);
+      if (![...this.pendingHooks.values()].includes(task.name)) this.onFinishHookRunning?.(task.name, false);
+    };
+    const hookPromise: Promise<void> = runTaskFinishHooksForStates(this.cwd, [task]).then(settle, settle);
     this.pendingHooks.set(hookPromise, task.name);
+    this.onFinishHookRunning?.(task.name, true);
   }
 
   private async startTask(taskName: string, workerName: string): Promise<ProjectStartResult> {
@@ -256,8 +259,14 @@ export class BuiltinProjectRuntime implements WorkerProject {
         this.config.ignoreExceed ? { ignoreIterationLimit: true } : undefined)
         .then((result) => {
           if (result.completion === undefined || result.runSlug === undefined) throw new Error('Goal task result was not saved');
-          saveManagerEvent(this.cwd, { kind: 'completion', goalId: record.goal_id!, taskName,
-            runSlug: result.runSlug, result: result.completion });
+          try {
+            saveManagerEvent(this.cwd, { kind: 'completion', goalId: record.goal_id!, taskName,
+              runSlug: result.runSlug, result: result.completion });
+          } catch (error) {
+            const detail = sanitizeSensitiveText(getErrorMessage(error));
+            warn(`Goal task ${sanitizeTerminalText(taskName)} (goal ${record.goal_id!}, run ${result.runSlug}) completed and is saved in .takt/tasks.yaml, but the manager was not notified: ${detail}`);
+            log.error('Goal task completion notification failed', { taskName, goalId: record.goal_id, runSlug: result.runSlug, error: detail });
+          }
           settled = true;
         })
         .finally(() => {

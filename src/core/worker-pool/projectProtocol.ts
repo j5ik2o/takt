@@ -23,7 +23,8 @@ export const ProjectReplySchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('snapshot'), id: z.string(), work: z.object({
     concurrency: z.number().int().positive(), available: z.boolean(),
     tasks: z.array(z.object({ taskName: z.string(), mergeTask: z.boolean(), origin: z.string().min(1).optional(),
-      retryWorker: z.string().optional(), retryReady: z.boolean().optional(), remoteOnly: z.boolean().optional() }).strict()),
+      retryWorker: z.string().optional(), retryReady: z.boolean().optional(), remoteOnly: z.boolean().optional(),
+      builtinOnly: z.boolean().optional() }).strict()),
     remoteRecords: z.array(RemoteTaskRecordSchema).optional(),
   }).strict() }).strict(),
   z.object({ kind: z.literal('started'), id: z.string(), result: StartResultSchema }).strict(),
@@ -31,6 +32,7 @@ export const ProjectReplySchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('claim_retry'), id: z.string(), retryAt: z.number().finite() }).strict(),
   z.object({ kind: z.literal('error'), id: z.string(), message: z.string() }).strict(),
   z.object({ kind: z.literal('finished'), taskName: z.string() }).strict(),
+  z.object({ kind: z.literal('finish_hook'), taskName: z.string(), running: z.boolean() }).strict(),
 ]);
 
 export type ProjectRequest = z.infer<typeof ProjectRequestSchema>;

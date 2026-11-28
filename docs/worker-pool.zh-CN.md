@@ -84,6 +84,8 @@ exec takt worker --url "$WORKER_DAEMON_URL"
 
 在 worker 启动输出中确认 `Worker cloud-1 connected`。随后在 daemon 机器的 manager 中提交目标任务，检查任务列表中的 worker 名称、执行结果，以及汇集到 daemon 的 run 日志和报告。任务也可能由 `builtin` 执行。如果为了单独验证远程执行而临时将内置上限设为0，验证后应恢复并重启 daemon。在此期间，PR 合并任务、没有 origin 的任务，以及在内置 worker 上失败后从原 run 恢复的重试无法推进。
 
+daemon 停止时，会在请求内置 worker 进程退出 5 秒后停止该进程。届时仍在运行的任务结束 hook 会被切断，并有一行警告写明被切断的是哪个任务的 hook。在这 5 秒内尚未开始的结束 hook 不会运行，也不会发出警告。
+
 断开连接的执行可在60秒 lease 期限内在同一 worker 上继续。过期任务被记录为失败，已接收的记录保留。失败任务会在原 worker 上预留一个槽位。requeue/retry 时，如果原 worker 的工作目录仍在，可以恢复执行。注册被删除或重试时持续断连60秒，则使用其他 worker 的空闲容量，从保存的原始 SHA 重新开始。工作目录丢失时，也会在新目录中从原始 SHA 开始。不会把执行中途的状态转移到其他 worker。
 
 在 daemon 机器上运行以下命令可删除注册。正在连接的 worker 会被断开，此后不再接受该分配的成果。
