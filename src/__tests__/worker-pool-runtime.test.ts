@@ -119,7 +119,7 @@ it.each(['renew', 'finish'] as const)('refuses remote %s when another manual own
 
 it('rechecks unreadable remote input after the claim, publishes the saved terminal result, and keeps a failed notification inside the runtime so its marked record is resent', async () => {
   const record = doubles.records()[0];
-  const saved = toTaskState('/project/.takt/tasks.yaml', { ...record, status: 'failed', run_slug: 'setup-remote',
+  const saved = toTaskState('/project/.takt/tasks.yaml', { ...record, name: 'unreadable-remote', status: 'failed', run_slug: 'setup-remote',
     completion: { success: false, interrupted: false, workflowResult: 'error' } });
   doubles.remoteRequest.mockResolvedValue({ kind: 'unreadable', taskName: 'a' });
   doubles.recheck.mockReturnValue(saved);
@@ -167,7 +167,7 @@ it('passes only a confirmed assignment to execution and saves completion before 
 
 it.each(['recheck', 'claim'] as const)('keeps a %s completion notification failure inside the runtime so its marked record is resent', async (operation) => {
   const record = doubles.records()[0];
-  const saved = toTaskState('/project/.takt/tasks.yaml', { ...record, status: 'failed', run_slug: 'setup-b',
+  const saved = toTaskState('/project/.takt/tasks.yaml', { ...record, name: 'setup-failed', status: 'failed', run_slug: 'setup-b',
     completion: { success: false, interrupted: false, workflowResult: 'error' }, completion_publication_pending: true });
   if (operation === 'recheck') {
     doubles.records.mockReturnValue([{ ...record, content: undefined }]);

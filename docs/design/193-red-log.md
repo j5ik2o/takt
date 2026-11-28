@@ -265,3 +265,17 @@ S23 は takt中将の答え（11/28）のとおり、host の層（`BuiltinProje
 | M18 | S21、M18 の単体の試験（`failed` を呼ぶ、`finished` を呼ばない、警告を出さない、警告に秘密を出す、のどれでも落ちる） |
 | M6（各段の `try/catch`） | S22 の 2 行 |
 | S23（設計の追記待ち） | host の 5 秒の打ち切りでフックを切ったときに、タスク名つきの 1 行を出さない（0 行でも 2 行でも落ちる）、またはその行に秘密を出す |
+
+## 見直しの直し（8 番目のあと）
+
+8 番目までのコミットは muse の基点なので付け替えず、このコミットで試験を直した。件数は変わらない（`it-worker-pool-completion-publication.test.ts` 15 件中 14 件、`it-worker-token-source.test.ts` 7 件中 7 件、`worker-pool-runtime.test.ts` 13 件中 4 件が落ちる）。
+
+- S23：タスク名を `host hook cut` から `stopping work` にした（名前に `hook` が入ると、`/hook/i` の条件が名前だけで満たされる）。数え方を、出口（子の stderr、daemon 側の stderr、`[WARN]`）ごとに数え、どの出口も 1 行まで、少なくとも 1 つの出口に 1 行、に改めた。host は子が 0 以外（シグナルを含む）で終わると子の stderr の末尾を自分の報告（`reportDaemonError`、daemon 側の stderr）に写すので、本番が子の stderr に警告を出すと、同じ行が 2 つの出口に出る。出口を足し合わせて 1 行と数えると、直したあとも落ちていた。
+- S5・S6・S7・S21：警告の行をタスク名で拾う試験で、タスク名が `a`・`b` だった。`manager was not notified` の文そのものに `a` と `b` が入っているので、名前の条件が空振りしていた。S5・S6 は `saved` の記録の名前だけを `setup-failed`・`unreadable-remote` に変えた（`start('a')` や `recheck('a')` の既存の assert はそのまま）。S7 の B を `blocked setup`、S21 の B を `notify failure` にした。
+- S15：接続の直後に stderr の警告を数えていたので、パイプの到着と競る。`vi.waitFor` で待つ形にした。
+
+### 確かめたこと（試験は変えていない）
+
+- **#211 のエラーの出口**：今の CLI は、`action` が投げたエラーを stdout の `[ERROR]` の行に書き、stderr には何も書かない（`TAKT_WORKER_TOKEN` だけで起動して、stdout が `[ERROR] Worker startup requires --url and --token`、stderr が空）。S16・S17 は設計（`worker-token-source.md` 1・2 節）のとおり stderr を見るので、M15・M16 が素直に `throw` するだけでは S16・S17 は red のまま残る。止める文（権限、重なり）は stderr へ明示して書く必要がある。
+- **S20 と `terminateManagedProcesses`**：終了フックは `runBoundedCommand`（`bounded-command-runner.ts`）が `node:child_process` の `spawn`（`detached`）で起こし、`spawnManagedProcess` の管理には入らない。runtime の `close()` が先に呼ぶ `terminateManagedProcesses()` はフックを止めない。試験はそこを mock しているが、本番との食い違いは無い。同じ理由で、S23 で host が子のプロセス群を止めても、フックのプロセスは残る（試験の後片付けで門のファイルを置いて終わらせる）。
+- **単体の mock のもとの終了フック**：`worker-pool-runtime.test.ts` は `infra/config/index.js` を丸ごと差し替えているが、`taskFinishHook.ts` は `loadProjectConfig` を `infra/config/project/projectConfig.js` から読む。作業ツリーの外の写しで、その mock のもとで `runTaskFinishHooksForStates('/project', [state])` を読み込んで呼び、stderr に何も書かずに解決することを確かめた。M5 のあとも、この mock で S5・S6 が別の理由で落ちることは無い。

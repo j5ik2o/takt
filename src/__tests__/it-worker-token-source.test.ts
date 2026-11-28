@@ -11,7 +11,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { randomInt, randomUUID } from 'node:crypto';
-import { afterEach, beforeEach, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { scaledMs } from '../../scripts/test-time-factor.mjs';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { UPDATE_NOTIFIER_DISABLED_ARG } from '../shared/utils/updateNotifierProcess.js';
@@ -130,7 +130,7 @@ it('warns that --token is visible to ps and still connects', async () => {
   const worker = await startWorker(['--token', token]);
   expect(await connectionOrExit(worker), worker.stderr()).toBe('connected');
   expect(authorizations).toEqual([`Bearer ${token}`]);
-  expect(worker.stderr().split('\n').filter((line) => line.includes('--token') && /\bps\b/u.test(line))).toHaveLength(1);
+  await vi.waitFor(() => expect(worker.stderr().split('\n').filter((line) => line.includes('--token') && /\bps\b/u.test(line))).toHaveLength(1));
   expect(worker.stderr()).not.toContain(token);
   expect(worker.stdout()).not.toContain(token);
 });
