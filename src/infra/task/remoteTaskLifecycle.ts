@@ -23,6 +23,7 @@ import { TaskStoppedError } from './taskStop.js';
 import { publishAndClearPendingMark } from './goalCompletionPublication.js';
 import { clearCompletionPublicationPendingFromStore } from './taskLifecycleService.js';
 import { toTaskState } from './mapper.js';
+import { resumesLocalRun } from './taskRecordMutations.js';
 import type { TaskState } from './types.js';
 import { warn } from '../../shared/ui/index.js';
 import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
@@ -249,6 +250,7 @@ export class RemoteTaskLifecycle {
     if (origin === undefined) return { kind: 'claim', assignment: null };
     const record = this.store.read().tasks.find((task) => task.name === request.taskName);
     if (record?.goal_id === undefined || record.status !== 'pending' || record.merge_task === true) return { kind: 'claim', assignment: null };
+    if (resumesLocalRun(record)) return { kind: 'claim', assignment: null };
     const goal = new GoalStore(this.cwd).getSync(record.goal_id);
     if (isGoalPaused(goal) || goal.executionStatus === 'aborted') return { kind: 'claim', assignment: null };
     try { resolveTaskContent(this.cwd, record); }

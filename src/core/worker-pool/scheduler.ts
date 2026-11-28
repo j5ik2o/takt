@@ -1,13 +1,20 @@
 import type { PoolAssignment, PoolProject, PoolTask, PoolWorker } from './types.js';
 
+/** The waiting reason for a retry that resumes a local run while the builtin worker has no slot (#209). */
+export const BUILTIN_RESUME_WAITING_REASON = 'Waiting for the builtin worker: this retry resumes a run saved on the daemon machine, and the builtin worker concurrency is 0';
+
 export function workerPoolAvailability(task: PoolTask, project: PoolProject, workers: readonly PoolWorker[],
   assignments: readonly PoolAssignment[]): { worker?: PoolWorker; reason?: string } {
-  const eligible = workers.filter((worker) => (!task.mergeTask || worker.kind === 'builtin')
+  const eligible = workers.filter((worker) => ((!task.mergeTask && !task.builtinOnly) || worker.kind === 'builtin')
     && (!task.remoteOnly || worker.kind === 'remote')
     && (task.retryWorker === undefined || task.retryWorker === worker.name && task.retryReady === true)
     && (worker.kind === 'builtin' || task.origin !== undefined)
     && (worker.concurrency === undefined && worker.kind === 'builtin' || (worker.concurrency ?? 0) > 0));
-  if (eligible.length === 0) return { reason: 'No executable worker is available: worker concurrency is 0' };
+  if (eligible.length === 0) {
+    return task.builtinOnly === true
+      ? { reason: BUILTIN_RESUME_WAITING_REASON }
+      : { reason: 'No executable worker is available: worker concurrency is 0' };
+  }
   if (assignments.filter((entry) => entry.projectId === project.projectId && !entry.retryReservation).length >= project.concurrency) {
     return { reason: 'Waiting for an available worker slot: project concurrency limit reached' };
   }

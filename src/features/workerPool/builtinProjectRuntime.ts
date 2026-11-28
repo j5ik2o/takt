@@ -22,6 +22,10 @@ import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { terminateManagedProcesses } from '../../shared/utils/spawn.js';
 import { prepareSharedServerPoolForForcedShutdown } from '../../infra/opencode/server-pool.js';
 import { RemoteTaskLifecycle } from '../../infra/task/remoteTaskLifecycle.js';
+import { resumesLocalRun } from '../../infra/task/taskRecordMutations.js';
+import { BUILTIN_RESUME_WAITING_REASON } from '../../core/worker-pool/scheduler.js';
+import { warn } from '../../shared/ui/index.js';
+import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import type { RemoteProjectRequest, RemoteProjectReply } from '../../core/worker-pool/remoteProtocol.js';
 import { prepareRemoteExecutionInput } from './remoteExecutionInput.js';
 
@@ -41,6 +45,7 @@ export class BuiltinProjectRuntime implements WorkerProject {
   private claimRetryAt: number | undefined;
   private readonly remoteTasks: RemoteTaskLifecycle;
   private readonly pendingHooks = new Map<Promise<void>, string>();
+  private readonly builtinResumeWarned = new Set<string>();
 
   constructor(private readonly cwd: string, private readonly finished: (taskName: string) => void,
     private readonly failed: (error: unknown) => void, private readonly remoteEnabled = false) {
@@ -112,6 +117,7 @@ export class BuiltinProjectRuntime implements WorkerProject {
       return { concurrency: this.config!.concurrency, available,
         ...(remoteRecords.length === 0 ? {} : { remoteRecords }),
         tasks: tasks.map((task) => ({ taskName: task.name, mergeTask: task.merge_task === true,
+          ...(resumesLocalRun(task) ? { builtinOnly: true } : {}),
           ...(task.remote_assignment === undefined ? {} : { remoteOnly: true,
             ...(task.remote_assignment.retryReservation ? { retryWorker: task.remote_assignment.workerName,
               retryReady: task.remote_assignment.retryReady === true } : {}) }),
@@ -124,7 +130,18 @@ export class BuiltinProjectRuntime implements WorkerProject {
     const retry = this.retryPending();
     if (retry !== undefined) return retry;
     try {
-      for (const { taskName, reason } of reasons) this.runner.setPendingWaitingReason([taskName], reason);
+      for (const { taskName, reason } of reasons) {
+        this.runner.setPendingWaitingReason([taskName], reason);
+        if (reason === BUILTIN_RESUME_WAITING_REASON) {
+          if (!this.builtinResumeWarned.has(taskName)) {
+            this.builtinResumeWarned.add(taskName);
+            warn(`Goal task ${sanitizeTerminalText(taskName)} waits for the builtin worker: it resumes a run saved on the daemon machine, and the builtin worker concurrency is 0. Set daemon.builtin_worker.concurrency above 0 to run it.`);
+            log.warn('Goal task waits for the builtin worker to resume a local run', { taskName });
+          }
+        } else {
+          this.builtinResumeWarned.delete(taskName);
+        }
+      }
       return { kind: 'updated' };
     } catch (error) { return this.acquisitionFailed(error); }
   }

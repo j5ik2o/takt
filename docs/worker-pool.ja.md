@@ -81,7 +81,7 @@ exec takt worker --url "$WORKER_DAEMON_URL" --token "$WORKER_REGISTRATION_TOKEN"
 
 ## 動作確認と運用上の制約
 
-worker の起動出力で `Worker cloud-1 connected` を確認します。次に daemon 側の manager でゴールタスクを投入し、タスク一覧の worker 名、実行結果、daemon に集まった run のログ・レポートを確認します。`builtin` が実行する場合もあります。リモートだけの実行を確認するため組み込み上限を0にする場合は、確認後に戻して daemon を再起動してください。その間は PRマージ用タスクと origin のないタスクが進みません。
+worker の起動出力で `Worker cloud-1 connected` を確認します。次に daemon 側の manager でゴールタスクを投入し、タスク一覧の worker 名、実行結果、daemon に集まった run のログ・レポートを確認します。`builtin` が実行する場合もあります。リモートだけの実行を確認するため組み込み上限を0にする場合は、確認後に戻して daemon を再起動してください。その間は PRマージ用タスクと origin のないタスクと、組み込み worker で失敗して元の run から再開する再試行が進みません。
 
 通信断は60秒の lease 期限内なら同じ実行を継続できます。期限切れのタスクは失敗として記録され、受領済みの記録は残ります。失敗タスクは元 worker の空きを一つ予約します。requeue/retry で同じ worker の作業場所が残っていれば再開できます。登録削除や再試行時の60秒の切断では別 worker の空きを使い、保存した元SHAから最初から実行します。作業場所が消失した場合も、新しい作業場所で元SHAから実行します。途中状態を別 worker へ移す機能ではありません。
 

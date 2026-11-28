@@ -103,6 +103,21 @@ export function buildExceededTaskRecord(
   };
 }
 
+/**
+ * Whether a record is a retry that resumes a run saved on this machine (#209): it has no remote
+ * assignment, and it carries one of the fields that tie it to the previous run. These are the
+ * same fields the remote retry-state path clears when it restarts from the original SHA.
+ */
+export function resumesLocalRun(task: TaskRecord): boolean {
+  return task.remote_assignment === undefined
+    && (task.source_run_slug !== undefined
+      || task.resume_mode !== undefined
+      || task.start_step !== undefined
+      || task.resume_point !== undefined
+      || task[TASK_RESTART_POINT_KEY] !== undefined
+      || task.source_resume_point !== undefined);
+}
+
 export function buildRetryTaskRecord(
   task: TaskRecord,
   status: Extract<TaskStatus, 'pending' | 'running'>,

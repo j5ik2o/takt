@@ -18,6 +18,7 @@ export interface PoolTask {
   retryWorker?: string;
   retryReady?: boolean;
   remoteOnly?: boolean;
+  builtinOnly?: boolean;
 }
 
 export interface PoolAssignment {
