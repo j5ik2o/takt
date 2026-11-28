@@ -34,7 +34,7 @@ export async function runAllTasks(
           ...(options.autoStrategy !== undefined ? { autoStrategy: options.autoStrategy } : {}),
         }
       : undefined;
-    const taskRunner = new TaskRunner(cwd, { onWarning: warn, goalTasksOnly: options?.goalTasksOnly });
+    const taskRunner = new TaskRunner(cwd, { onWarning: warn });
     const globalConfig = resolveWorkflowConfigValues(
       cwd,
       [
@@ -50,7 +50,7 @@ export async function runAllTasks(
       ...(options?.ignoreExceed === true || globalConfig.ignoreExceed === true
         ? { ignoreIterationLimit: true }
         : {}),
-      autoRequeueMaxAttempts: options?.goalTasksOnly === true ? 0 : globalConfig.autoRequeueMaxAttempts,
+      autoRequeueMaxAttempts: globalConfig.autoRequeueMaxAttempts,
     };
     const shouldNotifyRunComplete = globalConfig.notificationSound !== false
       && globalConfig.notificationSoundEvents?.runComplete !== false;
@@ -67,7 +67,7 @@ export async function runAllTasks(
     }
     const confirmation = terminalProviderConfirmation();
     const pendingTasks = await retryLockTimeout(
-      () => taskRunner.listTasksForProviderPreflight(options?.goalTasksOnly === true),
+      () => taskRunner.listTasksForProviderPreflight(),
     ) ?? [];
     const maxAttempts = runOptions.autoRequeueMaxAttempts;
     const failedTasks = maxAttempts > 0
@@ -96,7 +96,7 @@ export async function runAllTasks(
     }
     await retryLockTimeout(
       () => checkPendingTaskProviders(taskRunner, cwd, agentOverrides ?? {}, confirmation,
-        pendingTasks, schedulingSignal, options?.goalTasksOnly === true),
+        pendingTasks, schedulingSignal),
     );
 
     const runId = generateRunId();
@@ -145,7 +145,6 @@ export async function runAllTasks(
         globalConfig.taskPollIntervalMs,
         'run',
         poolSignals,
-        options?.goalTasksOnly === true,
       );
 
       const totalCount = result.success + result.fail;
@@ -180,7 +179,7 @@ export async function runAllTasks(
     } finally {
       statusLine.stop();
     }
-  }, options?.goalTasksOnly);
+  });
 }
 
 async function retryStartupLockTimeout<T>(

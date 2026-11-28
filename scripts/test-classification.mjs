@@ -302,6 +302,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/managed-provider-retry-preflight.test.ts',
   'src/__tests__/managed-sdk-version-alignment.test.ts',
   'src/__tests__/manager-refresh-interval.test.ts',
+  'src/__tests__/manager-workspace-access-realpath.test.ts',
   'src/__tests__/mcp-entrypoint.test.ts',
   'src/__tests__/mock-scenario.test.ts',
   'src/__tests__/monitorJsonMetricExporter.test.ts',
@@ -310,6 +311,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/observability-compose.test.ts',
   'src/__tests__/opencode-coerce-tool-args.test.ts',
   'src/__tests__/opencode-list-tool-shim.test.ts',
+  'src/__tests__/opencode-readonly-directory-guard.test.ts',
   'src/__tests__/opencode-types.test.ts',
   'src/__tests__/opencode-v2-transport.test.ts',
   'src/__tests__/orderReader.test.ts',
@@ -418,7 +420,6 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/daemon-conversation-events.integration.test.ts',
   'src/__tests__/daemon-conversation-ipc.integration.test.ts',
   'src/__tests__/daemon-retired-watch-events.integration.test.ts',
-  'src/__tests__/daemon-startup.integration.test.ts',
   'src/__tests__/deepseek-runtime-mode-input.integration.test.ts',
   'src/__tests__/director-foundation.integration.test.ts',
   'src/__tests__/epic-storage.integration.test.ts',
@@ -488,6 +489,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/taskInstructionActions.test.ts',
   'src/__tests__/tool-activity-terminal.integration.test.ts',
   'src/__tests__/verify-across-providers.integration.test.ts',
+  'src/__tests__/worker-pool-transfer.integration.test.ts',
 ]);
 
 export const lightIntegrationTestFiles = Object.freeze([

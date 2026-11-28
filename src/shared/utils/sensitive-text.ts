@@ -1,3 +1,4 @@
+import { redactExecutionSecrets, getExecutionSecrets } from './execution-secrets.js';
 import * as legacy from './sensitive-text-legacy.js';
 import { legacySequentialRanges, legacyStageSteps, type LegacyStage } from './sensitive-text-legacy-trace.js';
 
@@ -541,9 +542,10 @@ export function previousDisplayRanges(text: string, masked: readonly SensitiveRa
   return legacySequentialRanges(text, masked).ranges;
 }
 
-export function sanitizeSensitiveText(text: string): string {
+export function sanitizeSensitiveText(text: string, executionSecrets: readonly string[] = getExecutionSecrets()): string {
   if (!text) return text;
-  return maskSensitiveRanges(text, displayRanges(text, legacySequentialRanges(text, []).ranges));
+  const masked = maskSensitiveRanges(text, displayRanges(text, legacySequentialRanges(text, []).ranges));
+  return redactExecutionSecrets(masked, executionSecrets);
 }
 
 export function isSensitiveKeyName(key: string): boolean {
@@ -569,6 +571,7 @@ function patternRanges(matches: SensitiveMatches): SensitiveRange[] {
 
 /** Values hidden from later output: the previous collection and the new one (`all`). */
 export function collectEmbeddedSensitiveValues(text: string, values: Set<string>): void {
+  for (const value of getExecutionSecrets()) values.add(value);
   legacy.collectEmbeddedSensitiveValues(text, values);
   collectNewEmbeddedValues(text, values);
 }
@@ -578,6 +581,12 @@ export function collectEmbeddedSensitiveValues(text: string, values: Set<string>
  * found (the start of the previous composition, see sanitizeTextWithValues), `all` gets both.
  */
 export function collectTrackedEmbeddedSensitiveValues(text: string, into: { legacy: Set<string>; all: Set<string> }): void {
+  // Execution secrets are known values of the current implementation, as in
+  // collectEmbeddedSensitiveValues: they go to `all`, not to `legacy` (the previous
+  // collection did not know them, and the previous composition must start from
+  // `legacy` only). Without them, a short secret split across fragments is never
+  // tracked, so the fragment masking in the phase 1 log cannot hide it at all.
+  for (const value of getExecutionSecrets()) into.all.add(value);
   const found = new Set<string>();
   legacy.collectEmbeddedSensitiveValues(text, found);
   for (const value of found) {

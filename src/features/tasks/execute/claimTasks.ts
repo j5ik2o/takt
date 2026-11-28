@@ -1,5 +1,4 @@
 import type { TaskRunner, TaskInfo, TaskState } from '../../../infra/task/index.js';
-import { saveManagerEvent } from '../../../infra/goals/events.js';
 import { PrivateFileLockAcquisitionError } from '../../../shared/utils/private-file-lock.js';
 import {
   TaskClaimLockAcquisitionError,
@@ -12,8 +11,12 @@ import { createLogger, getErrorMessage } from '../../../shared/utils/index.js';
 import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { createRuntimeAssignmentSetupGuard } from './runtimeAssignmentGuard.js';
+import { publishAndClearPendingMark } from '../../../infra/task/goalCompletionPublication.js';
+import { saveManagerEvent } from '../../../infra/goals/events.js';
 
 const log = createLogger('claim-tasks');
+
+export const CLAIM_RETRY_INTERVAL_MS = 5_000;
 
 export class TaskClaimLockUnavailableError extends Error {
   readonly lock: TaskClaimLock;
@@ -78,37 +81,6 @@ export function isClaimLockTimeoutFailure(error: unknown): boolean {
   return classified instanceof TaskClaimLockUnavailableError && classified.code === 'TIMEOUT';
 }
 
-function publishGoalCompletion(cwd: string, task: TaskState): boolean {
-  if (task.goalId === undefined || task.completion === undefined) return false;
-  if (task.runSlug !== undefined) {
-    saveManagerEvent(cwd, { kind: 'completion', goalId: task.goalId, taskName: task.name, runSlug: task.runSlug, result: task.completion });
-    return true;
-  }
-  if (task.executionId !== undefined) {
-    saveManagerEvent(cwd, { kind: 'completion', goalId: task.goalId, taskName: task.name, executionId: task.executionId, result: task.completion });
-    return true;
-  }
-  return false;
-}
-
-/**
- * Publishes one saved completion and then clears its pending mark (#170). A failed clear never
- * undoes the publication: the daemon resends with a deterministic eventId and clears the mark.
- */
-function publishAndClearPendingMark(taskRunner: TaskRunner, cwd: string, task: TaskState): void {
-  if (!publishGoalCompletion(cwd, task)) return;
-  if (task.completionPublicationPending !== true) return;
-  try {
-    taskRunner.clearCompletionPublicationPending(task.name, {
-      goalId: task.goalId, status: task.status, runSlug: task.runSlug, executionId: task.executionId,
-    });
-  } catch (error) {
-    const detail = sanitizeSensitiveText(getErrorMessage(error));
-    warn(`Goal task ${sanitizeTerminalText(task.name)} (goal ${task.goalId ?? 'unknown'}) was saved as ${task.status} in .takt/tasks.yaml and the manager was notified, but clearing its completion publication mark failed; the daemon will resend it: ${detail}`);
-    log.error('Clearing the completion publication mark failed', { taskName: task.name, goalId: task.goalId, error: detail });
-  }
-}
-
 const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set(['completed', 'failed', 'exceeded', 'pr_failed']);
 
 /**
@@ -139,7 +111,7 @@ export function publishTaskCompletion(
   }
   if (saved !== undefined) {
     try {
-      publishAndClearPendingMark(taskRunner, cwd, saved);
+      publishAndClearPendingMark((taskName, identity) => taskRunner.clearCompletionPublicationPending(taskName, identity), cwd, saved);
     } catch (error) {
       const detail = sanitizeSensitiveText(getErrorMessage(error));
       warn(`Goal task ${sanitizeTerminalText(task.name)} (goal ${task.goalId}, run ${saved.runSlug ?? result.runSlug ?? 'unknown'}) finished and is saved in .takt/tasks.yaml, but the manager was not notified: ${detail}; the daemon will resend it from its completion mark`);
@@ -167,9 +139,9 @@ export function publishTaskCompletion(
  * The setup failure is already saved in tasks.yaml, so a failed manager notification must not lose
  * the claim. It is shown on the terminal: a manager auto run writes it to its run log only.
  */
-function publishSetupFailure(taskRunner: TaskRunner, cwd: string, task: TaskState): void {
+export function publishSetupFailure(taskRunner: TaskRunner, cwd: string, task: TaskState): void {
   try {
-    publishAndClearPendingMark(taskRunner, cwd, task);
+    publishAndClearPendingMark((taskName, identity) => taskRunner.clearCompletionPublicationPending(taskName, identity), cwd, task);
   } catch (error) {
     const detail = sanitizeSensitiveText(getErrorMessage(error));
     warn(`Goal task ${sanitizeTerminalText(task.name)} (goal ${task.goalId ?? 'unknown'}) failed during setup and is saved as failed in .takt/tasks.yaml, but the manager was not notified: ${detail}`);
@@ -180,7 +152,7 @@ function publishSetupFailure(taskRunner: TaskRunner, cwd: string, task: TaskStat
 export function failInterruptedTasksWithGoalEvents(taskRunner: TaskRunner, cwd: string): number {
   return taskRunner.failInterruptedRunningTasks(undefined, (task) => {
     try {
-      publishAndClearPendingMark(taskRunner, cwd, task);
+      publishAndClearPendingMark((taskName, identity) => taskRunner.clearCompletionPublicationPending(taskName, identity), cwd, task);
     } catch (error) {
       const detail = sanitizeSensitiveText(getErrorMessage(error));
       warn(`Goal task ${sanitizeTerminalText(task.name)} (goal ${task.goalId ?? 'unknown'}) was recovered as failed in .takt/tasks.yaml, but the manager was not notified: ${detail}`);

@@ -25,11 +25,10 @@ import { forceExitAfterOpenCodeCleanup } from './forceShutdown.js';
 import { isInputWaiting } from './inputWait.js';
 import type { TaskExecutionOptions } from './types.js';
 import { runTaskFinishHooksForStates } from './taskFinishHook.js';
-import { claimTasksWithGoalCompletions, isClaimLockTimeoutFailure, publishTaskCompletion, TaskClaimLockUnavailableError } from './claimTasks.js';
+import { CLAIM_RETRY_INTERVAL_MS, claimTasksWithGoalCompletions, isClaimLockTimeoutFailure, publishTaskCompletion, TaskClaimLockUnavailableError } from './claimTasks.js';
 import { checkQueuedTaskProviders, checkPendingTaskProviders } from './providerPreflight.js';
 
 const log = createLogger('worker-pool');
-const CLAIM_RETRY_INTERVAL_MS = 5_000;
 
 export interface WorkerPoolResult {
   success: number;
@@ -118,7 +117,6 @@ export async function runWithWorkerPool(
   pollIntervalMs: number,
   mode: 'run' | 'watch' = 'run',
   shutdownSignals?: WorkerPoolShutdownSignals,
-  goalTasksOnly = false,
 ): Promise<WorkerPoolResult> {
   const schedulingController = shutdownSignals === undefined ? new AbortController() : undefined;
   const taskAbortController = shutdownSignals === undefined ? new AbortController() : undefined;
@@ -162,7 +160,7 @@ export async function runWithWorkerPool(
       || (claimRetryAt !== undefined && Date.now() < claimRetryAt)) return;
     try {
       const { attempted, setupFailedTasks } = await claimAvailableTasks(taskRunner, queue, active.size, concurrency, schedulingSignal,
-        cwd, taskExecutionOptions, goalTasksOnly);
+        cwd, taskExecutionOptions);
       if (mode === 'run') {
         for (const task of setupFailedTasks) {
           failCount++;
@@ -338,15 +336,14 @@ async function claimAvailableTasks(
   signal: AbortSignal,
   cwd: string,
   overrides: TaskExecutionOptions | undefined,
-  goalTasksOnly: boolean,
 ): Promise<{ attempted: boolean; setupFailedTasks: import('../../../infra/task/index.js').TaskState[] }> {
   if (signal.aborted || isInputWaiting()) return { attempted: false, setupFailedTasks: [] };
   const freeSlots = concurrency - activeCount - queue.length;
   if (freeSlots <= 0) return { attempted: false, setupFailedTasks: [] };
-  await checkPendingTaskProviders(taskRunner, cwd, overrides ?? {}, undefined, [], signal, goalTasksOnly);
+  await checkPendingTaskProviders(taskRunner, cwd, overrides ?? {}, undefined, [], signal);
   if (signal.aborted || isInputWaiting()) return { attempted: false, setupFailedTasks: [] };
   const { tasks: newTasks, setupFailedTasks } = claimTasksWithGoalCompletions(
-    taskRunner, freeSlots, cwd, signal, goalTasksOnly,
+    taskRunner, freeSlots, cwd, signal,
   );
   await runTaskFinishHooksForStates(cwd, setupFailedTasks);
   log.trace('poll_tick', { active: activeCount, queued: queue.length, freeSlots });

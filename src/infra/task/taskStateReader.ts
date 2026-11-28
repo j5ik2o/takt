@@ -3,6 +3,7 @@ import { lstat, readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { parseDocument } from 'yaml';
 import { z } from 'zod/v4';
+import { RemoteAssignmentSchema } from '../../core/worker-pool/remoteProtocol.js';
 import { GoalTaskResultSchema, type GoalTaskResult } from '../goals/schema.js';
 import { hasCode, readEntirePrivateFile } from '../daemon/privateFile.js';
 
@@ -14,6 +15,7 @@ const WatchTaskSchema = z.object({
   goal_id: z.uuid().optional(), run_slug: z.string().min(1).optional(), execution_id: z.string().min(1).optional(),
   worktree_path: z.string().optional(), task_dir: z.string().optional(),
   merge_task: z.boolean().optional(),
+  waiting_reason: z.string().optional(), remote_assignment: RemoteAssignmentSchema.optional(),
   owner_pid: z.number().int().positive().nullable().optional(), owner_start_time: z.string().min(1).nullable().optional(),
   created_at: z.string(), started_at: z.string().nullable(), completed_at: z.string().nullable(),
 });

@@ -19,7 +19,7 @@ export class TaskStore {
   private readonly taktDir: string;
   private locked = false;
 
-  constructor(private readonly projectDir: string) {
+  constructor(private readonly projectDir: string, private readonly onAcquisitionError?: FileLockAcquisitionErrorHandler) {
     this.taktDir = path.join(projectDir, '.takt');
     this.tasksFile = path.join(this.taktDir, 'tasks.yaml');
     this.lockFile = `${this.tasksFile}.lock`;
@@ -125,7 +125,7 @@ export class TaskStore {
     this.locked = true;
     try {
       this.ensureDirs();
-      return withFileLock(this.lockFile, fn, { onAcquisitionError });
+      return withFileLock(this.lockFile, fn, { onAcquisitionError: onAcquisitionError ?? this.onAcquisitionError, directCreate: true });
     } finally {
       this.locked = false;
     }

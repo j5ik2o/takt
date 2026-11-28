@@ -1,0 +1,91 @@
+# #193 に入れる worker pool の直しの頼み（試験と本番）
+
+[#193](https://github.com/j5ik2o/takt/pull/193) に入れる 3 つの設計の、試験（Sonnet）と本番（muse）への頼みを 1 件 1 行で並べる。設計の中身と理由は、各設計の文書にある。
+
+- #195・#196・#197：`docs/design/worker-pool-completion-publication.md`
+- #209：`docs/design/worker-pool-local-resume-routing.md`
+- #211：`docs/design/worker-token-source.md`
+
+試験の決まり（3 つに共通）：
+
+- 新しい試験のファイルは `tsconfig.tests.json` に足す。`it-*.test.ts` は heavy の並列 IT になるので、足したら `releaseVerificationWiring.test.ts` を単独で流し、その IT も単独で流す。
+- 既存の試験は、S5・S6 の 2 件を除いて変えない。S5・S6 は元帥の決定（11/28）で期待を変える。名前と意図を「失敗しても外へ投げず、印が付き、出し直される」に改め、今ある assert は厳密なまま残し、新しい期待の assert を足す。
+- 作り物の秘密や token は、実行時に部品をつないで作る（`Zq` + 数字 + `Zq`、`EXAMPLE_NOT_A_VALID_TOKEN` + 乱数）。
+
+## #195・#196・#197（試験）
+
+新しい試験は `src/__tests__/it-worker-pool-completion-publication.test.ts` に置く。fixture は `it-worker-pool-runtime.test.ts`（`order.md` を消したゴールタスク、403 行の群の `'failed claim'` の起こし方、`vi.mock('../infra/goals/events.js')`）と `worker-pool-remote-task.test.ts`（遠隔の claim）と同じ形を使う。
+
+| # | ファイル | 試験の名前 | 何を確かめるか | 本番のどこを外せば落ちるか |
+|---|---|---|---|---|
+| S1 | `it-worker-pool-completion-publication.test.ts` | `marks an unreadable goal task failure for resend when the worker pool notification hits ENOSPC` | `saveManagerEvent` を 1 回 ENOSPC にして `runtime.start(name, 'builtin')`。保存は `failed` で `completion_publication_pending: true`、`readPendingGoalTaskCompletions(cwd)` がその 1 件を返す | M1（`buildUnreadableGoalTask` の印） |
+| S2 | 同上 | `marks a remote terminal record for resend when its manager notification fails` | 遠隔の claim のあと `request({ kind: 'fail', ... })` を `saveManagerEvent` が投げる状態で呼ぶ。保存に印が付き、`readPendingGoalTaskCompletions` がそれを返す | M6（遠隔の終わりの印） |
+| S3 | 同上 | `clears the completion mark after the worker pool notifies a failed claim` | claim の setup 失敗のあと、保存に印が無い。`readManagerEvents(cwd)` は 1 件、`readPendingGoalTaskCompletions` は空 | M5（`publishSetupFailure` を通す置き換え） |
+| S4 | 同上 | `calls the task finish hook exactly once for each worker pool terminal save` を `it.each(['unreadable task', 'failed claim', 'remote finish', 'remote fail', 'builtin completion'])` | フックのファイル（`it-lock-release-finish-hook.test.ts:79` と同じ `task_finish_hook: { command: [process.execPath, script, out] }`）にタスク名がちょうど 1 回書かれる。フックは返事のあとに走るので、`vi.waitFor` でファイルを待ち、そのあと runtime を `close()` しても回数が増えないことを確かめる。遠隔の 2 行は、同じ `finish` / `fail` をもう一度送ったあとも 1 回のまま | M5（ローカルのフック）、M6（`onTerminal` の呼び出し。外すと遠隔の 2 行が 0 回で落ちる）。2 回呼ぶ変更でも落ちる |
+| S5 | `src/__tests__/worker-pool-runtime.test.ts`（既存を改める） | 「propagates %s completion notification failures outside acquisition retry」を「keeps a %s completion notification failure inside the runtime so its marked record is resent」に改める（`it.each(['recheck', 'claim'])` はそのまま） | 今の `doubles.event` の `toHaveBeenCalledExactlyOnceWith(...)`、`execute` と `finished` が呼ばれないことの assert は残す。`rejects.toBe(failure)` を `resolves.toEqual({ kind: 'declined' })` に替え、`claim_retry` を返さないこと、runtime の `failed` が呼ばれないこと、警告の 1 行にタスク名があること、印のある `saved`（fixture に `completionPublicationPending: true` を足す）の印を消しに行かないこと（`clearCompletionPublicationPending` が呼ばれない）を足す | M5（捕まえる `try/catch`） |
+| S6 | 同上（既存を改める） | 「rechecks unreadable remote input after the claim and publishes the saved terminal result」の後半を「... and keeps a failed notification inside the runtime so its marked record is resent」に改める | 前半の assert は残す。後半の `await expect(runtime.remote(claim)).rejects.toBe(failure)` を `resolves.toEqual({ kind: 'claim', assignment: null })` に替え、`doubles.event` がもう 1 回呼ばれたことと警告の 1 行を足す。そのあとの「Git or storage failed」で reject する assert は残す（通知でない失敗は今までどおり外へ出る） | M5 |
+| S7 | `it-worker-pool-completion-publication.test.ts` | `keeps A running when a worker pool setup failure notification hits ENOSPC` を `it.each(['unreadable task', 'failed claim'])` | `TaskDispatcher` で A を走らせたまま、B の失敗の通知を ENOSPC にする。A の `signal.aborted` は偽、host の `close` は呼ばれない、B は `failed` で印が付く。警告の 1 行に B の名前がある | M5（`try/catch`） |
+| S8 | 同上 | `keeps the remote request result when its manager notification fails` | S2 と同じ状態で、`request()` が保存した記録の返事を返す（reject しない）。警告の 1 行にタスク名がある | M6（`try/catch`） |
+| S19 | 同上 | `replies to a remote finish before its finish hook ends` | フックの script が、試験の置くファイルができるまで終わらない形にする。`runtime.remote({ kind: 'finish', ... })` の返事が、フックが終わる前に返り、記録が保存されている。そのあとファイルを置くと、フックのファイルにタスク名が 1 回書かれる | M5・M6（返事の前にフックを待つ形に戻すと、返事がフックの終わりまで返らず落ちる） |
+| S20 | 同上 | `waits for a scheduled finish hook when the runtime closes` | S19 と同じフックで、返事のあとに `runtime.close()` を呼ぶ。ファイルを置くまで `close()` は解決せず、置いたあとに解決し、フックのファイルにタスク名が 1 回ある | M5（`close()` が `pendingHooks` を待つ所） |
+| S21 | 同上 | `keeps the project open when the notification of a normal completion fails` | `TaskDispatcher` で A と B を走らせ、B の通常の完了の `saveManagerEvent` を ENOSPC にする。A の `signal.aborted` は偽、host は閉じない、`finished` は B の名前で呼ばれる。警告の 1 行に B の名前・ゴールの id・`run_slug` がある。B の記録は `completed` で、印は無い | M18 |
+| S22 | `src/__tests__/worker-pool-remote-runtime.test.ts` の fixture を使う新しい試験（`worker-pool-remote-post-save.test.ts`、単体） | `updates the remote records and releases the assignment when a step after the save fails` を `it.each(['notification', 'intervention terminal'])` | `saveManagerEvent`、または `LiveInterventionFileStore.recordTerminal` を投げる状態で遠隔の `finish` を受けると、`RemoteWorkerRuntime` の `records` が保存した記録になり、`dispatcher.release` が呼ばれ、worker へ `completed` が返る。接続は切れない | M6（各段の `try/catch`） |
+| S23 | `it-worker-pool-completion-publication.test.ts` | `names the task whose finish hook the project host cuts off when it stops the builtin worker` | 読めないタスクを host の子で断らせ、終わらないフックが始まったあとに `host.close()` を呼ぶ。出口（子の stderr、daemon 側の stderr、`[WARN]`）ごとに、タスク名と `hook` を含む行が 1 行まで、少なくとも 1 つの出口に 1 行。フックの引数に混ぜた作り物の値がどの行にも無い | M19 |
+
+## #195・#196・#197（本番）
+
+| # | ファイル | 関数 | 変えること |
+|---|---|---|---|
+| M1 | `src/infra/task/taskLifecycleService.ts` | `buildUnreadableGoalTask` | `completion_publication_pending: true` を足す |
+| M2 | 同上 | `clearCompletionPublicationPending` | 本体を `(store, taskName, identity)` の関数に切り出し、メソッドはそれを呼ぶ |
+| M3 | `src/infra/task/goalCompletionPublication.ts`（新規） | `publishGoalCompletion`、`publishAndClearPendingMark` | `claimTasks.ts:83-112` から移す。印を消す関数を引数で受け取る |
+| M4 | `src/features/tasks/execute/claimTasks.ts` | `publishSetupFailure`、`failInterruptedTasksWithGoalEvents` | M3 を呼ぶ。`publishSetupFailure` を export する。文面と振る舞いは変えない |
+| M5 | `src/features/workerPool/builtinProjectRuntime.ts` | `saveCompletion`、`remote`、`startTask`、コンストラクタ、`close` | `saveCompletion` を `publishSetupFailure` + `scheduleFinishHook(task)` にする。`scheduleFinishHook` は `runTaskFinishHooksForStates(this.cwd, [task])` を始めて `pendingHooks` に入れ、終わったら外す。返事はフックを待たない。`RemoteTaskLifecycle` に `onTerminal` として `(task) => this.scheduleFinishHook(task)` を渡す。`close()` は `pendingHooks` を待つ |
+| M6 | `src/infra/task/remoteTaskLifecycle.ts` | コンストラクタ、`request` | 4 つめの省ける引数 `onTerminal?: (task: TaskState) => void` を足す。終わりの記録に印を足し、通知を M3 + `try/catch` の警告にし、`LiveInterventionFileStore` の `read`・`recordTerminal`（`:160-161`）も `try/catch` の警告にする。新しく保存したときだけ `onTerminal` を 1 回呼び、待たずに返事を返す |
+| M7 | 遠隔の記録を `pending` に戻す書き込み | （洗う） | `buildRetryTaskRecord` を通るか、通らないなら印を外すことを確かめる |
+| M18 | `src/features/workerPool/builtinProjectRuntime.ts` | `startTask` の実行の `.then`（`:222-227`） | `saveManagerEvent` を `try/catch` で囲み、失敗したら `warn()` と `log.error()`（タスク名・ゴールの id・`run_slug`・理由）を出し、`settled = true` にして `finished(taskName)` を呼ぶ。`failed` は呼ばない。印は付けない |
+| M19 | `src/core/worker-pool/projectProtocol.ts`、`src/features/workerPool/builtinProjectRuntime.ts`、`src/app/worker-pool-project/index.ts`、`src/infra/worker-pool/projectHost.ts` | `ProjectReplySchema`、`scheduleFinishHook`、`BuiltinProjectHost.close` | 返事に `{ kind: 'hooks', taskNames }` を足す。runtime は `pendingHooks` が変わるたびに走っているフックのタスク名の一覧を送る（runtime のコンストラクタに一覧を受ける関数を足し、子がそれを `send` につなぐ）。host は最後の一覧を持ち、`close()` の 5 秒の側が勝って一覧が空でないときだけ、`terminate()` の前に `sanitizeSensitiveText` を通した 1 行を `warn()` で出す（設計の 7 節の文） |
+| M8 | `docs/worker-pool.md`（ja・zh-CN も） | — | 通知が失敗しても印から出し直されることを 1 文足す |
+
+## #209（試験）
+
+新しい試験は `src/__tests__/worker-pool-local-resume-routing.test.ts`（単体）に置く。
+
+| # | ファイル | 試験の名前 | 何を確かめるか | 本番のどこを外せば落ちるか |
+|---|---|---|---|---|
+| S9 | `worker-pool-local-resume-routing.test.ts` | `keeps a local resume retry off remote workers in the pool schedule` | `scheduleWorkerPool` に `builtinOnly: true` のタスクと遠隔の worker（`origin` あり）だけを渡すと割り当てが空。組み込みの worker を足すと組み込みに割り当たる | M11（`eligible` の `builtinOnly`） |
+| S10 | 同上 | `marks a pending retry that resumes a local run as builtin only` を `it.each(['source_run_slug', 'start_step', 'resume_point'])` | `remote_assignment` が無く、その欄を持つ `pending` のゴールタスクで `inspect()` を呼ぶと、返るタスクに `builtinOnly: true` があり `remoteOnly` が無い。`remote_assignment` を持つ再試行には `builtinOnly` が無い | M9・M12（`resumesLocalRun` と `inspect` の付与） |
+| S11 | 同上 | `does not assign a local resume retry to a remote claim` | `source_run_slug` と `resume_mode` を持ち `remote_assignment` の無い `pending` の記録に遠隔の claim を送ると `{ kind: 'claim', assignment: null }`。記録は `pending` のまま `remote_assignment` が付かない | M13（claim の判定） |
+| S12 | 同上 | `explains that a local resume retry waits for the builtin worker when its concurrency is 0` | `workerPoolAvailability` に `builtinOnly: true` のタスクと、concurrency 0 の組み込み + 遠隔の worker を渡すと、`reason` が `BUILTIN_RESUME_WAITING_REASON` と同じ文。`builtinOnly` でないタスクは今の「No executable worker is available ...」のまま | M11（理由の文） |
+| S13 | 同上 | `shows and warns once that a local resume retry waits for the builtin worker` | `BuiltinProjectRuntime.setWaitingReasons` に、そのタスクと `BUILTIN_RESUME_WAITING_REASON` を 2 回渡す。`tasks.yaml` の記録の `waiting_reason` がその文になり、警告の 1 行（タスク名と `daemon.builtin_worker.concurrency` を含む）がちょうど 1 回出る | M12（警告と、1 回にする覚え） |
+
+## #209（本番）
+
+| # | ファイル | 関数 | 変えること |
+|---|---|---|---|
+| M9 | `src/infra/task/taskRecordMutations.ts`（または同じ層の小さなモジュール） | `resumesLocalRun`（新規） | `remote_assignment` が無く、6 つの欄のどれかを持つ |
+| M10 | `src/core/worker-pool/types.ts` | `PoolTask` | `builtinOnly?: boolean` を足す |
+| M11 | `src/core/worker-pool/scheduler.ts` | `workerPoolAvailability` | `eligible` を `(!task.mergeTask && !task.builtinOnly \|\| worker.kind === 'builtin')` にし、`builtinOnly` で候補が空なら `BUILTIN_RESUME_WAITING_REASON` を返す |
+| M12 | `src/features/workerPool/builtinProjectRuntime.ts` | `inspect`、`setWaitingReasons` | `resumesLocalRun` のタスクに `builtinOnly: true` を付ける。理由が `BUILTIN_RESUME_WAITING_REASON` になったタスクに、runtime ごとに 1 回警告する |
+| M13 | `src/infra/task/remoteTaskLifecycle.ts` | `claim` | `merge_task` と並べて `resumesLocalRun(record)` なら割り当てを返さない |
+| M14 | `docs/worker-pool.md`（ja・zh-CN も） | — | 「Verification and operational limits」の枠 0 の段落に、元の run から再開する再試行も進まないことと、待ちの理由の文を足す |
+
+## #211（試験）
+
+R1〜R4 にあたる S14〜S17 は実際の子プロセスを起動するので `src/__tests__/it-worker-token-source.test.ts`（heavy の並列 IT）に置く。S18 は単体。
+
+| # | ファイル | 試験の名前 | 何を確かめるか | 本番のどこを外せば落ちるか |
+|---|---|---|---|---|
+| S14 | `it-worker-token-source.test.ts` | `keeps the worker token out of the started process arguments` を `it.each(['TAKT_WORKER_TOKEN', '--token-file'])` | `bin/takt worker --url http://127.0.0.1:<port>` を、試験が立てて接続を保留する HTTP サーバーへ向けて起動する。サーバーが接続を受けたあと、起動したプロセスの引数（Linux は `/proc/<pid>/cmdline`、macOS は `ps -o args= -p <pid>`）に token の値が無く、サーバーが受けた `Authorization` は `Bearer <token>` | M15・M16（環境変数とファイルを読まないと起動が止まり、接続が来ない） |
+| S15 | 同上 | `warns that --token is visible to ps and still connects` | `--token` で起動すると接続が来て、stderr に `--token` の警告の 1 行がある。stderr にも stdout にも token の値が無い | M16（警告） |
+| S16 | 同上 | `refuses a token file that group or others can read` | 権限 644 のファイルで起動すると、接続の前に 0 以外の終了コードで終わる。stderr にパスと `644` があり、ファイルの中身が無い（Windows では飛ばす） | M15（権限の確かめ） |
+| S17 | 同上 | `stops when the worker token is given in more than one way and names only the ways` を `it.each` で `TAKT_WORKER_TOKEN` + `--token-file`、`--token-file` + `--token`、3 つとも | 接続の前に 0 以外で終わる。stderr の 1 行に、重なった渡し方の名前がその順で並ぶ（例「(TAKT_WORKER_TOKEN, --token-file)」）。stderr にも stdout にも、どの token の値も、ファイルのパスも無い（渡す値は渡し方ごとに別の値にする） | M15（重なりの判定と文） |
+| S18 | `src/__tests__/worker-token-source.test.ts`（単体） | `keeps the worker token out of task process arguments and environment` | `TAKT_WORKER_TOKEN` で `startWorker` を呼んだとき、`createRemoteTaskExecutor` に渡す環境に token の値を持つ変数が無く、`spawnManagedProcess` の引数にも token が無い。今の本番でも通る守りの試験 | `workerCommands.ts:29` の値の除外。子の引数に token を足す変更 |
+
+## #211（本番）
+
+| # | ファイル | 関数 | 変えること |
+|---|---|---|---|
+| M15 | `src/features/workerPool/workerToken.ts`（新規） | `resolveWorkerToken` | 設計の 1〜3・5 節のとおりに 1 つの渡し方を選び、ファイルなら権限を確かめて読み、重なりなら渡し方の名前だけの文で止める |
+| M16 | `src/app/cli/commands.ts:63-70` | `takt worker` | `--token-file <path>` を足し、`--url` だけを今の文で求め、token は M15 に任せる。警告を stderr に書く。説明文を直す |
+| M17 | `docs/worker-pool.md:72-79`（ja・zh-CN も）、`docs/cli-reference.md:133`（ja・zh-CN も）、`docs/design/worker-pool.md:87` | — | 起動スクリプトと表を、`TAKT_WORKER_TOKEN` / `--token-file` の形に直す |

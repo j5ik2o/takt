@@ -72,6 +72,7 @@ export function buildTerminalTaskRecord(
   return {
     ...nextTask,
     ...updates,
+    waiting_reason: undefined,
     owner_start_time: null,
     ...(nextRetryMetadata?.startStep ? { start_step: nextRetryMetadata.startStep } : {}),
     ...(nextRetryMetadata?.resumePoint ? { resume_point: nextRetryMetadata.resumePoint } : {}),
@@ -100,6 +101,21 @@ export function buildExceededTaskRecord(
     ...(updates.worktreePath ? { worktree_path: updates.worktreePath } : {}),
     ...(updates.branch ? { branch: updates.branch } : {}),
   };
+}
+
+/**
+ * Whether a record is a retry that resumes a run saved on this machine (#209): it has no remote
+ * assignment, and it carries one of the fields that tie it to the previous run. These are the
+ * same fields the remote retry-state path clears when it restarts from the original SHA.
+ */
+export function resumesLocalRun(task: TaskRecord): boolean {
+  return task.remote_assignment === undefined
+    && (task.source_run_slug !== undefined
+      || task.resume_mode !== undefined
+      || task.start_step !== undefined
+      || task.resume_point !== undefined
+      || task[TASK_RESTART_POINT_KEY] !== undefined
+      || task.source_resume_point !== undefined);
 }
 
 export function markNormalCompletionPublicationPending(record: TaskRecord, requested?: boolean): TaskRecord {
@@ -133,6 +149,10 @@ export function buildRetryTaskRecord(
     ...(options.runtimeAssignment === undefined ? {} : { runtime_assignment: options.runtimeAssignment }),
     ...taskSpecSource,
     status,
+    worker_name: task.remote_assignment?.workerName,
+    remote_assignment: task.remote_assignment === undefined ? undefined : { ...task.remote_assignment,
+      retryReady: false, retryWaitUntil: undefined },
+    waiting_reason: undefined,
     execution_id: status === 'running' ? randomUUID() : undefined,
     stop_request: undefined,
     started_at: status === 'running' ? nowIso() : null,

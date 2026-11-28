@@ -3,6 +3,8 @@ import type { TaskFailure, TaskStatus } from './schema.js';
 import type { RunResumeMode } from '../../core/workflow/run/run-meta.js';
 
 export interface TaskInfo {
+  workerName?: string;
+  waitingReason?: string;
   filePath: string;
   name: string;
   slug?: string;
@@ -79,6 +81,7 @@ export interface SummarizeOptions {
 }
 
 export interface TaskListItem {
+  remoteAssignment?: import('../../core/worker-pool/remoteProtocol.js').RemoteAssignment;
   executionId?: string;
   goalId?: string;
   kind: 'pending' | 'running' | 'completed' | 'failed' | 'exceeded' | 'pr_failed';
@@ -108,6 +111,10 @@ export interface TaskListItem {
 
 /** Task metadata used by state readers that must not resolve task content. */
 export interface TaskState {
+  remoteArtifacts?: import('../../core/worker-pool/remoteExecutionProtocol.js').RemoteArtifacts;
+  remoteAssignment?: import('../../core/worker-pool/remoteProtocol.js').RemoteAssignment;
+  workerName?: string;
+  waitingReason?: string;
   executionId?: string;
   goalId?: string;
   goalPurpose?: string;

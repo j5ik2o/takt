@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { StreamEvent } from '../../shared/types/provider.js';
+import { normalizeProviderEventData } from '../logging/providerEvent.js';
+import { getExecutionSecrets } from '../../shared/utils/execution-secrets.js';
 import { normalizeProviderEventValue } from '../../shared/utils/logMetadata.js';
 import {
   collectTrackedEmbeddedSensitiveValues,
@@ -43,7 +45,7 @@ function maskTextFragments(chunks: readonly string[]): string[] {
   const fullText = chunks.join('');
   const tracked = { legacy: new Set<string>(), all: new Set<string>() };
   collectTrackedEmbeddedSensitiveValues(fullText, tracked);
-  const masked = maskedCharacters(fullText, sensitiveTextRanges(fullText, new Set()), tracked.all);
+  const masked = maskedCharacters(fullText, sensitiveTextRanges(fullText, new Set(getExecutionSecrets())), tracked.all);
   const previous = maskedCharacters(fullText, previousSensitiveTextRanges(fullText), tracked.legacy);
   if (masked === undefined && previous === undefined) return [...chunks];
   const hidden = masked ?? new Uint8Array(fullText.length);
@@ -94,6 +96,7 @@ function maskedCharacters(fullText: string, patternRanges: readonly SensitiveRan
     maskChanges[end] = maskChanges[end]! - 1;
   };
   for (const range of patternRanges) markMask(range.start, range.end);
+  const executionSecrets = new Set(getExecutionSecrets());
   const nodes: SensitiveMatchNode[] = [{ next: new Map(), failure: 0, longest: 0, shortLengths: 0 }];
   const longValues: string[] = [];
   for (const value of sensitiveValues) {
@@ -112,7 +115,7 @@ function maskedCharacters(fullText: string, patternRanges: readonly SensitiveRan
       }
       state = next;
     }
-    if (value.length >= 4) nodes[state]!.longest = Math.max(nodes[state]!.longest, value.length);
+    if (value.length >= 4 || executionSecrets.has(value)) nodes[state]!.longest = Math.max(nodes[state]!.longest, value.length);
     else nodes[state]!.shortLengths |= 1 << value.length;
   }
   for (const range of substringSensitiveRanges(fullText, longValues)) markMask(range.start, range.end);
@@ -312,7 +315,9 @@ export class Phase1ExecutionLog {
     return serializePhase1ExecutionLog(this.entries.flatMap((entry, index) => {
       if (omitted.has(index) || (entry.kind === 'instruction' && !entry.dispatched)) return [];
       const retained = replacements.get(index) ?? entry;
-      return [retained.kind === 'provider_event' ? this.sanitize(retained) : retained];
+      return [retained.kind === 'provider_event'
+        ? { ...retained, event: { ...retained.event, data: normalizeProviderEventData(retained.event) } }
+        : retained];
     }));
   }
 
