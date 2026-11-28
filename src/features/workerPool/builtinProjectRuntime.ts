@@ -7,9 +7,8 @@ import { resolveManagerConfig } from '../../infra/config/managerConfig.js';
 import { invalidateGlobalConfigCache, resolveWorkflowConfigValues } from '../../infra/config/index.js';
 import { acquireProjectExecutionLock, getProjectExecutionOwner, ProjectExecutionAlreadyRunningError,
   type ProjectExecutionLock } from '../../infra/task/project-execution-lock.js';
-import { saveManagerEvent } from '../../infra/goals/events.js';
 import { executeRunTaskAndCompleteWithDetails } from '../tasks/execute/runTaskExecution.js';
-import { CLAIM_RETRY_INTERVAL_MS, failInterruptedTasksWithGoalEvents, publishSetupFailure } from '../tasks/execute/claimTasks.js';
+import { CLAIM_RETRY_INTERVAL_MS, failInterruptedTasksWithGoalEvents, publishSetupFailure, publishTaskCompletion } from '../tasks/execute/claimTasks.js';
 import { runTaskFinishHooksForStates } from '../tasks/execute/taskFinishHook.js';
 import { checkQueuedTaskProviders } from '../tasks/execute/providerPreflight.js';
 import type { PendingTaskReason, ProjectClaimRetry, ProjectStartResult, ProjectWaitingResult, ProjectWork, WorkerProject } from '../../core/worker-pool/types.js';
@@ -255,18 +254,15 @@ export class BuiltinProjectRuntime implements WorkerProject {
       const task = claim.task;
       let settled = false;
       const execution = executeRunTaskAndCompleteWithDetails(task, this.runner, this.cwd, undefined,
-        { abortSignal: this.controller.signal, outputMode: 'silent' },
+        { abortSignal: this.controller.signal, outputMode: 'silent', publishesGoalCompletion: true },
         this.config.ignoreExceed ? { ignoreIterationLimit: true } : undefined)
         .then((result) => {
-          if (result.completion === undefined || result.runSlug === undefined) throw new Error('Goal task result was not saved');
-          try {
-            saveManagerEvent(this.cwd, { kind: 'completion', goalId: record.goal_id!, taskName,
-              runSlug: result.runSlug, result: result.completion });
-          } catch (error) {
-            const detail = sanitizeSensitiveText(getErrorMessage(error));
-            warn(`Goal task ${sanitizeTerminalText(taskName)} (goal ${record.goal_id!}, run ${result.runSlug}) completed and is saved in .takt/tasks.yaml, but the manager was not notified: ${detail}`);
-            log.error('Goal task completion notification failed', { taskName, goalId: record.goal_id, runSlug: result.runSlug, error: detail });
+          if (result.completion === undefined || result.runSlug === undefined) {
+            log.error('Goal task completion is missing its saved result or run identifier', { goalId: record.goal_id, task: taskName });
+            settled = true;
+            return;
           }
+          publishTaskCompletion(this.runner, this.cwd, { name: taskName, goalId: record.goal_id!, executionId: task.executionId }, result);
           settled = true;
         })
         .finally(() => {
