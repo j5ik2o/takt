@@ -3,18 +3,20 @@
  * fails during setup, and the end of a remote execution). Each must keep the merged #170 / #171
  * promises: the save carries the completion publication mark, the manager notification goes through
  * the shared publication and clears the mark, a failed notification stays inside the runtime with a
- * warning, and the task finish hook runs exactly once after the reply. A failed notification of a
- * normal completion stays inside the runtime too, and a stopping runtime or project host accounts for
- * a finish hook still running.
+ * warning, and the task finish hook runs exactly once after the reply. A normal completion of the
+ * builtin execution (W5) is saved with the same mark (#216): a successful notification clears it, and a
+ * failed one stays inside the runtime and keeps the mark for the daemon to resend. A stopping runtime or
+ * project host accounts for a finish hook still running.
  * Design: docs/design/worker-pool-completion-publication.md, docs/design/193-worker-pool-requests.md
- * (S1-S8, S19-S21; S23 is the coordinator's decision of 11/28 awaiting its design text).
+ * (S1-S8, S19-S21; S23 is the coordinator's decision of 11/28 awaiting its design text),
+ * docs/design/issue-216-normal-completion-publication.md (R8, R9).
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { randomInt, randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { stringify as stringifyYaml } from 'yaml';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { scaledMs } from '../../scripts/test-time-factor.mjs';
 import { BuiltinProjectRuntime } from '../features/workerPool/builtinProjectRuntime.js';
 import { GoalStore } from '../infra/goals/store.js';
@@ -103,6 +105,12 @@ function notNotifiedWarnings(taskName: string): string[] {
 
 function savedRecord(taskName: string) {
   return new TaskStore(cwd).read().tasks.find((task) => task.name === taskName);
+}
+
+/** The mark as tasks.yaml holds it, read without the TAKT schema or its lock (safe inside a notification). */
+function rawMark(taskName: string): unknown {
+  const parsed = parseYaml(readFileSync(join(cwd, '.takt', 'tasks.yaml'), 'utf8')) as { tasks: Array<Record<string, unknown>> };
+  return parsed.tasks.find((task) => task.name === taskName)?.completion_publication_pending;
 }
 
 async function pendingCompletions() {
@@ -211,6 +219,38 @@ it('clears the completion mark after the worker pool notifies a failed claim', a
   expect(readManagerEvents(cwd)).toMatchObject([{ event: { kind: 'completion', taskName: task.name, runSlug: saved?.run_slug } }]);
   expect(saved?.completion_publication_pending).toBeUndefined();
   expect(await pendingCompletions()).toEqual([]);
+});
+
+// R8 (#216): the builtin execution asks the save for the mark, and its notification clears it.
+it('clears the completion mark after the worker pool notifies a normal completion', async () => {
+  const name = runner.addTask('normal notice', { goal_id: goalRecord().id }).name;
+  const runSlug = `run-${name}`;
+  doubles.execute.mockImplementation(async (task: TaskInfo, executingRunner: TaskRunner, _cwd, _options,
+    options: { publishesGoalCompletion?: true }) => {
+    const started = executingRunner.updateRunningTaskExecution(task.name, { runSlug });
+    const completion = { success: true, interrupted: false, workflowResult: 'completed' as const };
+    executingRunner.completeTask({ task: started, success: true, completion, response: 'done', executionLog: [],
+      startedAt: new Date().toISOString(), completedAt: new Date().toISOString(),
+      ...(options.publishesGoalCompletion === true ? { completionPublicationPending: true as const } : {}) });
+    return { completion, runSlug };
+  });
+  const markWhenNotified: unknown[] = [];
+  const actualEvents = await vi.importActual<typeof import('../infra/goals/events.js')>('../infra/goals/events.js');
+  vi.mocked(saveManagerEvent).mockImplementation((projectCwd, event) => {
+    if (event.kind === 'completion' && event.taskName === name) markWhenNotified.push(rawMark(name));
+    return actualEvents.saveManagerEvent(projectCwd, event);
+  });
+  expect(await runtime.start(name, 'builtin')).toEqual({ kind: 'started' });
+  await vi.waitFor(() => expect(finished).toHaveBeenCalledWith(name));
+  // The mark was written with the save, so a notice that never lands would still be resent.
+  expect(markWhenNotified).toEqual([true]);
+  expect(savedRecord(name)).toMatchObject({ status: 'completed', run_slug: runSlug, completion: { success: true } });
+  expect(savedRecord(name)?.completion_publication_pending).toBeUndefined();
+  expect(rawMark(name)).toBeUndefined();
+  expect(await pendingCompletions()).toEqual([]);
+  expect(readManagerEvents(cwd)).toMatchObject([{ event: { kind: 'completion', taskName: name, runSlug } }]);
+  expect(warnings.filter((line) => line.includes('[WARN]') && line.includes(name))).toEqual([]);
+  expect(fatal).not.toHaveBeenCalled();
 });
 
 it.each(['unreadable task', 'failed claim', 'remote finish', 'remote fail', 'builtin completion'] as const)(
@@ -342,19 +382,27 @@ it('waits for a scheduled finish hook when the runtime closes', async () => {
   expect(lines(hook.out)).toEqual([assignment.taskName]);
 });
 
+// S21, revised by R9 (#216): the builtin execution (W5) asks the save for the mark too, so the
+// completion whose notification failed stays marked for the daemon to resend.
 it('keeps the project open when the notification of a normal completion fails', async () => {
   const a = runner.addTask('A', { goal_id: goalRecord().id });
   const b = runner.addTask('notify failure', { goal_id: goalRecord().id });
   const release = deferred<void>();
   let signal: AbortSignal | undefined;
-  doubles.execute.mockImplementation(async (task: TaskInfo, executingRunner: TaskRunner, _cwd, _options, options) => {
+  doubles.execute.mockImplementation(async (task: TaskInfo, executingRunner: TaskRunner, _cwd, _options,
+    options: { abortSignal: AbortSignal; publishesGoalCompletion?: true }) => {
     if (task.name === a.name) {
       signal = options.abortSignal;
       await Promise.race([release.promise, new Promise<void>((resolve) => signal!.addEventListener('abort', () => resolve(), { once: true }))]);
     }
     const completion = { success: !options.abortSignal.aborted, interrupted: options.abortSignal.aborted, workflowResult: 'completed' as const };
-    if (completion.success) executingRunner.completeTask({ task, success: true, completion, response: 'done', executionLog: [],
-      startedAt: new Date().toISOString(), completedAt: new Date().toISOString() });
+    if (completion.success) {
+      // The execution gives the run its slug before it saves, as the production execution does.
+      const started = executingRunner.updateRunningTaskExecution(task.name, { runSlug: `run-${task.name}` });
+      executingRunner.completeTask({ task: started, success: true, completion, response: 'done', executionLog: [],
+        startedAt: new Date().toISOString(), completedAt: new Date().toISOString(),
+        ...(options.publishesGoalCompletion === true ? { completionPublicationPending: true as const } : {}) });
+    }
     return { completion, runSlug: `run-${task.name}` };
   });
   const secret = ['Zq', String(randomInt(10_000_000, 99_999_999)), 'Zq'].join('');
@@ -382,7 +430,11 @@ it('keeps the project open when the notification of a normal completion fails', 
     expect(signal!.aborted).toBe(false);
     expect(closes).not.toHaveBeenCalled();
     expect(fatal).not.toHaveBeenCalled();
-    expect(savedRecord(b.name)?.completion_publication_pending).toBeUndefined();
+    // Before #216 this read `toBeUndefined()`: the normal completion was not marked.
+    expect(savedRecord(b.name)).toMatchObject({ status: 'completed', run_slug: `run-${b.name}` });
+    expect(savedRecord(b.name)?.completion_publication_pending).toBe(true);
+    expect((await pendingCompletions()).map(({ name, status, runSlug }) => ({ name, status, runSlug })))
+      .toEqual([{ name: b.name, status: 'completed', runSlug: `run-${b.name}` }]);
     expect(warnings.filter((line) => line.includes('[WARN]') && line.includes(b.name) && line.includes(goalRecord().id)
       && line.includes(`run-${b.name}`))).toHaveLength(1);
     expect(warnings.filter((line) => line.includes(secret))).toEqual([]);
