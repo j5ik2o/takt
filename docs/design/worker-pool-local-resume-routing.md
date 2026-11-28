@@ -10,6 +10,7 @@
 
 1. `BuiltinProjectRuntime.inspect()` が、元の run に結びついた再試行に `builtinOnly: true` を付けて pool に渡し、`workerPoolAvailability`（`src/core/worker-pool/scheduler.ts:5-9`）がそのタスクの候補を組み込みの worker に限る。
 2. 遠隔の claim（`RemoteTaskLifecycle.claim`、`src/infra/task/remoteTaskLifecycle.ts:226`）も、同じ記録には割り当てを返さない。
+3. 組み込みの worker の枠が 0 で、その再試行が進めないときは、待ちの理由を「組み込みの worker を待っている」と分かる文にしてタスクの記録に書き、daemon の記録に警告を 1 回出す。黙って止まらない（元帥の決定、11/28）。
 
 「元の run に結びついた再試行」は、`remote_assignment` が無く、`source_run_slug`・`resume_mode`・`start_step`・`resume_point`・`restart_point`・`source_resume_point` のどれかを持つ記録とする。この 6 つは、遠隔の再試行を元の SHA からやり直すときに上流のコードが消す欄（`remoteTaskLifecycle.ts:76-77`）と同じで、「前の作業場所の run を前提にする欄」として上流がすでに選んでいる。判定は 1 つの関数にして、2 か所から呼ぶ。
 
@@ -34,7 +35,21 @@
 
 - **遠隔の claim だけで断る**：scheduler は遠隔の worker に割り当て続け、claim が毎回 `null` を返す。そのあいだ組み込みの枠が空いても、その dispatch では組み込みに回らない。待ちの理由も「遠隔の worker を待っている」と読める形のまま残る。
 - **遠隔で元の run を再開できるようにする**（組み込みの run の記録を入力に入れて送る）：run の記録、作業ツリー、セッションを遠隔へ運ぶ仕組みが新しく要る。#209 の期待（組み込みの worker だけを候補に残す）より大きい。
-- **遠隔に回すときに、再開の欄を消して元の SHA からやり直す**：遠隔の再試行が登録の削除や切断のときにとる形（`remoteTaskLifecycle.ts:70-77`）と同じだが、組み込みの枠があるのに、利用者が頼んだ再開を黙ってやり直しに変える。組み込みの枠が 0 のときの扱いは、上げる点の 1 番目にした。
+- **遠隔に回すときに、再開の欄を消して元の SHA からやり直す**：遠隔の再試行が登録の削除や切断のときにとる形（`remoteTaskLifecycle.ts:70-77`）と同じだが、組み込みの枠があるのに、利用者が頼んだ再開を黙ってやり直しに変える。組み込みの枠が 0 のときも、やり直しには変えず、待っていることを見せる（次の節）。
+
+### 組み込みの枠が 0 のときの見せ方
+
+`daemon.builtin_worker.concurrency: 0` で遠隔だけを使う環境では、元の run に結びついた再試行を走らせる worker が無い。今の `workerPoolAvailability` は、候補が空のとき「No executable worker is available: worker concurrency is 0」を返す（`scheduler.ts:10`）。この文からは、組み込みの枠を待っていることも、なぜ遠隔に回らないかも分からない。
+
+- **文**：`builtinOnly` のタスクで候補が空のときだけ、理由を次の文にする。定数 `BUILTIN_RESUME_WAITING_REASON` として `src/core/worker-pool/scheduler.ts` に置く。
+
+  > Waiting for the builtin worker: this retry resumes a run saved on the daemon machine, and the builtin worker concurrency is 0
+
+- **どの欄に出るか**：この理由は、今の流れのまま `TaskDispatcher.dispatchAvailable`（`src/features/daemon/taskDispatcher.ts:144-153`）→ `BuiltinProjectRuntime.setWaitingReasons`（`builtinProjectRuntime.ts:121-128`）→ `TaskRunner.setPendingWaitingReason`（`taskLifecycleService.ts:320-330`）で、`tasks.yaml` の記録の `waiting_reason` に入る。manager の MCP のタスク一覧は `waitingReason` としてこれを返す（`src/features/mcp/operations.ts:161`）。新しい欄は足さない。
+- **警告**：`BuiltinProjectRuntime.setWaitingReasons` が、理由がこの文になったタスクについて、runtime ごとに 1 回だけ `warn()` と `log.warn` を出す。文は「Goal task <name> waits for the builtin worker: it resumes a run saved on the daemon machine, and the builtin worker concurrency is 0. Set daemon.builtin_worker.concurrency above 0 to run it.」。同じタスクの理由がほかの文に変わったら、覚えを消す。dispatch のたびには出さない。
+- PR の merge のタスクも枠が 0 だと進まないが、今回は変えない（#209 の範囲は再試行だけ）。
+
+
 
 ## 直し方
 
@@ -45,6 +60,8 @@
 | `src/core/worker-pool/scheduler.ts:5-6` | `workerPoolAvailability` の `eligible` | `(!task.mergeTask && !task.builtinOnly \|\| worker.kind === 'builtin')` にする |
 | `src/features/workerPool/builtinProjectRuntime.ts:112-116` | `inspect` | `resumesLocalRun(task)` のとき `builtinOnly: true` を付ける |
 | `src/infra/task/remoteTaskLifecycle.ts:226` | `claim` | `record.merge_task === true` と並べて `resumesLocalRun(record)` なら `{ kind: 'claim', assignment: null }` |
+| `src/core/worker-pool/scheduler.ts:10` | `workerPoolAvailability` | `builtinOnly` で候補が空なら `BUILTIN_RESUME_WAITING_REASON` を返す |
+| `src/features/workerPool/builtinProjectRuntime.ts:121-128` | `setWaitingReasons` | 理由が `BUILTIN_RESUME_WAITING_REASON` になったタスクに、runtime ごとに 1 回警告する |
 
 `scheduler.ts:29`・`:35-38` の並べ替えと、再試行の予約を先に回す判定は `remoteOnly` と `retryWorker` だけを見ている。`builtinOnly` はそこに入れない。組み込みの再試行は、ほかの組み込みのタスクと同じ順で回る。
 
@@ -52,18 +69,15 @@
 
 ## red のテスト（Sonnet が書く）
 
-既存の試験は変えない。新しいファイル `src/__tests__/worker-pool-local-resume-routing.test.ts`（単体）に置き、`tsconfig.tests.json` に足す。
+`docs/design/193-worker-pool-requests.md` の「#209」の節に、1 件 1 行で並べた。
 
-| # | 試験の名前 | 確かめること | 本番のどこを外せば落ちるか |
-|---|---|---|---|
-| R1 | `keeps a local resume retry off remote workers in the pool schedule` | `scheduleWorkerPool` に、`builtinOnly: true` のタスク 1 つと、遠隔の worker（`origin` あり）だけを渡すと、割り当てが空。組み込みの worker を足すと、組み込みに割り当たる。`workerPoolAvailability` の理由は空きを待つ形になる | `scheduler.ts` の `builtinOnly` の条件 |
-| R2 | `marks a pending retry that resumes a local run as builtin only` を `it.each(['source_run_slug', 'start_step', 'resume_point'])` | `tasks.yaml` に、`remote_assignment` が無く、その欄を持つ `pending` のゴールタスクを置いて `inspect()` を呼ぶ。返るタスクに `builtinOnly: true` があり、`remoteOnly` は無い。`remote_assignment` を持つ再試行には `builtinOnly` が無い | `inspect` の `builtinOnly` の付与、または `resumesLocalRun` |
-| R3 | `does not assign a local resume retry to a remote claim` | `worker-pool-remote-task.test.ts` と同じ fixture で、`source_run_slug` と `resume_mode` を持ち `remote_assignment` の無い `pending` の記録に遠隔の claim を送る。返事は `{ kind: 'claim', assignment: null }` で、記録は `pending` のまま `remote_assignment` が付かない | `remoteTaskLifecycle.ts` の claim の判定 |
+## 決まったこと（元帥の答え、11/28）
+
+1. 組み込みの枠が 0 のときは、文書に書くだけにしない。待ちの理由と警告で見せる（「組み込みの枠が 0 のときの見せ方」）。直すのはそれだけで、遠隔でやり直す形は入れない。
 
 ## 上げる点
 
-1. **組み込みの枠が 0 のとき**（運用の形）。`daemon.builtin_worker.concurrency: 0` で遠隔だけを使う環境では、組み込みで失敗したタスクの再試行は、待ちの理由「No executable worker is available: worker concurrency is 0」のまま進まない。PR の merge のタスクも今同じ扱いである。推しは、この設計ではこのままにし、文書に書くこと。遠隔で元の SHA からやり直す形は、利用者が頼んだ再開を黙って変えるので、入れるなら別の issue で、利用者が選べる形にする。
-2. **`start_step` だけの再試行も組み込みに限るか**。`takt retry` で開始のステップだけを指定した再試行も、6 つの欄に入るので組み込みに限る。前の run のレポートを読まないステップなら遠隔でも走れるかもしれないが、それを見分ける情報は記録に無い。上流がやり直しで消す欄と同じにそろえることを推す。
+1. **`start_step` だけの再試行も組み込みに限るか**。`takt retry` で開始のステップだけを指定した再試行も、6 つの欄に入るので組み込みに限る。前の run のレポートを読まないステップなら遠隔でも走れるかもしれないが、それを見分ける情報は記録に無い。上流がやり直しで消す欄と同じにそろえることを推す。
 
 ## 範囲の外
 

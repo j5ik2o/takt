@@ -19,9 +19,14 @@
 //               host is closed, which aborts the tasks it is running.
 //   "Design"  — docs/design/worker-pool-completion-publication.md. Every save writes the mark in
 //               the same write. The runtime publishes through publishAndClearPendingMark
-//               (src/features/tasks/execute/claimTasks.ts:100-112), catches and warns, and for the
-//               two local saves calls runTaskFinishHooksForStates. The remote save calls no hook
-//               (outside this design; the document lists it).
+//               (src/features/tasks/execute/claimTasks.ts:100-112), catches and warns, and then calls
+//               runTaskFinishHooksForStates for every save, the remote one included: the remote
+//               child runs executeWorkflowForRun (remoteTaskProcess.ts:75) and never calls the hook,
+//               so without the daemon's call nobody would.
+//
+// A remote worker may send its finish again (a retry after a lost reply). The repeated request finds
+// the record no longer running (remoteTaskLifecycle.ts:93, :123) and saves nothing, so it must not
+// call the hook a second time.
 //
 // The disk can fill and empty at any time (ENOSPC on saveManagerEvent and on the clear), and the
 // runtime process can be killed at any time after the save. The daemon resends a marked record
@@ -54,6 +59,8 @@ module workerPoolCompletionPublication {
   var notifyWarned: bool
   var clearWarned: bool
   var hook: Hook
+  // how many times the finish hook ran or was reported lost for this attempt
+  var hookCalls: int
   // the disk is full: saveManagerEvent and the clear throw ENOSPC
   var full: bool
   // ghost: the project host was closed by hostFailed, aborting the tasks it was running
@@ -61,14 +68,16 @@ module workerPoolCompletionPublication {
   var lastAction: str
 
   pure def marksOnSave(k: Kind): bool = DESIGN == "Design" or k == ClaimFailed
-  pure def callsHook(k: Kind): bool = DESIGN == "Design" and k != Remote
+  pure def callsHook(k: Kind): bool = DESIGN == "Design"
+  // A repeated remote finish saves nothing and calls nothing.
+  pure def repeatCallsHook: bool = false
   pure def clearsMark: bool = DESIGN == "Design"
   pure def catchesNotification: bool = DESIGN == "Design"
 
   action init = all {
     kind' = Unreadable, phase' = Idle, mark' = false, delivered' = false,
     publishedByRuntime' = false, notifyWarned' = false, clearWarned' = false,
-    hook' = HookNotCalled, full' = false, projectClosed' = false, lastAction' = "init",
+    hook' = HookNotCalled, hookCalls' = 0, full' = false, projectClosed' = false, lastAction' = "init",
   }
 
   // The terminal record of the attempt is saved. The mark is part of the same write.
@@ -76,7 +85,7 @@ module workerPoolCompletionPublication {
     phase == Idle,
     kind' = k, phase' = Saved, mark' = marksOnSave(k),
     delivered' = delivered, publishedByRuntime' = publishedByRuntime, notifyWarned' = notifyWarned,
-    clearWarned' = clearWarned, hook' = hook, full' = full, projectClosed' = projectClosed,
+    clearWarned' = clearWarned, hook' = hook, hookCalls' = hookCalls, full' = full, projectClosed' = projectClosed,
     lastAction' = "save",
   }
 
@@ -86,7 +95,7 @@ module workerPoolCompletionPublication {
     phase' = if (clearsMark and mark) Published else HookDue,
     delivered' = true, publishedByRuntime' = true,
     kind' = kind, mark' = mark, notifyWarned' = notifyWarned, clearWarned' = clearWarned,
-    hook' = hook, full' = full, projectClosed' = projectClosed,
+    hook' = hook, hookCalls' = hookCalls, full' = full, projectClosed' = projectClosed,
     lastAction' = "publish",
   }
 
@@ -98,7 +107,7 @@ module workerPoolCompletionPublication {
     notifyWarned' = catchesNotification,
     projectClosed' = not(catchesNotification),
     kind' = kind, mark' = mark, delivered' = delivered, publishedByRuntime' = publishedByRuntime,
-    clearWarned' = clearWarned, hook' = hook, full' = full,
+    clearWarned' = clearWarned, hook' = hook, hookCalls' = hookCalls, full' = full,
     lastAction' = "publishFails",
   }
 
@@ -107,7 +116,7 @@ module workerPoolCompletionPublication {
     phase == Published, not(full),
     phase' = HookDue, mark' = false,
     kind' = kind, delivered' = delivered, publishedByRuntime' = publishedByRuntime,
-    notifyWarned' = notifyWarned, clearWarned' = clearWarned, hook' = hook, full' = full,
+    notifyWarned' = notifyWarned, clearWarned' = clearWarned, hook' = hook, hookCalls' = hookCalls, full' = full,
     projectClosed' = projectClosed,
     lastAction' = "clearMark",
   }
@@ -117,7 +126,7 @@ module workerPoolCompletionPublication {
     phase == Published, full,
     phase' = HookDue, clearWarned' = true,
     kind' = kind, mark' = mark, delivered' = delivered, publishedByRuntime' = publishedByRuntime,
-    notifyWarned' = notifyWarned, hook' = hook, full' = full, projectClosed' = projectClosed,
+    notifyWarned' = notifyWarned, hook' = hook, hookCalls' = hookCalls, full' = full, projectClosed' = projectClosed,
     lastAction' = "clearFails",
   }
 
@@ -127,6 +136,7 @@ module workerPoolCompletionPublication {
     phase == HookDue,
     phase' = Done,
     hook' = if (not(callsHook(kind))) hook else if (lost) HookLostWarned else HookCalled,
+    hookCalls' = if (callsHook(kind)) hookCalls + 1 else hookCalls,
     kind' = kind, mark' = mark, delivered' = delivered, publishedByRuntime' = publishedByRuntime,
     notifyWarned' = notifyWarned, clearWarned' = clearWarned, full' = full, projectClosed' = projectClosed,
     lastAction' = "finishAttempt",
@@ -137,9 +147,20 @@ module workerPoolCompletionPublication {
     phase == Saved or phase == Published or phase == HookDue,
     phase' = Killed,
     kind' = kind, mark' = mark, delivered' = delivered, publishedByRuntime' = publishedByRuntime,
-    notifyWarned' = notifyWarned, clearWarned' = clearWarned, hook' = hook, full' = full,
+    notifyWarned' = notifyWarned, clearWarned' = clearWarned, hook' = hook, hookCalls' = hookCalls, full' = full,
     projectClosed' = projectClosed,
     lastAction' = "kill",
+  }
+
+  // The remote worker sends its finish again after the attempt is done. The record is no longer
+  // running, so nothing is saved or published.
+  action repeatRemoteFinish: bool = all {
+    phase == Done, kind == Remote,
+    hookCalls' = if (repeatCallsHook) hookCalls + 1 else hookCalls,
+    kind' = kind, phase' = phase, mark' = mark, delivered' = delivered,
+    publishedByRuntime' = publishedByRuntime, notifyWarned' = notifyWarned, clearWarned' = clearWarned,
+    hook' = hook, full' = full, projectClosed' = projectClosed,
+    lastAction' = "repeatRemoteFinish",
   }
 
   // The daemon reads a marked record, writes the completion to the inbox and clears the mark.
@@ -147,7 +168,7 @@ module workerPoolCompletionPublication {
     phase != Idle, mark, not(full),
     mark' = false, delivered' = true,
     kind' = kind, phase' = phase, publishedByRuntime' = publishedByRuntime, notifyWarned' = notifyWarned,
-    clearWarned' = clearWarned, hook' = hook, full' = full, projectClosed' = projectClosed,
+    clearWarned' = clearWarned, hook' = hook, hookCalls' = hookCalls, full' = full, projectClosed' = projectClosed,
     lastAction' = "daemonResend",
   }
 
@@ -155,7 +176,7 @@ module workerPoolCompletionPublication {
     not(full), full' = true,
     kind' = kind, phase' = phase, mark' = mark, delivered' = delivered,
     publishedByRuntime' = publishedByRuntime, notifyWarned' = notifyWarned, clearWarned' = clearWarned,
-    hook' = hook, projectClosed' = projectClosed,
+    hook' = hook, hookCalls' = hookCalls, projectClosed' = projectClosed,
     lastAction' = "diskFills",
   }
 
@@ -163,7 +184,7 @@ module workerPoolCompletionPublication {
     full, full' = false,
     kind' = kind, phase' = phase, mark' = mark, delivered' = delivered,
     publishedByRuntime' = publishedByRuntime, notifyWarned' = notifyWarned, clearWarned' = clearWarned,
-    hook' = hook, projectClosed' = projectClosed,
+    hook' = hook, hookCalls' = hookCalls, projectClosed' = projectClosed,
     lastAction' = "diskFrees",
   }
 
@@ -172,7 +193,7 @@ module workerPoolCompletionPublication {
     nondet lost = Set(true, false).oneOf()
     any {
       save(k), publish, publishFails, clearMark, clearFails, finishAttempt(lost), kill,
-      daemonResend, diskFills, diskFrees,
+      repeatRemoteFinish, daemonResend, diskFills, diskFrees,
     }
   }
 
@@ -185,9 +206,13 @@ module workerPoolCompletionPublication {
   // the tasks it runs are not aborted.
   val notificationFailureStaysInside: bool = not(projectClosed)
 
-  // I3. When the runtime returns from a local save, the finish hook ran or a warning named it.
+  // I3. When the runtime returns from a save (local or remote), the finish hook ran or a warning
+  // named it.
   val localSaveCallsHook: bool =
-    (phase == Done and kind != Remote) implies hook != HookNotCalled
+    phase == Done implies hook != HookNotCalled
+
+  // I6. The finish hook runs at most once for an attempt, a repeated remote finish included.
+  val hookAtMostOnce: bool = hookCalls <= 1
 
   // I4. After the runtime's own publication, the mark is gone unless clearing it failed and warned.
   val publishedClearsMark: bool =
@@ -199,7 +224,7 @@ module workerPoolCompletionPublication {
 
   val safety: bool = and {
     deliveredOrMarked, notificationFailureStaysInside, localSaveCallsHook, publishedClearsMark,
-    unpublishedIsWarned,
+    unpublishedIsWarned, hookAtMostOnce,
   }
 
   // ---------- witnesses ----------
@@ -217,6 +242,8 @@ module workerPoolCompletionPublication {
   val wResendAfterKill: bool = phase == Killed and delivered and not(publishedByRuntime)
   val wResendAfterFailure: bool = phase == Done and notifyWarned and delivered
   val wDone: bool = phase == Done
+  val wRemoteHook: bool = kind == Remote and hook == HookCalled
+  val wRepeatRemoteFinish: bool = lastAction == "repeatRemoteFinish"
 }
 
 module current { import workerPoolCompletionPublication(DESIGN = "Current").* from "./workerPoolCompletionPublication" }

@@ -7,16 +7,14 @@
 
 ## 結論
 
-worker pool の経路で、ゴールタスクの失敗を保存する 3 か所（読めない内容、claim の setup 失敗、遠隔の実行の終わり）を、#170・#171 がマージ済みの経路と同じ形にそろえる。
+worker pool の経路で、ゴールタスクの失敗を保存する 3 か所（読めない内容、claim の setup 失敗、遠隔の実行の終わり）を、#170・#171 がマージ済みの経路と同じ形にそろえる。元帥は、この直しを #193 に入れる形で通した（段2・段3 の 3 コミット、66cdd2963・76659ff46・d7d15cf43）。
 
-1. 保存と同じ書き込みで `completion_publication_pending: true` を付ける。
+1. 保存と同じ書き込みで `completion_publication_pending: true` を付ける。遠隔の終わりにも付ける。
 2. 通知は、マージ済みの経路が使う `publishAndClearPendingMark` を通す。通知が成功したら印を消す。
-3. 通知の失敗は捕まえて警告し、例外を runtime の外へ出さない。印が残るので daemon が出し直す。
-4. ローカルの 2 か所（読めない内容、claim の setup 失敗）では、通知のあとで `runTaskFinishHooksForStates` を呼ぶ。
+3. 通知の失敗は捕まえて警告し、例外を runtime の外へ出さない。印が残るので daemon が出し直す。上流から入った単体試験 2 件の期待（通知の失敗で `start()` / `remote()` が reject する）は、この形に合わせて改める（「上流と違う振る舞い」の節）。
+4. 3 か所とも、通知のあとで `runTaskFinishHooksForStates` を 1 回だけ呼ぶ。遠隔の終わりは、今は誰もフックを呼ばない（3 節）ので、daemon 側で呼ぶ。
 
-この直しは #193 に入れることを推す。#193 をマージした時点で、daemon のゴールタスクは worker pool の経路を通るようになる。直さずにマージすると、マージ済みの #170・#171 の約束が統合ブランチの daemon の経路で破れる。理由は「#193 に入れるか」に書く。
-
-3 の「捕まえて警告する」は、上流から入った単体試験 2 件の期待（通知の失敗で `start()` / `remote()` が reject する）と食い違う。この 2 件の期待を変えるかどうかは、上げる点の 1 番目にした。
+試験と本番への頼みは、#209・#211 の分と合わせて `docs/design/193-worker-pool-requests.md` に 1 件 1 行で並べた。
 
 ## いまの動きの突き合わせ
 
@@ -62,7 +60,7 @@ daemon は `runDaemon.ts:183` で `TaskDispatcher` を作り、`BuiltinWorkerAda
 
 - W2・W3：`buildUnreadableGoalTask`（`taskLifecycleService.ts:310-317`）の `buildTerminalTaskRecord` に `completion_publication_pending: true` を足す。`buildSetupFailedTaskRecord` と同じ書き方で、保存と同じ `store.update` の中で付く。この記録は `goal_id`・`completion`・終端の `status`・`run_slug` を持つので、印の有効条件（`taskRecordSchemas.ts:17` の 4 条件）を満たす。
 - W4：すでに付いている。変えない。
-- W6：`remoteTaskLifecycle.ts:138-151` の `buildTerminalTaskRecord` に、`task.goal_id !== undefined` のとき `completion_publication_pending: true` を足す。`run_slug` はこの書き込みで必ず付く（`:145`）。
+- W6：`remoteTaskLifecycle.ts:138-151` の `buildTerminalTaskRecord` に、`task.goal_id !== undefined` のとき `completion_publication_pending: true` を足す（元帥の決定で確定）。`run_slug` はこの書き込みで必ず付く（`:145`）。
 
 `buildClaimedTaskRecord`・`buildRetryTaskRecord`・`requeueExceededTask` は再 claim と出し直しで印を外す（#170 の 1 節）。W6 の `fail` で `failed` になった記録は、遠隔の再試行（`remote_assignment.retryReservation`）で `pending` に戻ることがある。muse は、その書き込みが `buildRetryTaskRecord` を通るか、通らないなら印を外しているかを確かめる。印が残ったまま `pending` に戻ると、読むときに警告つきで落とされる（`taskRecordSchemas.ts:320-327`）。
 
@@ -83,7 +81,12 @@ daemon は `runDaemon.ts:183` で `TaskDispatcher` を作り、`BuiltinWorkerAda
 
 - W2・W3・W4 で、通知のあとに `await runTaskFinishHooksForStates(this.cwd, [task])` を呼ぶ。マージ済みの経路と同じく、通知が先でフックが後。`runTaskFinishHooksForStates` は投げない。フックの設定が読めないか、フックが落ちたときは、`reportLostHook` がタスク名つきの 1 行を出す（#171）。
 - `remote()` の W2 は `async` なので、そのまま `await` できる。`startTask()` の W3・W4 も同じ。フックの待ち時間（最大 60 秒）のあいだ、`start()` は返らない。マージ済みの経路の `claimAvailableTasks` も同じように待つ。
-- W6 の遠隔の終わりにはフックを呼ばない。マージ済みの経路に遠隔の実行は無く、#171 の範囲に当たる約束が無い。呼ぶかどうかは上げる点の 3 番目にした。
+- W6（遠隔の終わり）は、今は誰もフックを呼ばない。
+  - 遠隔の worker の子は `executeWorkflowForRun` を直接呼ぶ（`src/features/workerPool/remoteTaskProcess.ts:75`）。フックを呼ぶ `withTaskFinishHook`（`taskExecution.ts:126`）は通らない。`src/features/workerPool/`、`src/infra/worker-pool/`、`src/app/worker-pool-project/` に `taskFinishHook` を呼ぶ行は無い（`grep` で 0 件）。
+  - daemon 側の `RemoteTaskLifecycle.request()`（`remoteTaskLifecycle.ts:120-167`）も、終わりの記録を保存して通知するだけで、フックを呼ばない。
+  - 組み込みの runtime は `remote_assignment` のある記録を断る（`builtinProjectRuntime.ts:191`）ので、遠隔のタスクを組み込みで実行し直してフックを呼ぶこともない。
+- そこで W6 も daemon 側で呼ぶ。`RemoteTaskLifecycle` のコンストラクタに 4 つめの引数 `onTerminal?: (task: TaskState) => Promise<void>` を足し、`request()` が終わりの記録を新しく保存して通知したあと（`:157-167` の `updated !== null && request.kind !== 'renew'` の中）で 1 回だけ呼ぶ。`BuiltinProjectRuntime` は `(task) => runTaskFinishHooksForStates(this.cwd, [task])` を渡す。`infra` は `features` の `taskFinishHook.ts` を読めないので、呼ぶ関数は外から渡す。既存の単体試験は 3 引数で作るので、4 つめは省ける形にする。
+- フックが 2 回にならないこと。遠隔の worker が返事を受け取れずに `finish` を送り直しても、記録はもう `running` でないので、`:93` で早く返るか、`:123` の条件で何も保存しない。`fail` が `finish` のあとに来ても同じ。どちらも `updated` が `null` なので `onTerminal` を呼ばない。組み込みの実行の完了（W5）は `withTaskFinishHook` が 1 回呼び、この設計では足さない。
 
 ### 4. 通知のあとの印の消し込み
 
@@ -91,21 +94,22 @@ daemon は `runDaemon.ts:183` で `TaskDispatcher` を作り、`BuiltinWorkerAda
 
 ## 守る不変条件
 
-1 回の試みについて、次の 5 つを守る。I1 が #196、I3 が #195、I4 が #197 に当たる。
+1 回の試みについて、次の 6 つを守る。I1 が #196、I3 が #195、I4 が #197 に当たる。
 
 - **I1** 保存した完了は manager に届くか、印が残って daemon に出し直される。
 - **I2** manager への通知の失敗は runtime の外へ出ない。プロジェクトの host は閉じず、走っている別のタスクを中断しない。
-- **I3** ローカルの保存（読めない内容、claim の setup 失敗）で runtime が返るとき、終了フックが走ったか、タスク名つきの警告が出ている。
+- **I3** 保存（読めない内容、claim の setup 失敗、遠隔の終わり）のあとで runtime が返るとき、終了フックが走ったか、タスク名つきの警告が出ている。
 - **I4** runtime が自分で通知したあとは、印を消すのに失敗して警告した場合を除き、印は残らない。
 - **I5** runtime が通知できずに返るときは、警告が出ている。
+- **I6** 終了フックは 1 回の試みにつき 1 回までしか走らない。遠隔の `finish` の送り直しでも 2 回目は無い。
 
 ## Quint
 
-`specs/quint/worker-pool-completion-publication/workerPoolCompletionPublication.qnt`。1 回の試みの保存から、通知、印の消し込み、終了フック、daemon の出し直しまでを書いた。`DESIGN` が `"Current"`（595d6a826）と `"Design"`（この設計）を選ぶ。ディスクはいつでも埋まり、空く。runtime のプロセスは保存のあといつでも死ぬ。quint は 0.32.0。
+`specs/quint/worker-pool-completion-publication/workerPoolCompletionPublication.qnt`。1 回の試みの保存から、通知、印の消し込み、終了フック、遠隔の `finish` の送り直し、daemon の出し直しまでを書いた。`DESIGN` が `"Current"`（595d6a826）と `"Design"`（この設計）を選ぶ。ディスクはいつでも埋まり、空く。runtime のプロセスは保存のあといつでも死ぬ。quint は 0.32.0。
 
 ### (a) 不変条件が恒真でない
 
-`design` は 50,000 サンプル、max-steps 16、seed 0x2a で `safety`（I1〜I5）の違反なし。乱択で、証明ではない。
+`design` は 50,000 サンプル、max-steps 16、seed 0x2a で `safety`（I1〜I6）の違反なし。乱択で、証明ではない。
 
 `current`（595d6a826）は 20,000 サンプル、max-steps 12 で次のとおり。
 
@@ -113,9 +117,10 @@ daemon は `runDaemon.ts:183` で `TaskDispatcher` を作り、`BuiltinWorkerAda
 |---|---|---|
 | I1 `deliveredOrMarked` | 違反 | 読めない内容を保存した直後。印が無く、まだ届いていない |
 | I2 `notificationFailureStaysInside` | 違反 | ディスクが埋まり、`saveManagerEvent` が投げてプロジェクトが閉じる |
-| I3 `localSaveCallsHook` | 違反 | ローカルの保存で、フックを呼ばずに返る |
+| I3 `localSaveCallsHook` | 違反 | 保存のあと、フックを呼ばずに返る（遠隔の終わりも同じ） |
 | I4 `publishedClearsMark` | 違反 | claim の setup 失敗を通知したあと、印が残る |
 | I5 `unpublishedIsWarned` | 違反なし | `current` は通知の失敗で `Done` に届かない（例外で抜ける）ので、前提が成り立たない |
+| I6 `hookAtMostOnce` | 違反なし | `current` はフックを 1 回も呼ばない |
 
 `design` を 1 か所ずつ壊した版（作業ツリーの外で作り、流したあと消した）。
 
@@ -128,8 +133,10 @@ daemon は `runDaemon.ts:183` で `TaskDispatcher` を作り、`BuiltinWorkerAda
 | D5 | 通知のあとで印を消さない | I4 | 違反 |
 | D6 | 捕まえた失敗を警告しない | I5 | 違反 |
 | D7 | daemon が出し直したあとも印を消さない | `safety` 全体 | 違反なし |
+| D8 | 遠隔の終わりにフックを呼ばない（595d6a826 の遠隔の経路） | I3 | 違反 |
+| D9 | 遠隔の `finish` の送り直しでフックをもう一度呼ぶ | I6 | 違反 |
 
-D7 は、印が残り続けて daemon が毎回出し直す形で、I1〜I5 のどれも壊さない。daemon が印を消すこと（と、印が残る間 daemon が止まらないこと）は #170 のモデル `specs/quint/goal-task-completion-publication/` が見ている。
+D7 は、印が残り続けて daemon が毎回出し直す形で、I1〜I6 のどれも壊さない。daemon が印を消すこと（と、印が残る間 daemon が止まらないこと）は #170 のモデル `specs/quint/goal-task-completion-publication/` が見ている。
 
 ### (b) 遷移に届く
 
@@ -137,13 +144,14 @@ D7 は、印が残り続けて daemon が毎回出し直す形で、I1〜I5 の�
 
 | witness | 届いた trace |
 |---|---|
-| 読めない内容 / claim の setup 失敗 / 遠隔 の保存 | 6631 / 6794 / 6575 |
-| `publish` / `publishFails` | 5802 / 4183 |
-| `clearMark` / `clearFails` | 1620 / 530 |
-| フックが走る / フックを失って警告 | 1310 / 1362 |
-| `kill` / `daemonResend` | 16025 / 18479 |
-| 死んだあとに daemon が届ける / 通知の失敗のあとに daemon が届ける | 11912 / 2026 |
-| runtime が返る（`Done`） | 3971 |
+| 読めない内容 / claim の setup 失敗 / 遠隔 の保存 | 6620 / 6698 / 6682 |
+| `publish` / `publishFails` | 5790 / 4108 |
+| `clearMark` / `clearFails` | 1616 / 505 |
+| フックが走る / フックを失って警告 | 1890 / 1944 |
+| 遠隔の終わりでフックが走る / 遠隔の `finish` の送り直し | 603 / 1267 |
+| `kill` / `daemonResend` | 16161 / 18401 |
+| 死んだあとに daemon が届ける / 通知の失敗のあとに daemon が届ける | 11952 / 1917 |
+| runtime が返る（`Done`） | 3834 |
 
 ### (c) 本番との対応
 
@@ -156,7 +164,8 @@ D7 は、印が残り続けて daemon が毎回出し直す形で、I1〜I5 の�
 | `publish` / `publishFails` | `Current`：`builtinProjectRuntime.ts:170-175`、`remoteTaskLifecycle.ts:163-166`。`Design`：`claimTasks.ts:100-126` |
 | `projectClosed` | `builtinWorkerAdapter.ts:12-13` → `taskDispatcher.ts:73-79` |
 | `clearMark` / `clearFails` | `taskLifecycleService.ts:593-618`、`claimTasks.ts:103-111` |
-| `finishAttempt` | `taskFinishHook.ts:281-310`（`runTaskFinishHooksForStates`） |
+| `finishAttempt` | `taskFinishHook.ts:281-310`（`runTaskFinishHooksForStates`）。`Current` は 3 か所とも呼ばない |
+| `repeatRemoteFinish` | `remoteTaskLifecycle.ts:93`（記録が `running` でない `finish` は早く返る）、`:123` |
 | `kill` | 本番のコードは無い（プロセスの終了） |
 | `daemonResend` | `watchSource.ts:125`・`:157` → `readPendingGoalTaskCompletions`（`taskStateReader.ts:98`）→ `publishPendingGoalTaskCompletions` |
 | `diskFills` / `diskFrees` | 本番のコードは無い（環境） |
@@ -169,43 +178,17 @@ D7 は、印が残り続けて daemon が毎回出し直す形で、I1〜I5 の�
 - W1（中断の回収）と W5（通常の完了）は、マージ済みの経路と同じ形なのでモデルに入れていない。
 - max-steps 16。ディスクの出し入れでどの trace も 17 状態まで伸びるが、runtime の遷移は 5 つ以下で終わる。
 
-## red のテスト（Sonnet が書く）
+## red のテスト（Sonnet が書く）と本番の直し（muse が書く）
 
-新しいファイル `src/__tests__/it-worker-pool-completion-publication.test.ts` に置く（`it-*.test.ts` なので heavy の並列 IT）。`tsconfig.tests.json` に足し、`releaseVerificationWiring.test.ts` を単独で流す。既存の試験は変えない。作り方は `it-worker-pool-runtime.test.ts` の同じ fixture（`order.md` を消したゴールタスク、`'failed claim'` の行の claim 失敗の起こし方、`vi.mock('../infra/goals/events.js')` で `saveManagerEvent` を差し替える形）と、`worker-pool-remote-task.test.ts` の遠隔の fixture を使う。フックは `it-lock-release-finish-hook.test.ts:79` と同じ `task_finish_hook: { command: [process.execPath, script, out] }` で、呼ばれたタスク名をファイルに書く。
-
-| # | 試験の名前 | 確かめること | 本番のどこを外せば落ちるか |
-|---|---|---|---|
-| R1 | `marks an unreadable goal task failure for resend when the worker pool notification hits ENOSPC` | `saveManagerEvent` を 1 回 ENOSPC にして `runtime.start(name, 'builtin')` を呼ぶ（結果が reject でも resolve でも、ここでは問わない）。保存は `failed` で `completion_publication_pending: true`、`readPendingGoalTaskCompletions(cwd)` がその 1 件を返す。点検の F03-2 の再現と同じ形 | `buildUnreadableGoalTask` に足す印 |
-| R2 | `marks a remote terminal record for resend when its manager notification fails` | 遠隔の claim のあと `request({ kind: 'fail', ... })` を、`saveManagerEvent` が投げる状態で呼ぶ。保存は `failed` で印が付き、`readPendingGoalTaskCompletions` がそれを返す | `remoteTaskLifecycle.ts` の終わりの記録に足す印 |
-| R3 | `clears the completion mark after the worker pool notifies a failed claim` | claim の setup 失敗のあと、保存に印が無い。`readManagerEvents(cwd)` は 1 件、`readPendingGoalTaskCompletions` は空 | `publishSetupFailure` を通す置き換え（`saveCompletion` が `saveManagerEvent` を直接呼ぶまま） |
-| R4 | `calls the task finish hook once for a worker pool %s` を `it.each(['unreadable task', 'failed claim'])` | フックのファイルにタスク名がちょうど 1 回書かれる | `runTaskFinishHooksForStates` の呼び出し |
-| R5 | `keeps A running when a worker pool setup failure notification hits ENOSPC` を `it.each(['unreadable task', 'failed claim'])` | `TaskDispatcher` で A を走らせたまま、B の失敗の通知を ENOSPC にする。A の `signal.aborted` は偽、host の `close` は呼ばれない、B は `failed` で印が付く。警告の 1 行に B の名前がある | `publishSetupFailure` の `try/catch`（`saveCompletion` が投げるまま） |
-| R6 | `keeps the remote request result when its manager notification fails` | R2 と同じ状態で、`request()` が保存した記録の返事を返す（reject しない） | `RemoteTaskLifecycle` の通知の `try/catch` |
-
-R5・R6 は、上流の単体試験 2 件（上げる点の 1 番目）と逆の期待を持つ。上げる点の答えが「上流の期待を残す」なら、R5・R6 は書かない。その場合でも R1〜R4 は書ける。
-
-## 本番の直し（muse が書く）の範囲
-
-| ファイル | 関数 | 変えること |
-|---|---|---|
-| `src/infra/task/taskLifecycleService.ts` | `buildUnreadableGoalTask` | `completion_publication_pending: true` を足す |
-| 同上 | `clearCompletionPublicationPending` | 本体を `(store, taskName, identity)` の関数に切り出し、メソッドはそれを呼ぶ |
-| `src/infra/task/goalCompletionPublication.ts`（新規） | `publishGoalCompletion`、`publishAndClearPendingMark` | `claimTasks.ts:83-112` から移す。印を消す関数を引数で受け取る |
-| `src/features/tasks/execute/claimTasks.ts` | `publishSetupFailure`、`failInterruptedTasksWithGoalEvents` | 移した関数を呼ぶ。`publishSetupFailure` を export する。文面と振る舞いは変えない |
-| `src/features/workerPool/builtinProjectRuntime.ts` | `saveCompletion`、`remote`、`startTask` | `saveCompletion` を `publishSetupFailure` + `runTaskFinishHooksForStates` に置き換え、`async` にして呼び出し側で `await` する |
-| `src/infra/task/remoteTaskLifecycle.ts` | `request` | 終わりの記録に印を足し、通知を `publishAndClearPendingMark` + `try/catch` の警告にする |
-
-`docs/worker-pool.md` には、通知が失敗しても印から出し直されることを 1 文足す（#193 の docs の追加分に、完了の通知の扱いが無いため）。
+`docs/design/193-worker-pool-requests.md` の「#195・#196・#197」の節に、1 件 1 行で並べた。
 
 ## #193 に入れるか
 
-**#193 に入れる**ことを推す。
+**#193 に入れる**。元帥がこの形で通した。
 
 - #193 をマージすると、daemon のゴールタスクは `TaskDispatcher` → `BuiltinProjectRuntime` を通る。`takt run` の経路の #170・#171 の約束（マージ済み）が、統合ブランチの daemon の経路では守られない期間ができる。#193 のマージは今止めてあるので、ここで入れれば、その期間を作らない。
 - 直しは worker pool の 2 ファイルと、`taskLifecycleService.ts`・`claimTasks.ts` の小さな移動に収まり、新しい試験は 1 ファイルにまとまる。#193 の差分の中で読める大きさである。
 - 別の PR にすると、#193 のマージからその PR のマージまで、読めないゴールタスクの通知が ENOSPC で消える（#196 は使い捨ての木で再現済み）。
-
-上げる点の 1 番目（上流の単体試験 2 件の期待を変えるか）の答えが「変えない」でも、1・3・4 節（印、終了フック、印の消し込み）は #193 に入れられる。そのときは I2 を守らず、通知の失敗でプロジェクトの host が閉じる今の動きが残る。
 
 ## #188（[#200](https://github.com/j5ik2o/takt/issues/200)）の設計との接点
 
@@ -213,19 +196,35 @@ R5・R6 は、上流の単体試験 2 件（上げる点の 1 番目）と逆の
 
 1. **保留の置き場が無い呼び出し**。#188 は `publishSetupFailure` の警告を、`claimTasksWithGoalCompletions` が作る `setupFailedTasks` 配列に `WeakMap` で結んで保留する。worker pool の経路は `claimTasksWithGoalCompletions` を通らずに `publishSetupFailure` を呼ぶ。この呼び方のとき、保留せずにすぐ警告するのか、worker pool も配列を作って同じ配列をフックへ渡すのかを決める。後者なら、`publishSetupFailure` に置き場を渡す引数が要る。
 2. **同じ保存の 2 本**。worker pool の W2・W3・W4 は、この設計のあと、マージ済みの経路と同じ組（manager の通知の警告と、フックの取りこぼしの警告）を同じ保存で出しうる。#188 の「いま 2 本が出る場所」と「対象外」に、この経路の名前を書く。
-3. **遠隔の終わり**。W6 はフックを呼ばないので、#188 の組は起きない。上げる点の 3 番目で呼ぶことにしたら、W6 も #188 の対象になる。
+3. **遠隔の終わり**。W6 も通知のあとでフックを呼ぶので、manager の通知の警告とフックの取りこぼしの警告の組が、同じ保存で起きうる。フックを呼ぶのは `RemoteTaskLifecycle` の `onTerminal` の中で、通知の警告は `RemoteTaskLifecycle` が出す。#188 の保留の置き場をここへも渡すかを決める。
 4. **出力先**。`publishSetupFailure` の `warn()` は stdout に、`reportLostHook` は stderr に書く。worker pool の runtime は daemon の中で動くので、どちらも daemon の記録に入る。#188 が出力先を 1 本にそろえるとき、この経路でも同じ先になるかを確かめる。
 
 ## 上流 nrslib/takt
 
 上流の main（1b1e6bb7c）の `builtinProjectRuntime.ts` と `remoteTaskLifecycle.ts` は、W2〜W6 と同じ行に同じ形を持つ（`saveCompletion` が `saveManagerEvent` を try なしで呼び、終了フックを呼ばない）。上流には `completion_publication_pending` と `readPendingGoalTaskCompletions` がそもそも無いので、「出し直しも効かない」は上流では元からの形である。記録だけで、上流へは何もしない。
 
+## 決まったこと（元帥の答え、11/28）
+
+1. 上流の単体試験 2 件の期待は変えてよい。試験の名前と意図を「失敗しても外へ投げず、印が付き、出し直される」に改め、assert は厳密なまま消さず、新しい期待の assert を足す（`193-worker-pool-requests.md` の S5・S6）。
+2. 遠隔の終わりにも印を付ける。
+3. 遠隔の終わりのフックは、遠隔の側も daemon 側も呼んでいなかったので、daemon 側で呼ぶ形にした（3 節）。どの経路でもフックが 1 回だけ呼ばれることを確かめる試験を足す（S7）。
+
 ## 上げる点
 
-1. **上流の単体試験 2 件の期待を変えるか**（守りの仕組み）。`src/__tests__/worker-pool-runtime.test.ts` の「propagates %s completion notification failures outside acquisition retry」（`it.each(['recheck', 'claim'])`）と「rechecks unreadable remote input after the claim and publishes the saved terminal result」の後半は、通知の失敗で `start()` / `remote()` が reject することを期待する。この設計の 2 節（捕まえて警告する）を入れると、この 2 件の期待は「resolve して警告する」に変わる。推しは変えること。#170 の印があれば例外を外へ出す理由が無く、出すと別のタスクまで中断するためである。変えないなら、1・3・4 節だけを入れ、I2 と R5・R6 を外す。
-2. **遠隔の終わり（W6）に印を付けるか**（保存されるデータ）。#170 は通常の完了を範囲の外に置いた。W6 の `finish` は通常の完了に近く、`fail` は印を付ける `reconcileLostRun` に近い。推しは両方に付けること。遠隔の終わりは daemon の中で保存され、通知が消えたあとに拾う経路がほかに無いためである。付けない場合は、1 節の W6 と R2・R6 を外す。
-3. **遠隔の終わり（W6）に終了フックを呼ぶか**（守りの仕組み）。マージ済みの経路の通常の完了は `withTaskFinishHook` でフックを呼ぶが、遠隔の終わりは呼ばない。この設計では呼ばないままにした。呼ぶなら別の issue にする。
-4. **通常の完了（W5）の通知の失敗**。W5 の `saveManagerEvent` が投げると、実行の `.then` が reject し、`this.failed` でプロジェクトが閉じる。マージ済みの経路（`parallelExecution.ts:497-503`）と同じ形で、#170 の範囲の外なので、この設計では変えない。
+1. **通常の完了（W5）の通知の失敗**。W5 の `saveManagerEvent` が投げると、実行の `.then` が reject し、`this.failed` でプロジェクトが閉じる。マージ済みの経路（`parallelExecution.ts:497-503`）と同じ形で、#170 の範囲の外なので、この設計では変えない。
+2. **遠隔の終わりのフックの待ち時間**。W6 のフックは `request()` の中で待つので、遠隔の worker の `finish` の返事が、フックの時間（最大 60 秒）だけ遅れる。遠隔の worker が返事を待つ時間の上限との関係は確かめていない。上限より長くなると `finish` が送り直されるが、2 回目は何も保存しない（I6）。
+
+## 上流と違う振る舞い（次の上流の取り込みのために）
+
+上流 nrslib/takt に同じ直しは無い（上流には印と出し直しの仕組みそのものが無い）。次の上流の取り込みで、次の試験とコードが競合したときは、フォークの側を残す。
+
+| 試験・コード | 上流の振る舞い | フォークの振る舞い | 理由 |
+|---|---|---|---|
+| `src/__tests__/worker-pool-runtime.test.ts` の「propagates %s completion notification failures outside acquisition retry」（`it.each(['recheck', 'claim'])`） | 通知の失敗で `start()` が reject する | 名前を改め、`start()` は `{ kind: 'declined' }` を返し、印が付き、警告が出る | 印があれば daemon が出し直すので、例外を外へ出すと別のタスクまで中断するだけになる（I2） |
+| 同ファイルの「rechecks unreadable remote input after the claim and publishes the saved terminal result」の後半 | 通知の失敗で `remote()` が reject する | `remote()` は `{ kind: 'claim', assignment: null }` を返し、印が付き、警告が出る | 同上 |
+| `src/features/workerPool/builtinProjectRuntime.ts` の `saveCompletion` | `saveManagerEvent` を直接呼ぶ | `publishSetupFailure` と `runTaskFinishHooksForStates` を呼ぶ | #170・#171 の約束を worker pool の経路にも通す |
+| `src/infra/task/remoteTaskLifecycle.ts` の `request()` の終わり | 印なし、通知の失敗は投げる、フックなし | 印を付け、`publishAndClearPendingMark` で通知し、失敗は警告、`onTerminal` でフック | 同上 |
+| `src/infra/task/taskLifecycleService.ts` の `buildUnreadableGoalTask` | 印なし | 印を付ける | 同上 |
 
 ## 範囲の外
 

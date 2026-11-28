@@ -15,7 +15,7 @@
 | ファイル | `--token-file <path>` | ファイルの権限が 600（グループと他人に読み書き実行の権限が無い）であることを確かめてから読む |
 | 起動引数 | `--token <token>` | 今の使い方を壊さないために受け付ける。使われたら「ps から読める」と stderr に 1 行警告する |
 
-2 つ以上が同時に与えられたら、起動を止める。どれも無ければ、今と同じく起動を止める。標準入力からは受け取らない。
+2 つ以上が同時に与えられたら、起動を止める（元帥の決定、11/28）。止めるときの文には、重なった渡し方の名前を書き、token の値は書かない。どれも無ければ、今と同じく起動を止める。標準入力からは受け取らない。
 
 ## 何が起きているか
 
@@ -27,9 +27,11 @@
 
 ### 1. 重なったとき
 
-優先順は置かず、2 つ以上が与えられたら起動を止める。止めるときの文面は、与えられた渡し方の名前だけを並べ、値は書かない。
+優先順は置かず、2 つ以上が与えられたら起動を止める。止めるときの文は、与えられた渡し方の名前を、`TAKT_WORKER_TOKEN`、`--token-file`、`--token` の順で、与えられたものだけ並べる。値も、ファイルのパスも書かない。
 
 > Worker token was given more than once (TAKT_WORKER_TOKEN, --token-file). Give it in exactly one way.
+
+3 つとも与えられたときは「(TAKT_WORKER_TOKEN, --token-file, --token)」になる。終了コードは 0 以外で、接続の前に止まる。`--token` が重なりに含まれるときも、5 節の `--token` の警告は出さない（止める文だけを出す）。
 
 理由。
 
@@ -104,23 +106,16 @@ exec takt worker --url "$WORKER_DAEMON_URL" --token-file /run/secrets/takt-worke
 
 ## red のテスト（Sonnet が書く）
 
-既存の試験は変えない。
+`docs/design/193-worker-pool-requests.md` の「#211」の節に、1 件 1 行で並べた。
 
-| # | ファイル / 試験の名前 | 確かめること | 本番のどこを外せば落ちるか |
-|---|---|---|---|
-| R1 | `src/__tests__/it-worker-token-source.test.ts` / `keeps the worker token out of the started process arguments` を `it.each(['TAKT_WORKER_TOKEN', '--token-file'])` | `bin/takt worker --url http://127.0.0.1:<port>` を、試験が立てた接続を受けて保留する HTTP サーバーへ向けて子プロセスで起動する。token は `EXAMPLE_NOT_A_VALID_TOKEN` に乱数を足した値を、環境変数か権限 600 のファイルで渡す。サーバーが接続を受けたあと、起動したプロセスの引数（Linux は `/proc/<pid>/cmdline`、macOS は `ps -o args= -p <pid>`）に token の値が無く、サーバーが受けた `Authorization` の値は `Bearer <token>` である | `commands.ts` が環境変数とファイルを読まない（`--token` 必須のまま）と、起動が止まり接続が来ない |
-| R2 | 同じファイル / `warns that --token is visible to ps and still connects` | `--token` で起動すると接続が来て、stderr に 5 節の警告の 1 行がある。stderr にも stdout にも token の値は無い | 警告の出力 |
-| R3 | 同じファイル / `refuses a token file that group or others can read` | 権限 644 のファイルで起動すると、接続の前に 0 でない終了コードで終わる。stderr にパスと `644` があり、中身は無い | 権限の確かめ |
-| R4 | 同じファイル / `refuses a worker token given in more than one way` | `TAKT_WORKER_TOKEN` と `--token-file` を両方渡すと、接続の前に止まる。stderr に 2 つの渡し方の名前があり、値は無い | 重なりの判定 |
-| R5 | `src/__tests__/worker-token-source.test.ts`（単体）/ `keeps the worker token out of task process arguments and environment` | `TAKT_WORKER_TOKEN` で `startWorker` を呼んだとき、`createRemoteTaskExecutor` に渡す環境に token の値を持つ変数が無く、`spawnManagedProcess` の引数にも token が無い。今の本番でも通る守りの試験で、red ではない | `workerCommands.ts:29` の値の除外。子の起動引数に token を足す変更 |
+## 決まったこと（元帥の答え、11/28）
 
-R1〜R4 は実際の子プロセスを起動するので heavy の並列 IT（`it-*.test.ts`）に置く。`tsconfig.tests.json` に足し、`releaseVerificationWiring.test.ts` を単独で流す。Windows では R3 を飛ばす。
+1. 重なったら起動を止める。止める文に、どれとどれが重なったかを書き、token の値は書かない（1 節）。
 
 ## 上げる点
 
-1. **重なったら止める**（公開の CLI の形）。元帥の指示は「優先順を書く」だったが、この設計は優先順を置かずに止める形にした。理由は 1 節。優先順を置く場合の推しは「`--token-file` / `--token`（明示の起動引数）が `TAKT_WORKER_TOKEN` に勝ち、勝ったことを 1 行出す」。
-2. **`--token` をいつ消すか**。この設計では消さず、警告だけにした。消す時期は別に決める。
-3. **権限の確かめが Windows で効かない**。Windows の利用者には、ファイルの ACL を自分で絞ることを文書で頼むだけになる。
+1. **`--token` をいつ消すか**。この設計では消さず、警告だけにした。消す時期は別に決める。
+2. **権限の確かめが Windows で効かない**。Windows の利用者には、ファイルの ACL を自分で絞ることを文書で頼むだけになる。
 
 ## 範囲の外
 
