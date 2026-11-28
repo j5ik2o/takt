@@ -362,6 +362,9 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/selector-guidance-resolution.test.ts',
   'src/__tests__/selector-guidance-runtime-boundary.test.ts',
   'src/__tests__/selector-input.test.ts',
+  // Reads the production source and the Quint union spec from the real filesystem
+  // without replacing node:fs; the PBT itself runs 400 bounded cases in-process.
+  'src/__tests__/sensitive-stream-union.pbt.test.ts',
   'src/__tests__/sensitive-text-legacy.hash.test.ts',
   'src/__tests__/session-reader.test.ts',
   'src/__tests__/sessionStore.test.ts',
