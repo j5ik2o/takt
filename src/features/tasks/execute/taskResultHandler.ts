@@ -34,6 +34,7 @@ interface PersistTaskResultOptions {
 }
 
 interface PersistTaskErrorOptions {
+  completionPublicationPending?: true;
   completion?: GoalTaskResult;
   emitStatusLog?: boolean;
   responsePrefix?: string;
@@ -127,7 +128,7 @@ export function persistExceededTaskResult(
   taskRunner: TaskRunner,
   task: TaskInfo,
   exceeded: ExceededInfo,
-  context?: { worktreePath?: string; branch?: string; completion?: GoalTaskResult },
+  context?: { worktreePath?: string; branch?: string; completion?: GoalTaskResult; completionPublicationPending?: true },
   options?: PersistTaskResultOptions,
 ): void {
   taskRunner.exceedTask(task.name, {
@@ -138,6 +139,7 @@ export function persistExceededTaskResult(
     ...(context?.worktreePath ? { worktreePath: context.worktreePath } : {}),
     ...(context?.branch ? { branch: context.branch } : {}),
     ...(context?.completion === undefined ? {} : { completion: context.completion }),
+    ...(context?.completionPublicationPending === undefined ? {} : { completionPublicationPending: context.completionPublicationPending }),
   });
   if (options?.emitStatusLog !== false) {
     info(`Task "${sanitizeTerminalText(task.name)}" exceeded iteration limit at step "${exceeded.currentStep}"`);
@@ -163,6 +165,7 @@ export function persistTaskError(
     startedAt,
     completedAt,
     ...(options?.completion === undefined ? {} : { completion: options.completion }),
+    ...(options?.completionPublicationPending === undefined ? {} : { completionPublicationPending: options.completionPublicationPending }),
     ...(task.data?.branch ? { branch: task.data.branch } : {}),
     ...(task.worktreePath ? { worktreePath: task.worktreePath } : {}),
   });
