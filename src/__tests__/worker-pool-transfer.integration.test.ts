@@ -198,6 +198,32 @@ it.each([{}, { path: '/daemon/opencode', version: 'v2' }])('transfers daemon Ope
   expect(input).toMatchObject({ openCode });
 });
 
+// #207: the task's runtime assignment selects the runtime.yaml the remote task process runs with,
+// as withTaskRuntimeAssignment does for a builtin execution.
+it.each([
+  { runtimeAssignment: 'cost', profile: 'cost', assignmentOrigins: { defaults: 'assignments.cost.defaults' } },
+  { runtimeAssignment: undefined, profile: 'base', assignmentOrigins: undefined },
+])('transfers the task runtime assignment $runtimeAssignment into the runtime configuration of the remote task process', async ({ runtimeAssignment, profile, assignmentOrigins }) => {
+  const f = fixture();
+  mkdirSync(join(f.cwd, '.takt/workflows'), { recursive: true });
+  writeFileSync(join(getGlobalConfigDir(), 'config.yaml'), 'provider: mock\n');
+  writeFileSync(join(f.cwd, '.takt/workflows/root.yaml'), 'name: root\nsteps:\n  - name: work\n    instruction: Work\n    rules:\n      - condition: when(true)\n        next: COMPLETE\n');
+  writeFileSync(join(f.cwd, '.takt/runtime.yaml'), JSON.stringify({ version: 1, provider: {
+    defaults: { profile: 'base' },
+    profiles: { base: { provider: 'mock', model: 'base-model' }, cost: { provider: 'mock', model: 'cost-model' } },
+    assignments: { cost: { defaults: { profile: 'cost' } } },
+  } }));
+  invalidateGlobalConfigCache();
+  prepareRemoteExecutionInput(f.cwd, TaskRecordSchema.parse({ name: 'T', status: 'pending', content: 'work', workflow: 'root',
+    ...(runtimeAssignment === undefined ? {} : { runtime_assignment: runtimeAssignment }),
+    created_at: new Date().toISOString(), started_at: null, completed_at: null }), f.executionId);
+  const input = RemoteExecutionInputSchema.parse(JSON.parse(Buffer.from(await f.store.inputChunk('execution.json', 0), 'base64').toString()));
+  expect(input.taskConfig.runtime_assignment).toBe(runtimeAssignment);
+  const runtime = remoteRuntimeConfiguration(input);
+  expect(runtime.runtimeFile?.provider?.defaults).toEqual({ profile });
+  expect(runtime.assignmentOrigins).toEqual(assignmentOrigins);
+});
+
 const executionLimitCases = [
   ['callTimeoutMs', 'TAKT_OPENCODE_CALL_TIMEOUT_MS', '60000'],
   ['messageCycleBudget', 'TAKT_OPENCODE_MESSAGE_CYCLE_BUDGET', '7'],
