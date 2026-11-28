@@ -620,3 +620,96 @@ describe('sensitiveText', () => {
     expect(sanitizeSensitiveTextWithKnownValues('cycle-secret', source)).toBe('[REDACTED]');
   });
 });
+
+// #2103 leaves two URL userinfo shapes unredacted: a password that starts with
+// two or more at signs, and a URL that omits the user (`scheme://:password@host`).
+// Both run through URL_USERINFO_CREDENTIALS_REGEX, which `sanitizeSensitiveText`
+// (display) and `sensitiveTextRanges` (stream) share.
+describe('URL userinfo with an at-sign run or an omitted user', () => {
+  // Secret-shaped values are assembled at run time so no fixture in this file
+  // reads like a real credential. The parts stay low entropy on purpose.
+  const lowEntropy = (...parts: string[]): string => parts.join('');
+  const hidden = lowEntropy('Zq', '24', 'Zq');
+  const echoed = lowEntropy('Zq', '01', 'Zq');
+
+  const streamed = (text: string): string => {
+    const redactor = createSensitiveTextStreamRedactor();
+    return redactor.write(text, {}) + redactor.flush({});
+  };
+
+  describe.each([
+    ['U1 a password that starts with two at signs', `https://u:@@${hidden}@host`, 'https://[REDACTED]@host'],
+    ['U2 a URL that omits the user', `redis://:${hidden}@host`, 'redis://[REDACTED]@host'],
+  ])('redacts %s', (_name, text, expected) => {
+    it('in the displayed text', () => {
+      expect(sanitizeSensitiveText(text)).toBe(expected);
+    });
+
+    it('in the text written in one chunk to the stream', () => {
+      expect(streamed(text)).toBe(expected);
+    });
+
+    it('at every stream chunk boundary and in the preview', () => {
+      for (let split = 0; split <= text.length; split += 1) {
+        const redactor = createSensitiveTextStreamRedactor();
+        const output = redactor.write(text.slice(0, split), {})
+          + redactor.write(text.slice(split), {})
+          + redactor.flush({});
+        expect(output, `split at ${split}`).toBe(expected);
+      }
+      const preview = createSensitiveTextStreamRedactor();
+      preview.write(text, {});
+      expect(preview.preview({})).not.toContain(hidden);
+    });
+
+    it('when the same URL appears twice', () => {
+      expect(sanitizeSensitiveText(`${text} ${text}`)).toBe(`${expected} ${expected}`);
+      expect(streamed(`${text} ${text}`)).toBe(`${expected} ${expected}`);
+    });
+  });
+
+  it.each([
+    ['a path that contains an at sign', 'https://host:8080/path@v2'],
+    ['a bare host and port', 'https://host:8080/path'],
+    ['an scp-style Git remote', 'git@github.com:owner/repo.git'],
+    ['a sentence with an email address', `mail ${lowEntropy('Zq', '24', 'Zq')}@example.test before noon`],
+    ['an IPv6 host with a port and a path', 'https://[2001:db8::1]:8080/path'],
+  ])('keeps %s readable', (_name, text) => {
+    expect(sanitizeSensitiveText(text)).toBe(text);
+    expect(streamed(text)).toBe(text);
+  });
+
+  it.each([
+    ['three leading at signs', `https://u:@@@${hidden}@host`, 'https://[REDACTED]@host'],
+    ['two colons before the password', `redis://::${hidden}@host`, 'redis://[REDACTED]@host'],
+    ['three colons before the password', `https://u:::${hidden}@host`, 'https://[REDACTED]@host'],
+    ['a following TOKEN assignment without a space', `https://u:@@${hidden}@host;TOKEN=${echoed}`, 'https://[REDACTED]@host;TOKEN=[REDACTED]'],
+  ])('redacts userinfo followed by %s', (_name, text, expected) => {
+    expect(sanitizeSensitiveText(text)).toBe(expected);
+    expect(streamed(text)).toBe(expected);
+  });
+
+  it.each([',', '&', '|', ';', "'", '"'])('redacts the userinfo before a %s separator with no space', (separator) => {
+    const text = `https://u:@@${hidden}@host${separator}next`;
+    const expected = `https://[REDACTED]@host${separator}next`;
+    expect(sanitizeSensitiveText(text)).toBe(expected);
+    expect(streamed(text)).toBe(expected);
+  });
+
+  it.each([
+    ['an empty password', 'https://u:@host'],
+    ['an empty password and an extra at sign', 'https://u:@@host'],
+  ])('leaves %s unchanged because there is no userinfo secret to hide', (_name, text) => {
+    expect(sanitizeSensitiveText(text)).toBe(text);
+    expect(streamed(text)).toBe(text);
+  });
+
+  // The first at sign after the user/password separator still ends the userinfo, as before.
+  // A password that contains a later at sign is out of scope for this change.
+  it('ends the userinfo at the first at sign when the password contains a later one', () => {
+    const text = 'https://u:left@right@host';
+    const expected = 'https://[REDACTED]@right@host';
+    expect(sanitizeSensitiveText(text)).toBe(expected);
+    expect(streamed(text)).toBe(expected);
+  });
+});

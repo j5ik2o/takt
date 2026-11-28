@@ -732,6 +732,7 @@
     "src/__tests__/sensitive-text-sanitize.performance.test.ts",
     "src/__tests__/sensitive-text-streaming.test.ts",
     "src/__tests__/sensitiveText.test.ts",
+    "src/__tests__/sensitiveTextUserinfo.pbt.test.ts",
     "src/__tests__/serial-sender.test.ts",
     "src/__tests__/server-pool-forced-shutdown.test.ts",
     "src/__tests__/session-compact-contract.test.ts",
