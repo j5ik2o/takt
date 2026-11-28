@@ -64,3 +64,22 @@ R2・R3・R11・R7 の壊し方は、読みで確かめた（印の条件と、`
 | R10 | 同 `success=false` | 数え方は今も合う（reject は失敗と数えられる）。`[WARN]` の行が 0（1 行のはず）。今の本番は通知の失敗を警告しない |
 
 `success=false` の行は、数え方の assert では赤にならず、警告の assert だけで赤になる。直しの本番で P4 の警告を外すと、この行は落ちる。P4 の `try/catch` を外すと `success=true` の行が数え方で落ちる。runner の mock の `listTaskStateItems` は `[]` を返すので、直しの本番では印のある記録が見つからず、結果から送る経路（設計「直し方」の 2 の 3）を通る。警告の行にはタスク名が入ることも見る。
+
+## 3 コミット目：元帥の決め「同じ完了の知らせが 2 回届いても、manager がゴールを 2 回進めない」の試験
+
+R13 は、設計の表のとおり「受信箱のファイルを `receiveInboxChange` に渡し、渡った `eventId` の種類がちょうど 1 つ」を見る。これは記録する ingress で `eventId` が同じことまでで、manager の turn が 1 回だけ始まること（タスクを二重に積まないこと）は見ていない。同じ `eventId` を 1 回にまとめるのは daemon の `FileEventStore.accept`（`eventStore.ts:262-267`、`duplicate` を返す）なので、そこまで通す試験を 1 本足した。設計の表で別のファイルに置く試験は R8・R9（#193）と R10（2 コミット目）だけで、ほかに無い。
+
+ファイル：`src/__tests__/it-normal-completion-publication.test.ts`（1 コミット目と同じファイルに足す）。
+
+| 試験 | 確かめること |
+|---|---|
+| `starts one manager turn for the caller's notice and the daemon's resend of one attempt` | R13 の `normal` と同じ順（保存 → daemon が出し直す → 呼び出し側が本物の `saveManagerEvent` で通知）で、受信箱の 2 つのファイルを本物の `receiveInboxChange` と本物の `FileEventStore`（`getGlobalConfigDir()`）に通すと、新しい turn がちょうど 1 つ（`task_completed`、このゴールとタスク）、`duplicate` がちょうど 1 つ、受信箱は空になる。前提の assert：保存の直後に daemon がこの試みの 1 件を出し直し、受信箱に 2 つのファイルがある |
+
+流し方：1 コミット目と同じ。
+
+結果：**21 件が走り、13 件が落ち、8 件が通った。** 足した 1 件は落ちた。1 コミット目の 20 件の結果は変わらない（12 件が落ち、8 件が通った）。`npx tsc -p tsconfig.tests.json --noEmit` は通った。
+
+- 落ちた所：前提の assert で、保存の直後の `readPendingGoalTaskCompletions` が `[]`（この試みの 1 件のはず）。今の本番は印を付けないので、daemon は出し直さず、試みが重ならない。R13 の `normal` の行と同じ理由である。
+- 直しの本番で落ちる所：P1・P2・P5・P8 を外すと、前提の assert で落ちる。`inbox.ts:49-53` で `executionId` を `runSlug` より先に見るように入れ替えると、turn の数の assert で落ちる。
+
+外した木で確かめた：1 コミット目と同じ使い捨ての木（`completeTask`・`failTask` が頼まれたときに `run_slug` のある記録に印を付け、`fillSlots` が `publishesGoalCompletion: true` を渡す）で、この試験は通った。そこから `inbox.ts` の順を入れ替えると、新しい turn が 2 つになって落ちた（`expected [ … ] to have a length of 1 but got 2`）。

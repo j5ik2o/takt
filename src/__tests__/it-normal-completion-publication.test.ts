@@ -4,7 +4,8 @@
  * manager asks for it. `takt run` notifies through the saved record, clears the mark on success,
  * and keeps the mark (for the daemon to resend) and warns when the notice fails, without counting
  * a finished execution differently. Real tasks.yaml, no child process.
- * Design: docs/design/issue-216-normal-completion-publication.md (R1–R7, R11–R13, R15).
+ * Design: docs/design/issue-216-normal-completion-publication.md (R1–R7, R11–R13, R15, and the
+ * one-manager-turn check of the decision that backs R13).
  * Model: specs/quint/normal-completion-publication/.
  */
 
@@ -47,6 +48,7 @@ import type { WatchFileChange } from '../features/daemon/watchers/directories.js
 import { listWatchEntries } from '../features/daemon/watchers/files.js';
 import type { EventInput } from '../core/daemon/events.js';
 import { DaemonPersistedFiles } from '../infra/daemon/persistedFiles.js';
+import { FileEventStore } from '../infra/daemon/eventStore.js';
 import { GoalStore } from '../infra/goals/store.js';
 import { getGlobalConfigDir } from '../infra/config/paths.js';
 import { TaskRunner, type TaskInfo, type TaskResult } from '../infra/task/index.js';
@@ -525,6 +527,42 @@ describe('the caller and the daemon send one attempt under one inbox event id', 
     expect([...new Set(eventIds)]).toEqual([completionEventId(inboxDirectory, added.name, 'run', normal ? RUN_SLUG : SETUP_RUN_SLUG)]);
     expect(await inboxFiles(dir)).toEqual([]);
     expect(await pending(dir)).toEqual([]);
+  });
+});
+
+describe('the manager takes one attempt once', () => {
+  // Decision "the same notice delivered twice does not make the manager advance the goal twice": the
+  // two copies of R13's normal attempt go through the daemon's real event store, which starts one
+  // manager turn and folds the other copy as a duplicate.
+  it("starts one manager turn for the caller's notice and the daemon's resend of one attempt", async () => {
+    const dir = project();
+    const runner = new TaskRunner(dir);
+    const added = runner.addTask('Normal goal work', { workflow: 'default', goal_id: goalId });
+    const actual = await vi.importActual<typeof import('../infra/goals/events.js')>('../infra/goals/events.js');
+    save.mockImplementation((...args: Parameters<typeof actual.saveManagerEvent>) => actual.saveManagerEvent(...args));
+    const seen = executeWithDaemonFirst(dir, 'normal');
+
+    const result = await runWithWorkerPool(runner, [], 1, dir, undefined, undefined, 60_000, 'run');
+
+    expect(result).toEqual({ success: 1, fail: 0, executedTaskNames: [added.name] });
+    expect(seen.errors).toEqual([]);
+    // Premise: the daemon resent the marked attempt before the caller's notice, so both copies wait.
+    expect(seen.resent).toEqual([{ name: added.name, runSlug: RUN_SLUG, executionId: expect.any(String) }]);
+    expect(await inboxFiles(dir)).toHaveLength(2);
+
+    const store = new FileEventStore(getGlobalConfigDir());
+    const turns: EventInput[] = [];
+    let duplicates = 0;
+    await consumeInbox(dir, async (input) => {
+      const admission = await store.accept({ ...input, operationId: input.eventId, acceptedSequence: turns.length + 1, lane: 'other' });
+      if (admission.kind === 'duplicate') duplicates += 1;
+      else turns.push(input);
+    });
+
+    expect(turns).toHaveLength(1);
+    expect(turns[0]!.event).toMatchObject({ kind: 'task_completed', task: { goalId, taskName: added.name } });
+    expect(duplicates).toBe(1);
+    expect(await inboxFiles(dir)).toEqual([]);
   });
 });
 
