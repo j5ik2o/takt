@@ -118,6 +118,17 @@ daemon は `runDaemon.ts:183` で `TaskDispatcher` を作り、`BuiltinWorkerAda
 
 これで、保存した終わりの記録は必ず返事として `RemoteWorkerRuntime` に返り、`records` の更新と `release` が行われる。
 
+### 7. daemon を止めるときに切ったフック（S23、元帥の決め）
+
+daemon 側の `BuiltinProjectHost.close()`（`projectHost.ts:108-117`）は、子へ `shutdown` を送って 5 秒待ち、子が終わらなければ子のプロセス群を止める（`terminate()`、SIGTERM のあと 250 ミリ秒で SIGKILL、`spawn.ts:23`・`:176-200`）。runtime の `close()` は返事のあとに始めたフックを待つ（3 節）ので、5 秒を超えるフックがあると、この打ち切りで子ごと止まる。元帥の決めで、この打ち切りの振る舞いは変えず、切ったことだけを知らせる。
+
+- **5 秒を超えたフックは、呼ばれたことにならない。** フックのプロセスは `runBoundedCommand` が `detached` で起こすので、子のプロセス群を止めても残って走り続けることがある。それでも終わりを見る者がいないので、成功も失敗も記録されず、`reportLostHook` の警告も出ない。I3 が守るのは runtime の `close()` が待ち終えるまでで、host の 5 秒の外は守らない（上げる点 3）。
+- **切ったときは、どのタスクのフックを切ったかを 1 行の警告に出す。** 文は「Stopped the builtin worker for <cwd> before the finish hook of task <name> ended; the hook is not counted as run」。フックが複数あれば、1 行にタスク名を `, ` でつないで並べる。行は `sanitizeSensitiveText` を通し、フックのコマンドも引数も入れない。出すのは host の側の `warn()`（daemon の `[WARN]` の出口）だけで、子の stderr にも `reportDaemonError` にも出さない。どの出口でも 1 行までになる。
+- **タスク名を host が知る形。** host は子の中で走っているフックを知らないので、子が知らせる。`ProjectReplySchema`（`src/core/worker-pool/projectProtocol.ts`）に `{ kind: 'hooks', taskNames: string[] }` を足し、子の `BuiltinProjectRuntime` は `pendingHooks` が増えるか減るたびに、走っているフックのタスク名の一覧をそのまま送る（差分ではなく全体なので、順番や取りこぼしを気にしなくてよい）。host は最後に受けた一覧を持つ。`close()` は `Promise.race` で 5 秒の側が勝ち、一覧が空でないときだけ、`terminate()` の前に 1 回だけ警告を出す。
+- 子の側（SIGTERM を受けたときに子の stderr へ書く形）は採らない。SIGKILL までの 250 ミリ秒で、macOS のパイプへの非同期の書き込みが流れきる保証が無い。また host は子が 0 以外で終わると子の stderr の末尾を `reportDaemonError` に写す（`projectHost.ts:31-35`）ので、同じ行が 2 つの出口に出る。
+- host と子は同じ版の takt なので、`ProjectReplySchema` の `strict()` の和に 1 つ足しても古い子と食い違うことは無い。
+- red の試験は S23（`it-worker-pool-completion-publication.test.ts` › names the task whose finish hook the project host cuts off when it stops the builtin worker）。出口（子の stderr、daemon 側の stderr、`[WARN]`）ごとに、タスク名と `hook` を含む行が 1 行まで・少なくとも 1 つの出口に 1 行、秘密の値がどの行にも無いことを見る。この形では `[WARN]` に 1 行、ほかの 2 つは 0 行になる。
+
 ## 守る不変条件
 
 1 回の試みについて、次の 8 つを守る。I1 が #196、I3 が #195、I4 が #197 に当たる。I7・I8 は段7 で足した。
@@ -221,6 +232,7 @@ D7 は、印が残り続けて daemon が毎回出し直す形で、I1〜I6 の�
 - 受信箱の写しの数（同じ試みの写しを 1 回に畳むこと）は見ていない。`delivered` は「届いた」の 1 ビットである。
 - daemon が印を消すことと、印のある間 daemon が終わらないことは、#170 のモデルの範囲で、ここでは見ていない（D7）。
 - W1（中断の回収）は、マージ済みの経路と同じ形なのでモデルに入れていない。W5（通常の完了）の通知の失敗は、捕まえて警告するだけなので、I2 と同じ形としてモデルには入れていない。
+- 7 節（S23、host の 5 秒の打ち切りで切ったフックの警告）は入れない。モデルの範囲は runtime の `close()` までで、5 秒の打ち切りは別のプロセスからの時間の切れ目であり、警告を 1 行出すだけで記録・印・通知のどれも変えないので、I1〜I6 に関わる状態が無い。
 - max-steps 16。ディスクの出し入れでどの trace も 17 状態まで伸びるが、runtime の遷移は 5 つ以下で終わる。
 
 ## red のテスト（Sonnet が書く）と本番の直し（muse が書く）
@@ -255,12 +267,13 @@ D7 は、印が残り続けて daemon が毎回出し直す形で、I1〜I6 の�
 3. 遠隔の終わりのフックは、遠隔の側も daemon 側も呼んでいなかったので、daemon 側で呼ぶ形にした（3 節）。どの経路でもフックが 1 回だけ呼ばれることを確かめる試験を足す（S4）。
 4. （段7）フックは lease の更新と finish の返事を止めない形にする。I6 は保つ。Quint に I7 を足す（3 節、「lease とフック」）。
 5. （段7）通常の完了の通知の失敗も、外へ投げずに警告にとどめ、host を閉じない形を #193 の範囲に入れる（5 節）。遠隔の finish の、保存と `records`・`release` のずれも直す（6 節）。
+6. （S23）`BuiltinProjectHost.close()` が 5 秒で子を止めるとき、走りかけの終了フックがあれば、どのタスクのフックを切ったかを 1 行の警告に出す。出口ごとに 1 行まで、タスク名を含み、秘密は出さない。5 秒を超えたフックは呼ばれたことにならない（7 節）。
 
 ## 上げる点
 
 1. **通常の完了に印を付けるか**（保存されるデータ）。この設計では付けない（5 節）。付けるなら、`takt run` の経路と worker pool の経路を 1 つの issue で、`completeTask`・`failTask` の印と、両方の経路の通知のあとの消し込みをそろえる。
 2. **マージ済みの経路の通常の完了の通知の失敗**（`parallelExecution.ts:497-503`）。worker pool の W5 と同じく投げる。この設計では変えない。直すなら同じ `try/catch` と警告にする。
-3. **daemon を止めるときのフック**。runtime の `close()` はフックを待つが、daemon 側の `BuiltinProjectHost.close()`（`projectHost.ts:104-111`）は、子へ shutdown を送ってから 5 秒待ち、過ぎると子のプロセス群を止める。daemon を止めると、5 秒を超えて走っているフックは止められ、呼ばれたことにも警告にもならない（I3 は runtime の `close()` までで、host の 5 秒の外は守らない）。走っている実行も同じ 5 秒で止められる今の形と同じなので、この設計では変えない。延ばすなら、host の待ちを `TASK_FINISH_HOOK_MAX_TIMEOUT_MS` より長くする。
+3. **daemon を止めるときのフック**。runtime の `close()` はフックを待つが、daemon 側の `BuiltinProjectHost.close()`（`projectHost.ts:108-117`）は、子へ shutdown を送ってから 5 秒待ち、過ぎると子のプロセス群を止める。5 秒を超えて走っているフックは、呼ばれたことにならない（I3 は runtime の `close()` までで、host の 5 秒の外は守らない）。走っている実行も同じ 5 秒で止められる今の形と同じなので、5 秒は変えない。元帥の決め（S23）で、切ったときにタスク名つきの警告を 1 行出す（7 節）。延ばすなら、host の待ちを `TASK_FINISH_HOOK_MAX_TIMEOUT_MS` より長くする。
 
 ## 上流と違う振る舞い（次の上流の取り込みのために）
 
@@ -275,6 +288,8 @@ D7 は、印が残り続けて daemon が毎回出し直す形で、I1〜I6 の�
 | `src/infra/task/taskLifecycleService.ts` の `buildUnreadableGoalTask` | 印なし | 印を付ける | 同上 |
 | `builtinProjectRuntime.ts` の実行の `.then`（W5） | 通知の失敗で `failed` → host が閉じる | 警告とログにとどめ、`finished` を呼ぶ | 1 つの通知の失敗で、そのプロジェクトの実行をすべて止めない（I8） |
 | `remoteTaskLifecycle.ts` の `request()` の保存のあと（`:157-167`） | どの段が投げても返事が出ない | 各段を `try/catch` し、必ず返事を返す。フックは返事のあと | `records`・`release` を保存とそろえる。フックで lease と host の要求を止めない（I7） |
+| `src/__tests__/worker-pool-runtime.test.ts` の「retains project ownership after an unsaved %s failure until cleanup finishes」（`it.each(['execution', 'completion notification'])`） | `'completion notification'` の行：`saveManagerEvent` が `PrivateFileLockAcquisitionError('cannot notify completion', 'ENOSPC')` を投げ、実行は `{ runSlug: 'run-a', completion: { success: true, interrupted: false } }` で終わる。`failed` がその失敗で 1 回呼ばれ、`close()` の片付けが終わるまで `finished` は呼ばれず、`release` もせず、片付けのあとに `release` が 1 回 | `'completion notification'` の行を `it.each` から外し、新しい試験「keeps the runtime running when a completion notification fails and settles the task like a normal completion」に移した。`saveManagerEvent` は同じ引数で 1 回、`failed` は呼ばれない、`finished` はタスク名で 1 回、`release` は `close()` の前に 1 回で `close()` のあとも 1 回のまま、タスク名・ゴールの id・`run_slug` を含む `[WARN]` が 1 行、失敗の文に混ぜた `api_token=` の作り物の値がどの警告の行にも無い。`'execution'` の行は名前も assert もそのまま | 段7 の決め（5 節、M18）。通知の失敗を捕まえて `finished` を呼ぶので、「`finished` を呼ばず所有を保つ」という元の期待はこの行では成り立たない（I8）。記録は `193-red-log.md` の「既存の試験の期待を変えたもの」 |
+| `src/infra/worker-pool/projectHost.ts` の `close()` と `projectProtocol.ts` の返事 | 5 秒で子を止め、走っていたフックについて何も出さない | 子が `hooks` の返事で走っているフックのタスク名を送り、5 秒で止めるときに 1 行の `[WARN]` を出す | 5 秒を超えたフックが黙って消えないようにする（7 節、S23） |
 
 ## 範囲の外
 

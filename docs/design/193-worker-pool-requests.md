@@ -30,6 +30,7 @@
 | S20 | 同上 | `waits for a scheduled finish hook when the runtime closes` | S19 と同じフックで、返事のあとに `runtime.close()` を呼ぶ。ファイルを置くまで `close()` は解決せず、置いたあとに解決し、フックのファイルにタスク名が 1 回ある | M5（`close()` が `pendingHooks` を待つ所） |
 | S21 | 同上 | `keeps the project open when the notification of a normal completion fails` | `TaskDispatcher` で A と B を走らせ、B の通常の完了の `saveManagerEvent` を ENOSPC にする。A の `signal.aborted` は偽、host は閉じない、`finished` は B の名前で呼ばれる。警告の 1 行に B の名前・ゴールの id・`run_slug` がある。B の記録は `completed` で、印は無い | M18 |
 | S22 | `src/__tests__/worker-pool-remote-runtime.test.ts` の fixture を使う新しい試験（`worker-pool-remote-post-save.test.ts`、単体） | `updates the remote records and releases the assignment when a step after the save fails` を `it.each(['notification', 'intervention terminal'])` | `saveManagerEvent`、または `LiveInterventionFileStore.recordTerminal` を投げる状態で遠隔の `finish` を受けると、`RemoteWorkerRuntime` の `records` が保存した記録になり、`dispatcher.release` が呼ばれ、worker へ `completed` が返る。接続は切れない | M6（各段の `try/catch`） |
+| S23 | `it-worker-pool-completion-publication.test.ts` | `names the task whose finish hook the project host cuts off when it stops the builtin worker` | 読めないタスクを host の子で断らせ、終わらないフックが始まったあとに `host.close()` を呼ぶ。出口（子の stderr、daemon 側の stderr、`[WARN]`）ごとに、タスク名と `hook` を含む行が 1 行まで、少なくとも 1 つの出口に 1 行。フックの引数に混ぜた作り物の値がどの行にも無い | M19 |
 
 ## #195・#196・#197（本番）
 
@@ -43,6 +44,7 @@
 | M6 | `src/infra/task/remoteTaskLifecycle.ts` | コンストラクタ、`request` | 4 つめの省ける引数 `onTerminal?: (task: TaskState) => void` を足す。終わりの記録に印を足し、通知を M3 + `try/catch` の警告にし、`LiveInterventionFileStore` の `read`・`recordTerminal`（`:160-161`）も `try/catch` の警告にする。新しく保存したときだけ `onTerminal` を 1 回呼び、待たずに返事を返す |
 | M7 | 遠隔の記録を `pending` に戻す書き込み | （洗う） | `buildRetryTaskRecord` を通るか、通らないなら印を外すことを確かめる |
 | M18 | `src/features/workerPool/builtinProjectRuntime.ts` | `startTask` の実行の `.then`（`:222-227`） | `saveManagerEvent` を `try/catch` で囲み、失敗したら `warn()` と `log.error()`（タスク名・ゴールの id・`run_slug`・理由）を出し、`settled = true` にして `finished(taskName)` を呼ぶ。`failed` は呼ばない。印は付けない |
+| M19 | `src/core/worker-pool/projectProtocol.ts`、`src/features/workerPool/builtinProjectRuntime.ts`、`src/app/worker-pool-project/index.ts`、`src/infra/worker-pool/projectHost.ts` | `ProjectReplySchema`、`scheduleFinishHook`、`BuiltinProjectHost.close` | 返事に `{ kind: 'hooks', taskNames }` を足す。runtime は `pendingHooks` が変わるたびに走っているフックのタスク名の一覧を送る（runtime のコンストラクタに一覧を受ける関数を足し、子がそれを `send` につなぐ）。host は最後の一覧を持ち、`close()` の 5 秒の側が勝って一覧が空でないときだけ、`terminate()` の前に `sanitizeSensitiveText` を通した 1 行を `warn()` で出す（設計の 7 節の文） |
 | M8 | `docs/worker-pool.md`（ja・zh-CN も） | — | 通知が失敗しても印から出し直されることを 1 文足す |
 
 ## #209（試験）
