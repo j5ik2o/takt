@@ -23,6 +23,7 @@ import { terminateManagedProcesses } from '../../shared/utils/spawn.js';
 import { prepareSharedServerPoolForForcedShutdown } from '../../infra/opencode/server-pool.js';
 import { RemoteTaskLifecycle } from '../../infra/task/remoteTaskLifecycle.js';
 import { resumesLocalRun } from '../../infra/task/taskRecordMutations.js';
+import { initGitProvider } from '../../infra/git/index.js';
 import { BUILTIN_RESUME_WAITING_REASON } from '../../core/worker-pool/scheduler.js';
 import { warn } from '../../shared/ui/index.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
@@ -211,6 +212,9 @@ export class BuiltinProjectRuntime implements WorkerProject {
     const retry = this.retryPending();
     if (retry !== undefined) return retry;
     this.config ??= this.resolveConfig();
+    // Select the git provider from this project's configuration before executing, as the remote
+    // task process does (#208); the builtin worker has no CLI initialization that reads it.
+    initGitProvider(this.cwd);
     if (this.lock === undefined) {
       try { this.lock = acquireProjectExecutionLock(this.cwd, 'run'); this.lock.updateState('running'); }
       catch (error) { if (error instanceof ProjectExecutionAlreadyRunningError) return { kind: 'declined' }; throw error; }
