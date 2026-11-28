@@ -28,7 +28,7 @@
 | # | 試験 | 守りであること | 本番のどこを壊せば落ちるか |
 |---|---|---|---|
 | R2 | `does not mark a goal completion saved without a run slug` | 今は印を付けないので通る | P1 の `run_slug` の条件を外し、`execution_id` だけでも印を付けると落ちる |
-| R3 | `does not mark a completion of a task without a goal` | 同上 | P1 の `goal_id` の条件を外すと落ちる |
+| R3 | `does not mark a completion of a task without a goal` | 同上 | P1 の `goal_id` の条件を外すと落ちる（のちの確かめで、P1 の条件だけを外しても落ちないと分かった。下の「直す前から緑の守りの 8 件」） |
 | R11 | `does not mark a goal completion saved by a caller that does not publish it: completeTask` / `failTask` / `prFailTask` / `exceedTask`（4 件） | 同上 | P1〜P3 の `requested` を見ずに印を付けると落ちる |
 | R7 | `reads an old completed goal record without the mark as not pending` | 決め 2 の守り | `readPendingGoalTaskCompletions`（`taskStateReader.ts:129`）が印の無い記録を拾うと落ちる。読み替え・書き戻しでファイルのバイトが変わっても落ちる |
 | R13 | `gives the caller's notice and the daemon's resend of one attempt one inbox event id: paused before the workflow` | 一時停止の記録には印が付かないので、受信箱は呼び出し側の 1 通だけ | P1 の `run_slug` の条件を外すと落ちる（下の確かめ） |
@@ -48,7 +48,7 @@
 - そこから P1 の `run_slug` の条件を外し、`execution_id` だけでも印を付けた木：`paused before the workflow` が落ちた（前提の assert で、daemon が `executionId` の 1 件を出し直した）。前提の assert を外して流すと、`eventId` の種類の assert で 2 種類（`'execution'` と `'run'`）になって落ちた。`normal` は通った。
 - `inbox.ts` で `executionId` を `runSlug` より先に見るようにした木：`normal` が `eventId` の種類の assert で 2 種類になって落ちた。`paused` は通った。
 
-R2・R3・R11・R7 の壊し方は、読みで確かめた（印の条件と、`readPendingGoalTaskCompletions` の印の見方）。流してはいない。
+R2・R3・R11・R7 の壊し方は、読みで確かめた（印の条件と、`readPendingGoalTaskCompletions` の印の見方）。流してはいない。のちに別の担当が使い捨ての木で流した（下の「直す前から緑の守りの 8 件」）。
 
 ## 2 コミット目：worker pool の数え方の単体（R10）
 
@@ -148,3 +148,67 @@ R1・R4・R5・R6・R12・R15 の外す所は、設計の表の列を読みで�
 - R15：P8 の渡しを外すと、印の assert で落ちる。
 
 一つずつ外した木では流していない。
+
+## 6 コミット目：worker pool の組み込みの完了（W5）の R8・R9
+
+基点：統合ブランチの先端 6b2595fe8。#224（takt run の分、P1〜P5・P8）と #193（worker pool）が両方入っている。W5（`builtinProjectRuntime.ts` の `startTask`）は直す前のままで、`publishesGoalCompletion` を渡さず、`saveManagerEvent` を直に呼んで `try/catch` で警告する。
+
+ファイル：`src/__tests__/it-worker-pool-completion-publication.test.ts`（既存に足す、heavy IT。`tsconfig.tests.json` に載っている）。試験のコミットは 8b3022d65。
+
+流し方：`npm test -- src/__tests__/it-worker-pool-completion-publication.test.ts`（heavy parallel IT の runner に回る）。
+
+結果：**16 件が走り、2 件が落ち、14 件が通った。** 落ちた 2 件は R8 と R9 で、ほかの 14 件（#193 の S1〜S8・S19・S20・S23 など）は通った。`releaseVerificationWiring.test.ts` を単独で流して 74 件が通った。`npx tsc -p tsconfig.tests.json --noEmit` は通った（`npm run build` のあと）。
+
+| # | 試験 | 落ちた所 |
+|---|---|---|
+| R8 | `clears the completion mark after the worker pool notifies a normal completion`（新規） | 通知のときの印が `[undefined]`（`[true]` のはず、`:246`）。W5 が印を頼まないので、保存に印が付かない |
+| R9 | `keeps the project open when the notification of a normal completion fails`（#193 の S21 を改めた） | B の記録の `completion_publication_pending` が `undefined`（`true` のはず、`:435`）。その前の `status: completed`・`run_slug: run-${b.name}` の assert は通った |
+
+### R8 の組み方
+
+W5 の実行（`executeRunTaskAndCompleteWithDetails`）の代わりは、本物の `updateRunningTaskExecution` で `run_slug` を書き、本物の `completeTask` で保存する。5 番目の引数に `publishesGoalCompletion === true` があるときだけ `completionPublicationPending: true` を頼む（takt run の R4 の mock と同じ形）。`saveManagerEvent` の spy は、このタスクの完了が送られたときに tasks.yaml の生の印を控え、本物で送る。`runtime.start` から `finished` が呼ばれるまで待ち、通知のときに印があり、そのあと印が無く（schema を通した記録と生の記録の両方）、`readPendingGoalTaskCompletions` が空で、受信箱の完了がこのタスクと `run_slug` でちょうど 1 件、このタスクの `[WARN]` が無く、`fatal` が呼ばれないことを見る。
+
+### S21 を R9 に改めた所
+
+- 期待が逆になった行：`expect(savedRecord(b.name)?.completion_publication_pending)` を、改める前の `.toBeUndefined()`（通常の完了には印を付けない）から、改めた後の `.toBe(true)` にした。
+- 足した assert：その前に B の記録が `status: completed`・`run_slug: run-${b.name}` を持つこと、その後に `readPendingGoalTaskCompletions` が B（`completed`、`run-${b.name}`）の 1 件だけを返すこと。
+- そのままの assert：A を中断しない、`closes`（host を閉じる）と `fatal` が呼ばれない、`finished` が B で呼ばれる、タスク名・ゴールの id・`run-${b.name}` を含む `[WARN]` がちょうど 1 行、秘密がどの行にも無い、A があとで `completed` になる。
+- 実行の代わりも改めた。改める前は、`run_slug` を書かずに claim した `task` のまま `completeTask` を呼び、印を頼まなかった。P1 は `run_slug` の無い記録に印を付けないので、このままでは直しの本番でも印が付かない。改めた後は、成功のときに本物の `updateRunningTaskExecution` で `run-${task.name}` を書き、その戻りの `task` で `completeTask` を呼び、`publishesGoalCompletion === true` のときだけ `completionPublicationPending: true` を頼む。結果の `runSlug` は前と同じ `run-${task.name}`。中断された A は前と同じく保存しない。
+
+### 直しの近似の木で確かめた
+
+使い捨ての `git worktree add --detach`（8b3022d65 から。コミットせず、最後に消した）の W5 に、P6 の近似を入れた：第 5 引数に `publishesGoalCompletion: true` を足し、`saveManagerEvent` の `try/catch` を `publishTaskCompletion(this.runner, this.cwd, { name: taskName, goalId: record.goal_id!, executionId: task.executionId }, result)` に替えた。`:223` の `throw` は変えていない。
+
+| 木 | 結果 |
+|---|---|
+| 両方を入れた | 16 件が通った |
+| 通知の関数だけ替え、`publishesGoalCompletion` を渡さない | R8 が `:246`（通知のときの印が `[undefined]`）で、R9 が `:435`（印が `undefined`）で落ちた。14 件は通った |
+| `publishesGoalCompletion` だけ渡し、`saveManagerEvent` を直に呼んだまま | R8 が `:248`（通知のあとも印が `true` のまま）で落ちた。R9 は通った（印は付いて残り、警告は W5 の `try/catch` が 1 行出す）。15 件が通った |
+
+- R9 だけでは、通知の関数の置き換え忘れを捕まえない。置き換え忘れは R8 が捕まえる。設計の P6 の「両方が要る」に合う。
+- P6 のうち `:223`（結果に `completion` か `runSlug` が無いときの `throw` を `log.error` と `finished` にそろえる）は、R8・R9 のどちらも通らない。この 2 件はその所を確かめていない。
+
+### 本番の直し（82141f838）で期待を変えた既存の単体試験
+
+- `worker-pool-runtime.test.ts` の `passes only a confirmed assignment to execution and saves completion before releasing it`：第 5 引数の期待を `{ abortSignal, outputMode: 'silent' }` から `{ abortSignal, outputMode: 'silent', publishesGoalCompletion: true }` に改め（設計の P6 に従った期待の追加で、厳密な一致のまま。assert は消していない）、runner の mock に `listTaskStateItems: vi.fn(() => [])` を足して、`publishTaskCompletion` の読み直しの失敗の警告（`could not be read back`）が出ないようにした（設計の M18 の試験の記述のとおり）。
+
+## 直す前から緑の守りの 8 件
+
+1 コミット目の「通った 8 件」を、守っている本番の箇所で並べ直した。箇所は 6b2595fe8 の本番の行。「外すと落ちる」は、別の担当が使い捨ての木で確かめた結果である（この担当は流していない）。7 件は 1 か所を外すと落ちた。R3 は 2 重に守られていた。
+
+- R2 `does not mark a goal completion saved without a run slug`：`markNormalCompletionPublicationPending`（P1、`taskRecordMutations.ts:123`）の `run_slug` の条件。外すと落ちた。
+- R3 `does not mark a completion of a task without a goal`：P1 の `goal_id` の条件（`taskRecordMutations.ts:123`）と、`TasksFileSchema` の `isValidCompletionPublicationPending`（`taskRecordSchemas.ts:24` の `goal_id` の条件、`:323` で使い、合わない印を落とす）の 2 重。P1 の条件だけを外しても落ちず（schema が `goal_id` の無い印を落とす）、両方を外すと落ちた。1 コミット目の表の「P1 の `goal_id` の条件を外すと落ちる」は、これで改めた。
+- R11 `does not mark a goal completion saved by a caller that does not publish it: completeTask`：P1 の `requested` の条件（`taskRecordMutations.ts:122`）。`completeTask`（`taskLifecycleService.ts:714`）がここを通る。外すと落ちた。
+- R11 同 `failTask`：同じ条件。`failTask`（`taskLifecycleService.ts:748`）がここを通る。外すと落ちた。
+- R11 同 `prFailTask`：同じ条件。`prFailTask`（`taskLifecycleService.ts:852`）がここを通る。外すと落ちた。
+- R11 同 `exceedTask`：同じ条件。`exceedTask`（`taskExceedService.ts:36`）がここを通る。外すと落ちた。
+- R7 `reads an old completed goal record without the mark as not pending`：`readPendingGoalTaskCompletions`（`taskStateReader.ts:131`）の、印の無い記録を飛ばす条件。外すと落ちた。1 コミット目の表の `:129` は、基点 e626fcce3 の行である。
+- R13 `gives the caller's notice and the daemon's resend of one attempt one inbox event id: paused before the workflow`：P1 の `run_slug` の条件（`taskRecordMutations.ts:123`、R2 と同じ所）。外すと落ちた。
+
+### 設計の文書の直し
+
+設計（`issue-216-normal-completion-publication.md`）の文を、上の結果に合わせて直した。P の表と R の表の中身は、下の 2 つの欄のほかは変えていない。
+
+- R の表の R3 の「本番のどこを外せば落ちるか」：P1 の `goal_id` の条件だけから、P1 と `isValidCompletionPublicationPending` の 2 重の守りに改めた。
+- R の表の R13 の同じ欄：「直しの本番の P1〜P8 のどれを外しても `normal` の行は落ちない（守りの行）」を、前提の assert を置いた試験の形（直す前の本番で赤、P1・P2・P5・P8 を外すと落ちる）に改めた（1 コミット目の「設計の表との違い」のとおり）。
+- 「直し方」の 3 の W5 の行：W5 には通知の関数の置き換えと `publishesGoalCompletion` を渡すことの両方が要ること、片方だけのときにどうなり、どの試験が落ちるかを足した（#224 の review の指摘）。

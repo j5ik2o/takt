@@ -21,6 +21,7 @@ vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class {
   failUnreadableGoalTask = doubles.recheck;
   clearCompletionPublicationPending = doubles.clear;
   setPendingWaitingReason = doubles.waiting;
+  listTaskStateItems = vi.fn(() => []);
   getTasksFilePath() { return '/project/.takt/tasks.yaml'; }
 } }));
 vi.mock('../infra/task/store.js', () => ({ TaskStore: class { read() { return { tasks: doubles.records() }; } } }));
@@ -154,7 +155,7 @@ it('passes only a confirmed assignment to execution and saves completion before 
   expect(await runtime.start('a', 'builtin')).toEqual({ kind: 'started' });
   expect(doubles.claim).toHaveBeenCalledExactlyOnceWith('a', 'builtin');
   expect(doubles.execute).toHaveBeenCalledWith(claimed, expect.anything(), '/project', undefined,
-    { abortSignal: expect.any(AbortSignal), outputMode: 'silent' }, undefined);
+    { abortSignal: expect.any(AbortSignal), outputMode: 'silent', publishesGoalCompletion: true }, undefined);
   expect(doubles.release).not.toHaveBeenCalled();
   result.resolve({ runSlug: 'run-a', completion: { success: true, interrupted: false } });
   await vi.waitFor(() => expect(finished).toHaveBeenCalledExactlyOnceWith('a'));
