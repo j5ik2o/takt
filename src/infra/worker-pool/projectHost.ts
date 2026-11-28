@@ -4,7 +4,7 @@ import { spawnManagedProcess } from '../../shared/utils/spawn.js';
 import { ProjectReplySchema, type ProjectReply, type ProjectRequest } from '../../core/worker-pool/projectProtocol.js';
 import type { PendingTaskReason, ProjectClaimRetry, ProjectStartResult, ProjectWaitingResult, ProjectWork, WorkerProject } from '../../core/worker-pool/types.js';
 import { reportDaemonError } from '../daemon/diagnostics.js';
-import { warn } from '../../shared/ui/index.js';
+import { warn } from '../../shared/ui/LogManager.js';
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import type { RemoteProjectRequest, RemoteProjectReply } from '../../core/worker-pool/remoteProtocol.js';
