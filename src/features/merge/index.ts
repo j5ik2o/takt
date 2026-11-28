@@ -144,6 +144,7 @@ async function createPrMergeTask(request: PrWorkflowRequest, runner: TaskRunner,
 export async function executePersistedPrMergeTask(
   task: TaskInfo, runner: TaskRunner, projectCwd: string,
   abortSignal?: AbortSignal, display?: MergeDisplayOptions,
+  publishesGoalCompletion?: true,
 ): Promise<PrMergeResult> {
   const data = task.data;
   if (data?.merge_task !== true || data.pr_number === undefined || data.workflow === undefined
@@ -214,6 +215,7 @@ export async function executePersistedPrMergeTask(
     };
     const terminal = { task: runningTask, success: result.success,
       response: completion.failureReason ?? (result.merged ? 'PR merged' : 'PR prepared'), completion,
+      ...(publishesGoalCompletion === undefined ? {} : { completionPublicationPending: publishesGoalCompletion }),
       executionLog: [], startedAt, completedAt: new Date().toISOString(),
       branch: data.branch, worktreePath: task.worktreePath };
     if (!result.success) {
@@ -252,6 +254,7 @@ export async function executePersistedPrMergeTask(
         };
         runner.failTask({ task: runningTask, success: false, response: reason,
           ...(failure instanceof GoalAbortedError ? { failureRetryable: false } : {}),
+          ...(publishesGoalCompletion === undefined ? {} : { completionPublicationPending: publishesGoalCompletion }),
           executionLog: [], startedAt, completedAt: new Date().toISOString(),
           branch: data.branch, worktreePath: task.worktreePath,
           completion });

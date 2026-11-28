@@ -13,6 +13,7 @@ import {
   type ResolvedTaskRetryMetadata,
   buildTerminalTaskRecord,
   generateTaskName,
+  markNormalCompletionPublicationPending,
 } from './taskRecordMutations.js';
 import { findActiveTaskTargetConflict } from './activeTaskTarget.js';
 import { TASK_RESTART_POINT_KEY } from './taskExecutionSchemas.js';
@@ -710,7 +711,7 @@ export class TaskLifecycleService {
 
       const target = current.tasks[index]!;
       assertTaskStopHandled(target, result.completion);
-      const updated = buildTerminalTaskRecord(target, {
+      const updated = markNormalCompletionPublicationPending(buildTerminalTaskRecord(target, {
         status: 'completed',
         started_at: result.startedAt,
         completed_at: result.completedAt,
@@ -720,7 +721,7 @@ export class TaskLifecycleService {
         worktree_path: result.worktreePath ?? target.worktree_path,
         pr_url: result.prUrl ?? target.pr_url,
         ...(result.completion === undefined ? {} : { completion: result.completion }),
-      });
+      }), result.completionPublicationPending);
       const tasks = [...current.tasks];
       tasks[index] = updated;
       return { tasks };
@@ -744,7 +745,7 @@ export class TaskLifecycleService {
 
       const target = current.tasks[index]!;
       assertTaskStopHandled(target, result.completion);
-      const updated = buildTerminalTaskRecord(target, {
+      const updated = markNormalCompletionPublicationPending(buildTerminalTaskRecord(target, {
         status: 'failed',
         started_at: result.startedAt,
         completed_at: result.completedAt,
@@ -754,7 +755,7 @@ export class TaskLifecycleService {
         worktree_path: result.worktreePath ?? target.worktree_path,
         ...(result.completion === undefined ? {} : { completion: result.completion }),
         ...(target.goal_id === undefined || result.completion === undefined ? {} : { run_slug: result.task.runSlug }),
-      }, this.readTerminalRetryMetadata(target));
+      }, this.readTerminalRetryMetadata(target)), result.completionPublicationPending);
       const tasks = [...current.tasks];
       tasks[index] = updated;
       return { tasks };
@@ -848,7 +849,7 @@ export class TaskLifecycleService {
 
       const target = current.tasks[index]!;
       assertTaskStopHandled(target, result.completion);
-      const updated = buildTerminalTaskRecord(target, {
+      const updated = markNormalCompletionPublicationPending(buildTerminalTaskRecord(target, {
         status: 'pr_failed',
         started_at: result.startedAt,
         completed_at: result.completedAt,
@@ -858,7 +859,7 @@ export class TaskLifecycleService {
         worktree_path: result.worktreePath ?? target.worktree_path,
         pr_url: result.prUrl ?? target.pr_url,
         ...(result.completion === undefined ? {} : { completion: result.completion }),
-      }, this.readTerminalRetryMetadata(target));
+      }, this.readTerminalRetryMetadata(target)), result.completionPublicationPending);
       const tasks = [...current.tasks];
       tasks[index] = updated;
       return { tasks };

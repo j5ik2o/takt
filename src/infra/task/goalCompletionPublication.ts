@@ -42,7 +42,7 @@ export function publishAndClearPendingMark(
     });
   } catch (error) {
     const detail = sanitizeSensitiveText(getErrorMessage(error));
-    warn(`Goal task ${sanitizeTerminalText(task.name)} (goal ${task.goalId ?? 'unknown'}) was saved as failed in .takt/tasks.yaml and the manager was notified, but clearing its completion publication mark failed; the daemon will resend it: ${detail}`);
+    warn(`Goal task ${sanitizeTerminalText(task.name)} (goal ${task.goalId ?? 'unknown'}) was saved as ${task.status} in .takt/tasks.yaml and the manager was notified, but clearing its completion publication mark failed; the daemon will resend it: ${detail}`);
     log.error('Clearing the completion publication mark failed', { taskName: task.name, goalId: task.goalId, error: detail });
   }
 }

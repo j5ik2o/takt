@@ -25,7 +25,7 @@ import { forceExitAfterOpenCodeCleanup } from './forceShutdown.js';
 import { isInputWaiting } from './inputWait.js';
 import type { TaskExecutionOptions } from './types.js';
 import { runTaskFinishHooksForStates } from './taskFinishHook.js';
-import { CLAIM_RETRY_INTERVAL_MS, claimTasksWithGoalCompletions, isClaimLockTimeoutFailure, TaskClaimLockUnavailableError } from './claimTasks.js';
+import { CLAIM_RETRY_INTERVAL_MS, claimTasksWithGoalCompletions, isClaimLockTimeoutFailure, publishTaskCompletion, TaskClaimLockUnavailableError } from './claimTasks.js';
 import { checkQueuedTaskProviders, checkPendingTaskProviders } from './providerPreflight.js';
 
 const log = createLogger('worker-pool');
@@ -489,18 +489,16 @@ function fillSlots(
     };
     const context = runOptions?.ignoreIterationLimit === true ? { ignoreIterationLimit: true } : undefined;
     const goalId = task.data?.goal_id;
+    const goalExecutionOptions = goalId === undefined ? executionOptions : { ...executionOptions, publishesGoalCompletion: true as const };
     const promise = goalId === undefined
       ? executeRunTaskAndComplete(task, taskRunner, cwd, taskExecutionOptions, executionOptions, context)
-      : executeRunTaskAndCompleteWithDetails(task, taskRunner, cwd, taskExecutionOptions, executionOptions, context)
+      : executeRunTaskAndCompleteWithDetails(task, taskRunner, cwd, taskExecutionOptions, goalExecutionOptions, context)
         .then(async (result) => {
           if (result.completion === undefined || result.runSlug === undefined) {
             log.error('Goal task completion is missing its saved result or run identifier', { goalId, task: task.name });
             return result.success;
           }
-          const { saveManagerEvent } = await import('../../../infra/goals/events.js');
-          saveManagerEvent(cwd, { kind: 'completion', goalId,
-            taskName: task.name, runSlug: result.runSlug, result: result.completion,
-          });
+          publishTaskCompletion(taskRunner, cwd, { name: task.name, goalId, executionId: task.executionId }, { runSlug: result.runSlug, completion: result.completion });
           return result.success;
         });
     active.set(promise, task);

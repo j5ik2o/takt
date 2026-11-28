@@ -12,6 +12,7 @@ import { sanitizeSensitiveText } from '../../../shared/utils/sensitiveText.js';
 import { sanitizeTerminalText } from '../../../shared/utils/text.js';
 import { createRuntimeAssignmentSetupGuard } from './runtimeAssignmentGuard.js';
 import { publishAndClearPendingMark } from '../../../infra/task/goalCompletionPublication.js';
+import { saveManagerEvent } from '../../../infra/goals/events.js';
 
 const log = createLogger('claim-tasks');
 
@@ -78,6 +79,60 @@ function classifyClaimLockFailure(error: unknown): unknown {
 export function isClaimLockTimeoutFailure(error: unknown): boolean {
   const classified = classifyClaimLockFailure(error);
   return classified instanceof TaskClaimLockUnavailableError && classified.code === 'TIMEOUT';
+}
+
+const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set(['completed', 'failed', 'exceeded', 'pr_failed']);
+
+/**
+ * Notifies the manager of one finished goal task through its saved record (#216). The record of
+ * the same attempt (name, goal id and execution id) is read back; when it carries the pending
+ * mark, the saved completion is published through `publishAndClearPendingMark`, which clears the
+ * mark on success. When no marked record of this attempt is found, or reading the records fails,
+ * the notice is sent from the execution result as before and no mark is cleared. A failed notice
+ * is warned about and never thrown, so the caller keeps counting the execution result as it was.
+ */
+export function publishTaskCompletion(
+  taskRunner: TaskRunner, cwd: string,
+  task: { name: string; goalId: string; executionId?: string },
+  result: { runSlug?: string; completion?: import('../../../infra/goals/schema.js').GoalTaskResult },
+): void {
+  let saved: TaskState | undefined;
+  let readError: unknown;
+  let readFailed = false;
+  try {
+    saved = taskRunner.listTaskStateItems().find((item) => item.name === task.name
+      && item.goalId === task.goalId
+      && item.executionId === task.executionId
+      && item.completionPublicationPending === true
+      && TERMINAL_TASK_STATUSES.has(item.status));
+  } catch (error) {
+    readFailed = true;
+    readError = error;
+  }
+  if (saved !== undefined) {
+    try {
+      publishAndClearPendingMark((taskName, identity) => taskRunner.clearCompletionPublicationPending(taskName, identity), cwd, saved);
+    } catch (error) {
+      const detail = sanitizeSensitiveText(getErrorMessage(error));
+      warn(`Goal task ${sanitizeTerminalText(task.name)} (goal ${task.goalId}, run ${saved.runSlug ?? result.runSlug ?? 'unknown'}) finished and is saved in .takt/tasks.yaml, but the manager was not notified: ${detail}; the daemon will resend it from its completion mark`);
+      log.error('Goal task completion notification failed', { taskName: task.name, goalId: task.goalId, error: detail });
+    }
+    return;
+  }
+  if (result.completion === undefined || result.runSlug === undefined) return;
+  try {
+    saveManagerEvent(cwd, { kind: 'completion', goalId: task.goalId, taskName: task.name, runSlug: result.runSlug, result: result.completion });
+  } catch (error) {
+    const detail = sanitizeSensitiveText(getErrorMessage(error));
+    warn(`Goal task ${sanitizeTerminalText(task.name)} (goal ${task.goalId}, run ${result.runSlug}) finished and is saved in .takt/tasks.yaml, but the manager was not notified: ${detail}`);
+    log.error('Goal task completion notification failed', { taskName: task.name, goalId: task.goalId, error: detail });
+    return;
+  }
+  if (readFailed) {
+    const detail = sanitizeSensitiveText(getErrorMessage(readError));
+    warn(`Goal task ${sanitizeTerminalText(task.name)} (goal ${task.goalId}, run ${result.runSlug}) finished and the manager was notified, but its saved record could not be read back to clear its completion publication mark; the daemon resends it if the record is marked: ${detail}`);
+    log.error('Reading the saved goal task record back failed', { taskName: task.name, goalId: task.goalId, error: detail });
+  }
 }
 
 /**

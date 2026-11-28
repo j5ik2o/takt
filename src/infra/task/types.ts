@@ -23,6 +23,7 @@ export interface TaskInfo {
 }
 
 export interface TaskResult {
+  completionPublicationPending?: true;
   completion?: import('../goals/schema.js').GoalTaskResult;
   task: TaskInfo;
   success: boolean;

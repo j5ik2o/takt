@@ -118,6 +118,12 @@ export function resumesLocalRun(task: TaskRecord): boolean {
       || task.source_resume_point !== undefined);
 }
 
+export function markNormalCompletionPublicationPending(record: TaskRecord, requested?: boolean): TaskRecord {
+  if (requested !== true) return record;
+  if (record.goal_id === undefined || record.completion === undefined || record.run_slug === undefined) return record;
+  return { ...record, completion_publication_pending: true };
+}
+
 export function buildRetryTaskRecord(
   task: TaskRecord,
   status: Extract<TaskStatus, 'pending' | 'running'>,
