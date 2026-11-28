@@ -270,7 +270,7 @@ it.each(['success', 'preparation', 'preparation ENOSPC', 'claim lock', 'claim pe
 it.each([
   { operation: 'claim', stage: 'success', change: 'none' },
   ...['claim', 'waiting', 'recovery read', 'candidate read', 'start read'].flatMap((operation) =>
-    ['create', 'metadata'].map((stage) => ({ operation, stage, change: 'none' }))),
+    ['create', 'metadata', 'candidate open'].map((stage) => ({ operation, stage, change: 'none' }))),
   ...['removed', 'paused', 'aborted'].map((change) => ({ operation: 'claim', stage: 'create', change })),
 ])('preserves A through continuing $stage ENOSPC in $operation and rechecks $change on recovery', async ({ operation, stage, change }) => {
   const a = runner.addTask('A', { goal_id: goalRecord().id });
@@ -298,13 +298,19 @@ it.each([
   const responses: { operation: string; result: unknown }[] = [];
   const actualFs = await vi.importActual<typeof import('node:fs')>('node:fs');
   vi.mocked(fs.closeSync).mockImplementation((descriptor) => { descriptors.delete(descriptor); actualFs.closeSync(descriptor); });
+  // 'candidate open' fails the candidate's openSync (file-lock.ts acquireLock) instead of the write to its descriptor.
   vi.mocked(fs.openSync).mockImplementation((path, flags, mode) => {
-    const descriptor = actualFs.openSync(path, flags, mode);
-    if (isLockOpenTarget(path, lockPath) && flags === 'wx') {
+    const target = isLockOpenTarget(path, lockPath) && flags === 'wx';
+    if (target) {
       readCount++;
       if (armed && (operation === 'recovery read' || operation === 'candidate read') && readCount === (operation === 'candidate read' ? 2 : 1)) full = true;
-      descriptors.add(descriptor);
+      if (full && stage === 'candidate open') {
+        failures.push(`${lockPath} open ${String(path)}`);
+        throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
+      }
     }
+    const descriptor = actualFs.openSync(path, flags, mode);
+    if (target) descriptors.add(descriptor);
     return descriptor;
   });
   vi.mocked(fs.writeFileSync).mockImplementation((file, data, options) => {
@@ -350,6 +356,8 @@ it.each([
     expect(closes).not.toHaveBeenCalled();
     if (armed) {
       expect(failures).toHaveLength(1);
+      if (stage === 'candidate open') expect(failures[0]).toMatch(/ open /);
+      else expect(failures[0]).toMatch(/ fd=\d+$/);
       expect(responses).toContainEqual({ operation: operation.endsWith('read') && operation !== 'start read' ? 'inspect'
         : operation === 'waiting' ? 'waiting' : 'start', result: { kind: 'claim_retry', retryAt: expect.any(Number) } });
       expect(pool.activeTaskCount).toBe(1);
@@ -440,7 +448,8 @@ it.each([
   const goalFailure = operation === 'unreadable' || operation === 'goal claim';
   vi.mocked(fs.closeSync).mockImplementation((descriptor) => { descriptors.delete(descriptor); actual.closeSync(descriptor); });
   vi.mocked(fs.openSync).mockImplementation((path, flags, mode) => {
-    const target = flags === 'wx' && (goalFailure ? String(path).startsWith(join(cwd, '.takt', '.goal-execution.lock.')) : path === taskLock);
+    // TaskStore publishes tasks.yaml.lock through a candidate file (store.ts withLock -> file-lock.ts acquireLock openSync).
+    const target = flags === 'wx' && (goalFailure ? String(path).startsWith(join(cwd, '.takt', '.goal-execution.lock.')) : isLockOpenTarget(path, taskLock));
     if (target && full && stage === 'create') {
       failures.push(String(path)); throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
     }
@@ -530,6 +539,10 @@ it.each([
       expect(signal?.aborted).toBe(false);
     } else await vi.waitFor(() => expect(finished).toHaveBeenCalledWith(b.name));
     expect(doubles.execute.mock.calls.filter(([task]) => task.name === b.name)).toHaveLength(failedB || operation === 'paused claim' ? 0 : 1);
+    if (stage === 'create' && !goalFailure) {
+      expect(failures.length).toBeGreaterThan(0);
+      expect(failures.every((path) => isLockOpenTarget(path, taskLock))).toBe(true);
+    }
     full = false;
     release.resolve();
     await vi.waitFor(() => expect(finished).toHaveBeenCalledWith(a.name));

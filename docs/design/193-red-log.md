@@ -138,3 +138,43 @@ S14〜S17 は `bin/takt`（`dist/` を読む）を起動するので、流す前
 | M15（権限の確かめ） | S16 |
 | M15（重なりの判定と文） | S17（文に値やパスを書いても落ちる） |
 | `workerCommands.ts:29` の値の除外、子の引数に token を足す変更 | S18 |
+
+## #198（it-worker-pool-runtime.test.ts の ENOSPC の当て先）
+
+### 改めた試験
+
+- `it-worker-pool-runtime.test.ts` › preserves A and delivers the saved result through $operation with $stage ENOSPC, restore=$restore（paused claim / failed claim の create の 2 行の当て先を直し、注入が起きたことの assert を足した）
+- 同 › preserves A through continuing $stage ENOSPC in $operation and rechecks $change on recovery（stage に `candidate open` を足し、claim / waiting / recovery read / candidate read / start read の 5 行を足した）
+
+### 差分の要点
+
+- 403 行の群：tasks.yaml の lock の当て先を `path === taskLock` から、ファイルの頭の `isLockOpenTarget(path, taskLock)`（候補の `${lockPath}.<pid>.<uuid>.tmp`）にした。本番の経路は `store.ts:128`（`withFileLock(..., directCreate: true)`）→ `file-lock.ts:191`（候補の `openSync`）→ `:194`（候補の fd への `writeFileSync`）で、`tasks.yaml.lock` そのものは `openSync` で開かれない。前の当て先では paused claim と failed claim の create は一度も失敗を起こさず、緑のまま何も確かめていなかった。足した assert：その 2 行で `failures` が 1 件以上あり、どれも tasks.yaml の lock の候補であること。既存の expect はそのまま。
+- 270 行の群：595d6a826 のあと `create` と `metadata` の行は同じ失敗（候補の fd への `writeFileSync`）を起こしている（`quint-193-review.md` の「試験との食い違い」）。`candidate open` の行は、同じ数え方で選んだ回の候補の `openSync` そのものを ENOSPC にする。どの行がどちらの失敗を起こしたかを、最初の `failures` の形（`open` か `fd=`）で確かめる assert を足した。既存の expect と既存の行はそのまま。
+
+### 流した結果
+
+60 件走り、60 件緑（足した candidate open の 5 行を含む）。#198 は試験の当て先の直しで、本番の red は無い。
+
+足した assert が効くことは、作業ツリーの外の写しで当て先を `path === taskLock` に戻して流し、paused claim と failed claim の create の 2 行が `expected 0 to be greater than 0`（注入が 0 回）で落ちることで確かめた。
+
+候補の `openSync` の ENOSPC も、今の本番は書き込みの ENOSPC と同じく `claim_retry` に変え、A を止めずに次の試みで直る。`quint-193-review.md` の「試験との食い違い」の 1 つめは、この試験で閉じる（設計の文書そのものは変えていない）。
+
+## #207（遠隔の実行の runtime の割り当て）
+
+### 足した試験
+
+- `worker-pool-transfer.integration.test.ts`（light IT） › transfers the task runtime assignment $runtimeAssignment into the runtime configuration of the remote task process（cost / undefined）
+
+daemon の `prepareRemoteExecutionInput` が書く `execution.json` の `runtime` は、遠隔の子が `setExecutionRuntimeProviderConfiguration(remoteRuntimeConfiguration(...))` でそのまま使う runtime.yaml の中身である。子は渡された runtime だけを使い、タスクの `runtime_assignment` で選び直さない（`resolveInvocationRuntimeProviderFileWithOrigins` が `suppliedRuntime` を先に返す）。試験は、プロジェクトの `.takt/runtime.yaml` に `assignments.cost` を置き、`runtime_assignment: cost` のタスクの入力を作って、`remoteRuntimeConfiguration(input)` の `provider.defaults` と `assignmentOrigins` を見る。割り当ての無いタスクの行は対照で、今も緑。
+
+### 直す前の本番で流した結果
+
+ファイルの 86 件が走り、1 件落ちた（足した 2 行のうち cost の行。ほかの 85 件は緑）。
+
+| 試験 | 落ちた理由（期待 → 実際） |
+|---|---|
+| cost | 子の runtime の `provider.defaults` が `{ profile: 'cost' }` → `{ profile: 'base' }`（`taskConfig.runtime_assignment` は `cost` のまま運ばれるが、runtime の解決に効いていない） |
+
+### 本番のどこを外せば落ちるか
+
+`prepareRemoteExecutionInput`（`remoteExecutionInput.ts:73`）の `resolveInvocationRuntimeProviderFileWithOrigins` を、タスクの `runtime_assignment` の中（組み込みの実行の `withTaskRuntimeAssignment` と同じ）で呼ばないと cost の行が落ちる。割り当ての無いタスクにまで割り当てを付けると undefined の行が落ちる。
