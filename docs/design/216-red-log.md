@@ -49,3 +49,18 @@
 - `inbox.ts` で `executionId` を `runSlug` より先に見るようにした木：`normal` が `eventId` の種類の assert で 2 種類になって落ちた。`paused` は通った。
 
 R2・R3・R11・R7 の壊し方は、読みで確かめた（印の条件と、`readPendingGoalTaskCompletions` の印の見方）。流してはいない。
+
+## 2 コミット目：worker pool の数え方の単体（R10）
+
+ファイル：`src/__tests__/workerPool.test.ts`（既存に足す、単体。`tsconfig.tests.json` に載っている）。既存の試験は変えていない。
+
+流し方：`npm test -- src/__tests__/workerPool.test.ts`。
+
+結果：**69 件が走り、2 件が落ち、67 件が通った。** 落ちた 2 件は足した R10 の 2 行で、既存の 67 件は通った。`npx tsc -p tsconfig.tests.json --noEmit` は通った。
+
+| # | 試験 | 落ちた所 |
+|---|---|---|
+| R10 | `counts a goal task by its execution result when its completion notification fails: success=true` | 結果が `{ success: 0, fail: 1 }`（`{ success: 1, fail: 0 }` のはず）。`saveManagerEvent` の ENOSPC で約束が reject し、失敗と数えられる |
+| R10 | 同 `success=false` | 数え方は今も合う（reject は失敗と数えられる）。`[WARN]` の行が 0（1 行のはず）。今の本番は通知の失敗を警告しない |
+
+`success=false` の行は、数え方の assert では赤にならず、警告の assert だけで赤になる。直しの本番で P4 の警告を外すと、この行は落ちる。P4 の `try/catch` を外すと `success=true` の行が数え方で落ちる。runner の mock の `listTaskStateItems` は `[]` を返すので、直しの本番では印のある記録が見つからず、結果から送る経路（設計「直し方」の 2 の 3）を通る。警告の行にはタスク名が入ることも見る。

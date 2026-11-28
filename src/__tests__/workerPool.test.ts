@@ -472,6 +472,29 @@ describe('runWithWorkerPool', () => {
     });
   });
 
+  // #216 R10: the notice of a goal task completion failing does not change how the run counts it.
+  it.each([true, false])('counts a goal task by its execution result when its completion notification fails: success=%s', async (success) => {
+    const task = createTask('goal-task');
+    task.data!.goal_id = '550e8400-e29b-41d4-a716-446655440000';
+    const completion = { success, interrupted: !success };
+    executeWithDetails.mockResolvedValue({ success, runSlug: 'run-goal-task', completion });
+    saveEvent.mockImplementation(() => {
+      throw new PrivateFileLockAcquisitionError('cannot notify completion', 'ENOSPC', -28, { cause: new Error('ENOSPC') });
+    });
+    const runner = createRunner();
+
+    const result = await runWithWorkerPool(runner as never, [task], 1, '/cwd', undefined, undefined, 10);
+
+    expect(result).toEqual({ success: success ? 1 : 0, fail: success ? 0 : 1, executedTaskNames: [task.name] });
+    expect(saveEvent).toHaveBeenCalledExactlyOnceWith('/cwd', {
+      kind: 'completion', goalId: task.data!.goal_id, taskName: task.name, runSlug: 'run-goal-task', result: completion,
+    });
+    const warnings = vi.mocked(console.log).mock.calls.map(([message]) => String(message))
+      .filter((message) => message.includes('[WARN]'));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(task.name);
+  });
+
   it('入口の停止信号を使い、SIGINT ハンドラを重複登録しない', async () => {
     const scheduling = new AbortController();
     const taskAbort = new AbortController();
