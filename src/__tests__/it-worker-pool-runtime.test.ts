@@ -299,18 +299,16 @@ it.each([
   const actualFs = await vi.importActual<typeof import('node:fs')>('node:fs');
   vi.mocked(fs.closeSync).mockImplementation((descriptor) => { descriptors.delete(descriptor); actualFs.closeSync(descriptor); });
   vi.mocked(fs.openSync).mockImplementation((path, flags, mode) => {
+    const descriptor = actualFs.openSync(path, flags, mode);
     if (isLockOpenTarget(path, lockPath) && flags === 'wx') {
       readCount++;
       if (armed && (operation === 'recovery read' || operation === 'candidate read') && readCount === (operation === 'candidate read' ? 2 : 1)) full = true;
-      if (full && stage === 'create') { failures.push(String(path)); throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }); }
-      const descriptor = actualFs.openSync(path, flags, mode);
       descriptors.add(descriptor);
-      return descriptor;
     }
-    return actualFs.openSync(path, flags, mode);
+    return descriptor;
   });
   vi.mocked(fs.writeFileSync).mockImplementation((file, data, options) => {
-    if (typeof file === 'number' && descriptors.has(file) && full && stage === 'metadata') {
+    if (typeof file === 'number' && descriptors.has(file) && full) {
       failures.push(`${lockPath} fd=${file}`);
       actualFs.writeFileSync(file, '{');
       throw Object.assign(new Error('disk full'), { code: 'ENOSPC' });
@@ -565,9 +563,15 @@ it('keeps operation-specific acquisition handlers and native errors for stores w
   const operationFailure = new Error('operation-specific failure');
   const operationHandler = vi.fn((_error: unknown): never => { throw operationFailure; });
   const store = new TaskStore(cwd, handler);
+  const descriptors = new Set<number>();
   vi.mocked(fs.openSync).mockImplementation((path, flags, mode) => {
-    if (isLockOpenTarget(path, `${runner.getTasksFilePath()}.lock`) && flags === 'wx') throw failure;
-    return actualFs.openSync(path, flags, mode);
+    const descriptor = actualFs.openSync(path, flags, mode);
+    if (isLockOpenTarget(path, `${runner.getTasksFilePath()}.lock`) && flags === 'wx') descriptors.add(descriptor);
+    return descriptor;
+  });
+  vi.mocked(fs.writeFileSync).mockImplementation((file, data, options) => {
+    if (typeof file === 'number' && descriptors.has(file)) throw failure;
+    return actualFs.writeFileSync(file, data, options);
   });
   expect(() => store.read()).toThrow(converted);
   expect(() => store.update(() => undefined)).toThrow(converted);
@@ -576,6 +580,7 @@ it('keeps operation-specific acquisition handlers and native errors for stores w
   expect(operationHandler).toHaveBeenCalledExactlyOnceWith(failure);
   expect(handler).toHaveBeenCalledTimes(2);
   expect(() => new TaskStore(cwd).read()).toThrow(failure);
+  vi.mocked(fs.writeFileSync).mockImplementation(actualFs.writeFileSync);
   vi.mocked(fs.openSync).mockImplementation(actualFs.openSync);
   expect(store.read()).toEqual({ tasks: [] });
 });
