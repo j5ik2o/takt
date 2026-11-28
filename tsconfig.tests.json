@@ -511,6 +511,7 @@
     "src/__tests__/it-worker-pool-builtin.test.ts",
     "src/__tests__/it-worker-pool-completion-publication.test.ts",
     "src/__tests__/it-worker-pool-execution.test.ts",
+    "src/__tests__/it-worker-pool-git-provider.test.ts",
     "src/__tests__/it-worker-pool-remote.test.ts",
     "src/__tests__/it-worker-pool-runtime.test.ts",
     "src/__tests__/it-worker-token-source.test.ts",

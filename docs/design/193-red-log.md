@@ -178,3 +178,25 @@ daemon の `prepareRemoteExecutionInput` が書く `execution.json` の `runtime
 ### 本番のどこを外せば落ちるか
 
 `prepareRemoteExecutionInput`（`remoteExecutionInput.ts:73`）の `resolveInvocationRuntimeProviderFileWithOrigins` を、タスクの `runtime_assignment` の中（組み込みの実行の `withTaskRuntimeAssignment` と同じ）で呼ばないと cost の行が落ちる。割り当ての無いタスクにまで割り当てを付けると undefined の行が落ちる。
+
+## #208（組み込みの worker の git の provider）
+
+### 足した試験
+
+- `it-worker-pool-git-provider.test.ts` › selects the $setting git provider of the project before the builtin worker executes a task (origin $origin)（gitlab と判定できない origin / 設定なしで github.com の origin）
+
+直しの置き場所は takt中将の答えのとおり `BuiltinProjectRuntime`（コンストラクタか、`startTask` の実行の前のプロジェクトの設定を読む所）とする。試験は `runtime.start()` の実行の中（`executeRunTaskAndCompleteWithDetails` の差し替えの中）で `getGitProvider()` を読み、その型を見る。子の入口（`src/app/worker-pool-project/index.ts`）にだけ置く直しでは、この試験は緑にならない。
+
+### 直す前の本番で流した結果
+
+2 件走り、1 件落ちた。
+
+| 試験 | 落ちた理由（期待 → 実際） |
+|---|---|
+| gitlab（`vcs_provider: gitlab`、origin は `git.example.test`） | 実行の中の `getGitProvider()` が `GitLabProvider` → GitHub の provider（`initGitProvider` を通らず、`getGitProvider()` が自動判定の既定の github に落ちる） |
+
+対照の行（`vcs_provider` なし、origin が github.com）は今も緑で、直したあとも GitHub のままであることを守る。
+
+### 本番のどこを外せば落ちるか
+
+`BuiltinProjectRuntime` の実行の前に `initGitProvider(cwd)` を呼ばないと gitlab の行が落ちる。設定を読まずに GitLab に決め打ちすると対照の行が落ちる。
