@@ -50,7 +50,7 @@ export class BuiltinProjectRuntime implements WorkerProject {
 
   constructor(private readonly cwd: string, private readonly finished: (taskName: string) => void,
     private readonly failed: (error: unknown) => void, private readonly remoteEnabled = false,
-    private readonly onFinishHookRunning?: (taskName: string, running: boolean) => void) {
+    private readonly onFinishHooksChanged?: (taskNames: readonly string[]) => void) {
     const onAcquisitionError = (error: unknown): never => {
       if (error instanceof Error && 'code' in error && error.code === 'ENOSPC') {
         throw new TaskClaimLockAcquisitionError(error.message, 'ENOSPC', { cause: error });
@@ -202,11 +202,11 @@ export class BuiltinProjectRuntime implements WorkerProject {
   private scheduleFinishHook(task: TaskState): void {
     const settle = (): void => {
       this.pendingHooks.delete(hookPromise);
-      if (![...this.pendingHooks.values()].includes(task.name)) this.onFinishHookRunning?.(task.name, false);
+      this.onFinishHooksChanged?.([...this.pendingHooks.values()]);
     };
     const hookPromise: Promise<void> = runTaskFinishHooksForStates(this.cwd, [task]).then(settle, settle);
     this.pendingHooks.set(hookPromise, task.name);
-    this.onFinishHookRunning?.(task.name, true);
+    this.onFinishHooksChanged?.([...this.pendingHooks.values()]);
   }
 
   private async startTask(taskName: string, workerName: string): Promise<ProjectStartResult> {

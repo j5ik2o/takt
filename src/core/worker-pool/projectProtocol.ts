@@ -32,7 +32,7 @@ export const ProjectReplySchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('claim_retry'), id: z.string(), retryAt: z.number().finite() }).strict(),
   z.object({ kind: z.literal('error'), id: z.string(), message: z.string() }).strict(),
   z.object({ kind: z.literal('finished'), taskName: z.string() }).strict(),
-  z.object({ kind: z.literal('finish_hook'), taskName: z.string(), running: z.boolean() }).strict(),
+  z.object({ kind: z.literal('hooks'), taskNames: z.array(z.string()) }).strict(),
 ]);
 
 export type ProjectRequest = z.infer<typeof ProjectRequestSchema>;

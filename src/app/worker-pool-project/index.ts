@@ -10,7 +10,7 @@ const send = (reply: ProjectReply): void => {
 };
 const runtime = new BuiltinProjectRuntime(process.cwd(), (taskName) => send({ kind: 'finished', taskName }),
   () => { process.exitCode = 1; void stop(); }, process.env.TAKT_REMOTE_WORKER_POOL === '1',
-  (taskName, running) => send({ kind: 'finish_hook', taskName, running }));
+  (taskNames) => send({ kind: 'hooks', taskNames: [...taskNames] }));
 let closing: Promise<void> | undefined;
 const stop = (): Promise<void> => closing ??= runtime.close().catch((error: unknown) => {
   process.stderr.write(`${sanitizeSensitiveText(getErrorMessage(error))}\n`);

@@ -4,6 +4,9 @@ import { spawnManagedProcess } from '../../shared/utils/spawn.js';
 import { ProjectReplySchema, type ProjectReply, type ProjectRequest } from '../../core/worker-pool/projectProtocol.js';
 import type { PendingTaskReason, ProjectClaimRetry, ProjectStartResult, ProjectWaitingResult, ProjectWork, WorkerProject } from '../../core/worker-pool/types.js';
 import { reportDaemonError } from '../daemon/diagnostics.js';
+import { warn } from '../../shared/ui/index.js';
+import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
+import { sanitizeTerminalText } from '../../shared/utils/text.js';
 import type { RemoteProjectRequest, RemoteProjectReply } from '../../core/worker-pool/remoteProtocol.js';
 
 export class BuiltinProjectHost implements WorkerProject {
@@ -13,9 +16,9 @@ export class BuiltinProjectHost implements WorkerProject {
   private closing: Promise<void> | undefined;
   private ended = false;
   private stderr = '';
-  private readonly runningHooks = new Set<string>();
+  private hookTaskNames: readonly string[] = [];
 
-  constructor(cwd: string, configDirectory: string, private readonly finished: (taskName?: string) => void, remoteEnabled = false) {
+  constructor(private readonly cwd: string, configDirectory: string, private readonly finished: (taskName?: string) => void, remoteEnabled = false) {
     // Source execution uses the repository's installed tsx ESM loader; packaged execution needs no loader.
     const sourceLoader = import.meta.url.endsWith('.ts')
       ? ` --import ${JSON.stringify(new URL('../../../node_modules/tsx/dist/esm/index.mjs', import.meta.url).href)}` : '';
@@ -43,10 +46,7 @@ export class BuiltinProjectHost implements WorkerProject {
       try {
         const reply = ProjectReplySchema.parse(value);
         if (reply.kind === 'finished') { this.finished(reply.taskName); return; }
-        if (reply.kind === 'finish_hook') {
-          if (reply.running) this.runningHooks.add(reply.taskName); else this.runningHooks.delete(reply.taskName);
-          return;
-        }
+        if (reply.kind === 'hooks') { this.hookTaskNames = reply.taskNames; return; }
         const request = this.pending.get(reply.id);
         if (request === undefined) return;
         this.pending.delete(reply.id);
@@ -119,10 +119,9 @@ export class BuiltinProjectHost implements WorkerProject {
         await Promise.race([this.exited.then(() => { exitedInTime = true; }),
           new Promise<void>((resolve) => { timer = setTimeout(resolve, 5_000); })]);
       } finally { clearTimeout(timer); }
-      if (!exitedInTime) {
-        for (const taskName of this.runningHooks) {
-          this.report(new Error(`Builtin worker stopped while the finish hook for goal task ${taskName} was still running; the hook was cut off`));
-        }
+      if (!exitedInTime && this.hookTaskNames.length > 0) {
+        const names = this.hookTaskNames.map((taskName) => sanitizeTerminalText(taskName)).join(', ');
+        warn(sanitizeSensitiveText(`Stopped the builtin worker for ${this.cwd} before the finish hook of task ${names} ended; the hook is not counted as run`));
       }
       if (this.managed.child.pid !== undefined) await this.managed.terminate();
       await this.exited;
