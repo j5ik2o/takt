@@ -187,10 +187,22 @@ function acquireLock(lockPath: string, content: string, timeoutMs: number, direc
   const deadline = Date.now() + timeoutMs;
   while (true) {
     if (directCreate) {
-      let descriptor: number;
+      const temporaryPath = `${lockPath}.${process.pid}.${randomUUID()}.tmp`;
+      const descriptor = openSync(temporaryPath, 'wx', 0o600);
+      let snapshot: LockSnapshot;
       try {
-        descriptor = openSync(lockPath, 'wx', 0o600);
+        writeFileSync(descriptor, content, 'utf8');
+        snapshot = { stat: fstatSync(descriptor), content };
       } catch (error) {
+        try { closeSync(descriptor); } catch { /* the write error is the one to report */ }
+        try { unlinkSync(temporaryPath); } catch { /* the write error is the one to report */ }
+        throw error;
+      }
+      closeSync(descriptor);
+      try {
+        linkSync(temporaryPath, lockPath);
+      } catch (error) {
+        try { unlinkSync(temporaryPath); } catch { /* the publish error is the one to report */ }
         if (!hasCode(error, 'EEXIST')) throw error;
         if (recoverStaleLock(lockPath)) continue;
         if (Date.now() >= deadline) {
@@ -199,16 +211,7 @@ function acquireLock(lockPath: string, content: string, timeoutMs: number, direc
         Atomics.wait(waitBuffer, 0, 0, Math.min(RETRY_MS, deadline - Date.now()));
         continue;
       }
-      let snapshot: LockSnapshot;
-      try {
-        writeFileSync(descriptor, content, 'utf8');
-        snapshot = { stat: fstatSync(descriptor), content };
-      } catch (error) {
-        try { closeSync(descriptor); } catch { /* the write error is the one to report */ }
-        try { unlinkSync(lockPath); } catch { /* the write error is the one to report */ }
-        throw error;
-      }
-      closeSync(descriptor);
+      try { unlinkSync(temporaryPath); } catch { /* the lock is already published */ }
       orphanedLocks.delete(resolve(lockPath));
       return snapshot;
     }
