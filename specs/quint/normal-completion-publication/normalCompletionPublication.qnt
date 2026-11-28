@@ -252,7 +252,7 @@ module normalCompletionPublication {
   val hostStaysOpen: bool = not(s.hostClosed)
   // J4: after the caller published and neither the clear nor the read-back failed (both warn), no mark is left.
   // clearWarned stands for both warnings. Another writer that rewrites the record between the read-back and the
-  // clear (the PR re-creation, completePublishedTask) is not modelled: the clear then matches nothing and stays
+  // clear (status changed by the PR re-creation, or a deletion reservation) is not modelled: the clear then matches nothing and stays
   // silent, and the daemon resends the record with the same eventId (see the design, Quint (d)).
   val publishedClearsMark: bool =
     (s.phase == Returned and s.publishedByCaller and not(s.clearWarned)) implies not(s.mark)
@@ -313,6 +313,16 @@ module normalCompletionPublication {
   val wResendAfterFailure: bool = s.lastAction == "daemonResend" and s.notifyWarned
   val wResendAfterKill: bool = s.lastAction == "daemonResend" and s.phase == Killed
   val wPoolReturnedAfterFailure: bool = s.caller == WorkerPool and s.phase == Returned and s.notifyWarned
+  // Probes for single forms the design names (second adversarial read). Each is an invariant that must
+  // hold or fail as written next to it; they are not part of safety.
+  // Holds in sameWrite: no ExecId ever reaches the inbox (the paused record is never marked, H1).
+  val pNoExecIdInInbox: bool = not(s.inbox.contains(ExecId))
+  // Fails in brokenMarkOnSchema: the daemon resends first and the caller then sends from its result (H2).
+  val pJ8DaemonFirst: bool = not(s.inbox.size() > 1 and s.lastAction == "publish")
+  // Fail in markOnFailure: J1 by a kill after the save, and J1 by a failed second write (M2).
+  val j1Applies: bool = settled(s.phase) and publishes(s.caller) and recordRunSlug(s.shape)
+  val pJ1AfterKill: bool = (j1Applies and s.phase == Killed) implies (delivered or s.mark)
+  val pJ1AfterSecondWriteFails: bool = (j1Applies and s.lastAction == "markAfterFailureFails") implies (delivered or s.mark)
 }
 
 module current { import normalCompletionPublication(DESIGN = "Current", BREAK = "None").* }

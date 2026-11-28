@@ -22,6 +22,11 @@ quint verify normalCompletionPublication.qnt --main brokenMarkOnSchema --backend
 quint verify normalCompletionPublication.qnt --main sameWrite --backend tlc --temporal callerSettles
 quint verify normalCompletionPublication.qnt --main sameWrite --backend tlc --temporal callerSettlesUnfair        # 反例は止まり続けること
 quint verify normalCompletionPublication.qnt --main sameWrite --backend tlc --temporal callerSettlesSystemFair   # 反例はディスクが埋まって空くことの繰り返し
+# 設計が名指しする形の試し（2 回目の別の読み）。1 行目は違反なし、残りは違反する
+quint verify normalCompletionPublication.qnt --main sameWrite --backend tlc --invariant pNoExecIdInInbox
+quint verify normalCompletionPublication.qnt --main brokenMarkOnSchema --backend tlc --invariant pJ8DaemonFirst
+quint verify normalCompletionPublication.qnt --main markOnFailure --backend tlc --invariant pJ1AfterKill
+quint verify normalCompletionPublication.qnt --main markOnFailure --backend tlc --invariant pJ1AfterSecondWriteFails
 # 乱択と witness
 quint run normalCompletionPublication.qnt --main sameWrite --max-samples 50000 --max-steps 16 --seed 0x2a --invariant safety
 quint run normalCompletionPublication.qnt --main sameWrite --max-samples 20000 --max-steps 16 --seed 0x2a --invariant safety \
@@ -36,7 +41,7 @@ quint run normalCompletionPublication.qnt --main sameWrite --max-samples 20000 -
 
 - 2 回目以降の試み（再キュー・再 claim で印が外れる展開）と、別の試みの記録との取り違え（設計では読み直しを `execution_id` で絞ってふさぐ）。
 - 2 つのタスクの同時の保存。
-- 読み直しから印の消し込みまでの間に、ほかの書き手（PR の作り直し）が記録を書き換える形。消し込みは警告なしで何もせず、印は daemon が同じ `eventId` で出し直して消す（設計の J4 と Quint の（d））。
+- 読み直しから印の消し込みまでの間に、ほかの書き手が記録を書き換える形（PR の作り直しで状態が変わる、削除の予約が付く）。消し込みは警告なしで何もせず、印は daemon が同じ `eventId` で出し直して消す（設計の J4 と Quint の（d））。
 - daemon が印を消し切ること（#170 のモデル `goal-task-completion-publication/` の範囲）。
 - 保存そのものの失敗。
 
