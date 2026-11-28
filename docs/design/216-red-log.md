@@ -188,6 +188,10 @@ W5 の実行（`executeRunTaskAndCompleteWithDetails`）の代わりは、本物
 - R9 だけでは、通知の関数の置き換え忘れを捕まえない。置き換え忘れは R8 が捕まえる。設計の P6 の「両方が要る」に合う。
 - P6 のうち `:223`（結果に `completion` か `runSlug` が無いときの `throw` を `log.error` と `finished` にそろえる）は、R8・R9 のどちらも通らない。この 2 件はその所を確かめていない。
 
+### 本番の直し（82141f838）で期待を変えた既存の単体試験
+
+- `worker-pool-runtime.test.ts` の `passes only a confirmed assignment to execution and saves completion before releasing it`：第 5 引数の期待を `{ abortSignal, outputMode: 'silent' }` から `{ abortSignal, outputMode: 'silent', publishesGoalCompletion: true }` に改め（設計の P6 に従った期待の追加で、厳密な一致のまま。assert は消していない）、runner の mock に `listTaskStateItems: vi.fn(() => [])` を足して、`publishTaskCompletion` の読み直しの失敗の警告（`could not be read back`）が出ないようにした（設計の M18 の試験の記述のとおり）。
+
 ## 直す前から緑の守りの 8 件
 
 1 コミット目の「通った 8 件」を、守っている本番の箇所で並べ直した。箇所は 6b2595fe8 の本番の行。「外すと落ちる」は、別の担当が使い捨ての木で確かめた結果である（この担当は流していない）。7 件は 1 か所を外すと落ちた。R3 は 2 重に守られていた。
