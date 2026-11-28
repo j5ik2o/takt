@@ -9,7 +9,7 @@ import { invalidateAllResolvedConfigCache } from '../infra/config/index.js';
 import { buildRunPaths } from '../core/workflow/run/run-paths.js';
 import { DebugLogger } from '../shared/utils/debug.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
-import { CacciaGitHubTimeoutError, fetchPrStatus } from '../infra/github/pr.js';
+import { CacciaGitHubTimeoutError, fetchPrStatus, hasCodeRabbitReviewThreads } from '../infra/github/pr.js';
 import { synchronizeGoalBranch } from '../infra/goals/branch-sync.js';
 import { runCaccia } from '../features/caccia/index.js';
 
@@ -22,12 +22,16 @@ const specifications = {
 };
 
 vi.mock('../agents/runner.js', () => ({ runAgent: vi.fn() }));
-vi.mock('../infra/github/pr.js', async (original) => ({
-  ...await original<typeof import('../infra/github/pr.js')>(),
-  fetchPrDetails: vi.fn(async () => ({ number: 42, headBranch: goalRecord().branch, baseBranch: 'main',
-    headSha, headRepositoryUrl: repositoryUrl, headRepositoryPushUrls: [repositoryUrl], sameRepository: true })),
-  fetchPrStatus: vi.fn(async () => ({ merged: false, headSha })),
-}));
+vi.mock('../infra/github/pr.js', async (original) => {
+  const actual = await original<typeof import('../infra/github/pr.js')>();
+  return {
+    ...actual,
+    fetchPrDetails: vi.fn(async () => ({ number: 42, headBranch: goalRecord().branch, baseBranch: 'main',
+      headSha, headRepositoryUrl: repositoryUrl, headRepositoryPushUrls: [repositoryUrl], sameRepository: true })),
+    fetchPrStatus: vi.fn(async () => ({ merged: false, headSha })),
+    hasCodeRabbitReviewThreads: vi.fn(actual.hasCodeRabbitReviewThreads),
+  };
+});
 vi.mock('../features/caccia/index.js', async (original) => ({
   ...await original<typeof import('../features/caccia/index.js')>(),
   runCaccia: vi.fn(),
@@ -140,6 +144,7 @@ it('releases a queued goal merge on Caccia timeout without looking up PR or goal
   ].join('\n'));
   const error = 'Timed out waiting for pull request #42 head after Caccia review';
   vi.mocked(runCaccia).mockRejectedValueOnce(new CacciaGitHubTimeoutError(error));
+  vi.mocked(hasCodeRabbitReviewThreads).mockResolvedValueOnce(true);
   const { runner, task } = await claimMergeTask('caccia-timeout');
 
   expect(await executeAndCompleteTask(task, runner, project, undefined, { outputMode: 'silent' })).toBe(false);
