@@ -928,6 +928,7 @@
     "src/__tests__/worker-pool-credentials.test.ts",
     "src/__tests__/worker-pool-dispatcher.test.ts",
     "src/__tests__/worker-pool-input.test.ts",
+    "src/__tests__/worker-pool-local-resume-routing.test.ts",
     "src/__tests__/worker-pool-project-host.test.ts",
     "src/__tests__/worker-pool-registration.test.ts",
     "src/__tests__/worker-pool-remote-client.test.ts",
