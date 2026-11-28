@@ -191,28 +191,25 @@ describe('#175: a cookie value without a name is hidden in later output', () => 
   });
 });
 
-// Design 9.5 and 11 (R9-8): `Bearer` right after a word character is not read as a bearer token
+// Design 9.5 and 11 (R9-8): `Bearer` right after a word character was not read as a bearer token
 // by the previous display, the previous range path, the new display, phase 1 or the stream, so
-// `Zq1Zq` leaks on every path. This leak predates #151; a follow-up PR (with #175) fixes it and
-// turns these examples into "hidden". The stream-only leaks of the first PR (`Zq4Zq`, `Zq0Zq`) are
-// closed by the second PR, so the stream paths leak exactly these.
-const KNOWN_LEAKS_ON_EVERY_PATH: ReadonlyArray<{ input: string; later?: string; leaked: readonly string[] }> = [
-  { input: PHASE1_COMPOSITION[0]!, leaked: ['Zq1Zq'] },
-  { input: PHASE1_COMPOSITION[1]!, leaked: ['Zq1Zq'] },
-];
+// `Zq1Zq` leaked on every path. That leak predates #151; #175 reads a capital `Bearer` there on the
+// text paths, and the second PR reads it in the stream too, so nothing leaks on any path. The
+// stream-only leaks of the first PR (`Zq4Zq`, `Zq0Zq`) are closed by the second PR as well.
+const KNOWN_LEAKS_ON_EVERY_PATH: ReadonlyArray<{ input: string; later?: string; leaked: readonly string[] }> = [];
 
-describe('#151 known leak (since before #151): `Bearer` right after a word character', () => {
-  it.each(PHASE1_COMPOSITION.map((input) => [input]))('%j shows Zq1Zq on every path', (input) => {
-    for (const [path, output] of Object.entries(shownOnItsOwn(input))) expect(output, path).toContain('Zq1Zq');
-    for (const [path, shown] of STREAM_PATHS) expect(shown([input]), path).toContain('Zq1Zq');
+describe('#151 hidden now (was a known leak since before #151): `Bearer` right after a word character', () => {
+  it.each(PHASE1_COMPOSITION.map((input) => [input]))('%j hides Zq1Zq on every path', (input) => {
+    for (const [path, output] of Object.entries(shownOnItsOwn(input))) expect(output, path).not.toContain('Zq1Zq');
+    for (const [path, shown] of STREAM_PATHS) expect(shown([input]), path).not.toContain('Zq1Zq');
   });
 });
 
 // 14th edition, point 6 (design 9.5 and 11, R9-8): the stream-specific leaks of the first PR are
 // closed on the stream paths by the second PR: `Zq4Zq` of #1 and `Zq0Zq` of #2, #3 and #4. `Zq1Zq`
-// is not a stream leak: it leaks on every path since before #151 (a word character before `Bearer`),
-// and it is fixed by a follow-up PR (#175, item 423). This test fixes that leak; it does not hide it.
-describe('#151 2a: the stream paths close the first PR stream leaks and keep the Zq1Zq leak', () => {
+// leaked on every path since before #151 (a word character before `Bearer`); #175 reads it on the
+// text paths and the second PR reads it in the stream, so the stream paths hide it too.
+describe('#151 2a: the stream paths close the first PR stream leaks and the Zq1Zq leak', () => {
   it.each([
     [LEAK_2[0]!, 'Zq4Zq'],
     [LEAK_2[1]!, 'Zq0Zq'],
@@ -222,8 +219,8 @@ describe('#151 2a: the stream paths close the first PR stream leaks and keep the
     for (const [path, shown] of STREAM_PATHS) expect(shown([input]), path).not.toContain(secret);
   });
 
-  it.each(PHASE1_COMPOSITION.map((input) => [input]))('%j still shows Zq1Zq on every stream path', (input) => {
-    for (const [path, shown] of STREAM_PATHS) expect(shown([input]), path).toContain('Zq1Zq');
+  it.each(PHASE1_COMPOSITION.map((input) => [input]))('%j hides Zq1Zq on every stream path', (input) => {
+    for (const [path, shown] of STREAM_PATHS) expect(shown([input]), path).not.toContain('Zq1Zq');
   });
 });
 
@@ -346,15 +343,15 @@ describe('#175: a capital `Bearer` right after a word character is read', () => 
 });
 
 // Open point 6 (DECISIONS-after-review.md): the glued `Bearer` of #3 and #4 also shows through the
-// stream, which is still the previous stream. #175 does not change the stream; this stays a known
+// stream, which was still the previous stream. #175 does not change the stream; this stayed a known
 // leak until the stream reads the new reading (second PR of #151), which turns it into "hidden".
-describe('#175 known leak (stream): a capital `Bearer` right after a word character', () => {
-  it.each(PHASE1_COMPOSITION.map((input) => [input]))('the stream shows Zq1Zq of %j', (input) => {
-    expect(streamedAlone(input)).toContain('Zq1Zq');
+describe('#175 hidden now (was a known leak on the stream): a capital `Bearer` right after a word character', () => {
+  it.each(PHASE1_COMPOSITION.map((input) => [input]))('the stream hides Zq1Zq of %j', (input) => {
+    expect(streamedAlone(input)).not.toContain('Zq1Zq');
   });
 });
 
-describe('#151 the stream paths (L-stream): the fixed examples leak only the known leaks on every path', () => {
+describe('#151 the stream paths (L-stream): the fixed examples leak nothing on every path', () => {
   for (const [path, shown] of STREAM_PATHS) {
     it(path, () => {
       const alone = [
