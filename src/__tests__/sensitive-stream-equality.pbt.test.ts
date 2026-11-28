@@ -2,16 +2,21 @@ import fc from 'fast-check';
 import { scaledMs } from '../../scripts/test-time-factor.mjs';
 import { describe, expect, it } from 'vitest';
 import { responseBoundaryRanges } from '../infra/deepseek-harness/client.js';
-import { createSensitiveTextStreamRedactor, SensitiveTextStreamBuffer } from '../shared/utils/sensitive-stream.js';
+import { createStreamTrackingState, trackOpenCodeTextBytes } from '../infra/opencode/OpenCodeStreamHandler.js';
+import {
+  createLegacySensitiveTextStreamBuffer, createLegacySensitiveTextStreamRedactor, type SensitiveTextStreamBufferLike,
+} from '../shared/utils/sensitive-stream.js';
 import { createBoundedSensitiveValues, type BoundedSensitiveValues } from '../shared/utils/sensitive-value.js';
 import { legacyResponseBoundaryRanges } from './helpers/legacy-deepseek-boundary.js';
 import * as legacyStream from './helpers/legacy-sensitive-stream.js';
 import * as legacyValue from './helpers/legacy-sensitive-value.js';
 import { chunksOf, leakText, markersIn } from './helpers/sensitive-text-arbitraries.js';
 
-// #151, first PR (design 3 "stream equality" and 11): every stream path stays the previous
-// stream. The same operations on the current stream and on the copy of 337062193's stream give the
-// same results: commits, redactor output, previews, and the legacy bound of the tracked values.
+// #151 (design 3 "stream equality", 7.1, 11): the inner-only stream is the previous stream. The
+// same operations on the inner-only stream and on the copy of 337062193's stream give the same
+// results: commits, redactor output, previews, and the legacy bound of the tracked values. In 2a,
+// OpenCode (and DeepSeek, see deepseek-harness-client.test.ts) still build the inner-only stream, so
+// their stream output does not change by a character (R9-1).
 
 const NUM_RUNS = (() => {
   const parsed = Number.parseInt(process.env.TAKT_PBT_NUM_RUNS ?? '', 10);
@@ -85,29 +90,39 @@ function expectSameTracking(current: BoundedSensitiveValues, previous: legacyVal
   expect(current.legacyBound.hasUntrackedValues).toBe(previous.hasUntrackedValues);
 }
 
-describe('the stream is the previous stream (#151, first PR)', () => {
-  it('SensitiveTextStreamBuffer: the same commits, previews and tracked values', () => {
-    fc.assert(fc.property(operations, (steps) => {
-      const current = new SensitiveTextStreamBuffer();
-      const previous = new legacyStream.SensitiveTextStreamBuffer();
-      for (const step of steps) {
-        if (step.kind === 'write') {
-          expect(current.write(step.text, currentSource(step.source), step.substrings))
-            .toEqual(previous.write(step.text, previousSource(step.source), step.substrings));
-        } else if (step.kind === 'preview') {
-          expect(current.preview(currentSource(step.source))).toBe(previous.preview(previousSource(step.source)));
-        } else {
-          expect(current.flush(currentSource(step.source), step.substrings))
-            .toEqual(previous.flush(previousSource(step.source), step.substrings));
-        }
-        expectSameTracking(current.sensitiveValues, previous.sensitiveValues);
-      }
+function expectSameStream(current: SensitiveTextStreamBufferLike, steps: readonly Operation[]): void {
+  const previous = new legacyStream.SensitiveTextStreamBuffer();
+  for (const step of steps) {
+    if (step.kind === 'write') {
+      expect(current.write(step.text, currentSource(step.source), step.substrings))
+        .toEqual(previous.write(step.text, previousSource(step.source), step.substrings));
+    } else if (step.kind === 'preview') {
+      expect(current.preview(currentSource(step.source))).toBe(previous.preview(previousSource(step.source)));
+    } else {
+      expect(current.flush(currentSource(step.source), step.substrings))
+        .toEqual(previous.flush(previousSource(step.source), step.substrings));
+    }
+    expectSameTracking(current.sensitiveValues, previous.sensitiveValues);
+  }
+}
+
+describe('the inner-only stream is the previous stream (#151)', () => {
+  it('createLegacySensitiveTextStreamBuffer: the same commits, previews and tracked values', () => {
+    fc.assert(fc.property(operations, (steps) => expectSameStream(createLegacySensitiveTextStreamBuffer(), steps)), runs);
+  }, TIMEOUT);
+
+  // 2a (R9-1): OpenCode's response buffer is the inner-only stream, also after the tracking limit resets it.
+  it('OpenCode response buffer: the same commits, previews and tracked values as 337062193', () => {
+    fc.assert(fc.property(operations, fc.boolean(), (steps, exhausted) => {
+      const state = createStreamTrackingState({ textByteLimit: 0, reasoningByteLimit: 0, idLimit: 1 });
+      if (exhausted) trackOpenCodeTextBytes(state, 'x');
+      expectSameStream(state.responseBuffer, steps);
     }), runs);
   }, TIMEOUT);
 
-  it('createSensitiveTextStreamRedactor: the same output and previews', () => {
+  it('createLegacySensitiveTextStreamRedactor: the same output and previews', () => {
     fc.assert(fc.property(operations, (steps) => {
-      const current = createSensitiveTextStreamRedactor();
+      const current = createLegacySensitiveTextStreamRedactor();
       const previous = legacyStream.createSensitiveTextStreamRedactor();
       for (const step of steps) {
         if (step.kind === 'write') expect(current.write(step.text, currentSource(step.source))).toBe(previous.write(step.text, previousSource(step.source)));

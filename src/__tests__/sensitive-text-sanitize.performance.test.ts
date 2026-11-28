@@ -9,6 +9,7 @@ import {
   sanitizeSensitiveTextWithKnownValues,
 } from '../shared/utils/sensitiveText.js';
 import { trackedValuesOf } from './helpers/sensitive-text-tracked.js';
+import { createLegacySensitiveTextStreamRedactor, type SensitiveTextStreamRedactorFactory } from '../shared/utils/sensitive-stream.js';
 
 describe('sanitizeSensitiveText performance', () => {
   it('sanitizes a 64KiB uniform alphanumeric run without quadratic blowup', () => {
@@ -248,6 +249,65 @@ describe('the union with the previous redaction stays linear', () => {
     const ratio = median(pairs.map((pair) => pair.large / pair.small));
     expect(ratio).toBeLessThan(6);
     expect(large).toBeLessThan(scaledMs(25_000));
+  }, scaledMs(300_000));
+});
+
+// #151 2a (design 6 "the second PR's stream", R9-2, R9-7): A3's shape, a line only the new reading
+// keeps open followed by long plain lines, written in 4 KiB chunks. The new stream reads its outer
+// hold again at each previous boundary (at most 10,000 characters, five times), so it is slower than
+// the inner-only stream by a constant, not by the input length. The tool paths read a preview after
+// every write. The table goes to the PR body; past 4 times the inner-only stream at 256 KiB, the
+// numbers go to the marshal before the merge (design 6).
+describe('the second PR stream stays linear on A3 (write + flush, write + preview + flush)', () => {
+  const median = (samples: number[]): number => [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)]!;
+  // 4 KiB writes, and one line per write (a program that prints line by line, a small tool_output
+  // per line; design 13th edition, R12-2): the stream must stay linear whatever the writes are.
+  const WRITES: ReadonlyArray<readonly [name: string, split: (text: string) => string[]]> = [
+    ['4 KiB writes', (text) => Array.from({ length: Math.ceil(text.length / 4096) }, (_, index) => text.slice(index * 4096, (index + 1) * 4096))],
+    ['one line per write', (text) => text.split(/(?<=\n)/u)],
+  ];
+  // A3, and A3 again every 10,000 characters (12th edition): each open key makes the outer hold read
+  // a 10,000 character run again, so the repeated shape is where asking rule 2 per previous unit
+  // instead of once per write showed (12.7 times the inner-only stream at 256 KiB).
+  const SHAPES: ReadonlyArray<readonly [name: string, text: (bytes: number) => string]> = [
+    ['A3', (bytes) => "--password=''a'\n" + ('p'.repeat(99) + '\n').repeat(Math.ceil(bytes / 100))],
+    ['A3 every 10,000 characters', (bytes) => ("--password=''a'\n" + ('p'.repeat(99) + '\n').repeat(99)).repeat(Math.ceil(bytes / 9_916))],
+  ];
+  const streams: ReadonlyArray<readonly [name: string, create: SensitiveTextStreamRedactorFactory]> = [
+    ['first PR (inner only)', createLegacySensitiveTextStreamRedactor],
+    ['second PR', createSensitiveTextStreamRedactor],
+  ];
+  it.each(SHAPES.flatMap(([shape, text]) => WRITES.flatMap(([writes, split]) => [
+    [`${shape}, ${writes}, write + flush`, text, split, false],
+    [`${shape}, ${writes}, write + preview + flush`, text, split, true],
+  ] as const)))('%s', (name, shapeText, split, withPreview) => {
+    const run = (create: SensitiveTextStreamRedactorFactory, bytes: number): number => {
+      const chunks = split(shapeText(bytes));
+      const start = performance.now();
+      const redactor = create();
+      for (const chunk of chunks) {
+        redactor.write(chunk, undefined);
+        if (withPreview) redactor.preview(undefined);
+      }
+      redactor.flush(undefined);
+      return performance.now() - start;
+    };
+    const table: Record<string, Record<string, number>> = {};
+    for (const [stream, create] of streams) {
+      run(create, 16 * 1024);
+      const sizes = { '16 KiB': 16 * 1024, '64 KiB': 64 * 1024, '256 KiB': 256 * 1024 };
+      table[stream] = Object.fromEntries(Object.entries(sizes).map(([size, bytes]) => [size, Math.round(median([1, 2, 3].map(() => run(create, bytes))))]));
+      const pairs = Array.from({ length: 5 }, () => ({ small: run(create, 64 * 1024), large: run(create, 256 * 1024) }));
+      expect(median(pairs.map((pair) => pair.large / pair.small)), `${stream}: 256 KiB / 64 KiB`).toBeLessThan(6);
+      expect(median(pairs.map((pair) => pair.large)), stream).toBeLessThan(scaledMs(20_000));
+    }
+    // Design 6 (14th edition, points 4): the record is A3 613 ms against 193 ms (about 3.2 times), so
+    // "within 2 times" is not the pass line. The line is 4 times the inner-only stream at 256 KiB;
+    // past it the numbers go to the marshal before the merge.
+    const inner = table['first PR (inner only)']!['256 KiB']!;
+    const second = table['second PR']!['256 KiB']!;
+    expect(second / Math.max(1, inner), `256 KiB: second PR ${second} ms against ${inner} ms`).toBeLessThan(4);
+    console.info(`#151 2a stream, ${name} (ms, median of 3):`, JSON.stringify(table));
   }, scaledMs(300_000));
 });
 

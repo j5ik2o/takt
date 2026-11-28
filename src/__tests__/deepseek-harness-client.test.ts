@@ -15,6 +15,8 @@ import { loadDeepSeekTestModules } from './helpers/deepseek-managed-sdk.js';
 import type { StreamEvent } from '../shared/types/provider.js';
 import { createProviderEventLogger } from '../core/logging/providerEventLogger.js';
 import { scenarioText, secretFragmentsIn, splitSecretScenarios } from './helpers/split-secret-scenarios.js';
+import * as legacyStream from './helpers/legacy-sensitive-stream.js';
+import { maskSensitiveRanges } from './helpers/legacy-sensitive-text.js';
 
 interface ManagedModuleLoadEvidence {
   directory: string;
@@ -612,6 +614,32 @@ describe('DeepSeek Harness TypeScript SDK client', () => {
     expect(records.slice(0, tool)).toContainEqual(expect.objectContaining({ event_type: field,
       data: field === 'text' ? { text: 'Before [REDACTED]' } : { thinking: 'Before [REDACTED]' } }));
     for (const record of records) expect(JSON.stringify(record)).not.toContain('s3cr3t');
+  });
+
+  // #151 2a (design 7.1, R9-1): DeepSeek keeps the inner-only stream until 2b, so its streamed text
+  // is the first PR's stream output character for character. These chunks are where the new stream
+  // differs (a line only the new reading holds, leak 2); 2b switches DeepSeek and changes them.
+  it.each([
+    [["--password=''a'\n", "Zq5Zq' rest\n"]],
+    [["TOKEN=apikey: ?to", "ken=' 'Zq4Zq\n"]],
+    [["token:token :--password=\\\" \\\"Zq0Zq\n"]],
+  ])('streams text through the inner-only stream in 2a: %j', async (chunks) => {
+    const events: StreamEvent[] = [];
+    vi.spyOn(DeepSeekHarness.prototype, 'start').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'close').mockResolvedValue(undefined);
+    vi.spyOn(DeepSeekHarness.prototype, 'run').mockImplementation(async (_input, options) => {
+      const sessionId = 'inner-only-stream-session';
+      const send = (event: Record<string, unknown>): void => options?.onNotification?.({ method: 'session.event', params: { sessionId, event } });
+      for (const text of chunks) send({ type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text } } });
+      send({ type: 'turn/end', data: { reason: { kind: 'completed' } } });
+      return { sessionId, finalResponse: 'done', events: [], notifications: [] };
+    });
+    const response = await callDeepSeekHarness('worker', 'inspect', { cwd: temporaryRoot, onStream: (event) => events.push(event) });
+    expect(response.status).toBe('done');
+    const previous = new legacyStream.SensitiveTextStreamBuffer();
+    const mask = (commit: legacyStream.SensitiveTextCommit): string => maskSensitiveRanges(commit.text, commit.ranges);
+    const expected = chunks.map((text) => mask(previous.write(text, { token: [] }, []))).join('') + mask(previous.flush({ token: [] }, []));
+    expect(events.filter((event) => event.type === 'text').map((event) => event.data.text).join('')).toBe(expected);
   });
 
   it('keeps tool-input candidates turn-scoped without remasking previously emitted text', async () => {

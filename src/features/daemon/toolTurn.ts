@@ -5,6 +5,7 @@ import type { ToolActivityEntry, ToolActivityTurnState } from '../../shared/tool
 import type { PortOutput } from '../manager/conversationPort.js';
 import {
   createBoundedSensitiveValues, createSensitiveTextStreamRedactor, sanitizeSensitiveValueWithKnownValues, type SensitiveTextStreamRedactor,
+  type SensitiveTextStreamRedactorFactory,
 } from '../../shared/utils/sensitiveText.js';
 import { sanitizeNormalizedToolResultText, toolResultSensitiveValues } from '../../shared/tool-activity/sanitize.js';
 import { TerminalTextStream } from '../../shared/utils/terminal-text-stream.js';
@@ -23,7 +24,10 @@ export class ToolTurn {
   private readonly completed: ToolActivityEntry[] = [];
   private readonly values = createBoundedSensitiveValues();
 
-  constructor(private readonly turn: TurnIdentity) {}
+  constructor(
+    private readonly turn: TurnIdentity,
+    private readonly createRedactor: SensitiveTextStreamRedactorFactory = createSensitiveTextStreamRedactor,
+  ) {}
 
   apply(message: ConversationToolEvent): PortOutput[] {
     const event = message.event;
@@ -51,7 +55,7 @@ export class ToolTurn {
           context: { ...event.toolActivity }, tool: event.type === 'tool_result' ? 'Tool' : sanitizeNormalizedToolResultText(event.data.tool, normalized),
           input: {}, output: '', status: 'running', association: event.type === 'tool_use' ? 'matched' : 'unmatched',
           startedAt: Date.now() };
-        tool = { entry, redactor: createSensitiveTextStreamRedactor(), terminal: new TerminalTextStream(), outputCount: 0 };
+        tool = { entry, redactor: this.createRedactor(), terminal: new TerminalTextStream(), outputCount: 0 };
         this.active.set(identity, tool);
         if (event.type === 'tool_output') outputs.push({ kind: 'tool_started', entry: { ...entry } });
       }

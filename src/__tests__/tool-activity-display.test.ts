@@ -206,8 +206,15 @@ describe('tool activity display', () => {
           }
         }
 
+        // #151 2a (design 12th edition, the marshal's decision): while the tool runs, the stream may
+        // still hold a value the new reading reads as open (`\"…\""}`), and the preview hides what
+        // follows it (design 7.1, 9.3). The view shows the masked text up to there, never more; the
+        // check above that no part of the secret shows after each chunk stays as it was.
         const text = scenarioText(scenario);
-        expect(display.detail('1', 0).result.text).toBe(sanitizeSensitiveTextWithKnownValues(text, text).replace(/\n$/u, ''));
+        const shown = display.detail('1', 0).result.text;
+        expect(sanitizeSensitiveTextWithKnownValues(text, text).replace(/\n$/u, '').startsWith(shown)).toBe(true);
+        // R12-5: the prefix is not empty: the stream holds only from the open value on, and shows what comes before.
+        expect(shown).not.toBe('');
       },
     );
 
