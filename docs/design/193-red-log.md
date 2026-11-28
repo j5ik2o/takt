@@ -200,3 +200,15 @@ daemon の `prepareRemoteExecutionInput` が書く `execution.json` の `runtime
 ### 本番のどこを外せば落ちるか
 
 `BuiltinProjectRuntime` の実行の前に `initGitProvider(cwd)` を呼ばないと gitlab の行が落ちる。設定を読まずに GitLab に決め打ちすると対照の行が落ちる。
+
+## #210（tsconfig.tests.json に足す 3 本）
+
+### 足したもの
+
+- `tsconfig.tests.json` に `src/__tests__/manager-workspace-access-realpath.test.ts`、`src/__tests__/opencode-readonly-directory-guard.test.ts`、`src/__tests__/usageEventLogger.test.ts` を、名前の順の位置に足した。試験の設定なので、このコミットが直しそのもの。
+
+### 流した結果
+
+足す前（このコミットの 1 つ前、#208 のコミットのあと）も、足したあとも、`npx tsc -p tsconfig.tests.json --noEmit` は型の誤り 0 件で終わった（終了コード 0）。3 本とも今の本番の型に合っている。本番は変えていない。
+
+並びは `releaseVerificationWiring.test.ts` の決まり（文字コードの順。`-` は `.` より前なので `manager-workspace-access-realpath` が `manager-workspace-access.test.ts` の前）に合わせ、その試験を単独で流して 74 件緑を確かめた。
