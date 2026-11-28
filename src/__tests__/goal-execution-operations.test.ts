@@ -3,12 +3,33 @@ import { pauseTaktGoal, resumeTaktGoal, abortTaktGoal } from '../features/mcp/go
 import { setGoalExecutionStatus } from '../infra/goals/execution.js';
 import { goalId, goalRecord } from './helpers/goal-fixtures.js';
 import { firstTextContent } from './helpers/mcp-content.js';
+import type { TaskState } from '../infra/task/types.js';
 
-const doubles = vi.hoisted(() => ({ boundary: vi.fn(), invalidate: vi.fn(), list: vi.fn(() => []), daemon: vi.fn(), run: vi.fn() }));
+const doubles = vi.hoisted(() => ({ boundary: vi.fn(), invalidate: vi.fn(), list: vi.fn(() => []), daemon: vi.fn(), run: vi.fn(), hook: vi.fn() }));
 vi.mock('../infra/goals/execution.js', () => ({ setGoalExecutionStatus: vi.fn() }));
+// #169: the finish hook is called with the states the abort saved, so its command is observed here.
+vi.mock('../infra/config/project/projectConfig.js', async (original) => ({
+  ...await original<typeof import('../infra/config/project/projectConfig.js')>(),
+  loadProjectConfig: () => ({ taskFinishHook: { command: ['finish-hook'], timeoutMs: 1_000 } }),
+}));
+vi.mock('../shared/utils/bounded-command-runner.js', async (original) => ({
+  ...await original<typeof import('../shared/utils/bounded-command-runner.js')>(),
+  runBoundedCommand: doubles.hook,
+}));
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class { invalidatePendingGoalTasks = doubles.invalidate; listTaskStateItems = doubles.list; } }));
 vi.mock('../features/daemon/lifecycle.js', () => ({ ensureDaemon: doubles.daemon }));
 vi.mock('../features/manager/autoRun.js', () => ({ ensureManagerRun: doubles.run }));
+// #179: the lease owns the filesystem, so the operation runs the action directly here.
+vi.mock('../infra/goals/driver-lease.js', () => ({
+  withGoalDriverLease: (
+    _cwd: string,
+    _goalId: string,
+    _driver: unknown,
+    _operation: unknown,
+    _signal: AbortSignal,
+    action: () => Promise<unknown> | unknown,
+  ) => action(),
+}));
 vi.mock('../features/mcp/operations.js', async (original) => ({
   ...await original<typeof import('../features/mcp/operations.js')>(),
   assertCwdAllowedByMcpRoot: doubles.boundary,
@@ -23,6 +44,7 @@ beforeEach(() => {
   vi.mocked(setGoalExecutionStatus).mockImplementation(async (_cwd, _id, executionStatus) => ({ ...goalRecord(), executionStatus }));
   doubles.daemon.mockResolvedValue(undefined);
   doubles.run.mockResolvedValue(undefined);
+  doubles.hook.mockResolvedValue({ exitCode: 0, stdout: '', stderr: '', timedOut: false });
 });
 
 describe('goal execution MCP operations', () => {
@@ -52,14 +74,23 @@ describe('goal execution MCP operations', () => {
   });
 
   it('aborts with a reason and invalidates the selected goal tasks after saving', async () => {
+    doubles.invalidate.mockImplementation((id: string, onInvalidated?: (task: TaskState) => void) => {
+      onInvalidated?.({ name: 'aborted-task', kind: 'failed', status: 'failed', goalId: id, createdAt: '2026-11-27T00:00:00.000Z',
+        completedAt: '2026-11-27T00:00:01.000Z', filePath: '/repository/.takt/tasks.yaml', failure: { error: `Goal ${id} was aborted` } } as TaskState);
+    });
     const result = await abortTaktGoal({ ...input, reason: '作業を取りやめます' }, deps, signal);
 
     expect(result.isError).not.toBe(true);
     expect(JSON.parse(firstTextContent(result.content))).toMatchObject({ goalId, executionStatus: 'aborted' });
     expect(setGoalExecutionStatus).toHaveBeenCalledExactlyOnceWith(input.cwd, goalId, 'aborted', signal, 'manager');
-    expect(doubles.invalidate).toHaveBeenCalledExactlyOnceWith(goalId);
-    // The pending tasks are read first, so the finish hook can be called for the ones this fails.
-    expect(doubles.list.mock.invocationCallOrder[0]).toBeLessThan(doubles.invalidate.mock.invocationCallOrder[0]!);
+    // #169 (設計レビュー 中-3): the abort hands each state it saved to its second argument instead of
+    // reading the pending tasks first, so the tasks are not read and the hook gets the saved states.
+    expect(doubles.invalidate).toHaveBeenCalledExactlyOnceWith(goalId, expect.any(Function));
+    expect(doubles.list).not.toHaveBeenCalled();
+    expect(doubles.hook).toHaveBeenCalledOnce();
+    expect(doubles.hook.mock.calls[0]?.[0]).toMatchObject({ command: 'finish-hook', env: expect.objectContaining({
+      TAKT_FINISH_TASK_NAME: 'aborted-task', TAKT_FINISH_STATUS: 'failed', TAKT_FINISH_GOAL_ID: goalId,
+    }) });
     expect(vi.mocked(setGoalExecutionStatus).mock.invocationCallOrder[0]).toBeLessThan(doubles.invalidate.mock.invocationCallOrder[0]!);
     expect(doubles.daemon).not.toHaveBeenCalled();
     expect(doubles.run).not.toHaveBeenCalled();

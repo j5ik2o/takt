@@ -529,6 +529,22 @@ it('組立済みの見張りは各周期で観測し、停止後には再開し�
   expect(h.accept).not.toHaveBeenCalled();
 });
 
+it('組立済みの見張りは遅延した完了通知の送信を files の周期で回す', async () => {
+  const h = harness();
+  const taskCompletions = vi.fn(async () => undefined);
+  const source: DaemonWatchSource = { runs: vi.fn().mockResolvedValue([]), run: vi.fn(), pullRequests: vi.fn().mockResolvedValue([]),
+    inquiries: vi.fn().mockResolvedValue(undefined), launches: vi.fn().mockResolvedValue([]), directories: vi.fn().mockResolvedValue([]),
+    taskCompletions };
+  const watchers = startDaemonWatchers({ source, processes: { inspect: vi.fn() }, commands: { run: vi.fn() }, records: h.records,
+    ingress: { accept: h.accept }, filesChanged: vi.fn(), now: Date.now, onError: vi.fn() });
+  try {
+    await watchers.drain();
+    expect(taskCompletions).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(WATCH_INTERVALS.files * 3);
+    expect(taskCompletions).toHaveBeenCalledTimes(4);
+  } finally { await watchers.close(); }
+});
+
 it('長く動く run でも時間による異常イベントを発行しない', async () => {
   const h = harness();
   const target = { ...run, startedAt: '2020-01-01T00:00:00.000Z' };

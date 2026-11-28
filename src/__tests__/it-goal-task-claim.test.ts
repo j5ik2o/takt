@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -135,8 +135,9 @@ describe('the claim that saved a setup failure reports it', () => {
 
     const fromA = claimTasksWithGoalCompletions(a, 1, dir, signal());
 
-    expect(fromB?.setupFailedTaskNames).toEqual([broken.name]);
-    expect(fromA.setupFailedTaskNames).toEqual([]);
+    // #169: the claim returns the saved states instead of the names; the names checked are the same.
+    expect(fromB?.setupFailedTasks.map((task) => task.name)).toEqual([broken.name]);
+    expect(fromA.setupFailedTasks.map((task) => task.name)).toEqual([]);
     expect(save).toHaveBeenCalledOnce();
     expect(save.mock.calls[0]?.[1]).toMatchObject({ kind: 'completion', goalId, taskName: broken.name });
   });
@@ -155,7 +156,8 @@ describe('the claim that saved a setup failure reports it', () => {
 
     const result = claimTasksWithGoalCompletions(runner, 1, dir, signal());
 
-    expect(result.setupFailedTaskNames).toEqual([late!.name]);
+    // #169: the claim returns the saved states instead of the names; the names checked are the same.
+    expect(result.setupFailedTasks.map((task) => task.name)).toEqual([late!.name]);
     expect(save).toHaveBeenCalledOnce();
   });
 
@@ -169,7 +171,8 @@ describe('the claim that saved a setup failure reports it', () => {
     const result = claimTasksWithGoalCompletions(runner, 2, dir, signal());
 
     expect(result.tasks.map((task) => task.name)).toEqual([runnable.name]);
-    expect(result.setupFailedTaskNames).toEqual([broken.name]);
+    // #169: the claim returns the saved states instead of the names; the names checked are the same.
+    expect(result.setupFailedTasks.map((task) => task.name)).toEqual([broken.name]);
     expect(states(dir).find((task) => task.name === broken.name)?.status).toBe('failed');
     const [warning, ...rest] = warnings();
     expect(rest).toEqual([]);
@@ -230,16 +233,19 @@ describe('claim lock failures', () => {
   });
 
   // Never retry a failure after the write: the claim is saved, and a retry would end `takt run`
-  // normally with the task left running (Quint: fixedPostWriteRetried). Losing the claim on a lock
-  // release failure is the separate issue; this pins that the failure is not classified.
+  // normally with the task left running (Quint: fixedPostWriteRetried).
+  // #169: the release failure after the write no longer loses the claim. The claimed task is returned
+  // and the failure is warned once, instead of thrown (docs/design/claim-lock-release-failure.md).
   it.each([
     ['the tasks.yaml.lock release fails', 'store', () => new Error('EIO: i/o error, unlink \'.takt/tasks.yaml.lock\'')],
     ['the goal-execution.lock ownership changes before release', 'goal', () => new Error('Private file lock ownership changed before release: .takt/goal-execution.lock')],
     ['the goal-execution.lock release fails with EIO', 'goal', () => Object.assign(new Error('EIO: i/o error, unlink \'.takt/goal-execution.lock\''), { code: 'EIO' })],
     ['a private file lock timeout is thrown after the write', 'goal', () => new PrivateFileLockTimeoutError('.takt/goal-execution.lock')],
-  ] as const)('does not classify an error after the write as retryable: %s', (_label, where, failure) => {
+  ] as const)('keeps the claim when a lock release fails after the write: %s', (_label, where, failure) => {
     const dir = project();
-    const runner = new TaskRunner(dir);
+    // #169 (設計レビュー 中-2): the warning goes to onWarning, so it is received and counted here.
+    const onWarning = vi.fn();
+    const runner = new TaskRunner(dir, { onWarning });
     const runnable = addRunnable(runner);
     if (where === 'goal') {
       goalLock.after = () => { throw failure(); };
@@ -251,13 +257,65 @@ describe('claim lock failures', () => {
       });
     }
 
-    const error = thrown(() => claimTasksWithGoalCompletions(runner, 1, dir, signal()));
+    // #169: no error comes out of the claim, so it is not retried either.
+    const result = claimTasksWithGoalCompletions(runner, 1, dir, signal());
 
+    expect(result.tasks.map((task) => task.name)).toEqual([runnable.name]);
+    expect(onWarning).toHaveBeenCalledOnce();
+    expect(String(onWarning.mock.calls[0]?.[0])).toContain('Saved .takt/tasks.yaml, but releasing a lock afterwards failed');
+    vi.restoreAllMocks();
+    goalLock.after = undefined;
+    const running = states(dir).filter((task) => task.status === 'running').map((task) => task.name);
+    expect(running).toEqual(result.tasks.map((task) => task.name));
+  });
+
+  // #169 (設計レビュー 中-2): a goal-execution.lock timeout inside the update callback (the write has
+  // started but not finished) is thrown as it is: not retried, not warned, and nothing is saved.
+  it('throws a private file lock timeout from inside the update callback as it is, without a warning', () => {
+    const dir = project();
+    const onWarning = vi.fn();
+    const runner = new TaskRunner(dir, { onWarning });
+    addRunnable(runner);
+    const before = readFileSync(join(dir, '.takt', 'tasks.yaml'), 'utf-8');
+    const timeout = new PrivateFileLockTimeoutError(join(dir, '.takt', 'goal-execution.lock'));
+    const guard = { setupFailureReason: (): string | undefined => { throw timeout; } };
+    const onSetupFailed = vi.fn();
+
+    const error = thrown(() => runner.claimNextTasks(1, guard, onSetupFailed));
+
+    expect(error).toBe(timeout);
     expect(error).not.toBeInstanceOf(TaskClaimLockAcquisitionError);
     expect(error).not.toBeInstanceOf(TaskClaimLockUnavailableError);
     expect(isClaimLockTimeoutFailure(error)).toBe(false);
-    vi.restoreAllMocks();
-    expect(states(dir).find((task) => task.name === runnable.name)?.status).toBe('running');
+    expect(onSetupFailed).not.toHaveBeenCalled();
+    expect(onWarning).not.toHaveBeenCalled();
+    expect(readFileSync(join(dir, '.takt', 'tasks.yaml'), 'utf-8')).toBe(before);
+  });
+
+  // #169 試験の2: a setup failure saved by a claim whose lock release then fails is still reported.
+  it.each(['store', 'goal'] as const)('reports a setup failure saved by a claim whose %s lock release fails', (where) => {
+    const dir = project();
+    const onWarning = vi.fn();
+    const runner = new TaskRunner(dir, { onWarning });
+    const runnable = addRunnable(runner);
+    const broken = addBroken(runner);
+    if (where === 'goal') {
+      goalLock.after = () => { throw Object.assign(new Error('EIO: i/o error, unlink'), { code: 'EIO' }); };
+    } else {
+      const update = TaskStore.prototype.update;
+      vi.spyOn(TaskStore.prototype, 'update').mockImplementation(function (this: TaskStore, ...args) {
+        update.apply(this, args);
+        throw Object.assign(new Error('EIO: i/o error, unlink'), { code: 'EIO' });
+      });
+    }
+
+    const result = claimTasksWithGoalCompletions(runner, 2, dir, signal());
+
+    expect(result.tasks.map((task) => task.name)).toEqual([runnable.name]);
+    expect(result.setupFailedTasks.map((task) => [task.name, task.status])).toEqual([[broken.name, 'failed']]);
+    expect(save).toHaveBeenCalledOnce();
+    expect(save.mock.calls[0]?.[1]).toMatchObject({ kind: 'completion', goalId, taskName: broken.name });
+    expect(onWarning.mock.calls.map(([message]) => String(message)).filter((message) => message.includes('releasing a lock afterwards failed'))).toHaveLength(1);
   });
 });
 
@@ -333,7 +391,8 @@ describe('claim combinations of two processes', () => {
     }
     const saved = states(dir);
     const returned = [...(outcomes.A.result?.tasks ?? []), ...(outcomes.B.result?.tasks ?? [])].map((task) => task.name);
-    const reported = [...(outcomes.A.result?.setupFailedTaskNames ?? []), ...(outcomes.B.result?.setupFailedTaskNames ?? [])];
+    // #169: the claim returns the saved states instead of the names; the names checked are the same.
+    const reported = [...(outcomes.A.result?.setupFailedTasks ?? []), ...(outcomes.B.result?.setupFailedTasks ?? [])].map((task) => task.name);
     const failed = saved.filter((task) => task.status === 'failed').map((task) => task.name);
     // (a) every task saved as running was returned by exactly one claim.
     for (const task of saved.filter((item) => item.status === 'running')) {

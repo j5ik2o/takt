@@ -62,6 +62,7 @@ export class TaskRunner {
       slug?: string;
       summary?: string;
       deduplicateActiveTargets?: boolean;
+      onWritten?: () => void;
     },
   ): TaskInfo {
     return this.lifecycle.addTask(content, options);
@@ -118,8 +119,15 @@ export class TaskRunner {
     return this.lifecycle.failInterruptedRunningTasks(goalId, onRecovered);
   }
 
-  invalidatePendingGoalTasks(goalId: string): void {
-    this.lifecycle.invalidatePendingGoalTasks(goalId);
+  clearCompletionPublicationPending(
+    taskName: string,
+    identity: { goalId?: string; status: TaskState['status']; runSlug?: string; executionId?: string },
+  ) {
+    return this.lifecycle.clearCompletionPublicationPending(taskName, identity);
+  }
+
+  invalidatePendingGoalTasks(goalId: string, onInvalidated?: (task: TaskState) => void): void {
+    this.lifecycle.invalidatePendingGoalTasks(goalId, onInvalidated);
   }
 
   completeTask(result: TaskResult): string {

@@ -16,10 +16,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - A visit limit wins over loop monitors: when the next step has already reached its `max_visits`, the run aborts with `Visit limit reached` without running a loop-monitor judge, even when a judge rule would route elsewhere.
+- At iteration entry, `max_visits` is now checked immediately after interrupts and before `max_steps` and `loop_detection` (#176). When a step has already reached its `max_visits` at the same time `max_steps` is exhausted, the run aborts with `Visit limit reached` (`failed`) instead of saving `exceeded`.
 
 ### Fixed
 
 - `stop_on_repeated_verdict` no longer stops when a `system` step's `wait.on_timeout` sits between two equal verdicts.
+- `executeWorkflow` now marks a run as `exceeded` only when the workflow actually aborts with `iteration_limit` (#176). Stale `exceededInfo` recorded inside a `workflow_call` child no longer turns a parent `ABORT → COMPLETE` run into `exceeded`, overrides a higher-priority `step_error` branch in `parallel`, or turns a `Visit limit reached` stop (such as `development-core`'s `implement` `ABORT → replan`) into `exceeded`.
 
 ## [0.77.0] - 2026-11-24
 

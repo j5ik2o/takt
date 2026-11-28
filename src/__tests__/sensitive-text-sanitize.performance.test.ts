@@ -45,6 +45,9 @@ describe('sanitizeSensitiveText performance', () => {
     ['a JSON web token with a missing part', 'eyJabcdefgh.eyJabcdefgh '],
     ['a bearer scheme', 'Bearer abc '],
     ['a bearer scheme without a value', 'bearer '],
+    // #175: a capital `Bearer` right after a word character is read.
+    ['a bearer scheme glued to a word', 'xBearer abc '],
+    ['bearer schemes glued to each other', 'Bearer'],
     ['an escaped JSON key', String.raw`\"token\" `],
     ['an escaped JSON key without a value', String.raw`\"api_key\":`],
     ['a key query parameter', '?key'],
@@ -63,8 +66,8 @@ describe('sanitizeSensitiveText performance', () => {
     };
     elapsed(1024); // warm up regexes and JIT
 
-    expect(elapsed(64 * 1024)).toBeLessThan(500);
-    expect(elapsed(256 * 1024)).toBeLessThan(2000);
+    expect(elapsed(64 * 1024)).toBeLessThan(scaledMs(500));
+    expect(elapsed(256 * 1024)).toBeLessThan(scaledMs(2000));
   });
 
   // One URL whose userinfo is a long run of separators. Trying every colon as the
@@ -78,6 +81,9 @@ describe('sanitizeSensitiveText performance', () => {
     ['a leading-@ password of @-separated words', 'https://user:', '@a'],
     ['a leading-@ password of @ only', 'https://user:@', '@'],
     ['a scheme behind a run of digits and hyphens', '', '1-'],
+    // #175: a `,` right after an `@` does not end the URL.
+    ['a password of @, pairs', 'https://user:pass', '@,'],
+    ['a password of @-, pairs without a closing host', 'https://user:pass', '@-,a'],
   ])('stays linear on a URL followed by %s', (_name, head, unit) => {
     const elapsed = (bytes: number): number => {
       const body = unit.repeat(Math.ceil(bytes / unit.length));
@@ -88,8 +94,8 @@ describe('sanitizeSensitiveText performance', () => {
     };
     elapsed(1024); // warm up regexes and JIT
 
-    expect(elapsed(64 * 1024)).toBeLessThan(500);
-    expect(elapsed(256 * 1024)).toBeLessThan(2000);
+    expect(elapsed(64 * 1024)).toBeLessThan(scaledMs(500));
+    expect(elapsed(256 * 1024)).toBeLessThan(scaledMs(2000));
   });
 });
 
@@ -225,6 +231,9 @@ describe('the union with the previous redaction stays linear', () => {
     ['token lines', 'token:\n'],
     // Quoted assignments glued into one word share its end (review of #165, Devin).
     ['glued quoted assignments', 'token="a"'],
+    // #175: every value between two keys of one value is tracked up to its separator.
+    ['keys inside one value', 'token=a;password=b;'],
+    ['keys inside one value without separators', 'token=a/password=b/'],
   ])('on %s', (name, unit) => {
     const run = (bytes: number): number => {
       const text = (name === 'at' ? 'https://u:' : '') + fill(unit, bytes);
@@ -300,4 +309,31 @@ describe('the second PR stream stays linear on A3 (write + flush, write + previe
     expect(second / Math.max(1, inner), `256 KiB: second PR ${second} ms against ${inner} ms`).toBeLessThan(4);
     console.info(`#151 2a stream, ${name} (ms, median of 3):`, JSON.stringify(table));
   }, scaledMs(300_000));
+});
+
+// #175: a value between two keys of one value is tracked on its own, and what is tracked stays a
+// linear multiple of the text: the parts between keys do not overlap.
+describe('the values tracked from keys inside one value stay linear in bytes', () => {
+  it.each([
+    ['separated by ;', 'token=a;password=b;'],
+    ['separated by &&', '--token=a&&--password=b&&'],
+    ['without separators between the keys', 'token=a/password=b/'],
+    ['one separator at the end', 'token=a/password=b/'],
+  ])('%s', (name, unit) => {
+    const tracked = (bytes: number): number => {
+      const body = unit.repeat(Math.ceil(bytes / unit.length));
+      const text = name === 'one separator at the end' ? body + ';x' : body;
+      return [...trackedValuesOf(text).all].reduce((sum, value) => sum + value.length, 0);
+    };
+    const small = tracked(16 * 1024);
+    const large = tracked(64 * 1024);
+    expect(large).toBeLessThan(8 * 64 * 1024);
+    expect(large / small).toBeLessThan(6);
+  });
+
+  it('tracks each value between two keys', () => {
+    const text = Array.from({ length: 64 }, (_, index) => `password=Zq${index}Zq`).join(';');
+    const all = trackedValuesOf(text).all;
+    for (let index = 0; index < 64; index++) expect(all.has(`Zq${index}Zq`), `Zq${index}Zq`).toBe(true);
+  });
 });

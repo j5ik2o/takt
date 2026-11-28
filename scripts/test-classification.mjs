@@ -237,6 +237,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/builtin-workflow-categories-path.test.ts',
   'src/__tests__/central-task-repository.test.ts',
   'src/__tests__/central-worker.test.ts',
+  'src/__tests__/claim-lock-release.pbt.test.ts',
   'src/__tests__/claude-headless-client.test.ts',
   'src/__tests__/claude-mcp-config.test.ts',
   'src/__tests__/claude-mcp-runtime.test.ts',
@@ -275,7 +276,9 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/facet-resolution.test.ts',
   'src/__tests__/formalSpecVerifier.test.ts',
   'src/__tests__/global-workflowCategories.test.ts',
+  'src/__tests__/goal-completion-inbox-event-id.test.ts',
   'src/__tests__/goalSpecificationVerification.test.ts',
+  'src/__tests__/has-work-pending-publication.test.ts',
   'src/__tests__/image-attachment-store-seal.test.ts',
   'src/__tests__/imageAttachmentReferences.test.ts',
   'src/__tests__/initialization-noninteractive.test.ts',
@@ -312,8 +315,10 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/orderReader.test.ts',
   'src/__tests__/orderRevision.test.ts',
   'src/__tests__/pathBoundary.test.ts',
+  'src/__tests__/pending-goal-completion-resend.test.ts',
   'src/__tests__/pi-client.test.ts',
   'src/__tests__/policy-persona.test.ts',
+  'src/__tests__/private-file-lock-orphan.pbt.test.ts',
   'src/__tests__/probe-codex-reasoning-stream.test.ts',
   'src/__tests__/projectBoundaryError.test.ts',
   'src/__tests__/promotion-schema-normalizer.test.ts',
@@ -374,6 +379,7 @@ export const fileSystemIntegrationTestFiles = Object.freeze([
   'src/__tests__/tui-managed-provider.test.ts',
   'src/__tests__/tui-run.test.ts',
   'src/__tests__/usageEventLogger.test.ts',
+  'src/__tests__/watch-tasks-invalid-pending.test.ts',
   'src/__tests__/web-ui-directory-browser.test.ts',
   'src/__tests__/web-ui-launcher.test.ts',
   'src/__tests__/web-ui-project-registry.test.ts',
@@ -428,6 +434,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-cli-entrypoint-required-option-errors.test.ts',
   'src/__tests__/it-daemon-projects.test.ts',
   'src/__tests__/it-declared-report-inputs.test.ts',
+  'src/__tests__/it-enqueue-lock-release-after-write.test.ts',
   'src/__tests__/it-goal-task-claim.test.ts',
   'src/__tests__/it-goal-task-stop.test.ts',
   'src/__tests__/it-handoff-progress.test.ts',
@@ -436,6 +443,7 @@ export const lightNamedIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-list-esc-menu-routes.test.ts',
   'src/__tests__/it-list-task-stop.test.ts',
   'src/__tests__/it-live-intervention-task-spec.test.ts',
+  'src/__tests__/it-lock-release-after-write.test.ts',
   'src/__tests__/it-manager-compact-display.test.ts',
   'src/__tests__/it-manager-conversation-plan.test.ts',
   'src/__tests__/it-manager-goal-specifications.test.ts',
@@ -502,8 +510,18 @@ export const heavyParallelIntegrationTestFiles = Object.freeze([
   'src/__tests__/it-daemon-worktree-run-log.test.ts',
   'src/__tests__/it-mcp-goal-specification-verification-real.test.ts',
   'src/__tests__/it-mcp-goal-specification-verification.test.ts',
+  // Runs a real finish hook command (a Node child process) after a lock release failure (#169).
+  'src/__tests__/it-lock-release-finish-hook.test.ts',
+  // Runs `takt run` in a real child process with a preload that fails one lock release (#169).
+  'src/__tests__/it-claim-lock-release-run.test.ts',
+  // Runs the real `takt merge` path, which starts Git (clone, fetch, remote) before the finish hook (#171).
+  'src/__tests__/task-finish-hook-notice.test.ts',
+  // Starts a real MCP stdio server process and speaks JSON-RPC to it (#171).
+  'src/__tests__/it-finish-hook-notice-mcp-stdio.test.ts',
   ...legacyParallelIntegrationTestFiles,
   ...auditedIntegrationBoundaryTestFiles,
+  // Compares every #176 iteration-entry tuple against the model oracle in both run loops (~280k cases).
+  'src/__tests__/workflow-run-loop-entry-order.pbt.test.ts',
   // Runs real `git init` / `git remote` processes for repository identity.
   'src/__tests__/workflowExecution-session-loading.test.ts',
   // Measured slow suites dominate the serial light gate; CI shards this gate.

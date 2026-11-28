@@ -18,6 +18,9 @@ import { findActiveTaskTargetConflict } from './activeTaskTarget.js';
 import { TASK_RESTART_POINT_KEY } from './taskExecutionSchemas.js';
 import { randomUUID } from 'node:crypto';
 import { getErrorMessage } from '../../shared/utils/error.js';
+import { createLogger } from '../../shared/utils/debug.js';
+
+const log = createLogger('task-lifecycle');
 import { sanitizeSensitiveText } from '../../shared/utils/sensitiveText.js';
 import { parseGitHubPullRequestTarget } from '../github/pull-request-target.js';
 import type { Goal } from '../goals/schema.js';
@@ -221,9 +224,10 @@ export class TaskLifecycleService {
       slug?: string;
       summary?: string;
       deduplicateActiveTargets?: boolean;
+      onWritten?: () => void;
     },
   ): TaskInfo {
-    const { deduplicateActiveTargets, ...recordOptions } = options ?? {};
+    const { deduplicateActiveTargets, onWritten, ...recordOptions } = options ?? {};
     const state = this.store.update((current) => {
       const slug = options?.slug ?? slugify(firstLine(content));
       const name = generateTaskName(slug, current.tasks.map((task) => task.name));
@@ -247,7 +251,7 @@ export class TaskLifecycleService {
         }
       }
       return { tasks: [...current.tasks, record] };
-    });
+    }, { onWritten });
 
     const created = state.tasks[state.tasks.length - 1];
     if (!created) {
@@ -280,6 +284,7 @@ export class TaskLifecycleService {
       return failed;
     };
     let writeStarted = false;
+    let written = false;
 
     try {
       withGoalExecutionLock(this.projectDir, () => this.store.update((current) => {
@@ -328,6 +333,7 @@ export class TaskLifecycleService {
         });
         return { tasks };
       }, {
+        onWritten: () => { written = true; },
         onAcquisitionError: (error) => {
           if (error instanceof Error && 'code' in error && error.code === 'ENOSPC') {
             throw new TaskClaimLockAcquisitionError(error.message, 'ENOSPC', { cause: error });
@@ -339,12 +345,16 @@ export class TaskLifecycleService {
         },
       }));
     } catch (error) {
-      // Nothing is written before the update callback starts, so only then is a goal-execution.lock
-      // timeout safe to retry. After that, an error never becomes a retry: the claim may be saved.
-      if (!writeStarted && error instanceof PrivateFileLockTimeoutError) {
+      if (written) {
+        // The claim is saved; a lock release failure after the write must not lose it (#169).
+        this.warnLockReleaseAfterWrite(error);
+      } else if (!writeStarted && error instanceof PrivateFileLockTimeoutError) {
+        // Nothing is written before the update callback starts, so only then is a goal-execution.lock
+        // timeout safe to retry. After that, an error never becomes a retry: the claim may be saved.
         throw new TaskClaimLockAcquisitionError(error.message, 'TIMEOUT', { cause: error, lock: 'goal-execution' });
+      } else {
+        throw error;
       }
-      throw error;
     }
 
     for (const task of setupFailures) {
@@ -355,6 +365,24 @@ export class TaskLifecycleService {
       }
     }
     return claimed;
+  }
+
+  private warnLockReleaseAfterWrite(error: unknown): void {
+    const detail = error instanceof AggregateError
+      ? error.errors.map((entry) => sanitizeSensitiveText(getErrorMessage(entry))).join('; ')
+      : sanitizeSensitiveText(getErrorMessage(error));
+    const warning = `Saved .takt/tasks.yaml, but releasing a lock afterwards failed: ${detail}. `
+      + 'This process removes the lock file the next time it takes that lock; until then other TAKT processes wait for it.';
+    try {
+      log.warn(warning);
+    } catch {
+      // Logging must not lose a saved result.
+    }
+    try {
+      this.onWarning?.(warning);
+    } catch {
+      // The saved result must be returned even when the warning sink throws.
+    }
   }
 
   private warnSetupFailureReport(taskName: string, error: unknown): void {
@@ -371,6 +399,7 @@ export class TaskLifecycleService {
       status: 'failed', completed_at: nowIso(), owner_pid: null,
       failure: { error: reason },
       run_slug: `setup-${randomUUID()}`,
+      completion_publication_pending: true,
       completion: {
         success: false, interrupted: false, workflowResult: 'error',
         branch: task.branch, failureReason: reason,
@@ -379,16 +408,32 @@ export class TaskLifecycleService {
     }, this.readTerminalRetryMetadata(task));
   }
 
-  invalidatePendingGoalTasks(goalId: string): void {
-    withGoalExecutionLock(this.projectDir, () => this.store.update((current) => ({
-      tasks: current.tasks.map((task) => {
-        if (task.status !== 'pending' || task.goal_id !== goalId) return task;
-        return buildTerminalTaskRecord(task, {
-          status: 'failed', owner_pid: null,
-          failure: { error: `Goal ${goalId} was aborted`, retryable: false },
-        });
-      }),
-    })));
+  invalidatePendingGoalTasks(goalId: string, onInvalidated?: (task: TaskState) => void): void {
+    const invalidated: TaskRecord[] = [];
+    let written = false;
+    let releaseError: unknown;
+    let releaseFailed = false;
+    try {
+      withGoalExecutionLock(this.projectDir, () => this.store.update((current) => ({
+        tasks: current.tasks.map((task) => {
+          if (task.status !== 'pending' || task.goal_id !== goalId) return task;
+          const failed = buildTerminalTaskRecord(task, {
+            status: 'failed', owner_pid: null,
+            failure: { error: `Goal ${goalId} was aborted`, retryable: false },
+          });
+          invalidated.push(failed);
+          return failed;
+        }),
+      }), { onWritten: () => { written = true; } }));
+    } catch (error) {
+      if (!written) throw error;
+      releaseError = error;
+      releaseFailed = true;
+    }
+    for (const task of invalidated) {
+      onInvalidated?.(toTaskState(this.tasksFile, task));
+    }
+    if (releaseFailed) throw releaseError;
   }
 
   failInterruptedRunningTasks(goalId?: string, onRecovered?: (task: TaskState) => void): number {
@@ -402,6 +447,8 @@ export class TaskLifecycleService {
     if (candidates.size === 0) return 0;
 
     const recovered: TaskRecord[] = [];
+    let written = false;
+    try {
     this.store.update((current) => {
       const tasks = current.tasks.map((task) => {
         const candidate = candidates.get(task.name);
@@ -427,6 +474,7 @@ export class TaskLifecycleService {
           },
           ...(task.goal_id === undefined ? {} : {
             run_slug: task.run_slug ?? `setup-${randomUUID()}`,
+            completion_publication_pending: true as const,
             completion: {
               success: false, interrupted: true, workflowResult: 'error',
               branch: task.branch, failureReason: reason,
@@ -438,9 +486,51 @@ export class TaskLifecycleService {
         return completed;
       });
       return recovered.length === 0 ? undefined : { tasks };
-    });
-    for (const task of recovered) onRecovered?.(toTaskState(this.tasksFile, task));
+    }, { onWritten: () => { written = true; } });
+    } catch (error) {
+      if (!written) throw error;
+      this.warnLockReleaseAfterWrite(error);
+    }
+    for (const task of recovered) {
+      try {
+        onRecovered?.(toTaskState(this.tasksFile, task));
+      } catch (error) {
+        this.onWarning?.(sanitizeSensitiveText(`Recovered task ${task.name} was saved as failed, but reporting it failed: ${getErrorMessage(error)}`));
+      }
+    }
     return recovered.length;
+  }
+
+  /**
+   * Clears the completion publication mark of exactly one attempt (#170). The record is only
+   * rewritten when every identity field still matches, so a late clear never removes the mark
+   * of a requeued attempt. Returns the updated record, or undefined when nothing matched.
+   */
+  clearCompletionPublicationPending(
+    taskName: string,
+    identity: { goalId?: string; status: TaskRecord['status']; runSlug?: string; executionId?: string },
+  ): TaskRecord | undefined {
+    let cleared: TaskRecord | undefined;
+    this.store.update((current) => {
+      let changed = false;
+      const tasks = current.tasks.map((task) => {
+        if (task.name === taskName
+          && task.goal_id === identity.goalId
+          && task.status === identity.status
+          && task.run_slug === identity.runSlug
+          && task.execution_id === identity.executionId
+          && task.completion_publication_pending === true
+          && task.deletion === undefined) {
+          changed = true;
+          const clearedRecord: TaskRecord = { ...task, completion_publication_pending: undefined };
+          cleared = clearedRecord;
+          return clearedRecord;
+        }
+        return task;
+      });
+      return changed ? { tasks } : undefined;
+    });
+    return cleared;
   }
 
   private readTerminalRetryMetadata(task: TaskRecord): ResolvedTaskRetryMetadata {

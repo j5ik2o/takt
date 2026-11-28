@@ -41,11 +41,16 @@ export async function receiveInboxChange(change: WatchFileChange, files: DaemonP
     const assignment = await conversations.routing.resolve({ kind: 'repository', repositoryDirectory: directory });
     await conversations.ensure(assignment);
     const event = managerInboxTurnEvent(directory, saved);
+    const inboxDir = await files.inboxDirectory(directory);
     const id = saved.kind === 'answer'
       ? saved.goalId === null
-        ? `standalone-answer-${createHash('sha256').update(JSON.stringify([await files.inboxDirectory(directory), saved.questionId])).digest('hex')}`
-        : `goal-answer-${createHash('sha256').update(JSON.stringify([await files.inboxDirectory(directory), saved.goalId, saved.questionId])).digest('hex')}`
-      : `inbox-${createHash('sha256').update(change.path).digest('hex')}`;
+        ? `standalone-answer-${createHash('sha256').update(JSON.stringify([inboxDir, saved.questionId])).digest('hex')}`
+        : `goal-answer-${createHash('sha256').update(JSON.stringify([inboxDir, saved.goalId, saved.questionId])).digest('hex')}`
+      : saved.kind === 'completion' && saved.runSlug !== undefined
+        ? `goal-completion-${createHash('sha256').update(JSON.stringify([inboxDir, saved.goalId, saved.taskName, 'run', saved.runSlug])).digest('hex')}`
+        : saved.kind === 'completion' && saved.executionId !== undefined
+          ? `goal-completion-${createHash('sha256').update(JSON.stringify([inboxDir, saved.goalId, saved.taskName, 'execution', saved.executionId])).digest('hex')}`
+          : `inbox-${createHash('sha256').update(change.path).digest('hex')}`;
     const input: EventInput = { eventId: id, requestId: id, conversationId: conversationId(assignment), source: 'run', occurredAt: saved.createdAt, event };
     const admission = await ingress.accept(input);
     if (admission.kind !== 'accepted') throw new Error(`Inbox event was not accepted: ${admission.reason}`);

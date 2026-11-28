@@ -6,7 +6,9 @@ import { GoalStore } from '../../infra/goals/store.js';
 import { appendGoalWorkLog } from '../../infra/goals/workLog.js';
 import { TaskRunner } from '../../infra/task/runner.js';
 import type { TaskState } from '../../infra/task/types.js';
-import type { McpOperationDependencies } from './operations.js';
+import { assertCwdAllowedByMcpRoot, errorResult, type McpOperationDependencies } from './operations.js';
+import { finishGoalInputSchema } from './goalFinishSchemas.js';
+import { withGoalDriverLease, type GoalDriver } from '../../infra/goals/driver-lease.js';
 import { goalWrite } from './goalWrite.js';
 import { integrationSummary } from './goalResponse.js';
 import type { FinishGoalInput } from './goalFinishSchemas.js';
@@ -86,8 +88,14 @@ async function resolveIntegratedSha(cwd: string, goal: Goal, signal: AbortSignal
   }
 }
 
-export function finishTaktAbortedGoal(input: FinishGoalInput, deps: McpOperationDependencies, signal: AbortSignal) {
-  return goalWrite(input, deps, signal, async () => {
+export async function finishTaktAbortedGoal(input: FinishGoalInput, deps: McpOperationDependencies, signal: AbortSignal, driver: GoalDriver = 'manager') {
+  try {
+    finishGoalInputSchema.parse(input);
+    assertCwdAllowedByMcpRoot(input.cwd, deps.allowedProjectRoot);
+    signal.throwIfAborted();
+  } catch (error) { return errorResult('Goal finish failed', error); }
+  try {
+    return await withGoalDriverLease(input.cwd, input.goalId, driver, 'finish', signal, () => goalWrite(input, deps, signal, async () => {
     const store = new GoalStore(input.cwd);
     const previous = await store.get(input.goalId);
     signal.throwIfAborted();
@@ -102,6 +110,7 @@ export function finishTaktAbortedGoal(input: FinishGoalInput, deps: McpOperation
       assertAbortedGoalFinishable(current, runner.listTaskStateItems());
       return appendGoalWorkLog(nextFinishedGoal(current, input.reason, targetSha), { summary: input.reason });
     });
-    return integrationSummary({ goal: saved, workLogEntryId: saved.workLog.at(-1)!.id, targetSha });
-  }, 'Goal finish failed', 'finish_aborted');
+      return integrationSummary({ goal: saved, workLogEntryId: saved.workLog.at(-1)!.id, targetSha });
+    }, 'Goal finish failed', 'finish_aborted'));
+  } catch (error) { return errorResult('Goal finish failed', error); }
 }

@@ -57,6 +57,7 @@ export function buildClaimedTaskRecord(task: TaskRecord): TaskRecord {
     owner_start_time: getSelfTaskProcessIdentity()?.startTime ?? null,
     run_slug: undefined,
     completion: undefined,
+    completion_publication_pending: undefined,
   };
 }
 
@@ -134,6 +135,7 @@ export function buildRetryTaskRecord(
     owner_start_time: status === 'running' ? getSelfTaskProcessIdentity()?.startTime ?? null : null,
     run_slug: undefined,
     completion: undefined,
+    completion_publication_pending: undefined,
     ...(options.resumeSource?.sourceRunSlug
       ? { source_run_slug: options.resumeSource.sourceRunSlug }
       : {}),
