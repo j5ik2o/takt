@@ -11,10 +11,12 @@
 根拠：
 
 1. **狭く直す形が無い。** 直したい `https://u:<L>@<S>@host` と、host の見え方を変えてはいけない `https://u:<S>@host@evil.test` は、どちらも `u:X@Y@Z` という同じ並びで、文字からは区別できない。前者で `<S>` を伏せる式は、後者でも `host` を userinfo に入れ、見える host を `evil.test` に変える。前の版の式（0a1df6bb8）は、測り直しで実際に `https://[REDACTED]@evil.test` を出した。
-2. **前の版の式は退行する。** 別の作業ツリーでの測り直し（`curl https://u:<L>@host<c>TOKEN=left@<T>` の 95 文字 × 4 形 = 380 通り）で、先端が伏せていて前の版の式が出すものが、表示で 344 件、ストリームで 172 件あった。`host<c>TOKEN=left` がパスワードの続きとして読まれ、`<T>` が host として出る。区切りの集合に `=` や `)` を足しても、区切りの無い形（`hostTOKEN=left`）は残る。
+2. **前の版の式は退行する。** 別の作業ツリーでの測り直し（`curl https://u:<L>@host<c>TOKEN=left@<T>` の 95 文字 × 4 形 = 380 通り）で、先端が伏せていて前の版の式が出すものが、表示で 344 件、ストリームで 172 件あった。前の読みの元の行列（`.tmp-2103-read2/regress.ts`、つなぎの文字 26 × 鍵の名前 8 × userinfo 4 = 832 通り）を同じ写しに通すと、表示の退行は前の読みのとおり 304 件だった。`host<c>TOKEN=left` がパスワードの続きとして読まれ、`<T>` が host として出る。区切りの集合に `=` や `)` を足しても、区切りの無い形（`hostTOKEN=left`）は残る。
 3. **条件 A の基準。** 「304 通り（測り直しの行列では 380 通り）の退行が 0 件」「`host@evil.test` の見え方の変化が 0 件」「表示とストリームが今回の差分で新しくずれない」の 3 つを、途中の `@` を直す形では同時に満たせない。上流の PR は小さく安全に戻す、と公開で書いた約束を優先する。
 
-残す 2 つ（`@` の連続と空のユーザー）は、同じ行列とくじで、先端が伏せていて変更後に出すものが 0 件だった（2 節）。
+残す 2 つ（`@` の連続と空のユーザー）は、同じ 2 つの行列とくじで、先端が伏せていて変更後に出すものが 0 件だった（2 節）。
+
+**表示とストリームの新しいずれ（条件 A の 3 つめの基準）は、90 件の形を受け入れる。** 57,456 通りのくじで、先端では表示とストリームが同じなのに変更後で違う入力が 90 件あった。どれも「`@@` で始まり、途中の `@` のあと host が無く `@` で終わる」形（`https://u:@@<L>@<S>@`）である。先端でも、`@` が 1 つの同じ形（`https://u:@<L>@<S>@`）で同じずれがある。host の無い形のずれ（#212）が `@@` の形に広がるもので、秘密の出る量は先端と変わらない（どちらの出力でも `<S>` が出るのは先端と同じ）。これを避けるには、host のあとにもう `@` が無いことを後方参照で確かめる書き方が要り、上流の式が読みにくくなる。そこで、**この差分で初めてずれる入力として PR の文（6 節）と記録の試験（8 節の 9）に書き、直さない**と決めた。条件 A の 3 つめの基準は、パスワードの途中の `@` を入れるかどうかの基準として使い、途中の `@` は入れていない。
 
 ## 1. 変更
 
@@ -61,14 +63,15 @@
 
 試作は、7eb4f0f43 の `src/shared` の写しに 1 節の式と 3 節の `addCredentialComponents` を当てたもので、作業ツリーの外（一時の場所）で流した。表示は `sanitizeSensitiveText(text, [])`、ストリームは `createSensitiveTextStreamRedactor()` の `write(text, {}) + flush({})`。`<S>`・`<L>`・`<T>` は実行時に部品をつないで作った作り物の秘密（`Zq24Zq`・`Zq01Zq`・`Zq31Zq`）。
 
-「退行」は、入力に入れた秘密のうち、先端の出力に無く変更後の出力にあるものの数。「新しいずれ」は、先端で表示とストリームが同じ文字列なのに、変更後で違うもの（ストリームが再出現を新しく伏せた分は除く。3 節）。
+「退行」は、入力に入れた秘密のうち、先端の出力に無く変更後の出力にあるものの数。「新しいずれ」は、先端で表示とストリームが同じ文字列なのに、変更後で違うもの。文字列はそのまま比べる。除くのは、`echo` を含む入力で、ストリームが再出現を新しく伏せたために `echo` より後ろだけが違う分（3 節の意図した変化）だけである。
 
 | 入力の集合 | 件数 | 前の版の式の退行（表示 / ストリーム） | 変更後の退行（表示 / ストリーム） | 変更後の新しいずれ |
 |---|---|---|---|---|
 | 測り直しの行列：`curl https://u:<L>@host<c>TOKEN=left@<T>` の 95 文字 × 4 形（`curl` あり、なし、末尾 `.`、`'` で囲む） | 380 | 344 / 172 | **0 / 0** | 0 |
+| 前の読みの元の行列：`curl https://<userinfo>host<つなぎ><鍵>=left@<T>` のつなぎ 26 × 鍵の名前 8 × userinfo 4（`.tmp-2103-read2/regress.ts` と同じ作り） | 832 | 304 / 0 | **0 / 0** | 0 |
 | くじ：前置き 7 × scheme 3 × ユーザー 3 × パスワード 19 × host 8 × 後置き 6 | 57,456 | 4,770 / 4,410 | **0 / 0** | 90 |
 
-前の読みの 304 通りは、測り直しの行列の部分集合（漏れる文字だけを並べたもの）なので、その 304 通りも変更後は 0 件である。
+前の読みの 304 件は、2 行目の行列の表示の退行で、変更後は 0 件になる。
 
 くじの新しいずれ 90 件は、すべて「`@@` で始まり、途中の `@` のあと host が無く `@` で終わる」形（`https://u:@@<L>@<S>@` → 表示 `https://[REDACTED]@<S>@`、ストリーム `https://[REDACTED]@<S>[REDACTED]`）だった。先端でも、`@` が 1 つの同じ形（`https://u:@<L>@<S>@`）で同じずれがある。host の無い形のずれ（#212）が `@@` の形に広がるもので、**この差分で初めてずれる入力**として PR の文と 6 節の記録の試験に書く。
 
@@ -194,8 +197,8 @@ W5（`https://u:Zq12Zq@host;TOKEN=left@Zq13Zq;https://u:Zq14Zq@host;TOKEN=left@Z
 | 5 | 同上 | `stops the password before a later part with a separator` を `it.each` で `; , & \| ' "` に加え `=`・`)`・`]`・区切りなし | `curl https://u:<L>@host<c>TOKEN=left@<T>` で `<T>` が出ず、`host` が残る（表示・ストリーム）。`https://u:@@<S>@host<sep>next` は `https://[REDACTED]@host<sep>next`、`https://u:@@host;TOKEN=left@<T>` で `<T>` が出ない。`https://u:<S>@host,me@example.test` は今の出力のまま | 足す 2 つの選択肢の除外の集合（外すと `<T>` が host として出る）と、前の版の案の途中の片 |
 | 6 | 同上 | `hides a password that starts with at signs where it is echoed later` | `https://u:@@<S>@host echo <S>` をストリームで流すと `echo [REDACTED]`。`sanitizeSensitiveTextWithKnownValues('echo <S>', { command: 'https://u:@@<S>@host' })` が `echo [REDACTED]` | `addCredentialComponents` の先頭の `@` を落とす行 |
 | 7 | 同上 | `does not add a short value after the leading at signs` を `it.each(['a', 'ab', 'abc'])` | ストリームで `Authorization: Basic u:@<v>` の改行のあと `this is a test of a plan <v>` を流すと、2 行目が変わらない。`--user u:@<v>`、URL の `https://u:@@<v>@host` でも同じ | 9 節の 4 文字の下限 |
-| 8 | 同上 | 伏せてはいけない入力（今の群に足す） | `https://host:8080/path@v2`、`git@github.com:owner/repo.git`、`mail <S>@example.test before noon`、`https://[2001:db8::1]:8080/path`、`https://u:@host`、`https://u:@@host`、`https://u:@@<S>@`（host 無し）が表示・ストリームとも変わらない | 過剰に広い直し（例：`://` から最後の `@` まで）、足す選択肢の先読みを外す変更 |
-| 9 | 同上 | `keeps the known limits of the userinfo reading`（記録の試験） | 2 節と 1 節の「残す形」の出力を固定する：`https://u:<L>@<S>@host`、`https://u:<L>@a<sep><S>@host`（`it.each` で 6 文字）、`https://:@<S>@host`、`https://u:@@<L>@<S>@`（表示 `https://[REDACTED]@<S>@`、ストリーム `https://[REDACTED]@<S>[REDACTED]`。この差分で初めてずれる形）、`https://u:<L>@<S>@host echo <S>` の表示 `echo <S>`。名前とコメントで「漏れとずれの記録」と書く | —（期待を固定するだけ。直すときに意図して変える） |
+| 8 | 同上 | 伏せてはいけない入力（今の群に足す） | `https://host:8080/path@v2`、`git@github.com:owner/repo.git`、`mail <S>@example.test before noon`、`https://[2001:db8::1]:8080/path`、`https://u:@host`、`https://u:@@host` が表示・ストリームとも変わらない | 過剰に広い直し（例：`://` から最後の `@` まで）、足す選択肢の先読みを外す変更 |
+| 9 | 同上 | `keeps the known limits of the userinfo reading`（記録の試験） | 2 節と 1 節の「残す形」の出力を固定する：`https://u:<L>@<S>@host`、`https://u:<L>@a<sep><S>@host`（`it.each` で 6 文字）、`https://:@<S>@host`、`https://u:@@<S>@`（host 無し。表示・ストリームとも変わらず `<S>` が出る）、`https://u:@@<L>@<S>@`（表示 `https://[REDACTED]@<S>@`、ストリーム `https://[REDACTED]@<S>[REDACTED]`。この差分で初めてずれる形）、`https://u:<L>@<S>@host echo <S>` の表示 `echo <S>`。名前とコメントで「漏れとずれの記録」と書く | —（期待を固定するだけ。直すときに意図して変える） |
 | 10 | 同上 | W5 の形の試験を足す | 今の 8 件の印の試験は残し、表示の全文が `https://[REDACTED]@host;TOKEN=[REDACTED][REDACTED]@host;TOKEN=[REDACTED]`、ストリームの全文が `https://[REDACTED]@host;TOKEN=[REDACTED]` であることを足す（今の出力。表示とストリームは先端から違う）。T7 はもう全文を見ているので変えない | 伏せる範囲の形が変わる変更（印の不在だけでは捕まえない） |
 | 11 | `sensitiveTextUserinfo.pbt.test.ts`（フォークだけ） | 性質 1〜3 | 生成器は scheme（大文字の `HTTPS`・`Redis` を必ず含む）、ユーザー（空を含む）、パスワードの形（先頭の `@` が 0〜4 個、空のパスワード）を作る。性質 1「生成した形の userinfo の秘密は、表示にもストリームにも出ない」は、1 節の「残す形」（空のユーザー + 先頭の `@`、区切りか `=` を含むパスワード、途中の `@`）を生成しない。残す形は性質 3「範囲の外は 1 文字も変えない」と 9 の固定例で見る。性質 2「資格情報の無い文は変わらない」。各形の件数を数えて試験の出力に書き、どの形も 1 件以上あることを `expect` で確かめる。669116f6b の今の PBT は、空のユーザー + 先頭の `@`（`https://:@<S>@host`）を性質 1 で作るので、変更後に 2 件落ちる（試作で確かめた）。この形を性質 1 から外す | 足す 2 つの選択肢（どちらを外しても性質 1 が落ちる） |
 | 12 | `sensitive-text-userinfo.performance.test.ts`（フォークだけ） | 時間の性質と固定の大きさの線形性 | 669116f6b の性質 4 と 64 KiB / 256 KiB の試験をここへ移し、形に 1 節の「線形性」の 8 つを入れる | 足す選択肢をコロンや `@` を総当たりする形にしたとき |
@@ -216,4 +219,5 @@ W5（`https://u:Zq12Zq@host;TOKEN=left@Zq13Zq;https://u:Zq14Zq@host;TOKEN=left@Z
 - `addCredentialComponents` は HTTP ヘッダ、curl の `-u`、Cookie からも呼ばれる。4 文字の下限は試作で `Authorization` の 3 つの値だけ確かめた。
 - 1 節の「残す形」のうち `=` で終わる base64 のパスワード（`https://u:@@ab==@host`）は、先端と同じく伏せない。どのくらい現れるかは調べていない。
 - くじは 57,456 通りの組み合わせで、すべての入力を見たわけではない。前置き・後置き・host の形の外の形（たとえば host のあとの `)` に続く別の URL）は入れていない。
+- 7 節の段取り（1〜4 のコミットを `origin/integration/takt-mcp` の上へ cherry-pick すること）は試していない。統合ブランチ側の `sensitive-text.ts` が先端と違っていれば、ぶつかりうる。
 - `nix build .#default`・`npm run sync:nix-deps -- --check` は流していない（7 節のとおり、上流へ出す差分から package の変更を外すので、上流の nix の検査には関わらない）。
