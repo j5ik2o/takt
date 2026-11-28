@@ -10,7 +10,7 @@ worker pool は daemon が自動実行する manager のゴールタスクを、
 
 daemon はタスクの元になる SHA を確定して origin に push します。worker は origin からその SHA のコードを取得し、指示書、添付、workflow、facet、解決済み設定を daemon から受け取ります。worker 側へリポジトリ別の TAKT 設定や workflow を手作業で配置する必要はありません。
 
-worker は成果を origin へ push し、run のログとレポートを daemon へ送ります。daemon は記録の受領と成果の fetch・SHA 照合を済ませてから完了を保存します。接続できたことだけではタスクの成功になりません。
+worker は成果を origin へ push し、run のログとレポートを daemon へ送ります。daemon は記録の受領と成果の fetch・SHA 照合を済ませてから完了を保存します。接続できたことだけではタスクの成功になりません。保存した setup 失敗や遠隔の終わりの記録について manager への通知が失敗したときは、保存した記録に完了の公開の印が残り、daemon がその印から通知を出し直すので、通知が消えることはありません。
 
 ## daemon マシンの準備
 

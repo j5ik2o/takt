@@ -10,7 +10,7 @@ Single-machine usage is unchanged. Without registered remote workers, the builti
 
 The daemon fixes the task's original SHA and pushes it to origin. The worker retrieves that SHA from origin and receives the task specification, attachments, workflows, facets, and resolved configuration from the daemon. You do not need to place repository-specific TAKT configuration or workflows on each worker manually.
 
-The worker pushes its result to origin and sends run logs and reports to the daemon. The daemon saves completion after receiving the records, fetching the result, and verifying its SHA. A successful connection alone does not mean a task succeeded.
+The worker pushes its result to origin and sends run logs and reports to the daemon. The daemon saves completion after receiving the records, fetching the result, and verifying its SHA. A successful connection alone does not mean a task succeeded. If notifying the manager of a saved setup failure or remote terminal record fails, the saved record keeps its completion publication mark, and the daemon resends the notification from that mark instead of losing it.
 
 ## Preparing the daemon machine
 

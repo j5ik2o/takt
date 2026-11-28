@@ -9,7 +9,8 @@ import { acquireProjectExecutionLock, getProjectExecutionOwner, ProjectExecution
   type ProjectExecutionLock } from '../../infra/task/project-execution-lock.js';
 import { saveManagerEvent } from '../../infra/goals/events.js';
 import { executeRunTaskAndCompleteWithDetails } from '../tasks/execute/runTaskExecution.js';
-import { CLAIM_RETRY_INTERVAL_MS, failInterruptedTasksWithGoalEvents } from '../tasks/execute/claimTasks.js';
+import { CLAIM_RETRY_INTERVAL_MS, failInterruptedTasksWithGoalEvents, publishSetupFailure } from '../tasks/execute/claimTasks.js';
+import { runTaskFinishHooksForStates } from '../tasks/execute/taskFinishHook.js';
 import { checkQueuedTaskProviders } from '../tasks/execute/providerPreflight.js';
 import type { PendingTaskReason, ProjectClaimRetry, ProjectStartResult, ProjectWaitingResult, ProjectWork, WorkerProject } from '../../core/worker-pool/types.js';
 import type { TaskInfo, TaskState } from '../../infra/task/types.js';
@@ -39,6 +40,7 @@ export class BuiltinProjectRuntime implements WorkerProject {
   private preparationStopRequested = false;
   private claimRetryAt: number | undefined;
   private readonly remoteTasks: RemoteTaskLifecycle;
+  private readonly pendingHooks = new Map<Promise<void>, string>();
 
   constructor(private readonly cwd: string, private readonly finished: (taskName: string) => void,
     private readonly failed: (error: unknown) => void, private readonly remoteEnabled = false) {
@@ -50,7 +52,7 @@ export class BuiltinProjectRuntime implements WorkerProject {
     };
     this.runner = new TaskRunner(cwd, { goalTasksOnly: true, onAcquisitionError });
     this.store = new TaskStore(cwd, onAcquisitionError);
-    this.remoteTasks = new RemoteTaskLifecycle(cwd, this.store, (task, executionId) => prepareRemoteExecutionInput(cwd, task, executionId));
+    this.remoteTasks = new RemoteTaskLifecycle(cwd, this.store, (task, executionId) => prepareRemoteExecutionInput(cwd, task, executionId), (task) => this.scheduleFinishHook(task));
   }
 
   private resolveConfig(): { concurrency: number; ignoreExceed: boolean } {
@@ -168,10 +170,22 @@ export class BuiltinProjectRuntime implements WorkerProject {
   }
 
   private saveCompletion(task: TaskState | undefined): void {
-    if (task?.goalId !== undefined && task.status === 'failed' && task.completion !== undefined && task.runSlug !== undefined) {
-      saveManagerEvent(this.cwd, { kind: 'completion', goalId: task.goalId, taskName: task.name,
-        runSlug: task.runSlug, result: task.completion });
-    }
+    if (task === undefined) return;
+    publishSetupFailure(this.runner, this.cwd, task);
+    this.scheduleFinishHook(task);
+  }
+
+  /**
+   * Starts the task finish hook after the reply (#195-#197): the hook never delays the reply,
+   * and close() waits for the hooks still running. runTaskFinishHooksForStates never throws;
+   * a lost hook is reported with the task name by the hook runner itself.
+   */
+  private scheduleFinishHook(task: TaskState): void {
+    const hookPromise: Promise<void> = runTaskFinishHooksForStates(this.cwd, [task]).then(
+      () => { this.pendingHooks.delete(hookPromise); },
+      () => { this.pendingHooks.delete(hookPromise); },
+    );
+    this.pendingHooks.set(hookPromise, task.name);
   }
 
   private async startTask(taskName: string, workerName: string): Promise<ProjectStartResult> {
@@ -268,7 +282,8 @@ export class BuiltinProjectRuntime implements WorkerProject {
       try { this.lock?.updateState('stopping'); } catch (error) { errors.push(error); }
       const cleanup = Promise.allSettled([terminateManagedProcesses(), prepareSharedServerPoolForForcedShutdown()]);
       await Promise.allSettled([...this.starting]);
-      const results = [...await Promise.allSettled([...this.active]), ...await cleanup];
+      const results = [...await Promise.allSettled([...this.active]),
+        ...await Promise.allSettled([...this.pendingHooks.keys()]), ...await cleanup];
       try { this.releaseLock(); } catch (error) { errors.push(error); }
       errors.push(...results.flatMap((result) => result.status === 'rejected' ? [result.reason as unknown] : []));
       if (errors.length > 0) throw new AggregateError(errors, 'Builtin worker shutdown failed');

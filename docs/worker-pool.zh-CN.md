@@ -10,7 +10,7 @@ worker pool 将 daemon 自动执行的 manager 目标任务分配给 daemon 所�
 
 daemon 确定任务的原始 SHA 并将其 push 到 origin。worker 从 origin 获取该 SHA 的代码，从 daemon 接收任务指示、附件、workflow、facet 和解析后的配置。无需在各 worker 上手动放置仓库专用的 TAKT 配置或 workflow。
 
-worker 将成果 push 到 origin，并把 run 日志和报告发送给 daemon。daemon 接收记录、fetch 成果并核对 SHA 后才保存完成状态。连接成功本身不代表任务成功。
+worker 将成果 push 到 origin，并把 run 日志和报告发送给 daemon。daemon 接收记录、fetch 成果并核对 SHA 后才保存完成状态。连接成功本身不代表任务成功。如果保存的 setup 失败或远程终结记录向 manager 发送通知失败，保存的记录会保留完成发布标记，daemon 会依据该标记重新发送通知，通知不会丢失。
 
 ## 准备 daemon 机器
 

@@ -6,7 +6,6 @@ import { GoalStore } from '../goals/store.js';
 import { appendGoalWorkLog } from '../goals/workLog.js';
 import { isGoalPaused } from '../goals/state.js';
 import { runGoalGit, resolveGoalBranchSha, goalGitText } from '../goals/git-command.js';
-import { saveManagerEvent } from '../goals/events.js';
 import { TaskStore } from './store.js';
 import type { TaskRecord } from './schema.js';
 import { resolveTaskContent } from './mapper.js';
@@ -21,6 +20,15 @@ import type { RemoteArtifacts } from '../../core/worker-pool/remoteExecutionProt
 import { REMOTE_CHUNK_BYTES } from '../../core/worker-pool/remoteExecutionProtocol.js';
 import { toLocalBranchRef } from '../../shared/utils/gitBranchValidation.js';
 import { TaskStoppedError } from './taskStop.js';
+import { publishAndClearPendingMark } from './goalCompletionPublication.js';
+import { clearCompletionPublicationPendingFromStore } from './taskLifecycleService.js';
+import { toTaskState } from './mapper.js';
+import type { TaskState } from './types.js';
+import { warn } from '../../shared/ui/index.js';
+import { createLogger, getErrorMessage } from '../../shared/utils/index.js';
+import { sanitizeTerminalText } from '../../shared/utils/text.js';
+
+const log = createLogger('remote-task-lifecycle');
 
 function remoteRecord(task: TaskRecord): RemoteTaskRecord | undefined {
   if (task.remote_assignment === undefined || task.status === 'exceeded') return undefined;
@@ -31,7 +39,8 @@ function remoteRecord(task: TaskRecord): RemoteTaskRecord | undefined {
 
 export class RemoteTaskLifecycle {
   constructor(private readonly cwd: string, private readonly store: TaskStore,
-    private readonly prepareInput: (task: TaskRecord, executionId: string) => void) {}
+    private readonly prepareInput: (task: TaskRecord, executionId: string) => void,
+    private readonly onTerminal?: (task: TaskState) => void) {}
 
   async origin(): Promise<string | undefined> {
     const result = await runGoalGit(this.cwd, ['config', '--get', 'remote.origin.url'], 16 * 1024, undefined, [0, 1]);
@@ -136,6 +145,7 @@ export class RemoteTaskLifecycle {
           ? sanitizeRemoteFailureReason(assignment.workerName, detail, []) : sanitizeSensitiveText(detail);
         const goal = task.goal_id === undefined ? undefined : new GoalStore(this.cwd).getSync(task.goal_id);
         const next = buildTerminalTaskRecord(task, {
+          ...(task.goal_id === undefined ? {} : { completion_publication_pending: true }),
           remote_assignment: { ...assignment, workLocation: assignment.workLocation ?? assignment.executionId,
             retryReservation: !success && goal?.executionStatus !== 'aborted' },
           status: success ? 'completed' : prFailed ? 'pr_failed' : 'failed', completed_at: new Date().toISOString(), owner_pid: null,
@@ -157,13 +167,28 @@ export class RemoteTaskLifecycle {
     if (updated !== null && request.kind !== 'renew') {
       const task = saved.tasks.find((task) => task.name === request.assignment.taskName)!;
       if (task.run_slug !== undefined) {
-        const interventions = new LiveInterventionFileStore(this.cwd, task.run_slug);
-        if (interventions.read().issuedTotal > 0) await interventions.recordTerminal(task.status === 'completed' ? 'completed' : 'failed');
+        try {
+          const interventions = new LiveInterventionFileStore(this.cwd, task.run_slug);
+          if (interventions.read().issuedTotal > 0) await interventions.recordTerminal(task.status === 'completed' ? 'completed' : 'failed');
+        } catch (error) {
+          const detail = sanitizeSensitiveText(getErrorMessage(error));
+          warn(`Goal task ${sanitizeTerminalText(task.name)} (goal ${task.goal_id ?? 'unknown'}) was saved as ${task.status} in .takt/tasks.yaml, but recording its terminal state for live interventions failed: ${detail}`);
+          log.error('Recording the remote terminal state for live interventions failed', { taskName: task.name, goalId: task.goal_id, error: detail });
+        }
       }
       if (task.goal_id !== undefined && task.completion !== undefined && task.run_slug !== undefined) {
-        saveManagerEvent(this.cwd, { kind: 'completion', goalId: task.goal_id, taskName: task.name,
-          runSlug: task.run_slug, result: task.completion });
+        const state = toTaskState(this.store.getTasksFilePath(), task);
+        try {
+          publishAndClearPendingMark(
+            (taskName, identity) => clearCompletionPublicationPendingFromStore(this.store, taskName, identity),
+            this.cwd, state);
+        } catch (error) {
+          const detail = sanitizeSensitiveText(getErrorMessage(error));
+          warn(`Goal task ${sanitizeTerminalText(task.name)} (goal ${task.goal_id}) finished on remote worker ${sanitizeTerminalText(task.remote_assignment?.workerName ?? request.assignment.workerId)} and is saved as ${task.status} in .takt/tasks.yaml, but the manager was not notified: ${detail}`);
+          log.error('Remote goal task completion notification failed', { taskName: task.name, goalId: task.goal_id, error: detail });
+        }
       }
+      this.onTerminal?.(toTaskState(this.store.getTasksFilePath(), task));
     }
     return { kind: 'updated', record: updated };
   }

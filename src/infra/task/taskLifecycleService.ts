@@ -70,6 +70,39 @@ function formatGoalList(items: readonly string[]): string {
   return items.map((item) => `- ${item.replace(/\r?\n/g, '\n  ')}`).join('\n');
 }
 
+/**
+ * The store-only body of TaskLifecycleService.clearCompletionPublicationPending (#170, #195-#197).
+ * Callers that hold a TaskStore but no TaskLifecycleService (RemoteTaskLifecycle) clear the mark
+ * through this function, so the identity check stays in one place.
+ */
+export function clearCompletionPublicationPendingFromStore(
+  store: TaskStore,
+  taskName: string,
+  identity: { goalId?: string; status: TaskRecord['status']; runSlug?: string; executionId?: string },
+): TaskRecord | undefined {
+  let cleared: TaskRecord | undefined;
+  store.update((current) => {
+    let changed = false;
+    const tasks = current.tasks.map((task) => {
+      if (task.name === taskName
+        && task.goal_id === identity.goalId
+        && task.status === identity.status
+        && task.run_slug === identity.runSlug
+        && task.execution_id === identity.executionId
+        && task.completion_publication_pending === true
+        && task.deletion === undefined) {
+        changed = true;
+        const clearedRecord: TaskRecord = { ...task, completion_publication_pending: undefined };
+        cleared = clearedRecord;
+        return clearedRecord;
+      }
+      return task;
+    });
+    return changed ? { tasks } : undefined;
+  });
+  return cleared;
+}
+
 export class TaskLifecycleService {
   constructor(
     private readonly projectDir: string,
@@ -312,6 +345,7 @@ export class TaskLifecycleService {
     return buildTerminalTaskRecord(record, {
       status: 'failed', started_at: record.started_at ?? nowIso(), completed_at: nowIso(), owner_pid: null,
       failure: { error: reason }, run_slug: `setup-${randomUUID()}`,
+      completion_publication_pending: true,
       completion: { success: false, interrupted: false, workflowResult: 'error', branch: task.branch,
         failureReason: reason, shaUnavailableReason: 'Workflow execution did not start' },
     }, this.readTerminalRetryMetadata(task));
@@ -594,27 +628,7 @@ export class TaskLifecycleService {
     taskName: string,
     identity: { goalId?: string; status: TaskRecord['status']; runSlug?: string; executionId?: string },
   ): TaskRecord | undefined {
-    let cleared: TaskRecord | undefined;
-    this.store.update((current) => {
-      let changed = false;
-      const tasks = current.tasks.map((task) => {
-        if (task.name === taskName
-          && task.goal_id === identity.goalId
-          && task.status === identity.status
-          && task.run_slug === identity.runSlug
-          && task.execution_id === identity.executionId
-          && task.completion_publication_pending === true
-          && task.deletion === undefined) {
-          changed = true;
-          const clearedRecord: TaskRecord = { ...task, completion_publication_pending: undefined };
-          cleared = clearedRecord;
-          return clearedRecord;
-        }
-        return task;
-      });
-      return changed ? { tasks } : undefined;
-    });
-    return cleared;
+    return clearCompletionPublicationPendingFromStore(this.store, taskName, identity);
   }
 
   private readTerminalRetryMetadata(task: TaskRecord): ResolvedTaskRetryMetadata {
