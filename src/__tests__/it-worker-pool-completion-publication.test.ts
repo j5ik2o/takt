@@ -253,7 +253,7 @@ it.each(['unreadable task', 'failed claim', 'remote finish', 'remote fail', 'bui
 it.each(['unreadable task', 'failed claim'] as const)(
   'keeps A running when a worker pool setup failure notification hits ENOSPC: %s', async (path) => {
     const a = runner.addTask('A', { goal_id: goalRecord().id });
-    const b = unreadableTask('B');
+    const b = unreadableTask('blocked setup');
     if (path === 'unreadable task') rmSync(b.file);
     else failClaimOf(b.name, b.file);
     const release = deferred<void>();
@@ -344,7 +344,7 @@ it('waits for a scheduled finish hook when the runtime closes', async () => {
 
 it('keeps the project open when the notification of a normal completion fails', async () => {
   const a = runner.addTask('A', { goal_id: goalRecord().id });
-  const b = runner.addTask('B', { goal_id: goalRecord().id });
+  const b = runner.addTask('notify failure', { goal_id: goalRecord().id });
   const release = deferred<void>();
   let signal: AbortSignal | undefined;
   doubles.execute.mockImplementation(async (task: TaskInfo, executingRunner: TaskRunner, _cwd, _options, options) => {
@@ -397,7 +397,7 @@ it('keeps the project open when the notification of a normal completion fails', 
 it('names the task whose finish hook the project host cuts off when it stops the builtin worker', async () => {
   const secret = ['Zq', String(randomInt(10_000_000, 99_999_999)), 'Zq'].join('');
   const hook = writeConfig({ gated: true, extraArgs: [`--api-token=${secret}`] });
-  const task = unreadableTask('host hook cut');
+  const task = unreadableTask('stopping work');
   rmSync(task.file);
   const childStderr: string[] = [];
   const hostStderr: string[] = [];
@@ -417,7 +417,10 @@ it('names the task whose finish hook the project host cuts off when it stops the
   expect(await host.start(task.name, 'builtin')).toEqual({ kind: 'declined' });
   await vi.waitFor(() => expect(lines(hook.started)).toEqual([task.name]), { timeout: HOOK_WAIT_MS });
   await host.close();
-  const outlets = [...childStderr.join('').split('\n'), ...hostStderr.join('').split('\n'), ...warnings];
-  expect(outlets.filter((line) => line.includes(task.name) && /hook/i.test(line))).toHaveLength(1);
-  expect(outlets.filter((line) => line.includes(secret))).toEqual([]);
+  // The host repeats the child's stderr in its own report when the child is stopped, so each outlet is
+  // counted on its own: no outlet names the cut hook twice, and at least one names it.
+  const outlets = { child: childStderr.join('').split('\n'), daemon: hostStderr.join('').split('\n'), warnings };
+  const named = Object.values(outlets).map((lines) => lines.filter((line) => line.includes(task.name) && /hook/i.test(line)).length);
+  expect(Math.max(...named), JSON.stringify(outlets)).toBe(1);
+  expect(Object.values(outlets).flat().filter((line) => line.includes(secret))).toEqual([]);
 }, scaledMs(60_000));
