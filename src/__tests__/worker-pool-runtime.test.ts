@@ -241,7 +241,9 @@ it('retains project ownership until task settlement and provider cleanup have bo
   expect(doubles.release).toHaveBeenCalledOnce();
 });
 
-it.each(['execution', 'completion notification'] as const)('retains project ownership after an unsaved %s failure until cleanup finishes', async (stage) => {
+// The 'completion notification' row moved to the next test (#195-#197, M18): a failed notification of a
+// normal completion no longer stops the runtime, so it settles the task instead of keeping ownership.
+it.each(['execution'] as const)('retains project ownership after an unsaved %s failure until cleanup finishes', async (stage) => {
   const result = deferred<{ runSlug: string; completion: { success: boolean; interrupted: boolean } }>();
   const cleaned = deferred<void>();
   doubles.claim.mockReturnValue({ kind: 'claimed', task: toTaskInfo('/project', '/project/.takt/tasks.yaml', {
@@ -252,12 +254,9 @@ it.each(['execution', 'completion notification'] as const)('retains project owne
   const fatal = vi.fn();
   const finished = vi.fn();
   const runtime = new BuiltinProjectRuntime('/project', finished, fatal);
-  const failure = stage === 'execution' ? new Error('cannot save terminal result')
-    : new PrivateFileLockAcquisitionError('cannot notify completion', 'ENOSPC', undefined, { cause: new Error('disk full') });
-  if (stage === 'completion notification') doubles.event.mockImplementation(() => { throw failure; });
+  const failure = new Error(`cannot save terminal result (${stage})`);
   await runtime.start('a', 'builtin');
-  if (stage === 'execution') result.reject(failure);
-  else result.resolve({ runSlug: 'run-a', completion: { success: true, interrupted: false } });
+  result.reject(failure);
   await vi.waitFor(() => expect(fatal).toHaveBeenCalledExactlyOnceWith(failure));
   const closed = runtime.close();
   try {
@@ -267,5 +266,35 @@ it.each(['execution', 'completion notification'] as const)('retains project owne
     cleaned.resolve();
     await closed;
   }
+  expect(doubles.release).toHaveBeenCalledOnce();
+});
+
+it('keeps the runtime running when a completion notification fails and settles the task like a normal completion', async () => {
+  const secret = ['Zq', '31', 'Zq'].join('');
+  const record = { ...doubles.records()[0], name: 'notified-task' };
+  doubles.records.mockReturnValue([record]);
+  const result = deferred<{ runSlug: string; completion: { success: boolean; interrupted: boolean } }>();
+  doubles.claim.mockReturnValue({ kind: 'claimed', task: toTaskInfo('/project', '/project/.takt/tasks.yaml', {
+    ...record, status: 'running', execution_id: 'execution-notified',
+  }) });
+  doubles.execute.mockReturnValue(result.promise);
+  const failure = new PrivateFileLockAcquisitionError(`cannot notify completion api_token=${secret}`, 'ENOSPC', undefined, { cause: new Error('disk full') });
+  doubles.event.mockImplementation(() => { throw failure; });
+  const fatal = vi.fn();
+  const finished = vi.fn();
+  const warnings = captureWarnings();
+  const runtime = new BuiltinProjectRuntime('/project', finished, fatal);
+  try {
+    expect(await runtime.start('notified-task', 'builtin')).toEqual({ kind: 'started' });
+    result.resolve({ runSlug: 'run-notified', completion: { success: true, interrupted: false } });
+    await vi.waitFor(() => expect(finished).toHaveBeenCalledExactlyOnceWith('notified-task'));
+    expect(doubles.event).toHaveBeenCalledExactlyOnceWith('/project', { kind: 'completion', goalId: goalRecord().id,
+      taskName: 'notified-task', runSlug: 'run-notified', result: { success: true, interrupted: false } });
+    expect(fatal).not.toHaveBeenCalled();
+    expect(doubles.release).toHaveBeenCalledOnce();
+    expect(warnings.filter((line) => line.includes('[WARN]') && line.includes('notified-task') && line.includes(goalRecord().id)
+      && line.includes('run-notified'))).toHaveLength(1);
+    expect(warnings.filter((line) => line.includes(secret))).toEqual([]);
+  } finally { await runtime.close(); }
   expect(doubles.release).toHaveBeenCalledOnce();
 });

@@ -63,6 +63,10 @@
 - S5：`rejects.toBe(failure)` を `resolves.toEqual({ kind: 'declined' })` に替えた。`doubles.event` の `toHaveBeenCalledExactlyOnceWith(...)`、`execute` と `finished` が呼ばれないことの assert は残した。足した assert：runtime の `failed` が呼ばれない、`clearCompletionPublicationPending` が呼ばれない（fixture の `saved` に `completion_publication_pending: true` を足し、その印が `saved` に乗っていることも確かめる）、`[WARN]` の行のうちタスク名と `manager was not notified` を含むものがちょうど 1 行。`claim_retry` を返さないことは `toEqual({ kind: 'declined' })` が見る。
 - S6：後半の `rejects.toBe(failure)` を `resolves.toEqual({ kind: 'claim', assignment: null })` に替え、`doubles.event` が 2 回目まで呼ばれたこと（`toHaveBeenCalledTimes(2)`）と警告の 1 行を足した。前半の assert と、そのあとの「Git or storage failed」で reject する assert は残した。
 - fixture：`claimTasks.js` の mock を、本物を広げたうえで `CLAIM_RETRY_INTERVAL_MS` と `failInterruptedTasksWithGoalEvents` だけを差し替える形にした（M5 のあと本番が `publishSetupFailure` を import しても mock に無い export で落ちないように）。`TaskRunner` の mock に `clearCompletionPublicationPending` を足した。警告は `console.log` を覗いて `[WARN]` の行を拾う（`shared/ui` の `warn()` の出口）。
+- 上流から入った「retains project ownership after an unsaved %s failure until cleanup finishes」（`it.each(['execution', 'completion notification'])`）から、`'completion notification'` の行を外し、新しい試験「keeps the runtime running when a completion notification fails and settles the task like a normal completion」に移した（8 番目のコミット、takt中将の答え）。`'execution'` の行は名前も assert もそのまま（`'completion notification'` のための分岐だけを消した）。
+  - 外した行の元の assert：`saveManagerEvent` が `PrivateFileLockAcquisitionError('cannot notify completion', 'ENOSPC')` を投げ、実行は `{ runSlug: 'run-a', completion: { success: true, interrupted: false } }` で終わる。runtime の `failed` がその失敗でちょうど 1 回呼ばれ、`close()` の片付けが終わるまで `finished` は呼ばれず、所有（`release`）も手放さず、片付けのあとに `release` が 1 回。
+  - 理由：元帥の段7 の決め（通常の完了の通知の失敗は外へ投げず、host を閉じない。設計の M18）。M18 は失敗を捕まえて `settled = true` にし `finished(taskName)` を呼ぶので、`finished` が呼ばれず所有を保つという元の期待は、この行では成り立たない。
+  - 新しい試験の assert：`saveManagerEvent` は今と同じ引数でちょうど 1 回、`failed` は呼ばれない、`finished` はタスク名で 1 回、`release` は `close()` の前に 1 回（通常の完了と同じ）で `close()` のあとも 1 回のまま、タスク名・ゴールの id・`run_slug` を含む `[WARN]` の行が 1 行、失敗の文に混ぜた `api_token=` の作り物の値がどの警告の行にも無い。
 
 ## #209（S9〜S13）
 
@@ -212,3 +216,52 @@ daemon の `prepareRemoteExecutionInput` が書く `execution.json` の `runtime
 足す前（このコミットの 1 つ前、#208 のコミットのあと）も、足したあとも、`npx tsc -p tsconfig.tests.json --noEmit` は型の誤り 0 件で終わった（終了コード 0）。3 本とも今の本番の型に合っている。本番は変えていない。
 
 並びは `releaseVerificationWiring.test.ts` の決まり（文字コードの順。`-` は `.` より前なので `manager-workspace-access-realpath` が `manager-workspace-access.test.ts` の前）に合わせ、その試験を単独で流して 74 件緑を確かめた。
+
+## #195・#196・#197 の残り（S19〜S23）
+
+### 足した・改めた試験
+
+- S19 `it-worker-pool-completion-publication.test.ts` › replies to a remote finish before its finish hook ends
+- S20 同 › waits for a scheduled finish hook when the runtime closes
+- S21 同 › keeps the project open when the notification of a normal completion fails
+- S22 `worker-pool-remote-post-save.test.ts`（単体） › updates the remote records and releases the assignment when a step after the save fails: %s（notification / intervention terminal）
+- S23 `it-worker-pool-completion-publication.test.ts` › names the task whose finish hook the project host cuts off when it stops the builtin worker（**設計の追記待ち（元帥の決め）**）
+- M18 の既存試験の行の移し替え：`worker-pool-runtime.test.ts` › keeps the runtime running when a completion notification fails and settles the task like a normal completion（S5・S6 の節に書いた）
+
+S19・S20・S23 のフックは、試験が置くファイル（`hook-gate`）ができるまで終わらない。始まったことは `hook-started.txt` に、終わったことは `hook-calls.txt` にタスク名を書いて見る。S21 は通常の完了の通常の通知に印を付けない前提（元帥の答えのまま）。S22 は `worker-pool-remote-runtime.test.ts` の fixture の形に、本物の `RemoteTaskLifecycle`（tasks.yaml は手元の状態）をつないだ。S22 の後半の assert（`completed`、`release`、`records`、接続を切らない）は、作業ツリーの外の写しで失敗を入れずに流して通ることを確かめた。
+
+S23 は takt中将の答え（11/28）のとおり、host の層（`BuiltinProjectHost.close()` の 5 秒の打ち切り）を試す。S20 は runtime の層のまま（runtime の `close()` は打ち切らない）。警告をどちら（子の終わり際か host の側）で出すかは本番で決めるので、子の stderr（`spawnManagedProcess` の子に耳を付ける）、daemon 側の stderr（`reportDaemonError` の出口）、`[WARN]` の出口（`console.log`）を合わせて見て、タスク名と `hook` を含む行がちょうど 1 行あること、フックのコマンドに混ぜた `--api-token=` の作り物の値がどの行にも無いことを確かめる。
+
+### 直す前の本番で流した結果
+
+`it-worker-pool-completion-publication.test.ts`：15 件走り、14 件落ちた（S1〜S8 の 10 件は 1 つめの節のまま。足した 4 件はすべて落ちた）。
+
+| 試験 | 落ちた理由（期待 → 実際） |
+|---|---|
+| S19 | 遠隔の `finish` の返事は 5 秒より前に返る（今は通る）。そのあとフックが始まる → 始まらない（`hook-started.txt` が `[]`） |
+| S20 | フックが始まり、ファイルを置くまで `close()` が解決しない → フックが始まらない |
+| S21 | B の通常の完了の通知が ENOSPC でも `finished` が B で呼ばれる → 呼ばれない（runtime が `failed` に進み、A も中断される） |
+| S23 | host の子で読めないタスクのフックが始まる → 始まらない |
+
+`worker-pool-remote-post-save.test.ts`：2 件走り、2 件落ちた。
+
+| 試験 | 落ちた理由（期待 → 実際） |
+|---|---|
+| S22 notification | 遠隔の `complete` に返事を返す → `disk full`（`saveManagerEvent`）で `receive` が reject し、`completed` も `release` も無い |
+| S22 intervention terminal | 同上（`recordTerminal` の `disk full`） |
+
+`worker-pool-runtime.test.ts`：13 件走り、4 件落ちた（S5 の 2 件・S6 は 1 つめの節のまま、足した M18 の 1 件）。
+
+| 試験 | 落ちた理由（期待 → 実際） |
+|---|---|
+| keeps the runtime running when a completion notification fails ... | `finished('notified-task')` が 1 回 → 呼ばれない（通知の失敗で runtime が `failed` に進む） |
+
+### 本番のどこを外せば落ちるか
+
+| 設計の行 | 当たる試験 |
+|---|---|
+| M5・M6（返事の前にフックを待つ形に戻す） | S19（返事が 5 秒の内に返らない） |
+| M5（`close()` が `pendingHooks` を待つ所） | S20（`close()` がファイルを置く前に解決する） |
+| M18 | S21、M18 の単体の試験（`failed` を呼ぶ、`finished` を呼ばない、警告を出さない、警告に秘密を出す、のどれでも落ちる） |
+| M6（各段の `try/catch`） | S22 の 2 行 |
+| S23（設計の追記待ち） | host の 5 秒の打ち切りでフックを切ったときに、タスク名つきの 1 行を出さない（0 行でも 2 行でも落ちる）、またはその行に秘密を出す |

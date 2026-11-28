@@ -3,13 +3,16 @@
  * fails during setup, and the end of a remote execution). Each must keep the merged #170 / #171
  * promises: the save carries the completion publication mark, the manager notification goes through
  * the shared publication and clears the mark, a failed notification stays inside the runtime with a
- * warning, and the task finish hook runs exactly once after the reply.
- * Design: docs/design/worker-pool-completion-publication.md, docs/design/193-worker-pool-requests.md (S1-S8).
+ * warning, and the task finish hook runs exactly once after the reply. A failed notification of a
+ * normal completion stays inside the runtime too, and a stopping runtime or project host accounts for
+ * a finish hook still running.
+ * Design: docs/design/worker-pool-completion-publication.md, docs/design/193-worker-pool-requests.md
+ * (S1-S8, S19-S21; S23 is the coordinator's decision of 11/28 awaiting its design text).
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { stringify as stringifyYaml } from 'yaml';
 import { scaledMs } from '../../scripts/test-time-factor.mjs';
@@ -25,6 +28,8 @@ import { invalidateAllResolvedConfigCache } from '../infra/config/index.js';
 import { goalRecord } from './helpers/goal-fixtures.js';
 import { deferred } from './helpers/controlledDaemon.js';
 import { BuiltinWorkerAdapter } from '../infra/worker-pool/builtinWorkerAdapter.js';
+import { BuiltinProjectHost } from '../infra/worker-pool/projectHost.js';
+import { spawnManagedProcess } from '../shared/utils/spawn.js';
 import { TaskDispatcher } from '../features/daemon/taskDispatcher.js';
 import { prepareTaskSpecDirectory } from '../infra/task/enqueueService.js';
 import { withTaskFinishHook } from '../features/tasks/execute/taskFinishHook.js';
@@ -38,25 +43,31 @@ vi.mock('../infra/goals/events.js', async (original) => {
   const actual = await original<typeof import('../infra/goals/events.js')>();
   return { ...actual, saveManagerEvent: vi.fn(actual.saveManagerEvent) };
 });
-vi.mock('../shared/utils/spawn.js', async (original) => ({
-  ...await original<typeof import('../shared/utils/spawn.js')>(), terminateManagedProcesses: doubles.terminate,
-}));
+vi.mock('../shared/utils/spawn.js', async (original) => {
+  const actual = await original<typeof import('../shared/utils/spawn.js')>();
+  return { ...actual, terminateManagedProcesses: doubles.terminate, spawnManagedProcess: vi.fn(actual.spawnManagedProcess) };
+});
 vi.mock('../infra/opencode/server-pool.js', async (original) => ({
   ...await original<typeof import('../infra/opencode/server-pool.js')>(), prepareSharedServerPoolForForcedShutdown: doubles.cleanup,
 }));
 
 const HOOK_WAIT_MS = scaledMs(10_000);
 
-// Appends the task name to `out`. With a gate path it first writes `started`, then waits for the gate.
+// Appends the task name to `out`. With a gate path it first writes `started`, then waits for the gate
+// (and gives up once the test removed its directory). Arguments after the gate are ignored.
 const HOOK_SCRIPT = `
 const fs = require('node:fs');
+const path = require('node:path');
 const [out, started, gate] = process.argv.slice(2);
 const name = process.env.TAKT_FINISH_TASK_NAME;
 const finish = () => fs.appendFileSync(out, name + '\\n');
 if (started === undefined) finish();
 else {
   fs.appendFileSync(started, name + '\\n');
-  const timer = setInterval(() => { if (fs.existsSync(gate)) { clearInterval(timer); finish(); } }, 20);
+  const timer = setInterval(() => {
+    if (fs.existsSync(gate)) { clearInterval(timer); finish(); }
+    else if (!fs.existsSync(path.dirname(gate))) process.exit(0);
+  }, 20);
 }
 `;
 
@@ -65,17 +76,18 @@ let hookDir: string;
 let runtime: BuiltinProjectRuntime;
 let runner: TaskRunner;
 let warnings: string[];
+let hosts: BuiltinProjectHost[];
 const finished = vi.fn();
 const fatal = vi.fn();
 const diskFull = () => Object.assign(new Error('disk full'), { code: 'ENOSPC' });
 
-function writeConfig(hook?: { gated: boolean }): { out: string; started: string; gate: string } {
+function writeConfig(hook?: { gated: boolean; extraArgs?: readonly string[] }): { out: string; started: string; gate: string } {
   const files = { out: join(hookDir, 'hook-calls.txt'), started: join(hookDir, 'hook-started.txt'), gate: join(hookDir, 'hook-gate') };
   const script = join(hookDir, 'hook.cjs');
   writeFileSync(script, HOOK_SCRIPT);
   writeFileSync(join(cwd, '.takt', 'config.yaml'), stringifyYaml({ provider: 'mock', concurrency: 3,
     ...(hook === undefined ? {} : { task_finish_hook: { command: [process.execPath, script, files.out,
-      ...(hook.gated ? [files.started, files.gate] : [])] } }) }));
+      ...(hook.gated ? [files.started, files.gate] : []), ...(hook.extraArgs ?? [])] } }) }));
   invalidateGlobalConfigCache();
   invalidateAllResolvedConfigCache();
   return files;
@@ -143,6 +155,7 @@ beforeEach(async () => {
   doubles.terminate.mockResolvedValue(undefined);
   doubles.cleanup.mockResolvedValue(undefined);
   warnings = [];
+  hosts = [];
   vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { warnings.push(args.map(String).join(' ')); });
   cwd = mkdtempSync(join(getGlobalConfigDir(), 'builtin-publication-'));
   hookDir = mkdtempSync(join(getGlobalConfigDir(), 'builtin-publication-hook-'));
@@ -157,6 +170,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  // Lets a gated hook that is still waiting end before its directory goes away.
+  writeFileSync(join(hookDir, 'hook-gate'), '');
+  for (const host of hosts) await host.close();
   await runtime.close();
   rmSync(cwd, { recursive: true, force: true });
   rmSync(hookDir, { recursive: true, force: true });
@@ -291,3 +307,117 @@ it('keeps the remote request result when its manager notification fails', async 
   expect(savedRecord(assignment.taskName)?.status).toBe('failed');
   expect(notNotifiedWarnings(assignment.taskName)).toHaveLength(1);
 });
+
+async function within<T>(promise: Promise<T>, ms: number, failure: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([promise, new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(failure)), ms); })]);
+  } finally { clearTimeout(timer); }
+}
+
+it('replies to a remote finish before its finish hook ends', async () => {
+  const hook = writeConfig({ gated: true });
+  const assignment = await claimRemotely('remote hook reply');
+  const reply = await within(runtime.remote(remoteEnd('finish', assignment)), scaledMs(5_000),
+    'The remote finish reply waited for the task finish hook');
+  expect(reply).toMatchObject({ kind: 'updated', record: { status: 'failed' } });
+  expect(savedRecord(assignment.taskName)?.status).toBe('failed');
+  await vi.waitFor(() => expect(lines(hook.started)).toEqual([assignment.taskName]), { timeout: HOOK_WAIT_MS });
+  expect(lines(hook.out)).toEqual([]);
+  writeFileSync(hook.gate, '');
+  await vi.waitFor(() => expect(lines(hook.out)).toEqual([assignment.taskName]), { timeout: HOOK_WAIT_MS });
+});
+
+it('waits for a scheduled finish hook when the runtime closes', async () => {
+  const hook = writeConfig({ gated: true });
+  const assignment = await claimRemotely('remote hook close');
+  expect(await runtime.remote(remoteEnd('finish', assignment))).toMatchObject({ kind: 'updated', record: { status: 'failed' } });
+  let closed = false;
+  const closing = runtime.close().then(() => { closed = true; });
+  await vi.waitFor(() => expect(lines(hook.started)).toEqual([assignment.taskName]), { timeout: HOOK_WAIT_MS });
+  await new Promise<void>((resolve) => setTimeout(resolve, 300));
+  expect(closed).toBe(false);
+  writeFileSync(hook.gate, '');
+  await closing;
+  expect(lines(hook.out)).toEqual([assignment.taskName]);
+});
+
+it('keeps the project open when the notification of a normal completion fails', async () => {
+  const a = runner.addTask('A', { goal_id: goalRecord().id });
+  const b = runner.addTask('B', { goal_id: goalRecord().id });
+  const release = deferred<void>();
+  let signal: AbortSignal | undefined;
+  doubles.execute.mockImplementation(async (task: TaskInfo, executingRunner: TaskRunner, _cwd, _options, options) => {
+    if (task.name === a.name) {
+      signal = options.abortSignal;
+      await Promise.race([release.promise, new Promise<void>((resolve) => signal!.addEventListener('abort', () => resolve(), { once: true }))]);
+    }
+    const completion = { success: !options.abortSignal.aborted, interrupted: options.abortSignal.aborted, workflowResult: 'completed' as const };
+    if (completion.success) executingRunner.completeTask({ task, success: true, completion, response: 'done', executionLog: [],
+      startedAt: new Date().toISOString(), completedAt: new Date().toISOString() });
+    return { completion, runSlug: `run-${task.name}` };
+  });
+  const secret = ['Zq', String(randomInt(10_000_000, 99_999_999)), 'Zq'].join('');
+  const actualEvents = await vi.importActual<typeof import('../infra/goals/events.js')>('../infra/goals/events.js');
+  vi.mocked(saveManagerEvent).mockImplementation((projectCwd, event) => {
+    if (event.kind === 'completion' && event.taskName === b.name) {
+      throw Object.assign(new Error(`disk full api_token=${secret}`), { code: 'ENOSPC' });
+    }
+    return actualEvents.saveManagerEvent(projectCwd, event);
+  });
+  await runtime.close();
+  const closes = vi.fn();
+  const pool = new TaskDispatcher({ workers: [new BuiltinWorkerAdapter({ name: 'builtin', kind: 'builtin', concurrency: 2 })],
+    projects: async () => [cwd], wake: vi.fn(), onError: vi.fn(), factory: { create(_cwd, done) {
+      runtime = new BuiltinProjectRuntime(cwd, (name) => { finished(name); done(name); }, fatal);
+      return { inspect: () => runtime.inspect(), setWaitingReasons: (reasons) => runtime.setWaitingReasons(reasons),
+        start: (name, worker) => runtime.start(name, worker), close: async () => { closes(); await runtime.close(); done(); } };
+    } },
+  });
+  try {
+    await pool.dispatch();
+    await vi.waitFor(() => expect(savedRecord(b.name)?.status).toBe('completed'));
+    await vi.waitFor(() => expect(finished).toHaveBeenCalledWith(b.name));
+    expect(signal).toBeDefined();
+    expect(signal!.aborted).toBe(false);
+    expect(closes).not.toHaveBeenCalled();
+    expect(fatal).not.toHaveBeenCalled();
+    expect(savedRecord(b.name)?.completion_publication_pending).toBeUndefined();
+    expect(warnings.filter((line) => line.includes('[WARN]') && line.includes(b.name) && line.includes(goalRecord().id)
+      && line.includes(`run-${b.name}`))).toHaveLength(1);
+    expect(warnings.filter((line) => line.includes(secret))).toEqual([]);
+    release.resolve();
+    await vi.waitFor(() => expect(finished).toHaveBeenCalledWith(a.name));
+    expect(savedRecord(a.name)).toMatchObject({ status: 'completed', completion: { success: true, interrupted: false } });
+  } finally { release.resolve(); await pool.close(); }
+});
+
+// S23 (the coordinator's decision of 11/28, awaiting its design text): the project host stops the builtin
+// worker 5 seconds after asking it to shut down. A finish hook it cuts off is named in one warning line.
+it('names the task whose finish hook the project host cuts off when it stops the builtin worker', async () => {
+  const secret = ['Zq', String(randomInt(10_000_000, 99_999_999)), 'Zq'].join('');
+  const hook = writeConfig({ gated: true, extraArgs: [`--api-token=${secret}`] });
+  const task = unreadableTask('host hook cut');
+  rmSync(task.file);
+  const childStderr: string[] = [];
+  const hostStderr: string[] = [];
+  const actualSpawn = await vi.importActual<typeof import('../shared/utils/spawn.js')>('../shared/utils/spawn.js');
+  vi.mocked(spawnManagedProcess).mockImplementationOnce((...args) => {
+    const managed = actualSpawn.spawnManagedProcess(...args);
+    managed.child.stderr?.on('data', (chunk: Buffer) => { childStderr.push(chunk.toString('utf8')); });
+    return managed;
+  });
+  vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+    hostStderr.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    return true;
+  }) as typeof process.stderr.write);
+  await runtime.close();
+  const host = new BuiltinProjectHost(cwd, getGlobalConfigDir(), vi.fn());
+  hosts.push(host);
+  expect(await host.start(task.name, 'builtin')).toEqual({ kind: 'declined' });
+  await vi.waitFor(() => expect(lines(hook.started)).toEqual([task.name]), { timeout: HOOK_WAIT_MS });
+  await host.close();
+  const outlets = [...childStderr.join('').split('\n'), ...hostStderr.join('').split('\n'), ...warnings];
+  expect(outlets.filter((line) => line.includes(task.name) && /hook/i.test(line))).toHaveLength(1);
+  expect(outlets.filter((line) => line.includes(secret))).toEqual([]);
+}, scaledMs(60_000));
