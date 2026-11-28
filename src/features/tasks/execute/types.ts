@@ -352,6 +352,7 @@ export interface RunAllTasksOptions extends TaskExecutionOptions {
 }
 
 export interface TaskExecutionParallelOptions {
+  publishesGoalCompletion?: true;
   abortSignal?: AbortSignal;
   taskPrefix?: string;
   taskColorIndex?: number;

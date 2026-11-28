@@ -147,7 +147,7 @@ async function executeTaskAndCompleteWithDetailsInScope(
         taskPrefix: parallelOptions?.taskPrefix,
         taskColorIndex: parallelOptions?.taskColorIndex,
         taskDisplayLabel: parallelOptions?.taskDisplayLabel,
-      });
+      }, parallelOptions?.publishesGoalCompletion);
       return { success: result.success,
         ...(result.completion === undefined ? {} : {
           completion: result.completion, runSlug: result.runSlug, failureReason: result.completion.failureReason,
@@ -345,6 +345,7 @@ async function executeTaskAndCompleteWithDetailsInScope(
         worktreePath,
         branch,
         ...(completion === undefined ? {} : { completion }),
+        ...(parallelOptions?.publishesGoalCompletion === undefined ? {} : { completionPublicationPending: parallelOptions.publishesGoalCompletion }),
       }, {
         emitStatusLog,
       });
@@ -413,6 +414,7 @@ async function executeTaskAndCompleteWithDetailsInScope(
       });
       const completion = snapshot(false, taskResult.response);
       if (completion !== undefined) taskResult.completion = completion;
+      if (parallelOptions?.publishesGoalCompletion !== undefined) taskResult.completionPublicationPending = parallelOptions.publishesGoalCompletion;
       persistTaskResult(taskRunner, taskResult, { emitStatusLog });
       return {
         success: false,
@@ -432,6 +434,7 @@ async function executeTaskAndCompleteWithDetailsInScope(
       prUrl,
     });
 
+    if (parallelOptions?.publishesGoalCompletion !== undefined) taskResult.completionPublicationPending = parallelOptions.publishesGoalCompletion;
     if (prFailedError !== undefined) {
       const completion = snapshot(false, prFailedError);
       if (completion !== undefined) taskResult.completion = completion;
@@ -474,6 +477,7 @@ async function executeTaskAndCompleteWithDetailsInScope(
       persistTaskError(taskRunner, taskForPersistence, startedAt, completedAt, failure, {
         emitStatusLog: parallelOptions?.outputMode !== 'silent',
         ...(completion === undefined ? {} : { completion }),
+        ...(parallelOptions?.publishesGoalCompletion === undefined ? {} : { completionPublicationPending: parallelOptions.publishesGoalCompletion }),
       });
       return { success: false, failureReason,
         ...(completion === undefined ? {} : { completion, runSlug }) };

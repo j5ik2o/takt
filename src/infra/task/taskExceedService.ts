@@ -1,10 +1,11 @@
 import type { WorkflowResumePoint } from '../../core/models/index.js';
 import type { TaskRecord } from './schema.js';
-import { buildExceededTaskRecord } from './taskRecordMutations.js';
+import { buildExceededTaskRecord, markNormalCompletionPublicationPending } from './taskRecordMutations.js';
 import { TaskStore } from './store.js';
 import { assertTaskStopHandled } from './taskStop.js';
 
 export interface ExceedTaskOptions {
+  completionPublicationPending?: true;
   completion?: import('../goals/schema.js').GoalTaskResult;
   currentStep: string;
   newMaxSteps: number;
@@ -32,7 +33,7 @@ export class TaskExceedService {
       }
 
       assertTaskStopHandled(current.tasks[index]!, options.completion);
-      const updated = buildExceededTaskRecord(current.tasks[index]!, options);
+      const updated = markNormalCompletionPublicationPending(buildExceededTaskRecord(current.tasks[index]!, options), options.completionPublicationPending);
 
       const tasks = [...current.tasks];
       tasks[index] = updated;
