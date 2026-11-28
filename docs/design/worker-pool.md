@@ -84,7 +84,7 @@ daemon マシン上で登録し、出力されたトークンを worker の起�
 ```sh
 takt worker add w1 --concurrency 2
 takt worker list
-takt worker --url https://daemon.example.test --token '<登録時のトークン>'
+TAKT_WORKER_TOKEN='<登録時のトークン>' takt worker --url https://daemon.example.test
 takt worker remove w1
 ```
 
