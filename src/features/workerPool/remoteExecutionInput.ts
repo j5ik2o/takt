@@ -11,7 +11,7 @@ import { loadProjectConfig, loadProjectConfigTraceState } from '../../infra/conf
 import { getGlobalTracedSchema, getProjectTracedSchema, type TracedOrigin } from '../../infra/config/traced/tracedConfigSchema.js';
 import type { ConfigTrace } from '../../infra/config/traced/tracedConfigLoader.js';
 import { withConfigSnapshot } from '../../infra/config/configSnapshot.js';
-import { resolveInvocationRuntimeProviderFileWithOrigins } from '../../infra/config/runtime-provider/invocation.js';
+import { resolveInvocationRuntimeProviderFileWithOrigins, withTaskRuntimeAssignment } from '../../infra/config/runtime-provider/invocation.js';
 import type { ResolvedRuntimeProviderFileWithOrigins } from '../../infra/config/runtime-provider/loader.js';
 import { TaskExecutionConfigSchema, TaskExecutionConfigObjectSchema } from '../../infra/task/taskExecutionSchemas.js';
 import type { TaskRecord } from '../../infra/task/schema.js';
@@ -75,7 +75,7 @@ export function prepareRemoteExecutionInput(cwd: string, task: TaskRecord, execu
   const global = loadGlobalConfig();
   const config = { projectDir: cwd, project, global,
     projectTrace: loadProjectConfigTraceState(cwd), globalTrace: loadGlobalConfigTraceState() };
-  const runtime = resolveInvocationRuntimeProviderFileWithOrigins({ globalConfigDir: getGlobalConfigDir(), projectConfigDir: getProjectConfigDir(cwd) });
+  const runtime = withTaskRuntimeAssignment(task.runtime_assignment, () => resolveInvocationRuntimeProviderFileWithOrigins({ globalConfigDir: getGlobalConfigDir(), projectConfigDir: getProjectConfigDir(cwd) }));
   const portable = {
     project: portableRemoteConfiguration(project), global: portableRemoteConfiguration(global),
     projectTrace: serializeTrace(config.projectTrace, Object.keys(getProjectTracedSchema())),
