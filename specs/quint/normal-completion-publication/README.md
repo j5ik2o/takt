@@ -1,13 +1,13 @@
 # normal-completion-publication（#216）
 
-ゴールタスクの通常の完了を 1 回の試みとして書いたモデル。保存、呼び出し側（takt run か worker pool の W5）の通知、印の消し込み、run の数え方、daemon の出し直し、古い記録の読みを持つ。設計は `docs/design/issue-216-normal-completion-publication.md`。
+ゴールタスクの通常の完了を 1 回の試みとして書いたモデル。保存、呼び出し側（takt run、worker pool の W5、通知しない instruct）の通知、読み直しの失敗、印の消し込み、run の数え方、daemon の出し直し、古い記録の読みを持つ。設計は `docs/design/issue-216-normal-completion-publication.md`。
 
 ## 版
 
 - `sameWrite`：案 A（この設計）。保存と同じ書き込みで印を付け、通知の成功で消し、失敗は警告する。
 - `current`：e626fcce3。印なし、通知は `try` なし。
 - `markOnFailure`：案 B。通知に失敗したときだけ 2 回目の書き込みで印を付ける。
-- `broken*`：案 A を 1 か所ずつ壊した版（`NoClear`、`NoCatch`、`NoWarn`、`ResendUnmarked`、`MarkOnSchema`）。
+- `broken*`：案 A を 1 か所ずつ壊した版（`NoClear`、`NoCatch`、`NoWarn`、`ResendUnmarked`、`MarkOnSchema`、`MarkUnrequested`、`SilentReadBack`）。
 
 ## 流し方
 
@@ -16,7 +16,7 @@ quint typecheck normalCompletionPublication.qnt
 quint run normalCompletionPublication.qnt --main sameWrite --max-samples 50000 --max-steps 16 --seed 0x2a --invariant safety
 quint run normalCompletionPublication.qnt --main current --max-samples 10000 --max-steps 12 --seed 0x2a --invariant deliveredOrMarked
 quint run normalCompletionPublication.qnt --main sameWrite --max-samples 20000 --max-steps 16 --seed 0x2a --invariant safety \
-  --witnesses wSave wSkip wPublish wPublishFails wClear wClearFails wKill wResend wResendAfterFailure wResendAfterKill \
+  --witnesses wSave wSkip wInstruct wReadBackFails wPublish wPublishFails wClear wClearFails wKill wResend wResendAfterFailure wResendAfterKill \
   wSuccessCountedAfterFailure wWorkerPoolReturnedAfterFailure
 ```
 

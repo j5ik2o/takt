@@ -61,7 +61,7 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 
 1. `taskRunner.listTaskStateItems()` から、名前とゴールの id が一致し、状態が終端で、印のある記録を探す。`run_slug` では探さない。保存した `run_slug` と `result.runSlug` がずれていても、daemon が出し直すときと同じ `run_slug` で送るためである。
 2. 見つかったら、その記録を `publishAndClearPendingMark`（`claimTasks.ts:98-112`）に渡す。保存した `completion` と `run_slug` で通知し、成功したら、保存した `status`・`run_slug`・`execution_id` を身元にして印を消す。呼び出し側は保存した `status` と `execution_id` を持っていないので、読み直しで身元をそろえる。
-3. 見つからない（印の付かない記録、または試みのあいだに消された記録）ときと、1 の読み直しが投げたとき（`listTaskStateItems` は `store.read()` でロックを取る、`store.ts:36-38`。ロックの時間切れや ENOSPC で投げうる）は、今と同じく `result` から `saveManagerEvent` を呼ぶ。印は消さない。読み直しの失敗で印が残っても、daemon が出し直し、同じ `eventId` で 1 回にまとまる。
+3. 見つからない（印の付かない記録、または試みのあいだに消された記録）ときと、1 の読み直しが投げたとき（`listTaskStateItems` は `store.read()` でロックを取る、`store.ts:36-38`。ロックの時間切れや ENOSPC で投げうる）は、今と同じく `result` から `saveManagerEvent` を呼ぶ。印は消さない。読み直しが投げたときは、通知が成功しても印が残るので、印を消せなかったときと同じ形で警告する（「Goal task <name> (goal <goal id>, run <run_slug>) finished and the manager was notified, but its saved record could not be read back to clear its completion publication mark; the daemon will resend it: <detail>」）。daemon が出し直し、同じ `eventId` で 1 回にまとまる。
 4. 2・3 の通知を `try/catch` で囲む。失敗したら `warn()` と `log.error()` を出し、投げない。警告の文は「Goal task <name> (goal <goal id>, run <run_slug>) finished and is saved in .takt/tasks.yaml, but the manager was not notified: <detail>」。2 の経路（印のある記録が見つかった）では、その後ろに「; the daemon will resend it from its completion mark」を足す。3 の経路では出し直しを約束しない。`detail` は `sanitizeSensitiveText` を通す。
 
 送る中身は今と同じになる。保存した `completion` は呼び出し側の `result.completion` をそのまま保存したもので、`run_slug` も同じ試みの値である。受信箱の `eventId` は `(受信箱, goalId, taskName, 'run', runSlug)` から決まる（`inbox.ts:49-50`）ので、この関数の通知と daemon の出し直しが重なっても 1 回にまとまる。
@@ -95,14 +95,14 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 - **J1** 呼び出し側が試みから抜けたとき（返った、例外で抜けた、死んだ）、今の呼び出し側が通知する完了（`run_slug` あり）は、manager の受信箱にあるか、印が残って daemon に出し直される。
 - **J2** run は、通知がどうなっても、実行の結果のとおりに成功・失敗を数える。
 - **J3** 通知の失敗で、プロジェクトの host は閉じない。
-- **J4** 呼び出し側が通知し、印を消すのに失敗しなかったときは、印は残らない。
+- **J4** 呼び出し側が通知し、印の消し込みも読み直しも失敗しなかったときは、印は残らない（どちらかが失敗したときは警告が出ている）。
 - **J5** 呼び出し側が通知すべき完了を通知できずに返ったときは、警告が出ている。
 - **J6** 印の無い古い記録は、出し直されない。
 - **J7** 今の呼び出し側が通知しない完了（`run_slug` が無い完了、通知しない instruct の再実行）には、印も送りも生まれない。
 
 ## Quint
 
-`specs/quint/normal-completion-publication/normalCompletionPublication.qnt`。1 回の試みの保存から、呼び出し側の通知、印の消し込み、run の数え方、daemon の出し直し、古い記録の読みまでを書いた。呼び出し側は `TaktRun` と `WorkerPool` を初めに選ぶ。`DESIGN` が `"Current"`（e626fcce3）、`"SameWrite"`（案 A、この設計）、`"MarkOnFailure"`（案 B、通知に失敗したときだけ 2 回目の書き込みで印を付ける）を選び、`BREAK` が案 A を 1 か所ずつ壊す。ディスクはいつでも埋まり、空く。プロセスは保存のあといつでも死ぬ。quint は 0.32.0。
+`specs/quint/normal-completion-publication/normalCompletionPublication.qnt`。1 回の試みの保存から、呼び出し側の通知、読み直しの失敗、印の消し込み、run の数え方、daemon の出し直し、古い記録の読みまでを書いた。呼び出し側は `TaktRun`・`WorkerPool`・`Instruct`（通知しない、印を頼まない）を初めに選ぶ。`DESIGN` が `"Current"`（e626fcce3）、`"SameWrite"`（案 A、この設計）、`"MarkOnFailure"`（案 B、通知に失敗したときだけ 2 回目の書き込みで印を付ける）を選び、`BREAK` が案 A を 1 か所ずつ壊す。ディスクはいつでも埋まり、空く。プロセスは保存のあといつでも死ぬ。quint は 0.32.0。
 
 ### (a) 不変条件が恒真でない
 
@@ -118,12 +118,14 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 | `brokenNoWarn`（捕まえた失敗を警告しない） | | | | | V | | |
 | `brokenResendUnmarked`（daemon が印の無い記録も出し直す） | | | | | | V | |
 | `brokenMarkOnSchema`（印を schema の条件、`run_slug` か `execution_id` で付ける） | | | | | | | V |
+| `brokenMarkUnrequested`（頼まない instruct の保存にも印を付ける） | | | | | | | V |
+| `brokenSilentReadBack`（読み直しの失敗で印を残すのに警告しない） | | | | V | | | |
 
 7 つの不変条件は、どれもどれかの壊した版で違反する。`sameWrite` は、まとめた `safety` を 50,000 サンプル、max-steps 16 で流しても違反なし。乱択で、証明ではない。
 
 - `current` の J1 は「通知が ENOSPC で投げ、印も無い」、J2 は「成功した実行が失敗と数えられる」、J3 は「worker pool で host が閉じる」。最初の確かめ（a）（b）と同じ形である。
-- `markOnFailure` の J1 の反例は 2 つの形で出た。保存の直後にプロセスが死ぬ形（seed 0x1・0x2）と、通知の失敗のあとの 2 回目の書き込みも ENOSPC で落ちる形（seed 0x2a）。案 B を採らない理由の裏づけになる。
-- `current` の J4・J5 は前提が成り立たない（印を付けず、通知の失敗では返らない）ので空振りする。J4 は `brokenNoClear`、J5 は `brokenNoWarn` で違反を確かめた。
+- `markOnFailure` の J1 の反例は 2 つの形で出た。保存の直後にプロセスが死ぬ形（seed 0x1・0x2・0x2a ほか）と、通知の失敗のあとの 2 回目の書き込みも ENOSPC で落ちる形（seed 0x5）。案 B を採らない理由の裏づけになる。
+- `current` の J4・J5 は前提が成り立たない（印を付けず、通知の失敗では返らない）ので空振りする。J4 は `brokenNoClear`・`brokenSilentReadBack`、J5 は `brokenNoWarn` で違反を確かめた。
 
 ### (b) 遷移に届く
 
@@ -131,21 +133,23 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 
 | witness | 届いた trace |
 |---|---|
-| 保存 / `run_slug` が無く通知を飛ばす | 19921 / 4988 |
-| 通知 / 通知の失敗 | 3740 / 1202 |
-| 印の消し込み / 消し込みの失敗 | 1047 / 323 |
-| プロセスの死 / daemon の出し直し | 11300 / 8929 |
-| 通知の失敗のあとの出し直し / 死んだあとの出し直し | 824 / 4373 |
-| 通知が失敗しても成功と数える（takt run） / 通知が失敗しても返る（worker pool） | 295 / 611 |
+| 保存 / `run_slug` が無く通知を飛ばす / instruct が通知せずに返る | 19931 / 3327 / 3158 |
+| 通知 / 通知の失敗 / 読み直しの失敗（`result` から通知し、印を残して警告） | 1930 / 676 / 1420 |
+| 印の消し込み / 消し込みの失敗 | 564 / 181 |
+| プロセスの死 / daemon の出し直し | 10096 / 6047 |
+| 通知の失敗のあとの出し直し / 死んだあとの出し直し | 463 / 2308 |
+| 通知が失敗しても成功と数える（takt run） / 通知が失敗しても返る（worker pool） | 154 / 356 |
 
-案 B だけの 2 回目の書き込みとその失敗は `markOnFailure` で 154 / 490、古い記録の出し直しは `brokenResendUnmarked` で 19849 届いた。`sameWrite` では、この 3 つは 0 になる（その版に無い遷移なので正しい）。
+案 B だけの 2 回目の書き込みとその失敗は `markOnFailure` で 116 / 264、古い記録の出し直しは `brokenResendUnmarked` で 19843 届いた。`sameWrite` では、この 3 つは 0 になる（その版に無い遷移なので正しい）。
 
 ### (c) 本番との対応
 
 | モデル | 本番 |
 |---|---|
-| `save` | `taskLifecycleService.ts:598-660`・`:736-765`（`completeTask`・`failTask`・`prFailTask`）、`taskExceedService.ts:25-41`（`exceedTask`）。`markedOnSave` は「直し方」の 1 の `markNormalCompletionPublicationPending`。モデルの呼び出し側は通知する 2 つだけなので、`requested` は常に `true` と置いた。instruct（頼まない呼び出し側）は J7 の側で、`brokenMarkOnSchema` と同じく「今送らないものに印を付ける」壊し方に当たる |
+| `save` | `taskLifecycleService.ts:598-660`・`:736-765`（`completeTask`・`failTask`・`prFailTask`）、`taskExceedService.ts:25-41`（`exceedTask`）。`markedOnSave` は「直し方」の 1 の `markNormalCompletionPublicationPending`。`requested` は、呼び出し側が `TaktRun`・`WorkerPool` のとき真、`Instruct` のとき偽 |
 | `skipWithoutRunSlug` | `parallelExecution.ts:499-502` の `log.error` |
+| `returnWithoutPublishing`（`Instruct`） | `taskInstructionActions.ts:292`（`executeAndCompleteTask` は通知しない） |
+| `readBackFails` | 「直し方」の 2 の 3（`listTaskStateItems` → `store.read()` が投げる、`store.ts:36-38`） |
 | `publish` / `publishFails` | `Current`：`parallelExecution.ts:503-506`、`builtinProjectRuntime.ts:224-225`。`SameWrite`：「直し方」の 2 の `publishTaskCompletion` → `claimTasks.ts:98-112` |
 | `Escaped` の数え方と `hostClosed` | `parallelExecution.ts:253`・`:296-302`、`builtinProjectRuntime.ts:234-239`（`failed` → 子の `stop()` → host の切断） |
 | `returned` の数え方 | `parallelExecution.ts:301-302`（`settled.result` が実行の結果） |
@@ -225,7 +229,7 @@ W6 は #193 が通常の完了も含めて直すので、この設計で足す�
 | R8 | `src/__tests__/it-worker-pool-completion-publication.test.ts`（#193 の枝。既存に足す） | `clears the completion mark after the worker pool notifies a normal completion` | 組み込みの実行が `completed` で終わり、`saveManagerEvent` が成功すると、記録に印が無く、受信箱の完了がちょうど 1 件 | P6（W5 が `saveManagerEvent` を直接呼んだままだと印が残る） |
 | R9 | 同上（S21 を改める） | `keeps the project open when the notification of a normal completion fails` | 「B の記録は `completed` で、印は無い」を「B の記録は `completed` で印が残り、`readPendingGoalTaskCompletions` が B を返す」に改める。ほかの assert（A を中断しない、host を閉じない、`finished` が B で呼ばれる、警告の 1 行）はそのまま | P2（印を付けない） |
 | R11 | `it-normal-completion-publication.test.ts` | `does not mark a goal completion saved by a caller that does not publish it` を `it.each(['completeTask', 'failTask', 'prFailTask', 'exceedTask'])` | R1 と同じ記録を、`completionPublicationPending` を渡さずに各関数へ通すと、印が無く、`readPendingGoalTaskCompletions` は空（instruct の再実行の保存の形） | P1・P2・P3 の `requested`（頼まれなくても付けると落ちる） |
-| R12 | 同上 | `notifies from the run result and keeps the mark when the saved record cannot be read back` | R4 の形で、通知の前の `listTaskStateItems` だけを `PrivateFileLockAcquisitionError('cannot read tasks', 'ENOSPC')` で投げさせる。`saveManagerEvent` は今と同じ引数でちょうど 1 回呼ばれ、結果は `{ success: 1, fail: 0 }`、記録には印が残る（daemon が出し直す）、警告は出ない | P4 の 3（読み直しの失敗で通知を止めると落ちる） |
+| R12 | 同上 | `notifies from the run result and keeps the mark when the saved record cannot be read back` | R4 の形で、通知の前の `listTaskStateItems` だけを `PrivateFileLockAcquisitionError('cannot read tasks', 'ENOSPC')` で投げさせる。`saveManagerEvent` は今と同じ引数でちょうど 1 回呼ばれ、結果は `{ success: 1, fail: 0 }`、記録には印が残る（daemon が出し直す）。`[WARN]` の行のうちタスク名と `could not be read back` を含むものがちょうど 1 行 | P4 の 3（読み直しの失敗で通知を止めると落ちる） |
 | R10 | `src/__tests__/workerPool.test.ts`（既存に足す、単体） | `counts a goal task by its execution result when its completion notification fails` を `it.each([true, false])` | 既存の `ゴールのタスクの終了を受信箱へ保存し…` と同じ形で `saveEvent` が ENOSPC を投げる。結果は R5 と同じ数え方で、`[WARN]` が 1 行。runner の mock の `listTaskStateItems` は `[]` のままで、`result` から送る経路を通る | P5 |
 
 既存の `workerPool.test.ts` の「ゴールのタスクの終了を受信箱へ保存し、イベントを処理せず終了する」（`saveEvent` を同じ引数でちょうど 1 回）は変えない。`worker-pool-runtime.test.ts` の M18 の試験（#193）は、runner の mock に `listTaskStateItems` が無いと `publishTaskCompletion` が投げて警告に回る。assert は変えず、mock に `listTaskStateItems: vi.fn(() => [])` を足すだけにする。

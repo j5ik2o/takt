@@ -11,6 +11,8 @@
 //                the attempt (:270-303): a rejected promise is counted as a failure (:253).
 //   WorkerPool — BuiltinProjectRuntime.startTask's .then (src/features/workerPool/builtinProjectRuntime.ts:222-239
 //                on #193). An exception calls the runtime's `failed`, which closes the project host.
+//   Instruct   — the instruct re-execution (src/features/tasks/list/taskInstructionActions.ts:292). It saves
+//                through the same functions and never publishes; it does not ask for the mark.
 //
 // The caller publishes only when the saved result has a run slug (parallelExecution.ts:499-502);
 // a GoalPausedError before the workflow starts saves a completion without one (taskExecution.ts:462-465).
@@ -18,15 +20,19 @@
 // DESIGN picks the shape:
 //   "Current"       — e626fcce3. No mark; saveManagerEvent without a try.
 //   "SameWrite"     — design A. The save writes completion_publication_pending in the same write when
-//                     the record has a goal, a completion and a run slug. The caller publishes through
-//                     publishAndClearPendingMark (claimTasks.ts:98-112), catches and warns, and returns
-//                     the execution's own result.
+//                     the caller asked for it (publishesGoalCompletion) and the record has a goal, a
+//                     completion and a run slug. The caller reads the saved record back and publishes it
+//                     through publishAndClearPendingMark (claimTasks.ts:98-112); when the read-back throws,
+//                     it publishes from its own result, leaves the mark and warns. Every failure is caught
+//                     and warned, and the caller returns the execution's own result.
 //   "MarkOnFailure" — design B. The save writes no mark; only a failed notification writes the mark,
 //                     in a second write.
 // BREAK breaks "SameWrite" in one place, to show that each invariant can fail:
 //   "None", "NoClear" (no clear after a publish), "NoCatch" (the notification is not caught),
 //   "NoWarn" (a caught failure is not warned), "ResendUnmarked" (the daemon also resends an unmarked
-//   old record), "MarkOnSchema" (the mark follows the schema's rule, run slug or execution id).
+//   old record), "MarkOnSchema" (the mark follows the schema's rule, run slug or execution id),
+//   "MarkUnrequested" (the save marks for a caller that did not ask), "SilentReadBack" (a failed read-back
+//   leaves the mark without a warning).
 //
 // The disk can fill and empty at any time (ENOSPC on saveManagerEvent and on every tasks.yaml write).
 // The process can be killed after the save. The daemon resends a marked record when the disk lets it
@@ -35,7 +41,7 @@ module normalCompletionPublication {
   const DESIGN: str
   const BREAK: str
 
-  type Caller = TaktRun | WorkerPool
+  type Caller = TaktRun | WorkerPool | Instruct
   //   Idle        — nothing saved yet.
   //   Saved       — the terminal record is in tasks.yaml; the caller has not published yet.
   //   Published   — saveManagerEvent returned; the mark still needs clearing.
@@ -73,8 +79,10 @@ module normalCompletionPublication {
   pure def warns: bool = BREAK != "NoWarn"
   pure def clears: bool = BREAK != "NoClear"
   // The mark is written on save only where the caller publishes today.
-  pure def markedOnSave(runSlug: bool, executionId: bool): bool =
-    sameWrite and (runSlug or (BREAK == "MarkOnSchema" and executionId))
+  pure def publishes(c: Caller): bool = c != Instruct
+  pure def markedOnSave(c: Caller, runSlug: bool, executionId: bool): bool =
+    sameWrite and (publishes(c) or BREAK == "MarkUnrequested")
+      and (runSlug or (BREAK == "MarkOnSchema" and executionId))
   pure def resendsUnmarked: bool = BREAK == "ResendUnmarked"
 
   // The caller returns normally; the run counts the execution's own result.
@@ -83,7 +91,7 @@ module normalCompletionPublication {
       lastAction: name }
 
   action init = {
-    nondet caller = Set(TaktRun, WorkerPool).oneOf()
+    nondet caller = Set(TaktRun, WorkerPool, Instruct).oneOf()
     s' = { caller: caller, phase: Idle, success: false, runSlug: false, executionId: false, mark: false,
            delivered: false, publishedByCaller: false, notifyWarned: false, clearWarned: false,
            count: Uncounted, hostClosed: false, legacyMarked: false, legacyDelivered: false,
@@ -98,19 +106,33 @@ module normalCompletionPublication {
     all {
       s.phase == Idle, not(s.full),
       s' = { ...s, phase: Saved, success: success, runSlug: runSlug, executionId: executionId,
-             mark: markedOnSave(runSlug, executionId), lastAction: "save" },
+             mark: markedOnSave(s.caller, runSlug, executionId), lastAction: "save" },
     }
   }
 
   // No run slug: the caller logs an error and returns without publishing (parallelExecution.ts:499-502).
   action skipWithoutRunSlug: bool = all {
-    s.phase == Saved, not(s.runSlug),
+    s.phase == Saved, publishes(s.caller), not(s.runSlug),
     s' = returned(s, "skipWithoutRunSlug"),
+  }
+
+  // Instruct saves and returns without publishing (today and in the design).
+  action returnWithoutPublishing: bool = all {
+    s.phase == Saved, not(publishes(s.caller)),
+    s' = returned(s, "returnWithoutPublishing"),
+  }
+
+  // SameWrite: the read-back of the saved record throws (tasks.yaml lock timeout). The caller
+  // publishes from its own result, leaves the mark for the daemon and warns about it.
+  action readBackFails: bool = all {
+    sameWrite, s.phase == Saved, publishes(s.caller), s.runSlug, s.mark, not(s.full),
+    s' = returned({ ...s, delivered: true, publishedByCaller: true, clearWarned: BREAK != "SilentReadBack" },
+                  "readBackFails"),
   }
 
   // saveManagerEvent succeeds.
   action publish: bool = all {
-    s.phase == Saved, s.runSlug, not(s.full),
+    s.phase == Saved, publishes(s.caller), s.runSlug, not(s.full),
     s' = if (sameWrite and s.mark and clears)
            { ...s, phase: Published, delivered: true, publishedByCaller: true, lastAction: "publish" }
          else returned({ ...s, delivered: true, publishedByCaller: true }, "publish"),
@@ -118,7 +140,7 @@ module normalCompletionPublication {
 
   // saveManagerEvent throws ENOSPC.
   action publishFails: bool = all {
-    s.phase == Saved, s.runSlug, s.full,
+    s.phase == Saved, publishes(s.caller), s.runSlug, s.full,
     s' = if (markOnFailure) { ...s, phase: FailMarkDue, lastAction: "publishFails" }
          else if (catches) returned({ ...s, notifyWarned: warns }, "publishFails")
          else { ...s, phase: Escaped,
@@ -170,7 +192,7 @@ module normalCompletionPublication {
   action diskFrees: bool = all { s.full, s' = { ...s, full: false, lastAction: "diskFrees" } }
 
   action step = any {
-    save, skipWithoutRunSlug, publish, publishFails, markAfterFailure, markAfterFailureFails,
+    save, skipWithoutRunSlug, returnWithoutPublishing, readBackFails, publish, publishFails, markAfterFailure, markAfterFailureFails,
     clearMark, clearFails, kill, daemonResend, daemonReadsLegacy, diskFills, diskFrees,
   }
 
@@ -178,22 +200,23 @@ module normalCompletionPublication {
 
   // J1: once the caller is out of the attempt, a completion the caller would publish today is in the
   // inbox, or its mark is still there for the daemon.
-  val deliveredOrMarked: bool = (settled(s.phase) and s.runSlug) implies (s.delivered or s.mark)
+  val deliveredOrMarked: bool =
+    (settled(s.phase) and s.runSlug and publishes(s.caller)) implies (s.delivered or s.mark)
   // J2: the run counts the execution's own result, whatever happened to the notification.
   val successCountedAsSuccess: bool =
     s.count != Uncounted implies (s.count == (if (s.success) CountedSuccess else CountedFailure))
   // J3: a notification failure never closes the project host.
   val hostStaysOpen: bool = not(s.hostClosed)
-  // J4: after the caller published and the clear did not fail, no mark is left.
+  // J4: after the caller published and neither the clear nor the read-back failed (both warn), no mark is left.
   val publishedClearsMark: bool =
     (s.phase == Returned and s.publishedByCaller and not(s.clearWarned)) implies not(s.mark)
   // J5: a completion the caller should have published and did not is warned.
   val unpublishedIsWarned: bool =
-    (s.phase == Returned and s.runSlug and not(s.publishedByCaller)) implies s.notifyWarned
+    (s.phase == Returned and s.runSlug and publishes(s.caller) and not(s.publishedByCaller)) implies s.notifyWarned
   // J6: an old record without the mark is never resent.
   val legacyNotResent: bool = not(s.legacyDelivered)
-  // J7: nothing is marked or sent that the caller does not publish today (no run slug, no completion event).
-  val noNewSends: bool = (s.mark or s.delivered) implies s.runSlug
+  // J7: nothing is marked or sent that is not published today (no run slug, or a caller that never publishes).
+  val noNewSends: bool = (s.mark or s.delivered) implies (s.runSlug and publishes(s.caller))
 
   val safety: bool = deliveredOrMarked and successCountedAsSuccess and hostStaysOpen and publishedClearsMark
     and unpublishedIsWarned and legacyNotResent and noNewSends
@@ -201,6 +224,8 @@ module normalCompletionPublication {
   // Witnesses (each should be reached in some trace).
   val wSave: bool = s.lastAction == "save"
   val wSkip: bool = s.lastAction == "skipWithoutRunSlug"
+  val wInstruct: bool = s.lastAction == "returnWithoutPublishing"
+  val wReadBackFails: bool = s.lastAction == "readBackFails"
   val wPublish: bool = s.lastAction == "publish"
   val wPublishFails: bool = s.lastAction == "publishFails"
   val wMarkAfterFailure: bool = s.lastAction == "markAfterFailure"
@@ -224,3 +249,5 @@ module brokenNoCatch { import normalCompletionPublication(DESIGN = "SameWrite", 
 module brokenNoWarn { import normalCompletionPublication(DESIGN = "SameWrite", BREAK = "NoWarn").* }
 module brokenResendUnmarked { import normalCompletionPublication(DESIGN = "SameWrite", BREAK = "ResendUnmarked").* }
 module brokenMarkOnSchema { import normalCompletionPublication(DESIGN = "SameWrite", BREAK = "MarkOnSchema").* }
+module brokenMarkUnrequested { import normalCompletionPublication(DESIGN = "SameWrite", BREAK = "MarkUnrequested").* }
+module brokenSilentReadBack { import normalCompletionPublication(DESIGN = "SameWrite", BREAK = "SilentReadBack").* }
