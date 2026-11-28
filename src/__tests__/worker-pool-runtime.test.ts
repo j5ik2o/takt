@@ -10,7 +10,7 @@ import { ProjectExecutionAlreadyRunningError } from '../infra/task/project-execu
 const doubles = vi.hoisted(() => ({
   records: vi.fn(), claim: vi.fn(), recheck: vi.fn(), waiting: vi.fn(), goal: vi.fn(), config: vi.fn(),
   owner: vi.fn(), acquire: vi.fn(), release: vi.fn(), state: vi.fn(), preflight: vi.fn(), execute: vi.fn(), event: vi.fn(),
-  terminate: vi.fn(), cleanup: vi.fn(),
+  terminate: vi.fn(), cleanup: vi.fn(), clear: vi.fn(),
   remoteOrigin: vi.fn(), remoteRecords: vi.fn(), remoteRequest: vi.fn(),
 }));
 vi.mock('../infra/task/remoteTaskLifecycle.js', () => ({ RemoteTaskLifecycle: class {
@@ -19,6 +19,7 @@ vi.mock('../infra/task/remoteTaskLifecycle.js', () => ({ RemoteTaskLifecycle: cl
 vi.mock('../infra/task/runner.js', () => ({ TaskRunner: class {
   claimTask = doubles.claim;
   failUnreadableGoalTask = doubles.recheck;
+  clearCompletionPublicationPending = doubles.clear;
   setPendingWaitingReason = doubles.waiting;
   getTasksFilePath() { return '/project/.takt/tasks.yaml'; }
 } }));
@@ -29,7 +30,11 @@ vi.mock('../infra/config/managerConfig.js', () => ({ resolveManagerConfig: doubl
 vi.mock('../infra/task/project-execution-lock.js', () => ({ acquireProjectExecutionLock: doubles.acquire,
   getProjectExecutionOwner: doubles.owner, ProjectExecutionAlreadyRunningError: class extends Error {},
 }));
-vi.mock('../features/tasks/execute/claimTasks.js', () => ({ CLAIM_RETRY_INTERVAL_MS: 5000, failInterruptedTasksWithGoalEvents: vi.fn() }));
+// The setup-failure publication (#195-#197) runs for real so the notification double and the warning are observable.
+vi.mock('../features/tasks/execute/claimTasks.js', async (original) => ({
+  ...await original<typeof import('../features/tasks/execute/claimTasks.js')>(),
+  CLAIM_RETRY_INTERVAL_MS: 5000, failInterruptedTasksWithGoalEvents: vi.fn(),
+}));
 vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkQueuedTaskProviders: doubles.preflight }));
 vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({ executeRunTaskAndCompleteWithDetails: doubles.execute }));
 vi.mock('../infra/goals/events.js', () => ({ saveManagerEvent: doubles.event }));
@@ -40,7 +45,18 @@ vi.mock('../infra/opencode/server-pool.js', async (original) => ({
   ...await original<typeof import('../infra/opencode/server-pool.js')>(), prepareSharedServerPoolForForcedShutdown: doubles.cleanup,
 }));
 
+function captureWarnings(): string[] {
+  const lines: string[] = [];
+  vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { lines.push(args.map(String).join(' ')); });
+  return lines;
+}
+
+function notNotifiedWarnings(lines: readonly string[], taskName: string): string[] {
+  return lines.filter((line) => line.includes('[WARN]') && line.includes(taskName) && line.includes('manager was not notified'));
+}
+
 beforeEach(() => {
+  vi.restoreAllMocks();
   vi.resetAllMocks();
   doubles.preflight.mockResolvedValue(undefined);
   doubles.terminate.mockResolvedValue(undefined);
@@ -101,12 +117,13 @@ it.each(['renew', 'finish'] as const)('refuses remote %s when another manual own
   } finally { await runtime.close(); }
 });
 
-it('rechecks unreadable remote input after the claim and publishes the saved terminal result', async () => {
+it('rechecks unreadable remote input after the claim, publishes the saved terminal result, and keeps a failed notification inside the runtime so its marked record is resent', async () => {
   const record = doubles.records()[0];
   const saved = toTaskState('/project/.takt/tasks.yaml', { ...record, status: 'failed', run_slug: 'setup-remote',
     completion: { success: false, interrupted: false, workflowResult: 'error' } });
   doubles.remoteRequest.mockResolvedValue({ kind: 'unreadable', taskName: 'a' });
   doubles.recheck.mockReturnValue(saved);
+  const warnings = captureWarnings();
   const runtime = new BuiltinProjectRuntime('/project', vi.fn(), vi.fn(), true);
   try {
     const claim = { kind: 'claim' as const, taskName: 'a', workerId: 'w1', registrationGeneration: 'generation', requestId: 'r1', leaseExpiresAt: 60_000 };
@@ -116,7 +133,9 @@ it('rechecks unreadable remote input after the claim and publishes the saved ter
       taskName: saved.name, runSlug: saved.runSlug, result: saved.completion });
     const failure = new Error('Cannot notify manager');
     doubles.event.mockImplementation(() => { throw failure; });
-    await expect(runtime.remote(claim)).rejects.toBe(failure);
+    await expect(runtime.remote(claim)).resolves.toEqual({ kind: 'claim', assignment: null });
+    expect(doubles.event).toHaveBeenCalledTimes(2);
+    expect(notNotifiedWarnings(warnings, saved.name)).toHaveLength(1);
     doubles.recheck.mockClear(); doubles.remoteRequest.mockRejectedValueOnce(new Error('Git or storage failed'));
     await expect(runtime.remote(claim)).rejects.toThrow('Git or storage failed');
     expect(doubles.recheck).not.toHaveBeenCalled();
@@ -146,10 +165,10 @@ it('passes only a confirmed assignment to execution and saves completion before 
   expect(doubles.cleanup).toHaveBeenCalledOnce();
 });
 
-it.each(['recheck', 'claim'] as const)('propagates %s completion notification failures outside acquisition retry', async (operation) => {
+it.each(['recheck', 'claim'] as const)('keeps a %s completion notification failure inside the runtime so its marked record is resent', async (operation) => {
   const record = doubles.records()[0];
   const saved = toTaskState('/project/.takt/tasks.yaml', { ...record, status: 'failed', run_slug: 'setup-b',
-    completion: { success: false, interrupted: false, workflowResult: 'error' } });
+    completion: { success: false, interrupted: false, workflowResult: 'error' }, completion_publication_pending: true });
   if (operation === 'recheck') {
     doubles.records.mockReturnValue([{ ...record, content: undefined }]);
     doubles.recheck.mockReturnValue(saved);
@@ -157,14 +176,20 @@ it.each(['recheck', 'claim'] as const)('propagates %s completion notification fa
   const failure = new PrivateFileLockAcquisitionError('notification failed', 'ENOSPC', undefined, { cause: new Error('disk full') });
   doubles.event.mockImplementation(() => { throw failure; });
   const finished = vi.fn();
-  const runtime = new BuiltinProjectRuntime('/project', finished, vi.fn());
+  const fatal = vi.fn();
+  const warnings = captureWarnings();
+  const runtime = new BuiltinProjectRuntime('/project', finished, fatal);
   try {
-    await expect(runtime.start('a', 'builtin')).rejects.toBe(failure);
+    expect(saved.completionPublicationPending).toBe(true);
+    await expect(runtime.start('a', 'builtin')).resolves.toEqual({ kind: 'declined' });
     expect(doubles.event).toHaveBeenCalledExactlyOnceWith('/project', {
       kind: 'completion', goalId: saved.goalId, taskName: saved.name, runSlug: saved.runSlug, result: saved.completion,
     });
     expect(doubles.execute).not.toHaveBeenCalled();
     expect(finished).not.toHaveBeenCalled();
+    expect(fatal).not.toHaveBeenCalled();
+    expect(doubles.clear).not.toHaveBeenCalled();
+    expect(notNotifiedWarnings(warnings, saved.name)).toHaveLength(1);
   } finally { await runtime.close(); }
 });
 
