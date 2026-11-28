@@ -100,3 +100,41 @@
 | M12（`inspect` の付与） | S10。`remote_assignment` のある再試行に `builtinOnly` を付けても S10 が落ちる |
 | M12（警告と、1 回にする覚え） | S13（0 回でも 2 回でも落ちる） |
 | M13（claim の判定） | S11 |
+
+## #211（S14〜S18）
+
+### 足した試験
+
+- S14 `it-worker-token-source.test.ts` › keeps the worker token out of the started process arguments: %s（TAKT_WORKER_TOKEN / --token-file）
+- S15 同 › warns that --token is visible to ps and still connects
+- S16 同 › refuses a token file that group or others can read（Windows では飛ばす）
+- S17 同 › stops when the worker token is given in more than one way and names only the ways: $named（(TAKT_WORKER_TOKEN, --token-file) / (--token-file, --token) / (TAKT_WORKER_TOKEN, --token-file, --token)）
+- S18 `worker-token-source.test.ts`（単体） › keeps the worker token out of task process arguments and environment
+
+S14〜S17 は `bin/takt`（`dist/` を読む）を起動するので、流す前に `npm run build` が要る。この記録は、3bcae5cc9 の src で build した `dist/` で流した。worker は接続の前に token の見出し（base64url の identity）を手元で読むので、作り物の token は `<見出し>.Zq<8 桁>Zq` を実行時に組み立てる。試験のサーバーは要求を返さずに保留し、そのあいだに起動したプロセスの引数（macOS は `ps -o args= -p <pid>`、Linux は `/proc/<pid>/cmdline`）を読む。この読み方が token を拾えることは、`--token` で起動したプロセスの引数に token が出ることで一度確かめた（試験の外）。
+
+### 直す前の本番で流した結果
+
+`it-worker-token-source.test.ts`：7 件走り、7 件落ちた。
+
+| 試験 | 落ちた理由（期待 → 実際） |
+|---|---|
+| S14 TAKT_WORKER_TOKEN | サーバーに接続が来る → 接続の前に終わる（`--url and --token` を求めて止まる） |
+| S14 --token-file | 同上（`error: unknown option '--token-file'`） |
+| S15 | `--token` と `ps` を含む stderr の行が 1 行 → 0 行（接続は来る） |
+| S16 | stderr にファイルのパスと `644` → `error: unknown option '--token-file'` だけ |
+| S17 (TAKT_WORKER_TOKEN, --token-file) | stderr に重なった渡し方の名前の行が 1 行 → 0 行（`unknown option` で止まる） |
+| S17 (--token-file, --token) | 同上 |
+| S17 (TAKT_WORKER_TOKEN, --token-file, --token) | 同上 |
+
+`worker-token-source.test.ts`（S18）：1 件走り、緑。設計のとおり今の本番でも通る守りの試験で、red の件数に入れない。守りが効くことは、作業ツリーの外の写しで、`startWorker` を通さずに `createRemoteTaskExecutor({ ...process.env })` を渡すと、子の環境に token を持つ変数（`TAKT_TEST_TOKEN_COPY` ほか）が残って落ちることで確かめた。
+
+### 本番のどこを外せば落ちるか
+
+| 設計の行 | 当たる試験 |
+|---|---|
+| M15・M16（環境変数とファイルを読む） | S14（読まないと起動が止まり、接続が来ない） |
+| M16（`--token` の警告） | S15 |
+| M15（権限の確かめ） | S16 |
+| M15（重なりの判定と文） | S17（文に値やパスを書いても落ちる） |
+| `workerCommands.ts:29` の値の除外、子の引数に token を足す変更 | S18 |
