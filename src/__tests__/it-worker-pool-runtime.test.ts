@@ -24,6 +24,18 @@ import type { TaskRecord } from '../infra/task/schema.js';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
+// FileAsyncLock creates the lock through `${lockPath}.${pid}.${uuid}.tmp` and publishes it with link.
+// Treat that candidate exactly like the published lock so the injected open/write failures still land.
+function isLockOpenTarget(path: unknown, lockPath: string): boolean {
+  if (typeof path !== 'string') return false;
+  if (path === lockPath) return true;
+  const prefix = `${lockPath}.`;
+  if (!path.startsWith(prefix) || !path.endsWith('.tmp')) return false;
+  const [pid, uuid, ...rest] = path.slice(prefix.length, -'.tmp'.length).split('.');
+  return rest.length === 0 && /^\d+$/.test(pid ?? '')
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(uuid ?? '');
+}
+
 const doubles = vi.hoisted(() => ({ execute: vi.fn(), preflight: vi.fn(), terminate: vi.fn(), cleanup: vi.fn() }));
 vi.mock('../features/tasks/execute/runTaskExecution.js', () => ({ executeRunTaskAndCompleteWithDetails: doubles.execute }));
 vi.mock('../features/tasks/execute/providerPreflight.js', () => ({ checkQueuedTaskProviders: doubles.preflight }));
@@ -287,7 +299,7 @@ it.each([
   const actualFs = await vi.importActual<typeof import('node:fs')>('node:fs');
   vi.mocked(fs.closeSync).mockImplementation((descriptor) => { descriptors.delete(descriptor); actualFs.closeSync(descriptor); });
   vi.mocked(fs.openSync).mockImplementation((path, flags, mode) => {
-    if (path === lockPath && flags === 'wx') {
+    if (isLockOpenTarget(path, lockPath) && flags === 'wx') {
       readCount++;
       if (armed && (operation === 'recovery read' || operation === 'candidate read') && readCount === (operation === 'candidate read' ? 2 : 1)) full = true;
       if (full && stage === 'create') { failures.push(String(path)); throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }); }
@@ -554,7 +566,7 @@ it('keeps operation-specific acquisition handlers and native errors for stores w
   const operationHandler = vi.fn((_error: unknown): never => { throw operationFailure; });
   const store = new TaskStore(cwd, handler);
   vi.mocked(fs.openSync).mockImplementation((path, flags, mode) => {
-    if (path === `${runner.getTasksFilePath()}.lock` && flags === 'wx') throw failure;
+    if (isLockOpenTarget(path, `${runner.getTasksFilePath()}.lock`) && flags === 'wx') throw failure;
     return actualFs.openSync(path, flags, mode);
   });
   expect(() => store.read()).toThrow(converted);
