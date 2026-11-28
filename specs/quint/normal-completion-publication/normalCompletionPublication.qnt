@@ -242,13 +242,17 @@ module normalCompletionPublication {
 
   // J1: once the caller is out of the attempt, a completion the caller publishes today and whose record
   // keeps its run slug is in the inbox, or its mark is still there for the daemon.
-  // (PausedBeforeWorkflow is left out on purpose: see the design, raised point 6.)
+  // (PausedBeforeWorkflow is out of #216's scope and left out: see the design, section 範囲の外,
+  // and https://github.com/j5ik2o/takt/issues/222.)
   val deliveredOrMarked: bool =
     (settled(s.phase) and publishes(s.caller) and recordRunSlug(s.shape)) implies (delivered or s.mark)
   // J2: the run counts the execution's own result, whatever happened to the notification.
   val successCountedAsSuccess: bool =
     s.count != Uncounted implies (s.count == (if (s.success) CountedSuccess else CountedFailure))
-  // J3 (worker pool only; takt run has no host): a notification failure never closes the project host.
+  // J3 (worker pool only; takt run has no host): the project host is never closed. Two transitions set
+  // hostClosed, so J3 has two causes: publishFails when the notification failure is not caught (Current,
+  // NoCatch) and skipWithoutResult when the worker pool throws on a result without a completion (Current,
+  // PoolThrowsWithoutResult, i.e. P6 not applied). pJ3ByPublishFailure and pJ3ByMissingResult below split them.
   val hostStaysOpen: bool = not(s.hostClosed)
   // J4: after the caller published and neither the clear nor the read-back failed (both warn), no mark is left.
   // clearWarned stands for both warnings. Another writer that rewrites the record between the read-back and the
@@ -261,7 +265,11 @@ module normalCompletionPublication {
     (s.phase == Returned and publishesToday(s.caller, s.shape) and not(s.publishedByCaller)) implies s.notifyWarned
   // J6: an old record without the mark is never resent.
   val legacyNotResent: bool = not(s.legacyDelivered)
-  // J7: nothing is marked or sent that is not published today (no completion in the result, or a caller that never publishes).
+  // J7: a mark or an inbox event exists only for an attempt that the caller publishes today, that is
+  // publishesToday: a publishing caller (not Instruct) whose result carries a completion and a runSlug.
+  // NoResult and Instruct are the attempts it rules out; PausedBeforeWorkflow counts as published today
+  // (the caller sends it with the result's runSlug), so a mark on it does not break J7. A mark alone, with an
+  // empty inbox, already breaks it.
   val noNewSends: bool = (s.mark or delivered) implies publishesToday(s.caller, s.shape)
   // J8: the caller's notice and the daemon's resend of one attempt are one manager event (one eventId).
   val oneEventPerAttempt: bool = s.inbox.size() <= 1
@@ -277,7 +285,8 @@ module normalCompletionPublication {
   // Without fairness it fails, and its counterexample is plain stuttering at an in-attempt state.
   temporal callerSettlesUnfair: bool = always(inAttempt(s.phase) implies eventually(settled(s.phase)))
   // With fairness on the whole step only (no stuttering forever), it still fails: the disk fills and frees
-  // forever while the caller never moves. So the fairness of the caller's own moves is what callerSettles needs.
+  // forever while the caller never moves. This shows only that fairness on the whole step is not enough;
+  // it does not show that fairness of the caller's own moves is necessary.
   temporal callerSettlesSystemFair: bool =
     weakFair(step, s) implies always(inAttempt(s.phase) implies eventually(settled(s.phase)))
 
@@ -323,6 +332,11 @@ module normalCompletionPublication {
   val j1Applies: bool = settled(s.phase) and publishes(s.caller) and recordRunSlug(s.shape)
   val pJ1AfterKill: bool = (j1Applies and s.phase == Killed) implies (delivered or s.mark)
   val pJ1AfterSecondWriteFails: bool = (j1Applies and s.lastAction == "markAfterFailureFails") implies (delivered or s.mark)
+  // The two causes of J3 (third adversarial read). The state right after the transition that closed the host is
+  // checked, so each probe sees one cause: Current fails both, NoCatch only the first,
+  // PoolThrowsWithoutResult only the second, sameWrite neither.
+  val pJ3ByPublishFailure: bool = not(s.hostClosed and s.lastAction == "publishFails")
+  val pJ3ByMissingResult: bool = not(s.hostClosed and s.lastAction == "skipWithoutResult")
 }
 
 module current { import normalCompletionPublication(DESIGN = "Current", BREAK = "None").* }

@@ -27,6 +27,9 @@ quint verify normalCompletionPublication.qnt --main sameWrite --backend tlc --in
 quint verify normalCompletionPublication.qnt --main brokenMarkOnSchema --backend tlc --invariant pJ8DaemonFirst
 quint verify normalCompletionPublication.qnt --main markOnFailure --backend tlc --invariant pJ1AfterKill
 quint verify normalCompletionPublication.qnt --main markOnFailure --backend tlc --invariant pJ1AfterSecondWriteFails
+# J3 の 2 つの原因（3 回目の別の読み）。current は両方、brokenNoCatch は前者だけ、brokenPoolThrowsWithoutResult は後者だけに違反し、sameWrite は違反しない
+quint verify normalCompletionPublication.qnt --main brokenNoCatch --backend tlc --invariant pJ3ByPublishFailure
+quint verify normalCompletionPublication.qnt --main brokenPoolThrowsWithoutResult --backend tlc --invariant pJ3ByMissingResult
 # 乱択と witness
 quint run normalCompletionPublication.qnt --main sameWrite --max-samples 50000 --max-steps 16 --seed 0x2a --invariant safety
 quint run normalCompletionPublication.qnt --main sameWrite --max-samples 20000 --max-steps 16 --seed 0x2a --invariant safety \
@@ -35,7 +38,15 @@ quint run normalCompletionPublication.qnt --main sameWrite --max-samples 20000 -
   wPausedReadBackFails wPausedLost wResendAfterFailure wResendAfterKill wPoolReturnedAfterFailure
 ```
 
-結果の表（どの版がどの不変条件に違反するか、witness の数）は設計の文書の「Quint」の節にある。quint 0.32.0、TLC は quint の同梱のもの。`quint verify` が作る `_apalache-out/` はコミットしない。
+結果の表（どの版がどの不変条件に違反するか、witness の数）は設計の文書の「Quint」の節にある。quint 0.32.0、TLC は quint の同梱のもの。
+
+どの結果がどの版のモデルのものかは次のとおり。
+
+- 3 回目の別の読みのあとのモデル（この版）：TLC の 96 本（12 の版 × 8 つの不変条件）、`sameWrite` の `safety`、試しの不変条件（`pJ3*`・`pNoExecIdInInbox`・`pJ8DaemonFirst`・`pJ1After*`）、時相の性質 3 本を流し直した。
+- 2 回目の別の読みのあとのモデル：witness の数（20,000 サンプル）と、50,000 サンプルの `safety`。今回は流し直していない。
+- それより前のモデル（`brokenPoolThrowsWithoutResult` を足す前）：10,000 サンプルの乱択の 88 本。流し直していない。
+
+3 回目のあとの直しは、注と試しの不変条件だけで、遷移と J1〜J8 の式は変えていない。`quint verify` が作る `_apalache-out/` はコミットしない。
 
 ## 見ていないもの
 
@@ -43,6 +54,8 @@ quint run normalCompletionPublication.qnt --main sameWrite --max-samples 20000 -
 - 2 つのタスクの同時の保存。
 - 読み直しから印の消し込みまでの間に、ほかの書き手が記録を書き換える形（PR の作り直しで状態が変わる、削除の予約が付く）。消し込みは警告なしで何もせず、印は daemon が同じ `eventId` で出し直して消す（設計の J4 と Quint の（d））。
 - daemon が印を消し切ること（#170 のモデル `goal-task-completion-publication/` の範囲）。
+- ゴールが中止されていると `saveManagerEvent` が何も書かずに返る形（`infra/goals/events.ts:32`）。`publish` はいつも受信箱に書く。#216 の範囲の外で、https://github.com/j5ik2o/takt/issues/223 で扱う。
+- ワークフローの前の一時停止の完了を失わない直し（`PausedBeforeWorkflow` は J1 から外してある）。#216 の範囲の外で、https://github.com/j5ik2o/takt/issues/222 で扱う。
 - 保存そのものの失敗。
 
 コードを変えるときは、先にこのモデルと設計を直し、同じ検査を流し直す。
